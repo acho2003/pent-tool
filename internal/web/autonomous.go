@@ -48,10 +48,12 @@ For EVERY potential vulnerability found in Phase 2, you MUST:
 - NEVER execute destructive commands (rm, dd, mkfs, etc.)
 - Proof = command output in response
 
-**IDOR / Auth Bypass:**
-- Access another user's resource by changing ID/parameters
-- Compare response with and without authentication
-- Proof = the unauthorized data received
+**IDOR (Insecure Direct Object Reference) — REQUIRES AUTHENTICATION:**
+- MUST be logged in as User A to test IDOR (unauthenticated = just "no access", not a vuln)
+- While logged in as User A: try accessing User B's resources by changing IDs/parameters
+  Example: User A's profile is /profile?id=100 — try /profile?id=101 (another user's profile)
+- Proof = AS User A, you receive User B's data (not your own)
+- Auth Bypass (different): accessing protected endpoints without any credentials
 
 **File Inclusion (LFI/RFI):**
 - Read: ` + "`" + `/etc/passwd` + "`" + `, ` + "`" + `../../etc/hostname` + "`" + `
@@ -161,8 +163,8 @@ Create folder: mkdir -p ./TARGET && cd ./TARGET
 **XSS:** Show reflected payload in response body (curl + grep)
 **SSRF:** Get callback or read internal metadata
 **RCE:** Execute id/whoami and show output
-**IDOR:** Access other user's data and show it
-**Auth Bypass:** Access protected endpoint without credentials
+**IDOR:** Log in as User A, access User B's data by changing IDs (authenticated required)
+**Auth Bypass:** Access protected endpoint without any credentials
 
 ## SEVERITY RULES (HackerOne CVSS 3.1 Standard):
 You MUST provide CVSS score + vector string with every report. Severity MUST match CVSS:
