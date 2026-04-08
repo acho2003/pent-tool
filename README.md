@@ -22,11 +22,8 @@
 ### Live Feed & Vulnerabilities
 ![Live Feed](assets/ui-screenshot-2.png)
 
-### Severity Filter & Settings
-![Severity Filter](assets/ui-screenshot-3.png)
-
-### Scan Results
-![Results](assets/ui-screenshot-4.png)
+### Vulnerability Details
+![Vulnerability Details](assets/ui-screenshot-3.png)
 
 ---
 
@@ -175,15 +172,27 @@
 
 ### 1️⃣ Install
 
+> ⚠️ **Requires Go 1.24+** — Check with `go version`. Install/upgrade: [go.dev/dl](https://go.dev/dl/)
+>
+> ```bash
+> # Quick install Go 1.24 on Linux:
+> sudo rm -rf /usr/local/go
+> wget -q https://go.dev/dl/go1.24.2.linux-amd64.tar.gz
+> sudo tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz && rm go1.24.2.linux-amd64.tar.gz
+> export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
+> ```
+
 ```bash
-# Quick install
-go install github.com/xalgord/xalgorix/cmd/xalgorix@latest
+# Recommended — install via Go (works on all platforms)
+GOPROXY=direct go install -v github.com/xalgord/xalgorix/v3/cmd/xalgorix@latest
 
 # Or build from source
 git clone https://github.com/xalgord/xalgorix.git
 cd xalgorix
-./build.sh --install
+make install
 ```
+
+> **💡 Update:** Run `xalgorix --update` or `GOPROXY=direct go install -v github.com/xalgord/xalgorix/v3/cmd/xalgorix@latest` to get the latest version. Xalgorix also auto-updates on every start.
 
 ### 2️⃣ Configure
 
@@ -474,24 +483,35 @@ After **5 consecutive failures**, a tool is temporarily blocked for **60 seconds
 
 ---
 
-## 🔍 Recon Tools (Auto-Installed) (Auto-Installed)
+## 🧰 Toolkit Architecture (Auto-Installed)
 
-| Category | Tools |
-|----------|-------|
-| 🌐 Subdomains | subfinder, findomain, assetfinder, amass |
-| 🔎 URLs | gospider, katana, gau, waybackurls |
-| 🔧 Parameters | paramspider, arjun |
-| 🚀 Ports | nmap |
-| 💥 Vulns | nuclei, nikto, sqlmap, dalfox |
-| 📁 Fuzzing | gobuster, ffuf |
-| 🖥️ Tech | whatweb, wappalyzer |
+Xalgorix intelligently auto-resolves, installs, and manages **70+ security tools** on-the-fly. If an agent tries to use a tool that isn't installed, Xalgorix pauses the execution, instantly installs it (via `apt`, `go install`, `cargo`, pip, etc.), and resumes transparently.
+
+### 🌐 Asset Discovery & Networking
+*   **Subdomain & DNS:** `subfinder`, `findomain`, `assetfinder`, `dnsx`, `amass`, `nslookup`, `dig`, `host`, `whois`
+*   **Network & Ports:** `nmap`, `masscan`, `naabu`, `netcat` (`nc`), `socat`, `tcpdump`, `traceroute`
+
+### 🔎 Web Crawling & URL Discovery
+*   **Spiders & Crawlers:** `katana`, `gospider`, `hakrawler`
+*   **Archive Extractors:** `gau` (GetAllUrls), `waybackurls`
+*   **Parameters:** `paramspider`, `arjun`
+
+### 💥 Vulnerability Scanners & Fuzzers
+*   **Scanners:** `nuclei`, `sqlmap`, `dalfox` (XSS)
+*   **Fuzzers:** `ffuf`, `gobuster`, `wfuzz`, `feroxbuster`, `dirb`
+*   **Web Toolkit:** `httpx`, `curl`, `wget`, `httpie`
+
+### 📦 Utilities & System
+*   **Text & Data:** `jq`, `xmllint`, `html2text`, `awk`, `sed`, `grep`
+*   **Security & Crypto:** `openssl`, `base64`, `xxd`, `strings`
+*   **Environment:** `python3`, `pip3`, `python3-venv`, `git`, `unzip`
 
 ---
 
 ## 📋 20-Phase Methodology
 
 1. 🔍 **Recon** — Subdomains, ports, directories
-2. 🦠 **Vuln Scan** — Nuclei, nikto, nmap scripts
+2. 🦠 **Vuln Scan** — Nuclei, nmap scripts
 3. 📂 **Content** — Fuzzing, backups, admin panels
 4. 🔐 **SSL/TLS** — Cipher, certificates, headers
 5. 🔑 **Auth** — SQLi login, brute-force, OAuth

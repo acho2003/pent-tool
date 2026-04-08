@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	netURL "net/url"
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/internal/config"
-	"github.com/xalgord/xalgorix/internal/tools"
+	"github.com/xalgord/xalgorix/v3/internal/config"
+	"github.com/xalgord/xalgorix/v3/internal/tools"
 )
 
 // Register adds web search tools to the registry.
@@ -118,8 +119,11 @@ func searchBrave(query string, max int) ([]searchResult, error) {
 	// Try Brave's JSON API (more reliable)
 	url := fmt.Sprintf("https://search.brave.com/api/search?q=%s&count=%d", netURL.QueryEscape(query), max)
 
-	client := &http.Client{}
-	req, _ := http.NewRequest("GET", url, nil)
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Brave search request: %w", err)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	req.Header.Set("Accept", "application/json")
 
@@ -133,7 +137,10 @@ func searchBrave(query string, max int) ([]searchResult, error) {
 		return nil, fmt.Errorf("brave API returned %d", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Brave response: %w", err)
+	}
 
 	var brave struct {
 		WebResults []struct {
@@ -166,8 +173,11 @@ func searchBrave(query string, max int) ([]searchResult, error) {
 func searchGoogle(query string, max int) ([]searchResult, error) {
 	url := fmt.Sprintf("https://www.google.com/search?q=%s&num=%d", netURL.QueryEscape(query), max)
 
-	client := &http.Client{}
-	req, _ := http.NewRequest("GET", url, nil)
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Google search request: %w", err)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
@@ -178,7 +188,10 @@ func searchGoogle(query string, max int) ([]searchResult, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Google response: %w", err)
+	}
 	html := string(body)
 
 	var results []searchResult
@@ -212,8 +225,11 @@ func searchGoogle(query string, max int) ([]searchResult, error) {
 func searchBing(query string, max int) ([]searchResult, error) {
 	url := fmt.Sprintf("https://www.bing.com/search?q=%s&count=%d", netURL.QueryEscape(query), max)
 
-	client := &http.Client{}
-	req, _ := http.NewRequest("GET", url, nil)
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Bing search request: %w", err)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
 	resp, err := client.Do(req)
@@ -222,7 +238,10 @@ func searchBing(query string, max int) ([]searchResult, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Bing response: %w", err)
+	}
 	html := string(body)
 
 	var results []searchResult
@@ -252,44 +271,50 @@ func searchDuckDuckGo(query string, max int) ([]searchResult, error) {
 	// Try JSON API first (more reliable)
 	url := fmt.Sprintf("https://api.duckduckgo.com/?q=%s&format=json&no_html=1&skip_disambig=1", netURL.QueryEscape(query))
 
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
 	if err == nil {
 		defer resp.Body.Close()
 		if resp.StatusCode == 200 {
-			body, _ := io.ReadAll(resp.Body)
-
-			var ddg struct {
-				AbstractText string `json:"AbstractText"`
-				AbstractURL  string `json:"AbstractURL"`
-				Results      []struct {
-					Text string `json:"Text"`
-					URL  string `json:"URL"`
-				} `json:"RelatedTopics"`
-			}
-
-			json.Unmarshal(body, &ddg)
-
-			var results []searchResult
-			if ddg.AbstractText != "" {
-				results = append(results, searchResult{
-					Title:   ddg.AbstractText[:min(100, len(ddg.AbstractText))],
-					URL:     ddg.AbstractURL,
-					Snippet: ddg.AbstractText,
-				})
-			}
-
-			for _, r := range ddg.Results {
-				if len(results) >= max {
-					break
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				log.Printf("Warning: failed to read DuckDuckGo JSON response: %v", readErr)
+			} else {
+				var ddg struct {
+					AbstractText string `json:"AbstractText"`
+					AbstractURL  string `json:"AbstractURL"`
+					Results      []struct {
+						Text string `json:"Text"`
+						URL  string `json:"URL"`
+					} `json:"RelatedTopics"`
 				}
-				results = append(results, searchResult{
-					Title: r.Text,
-					URL:   r.URL,
-				})
-			}
 
-			if len(results) > 0 {
-				return results, nil
+				if err := json.Unmarshal(body, &ddg); err != nil {
+					log.Printf("Warning: failed to parse DuckDuckGo JSON: %v", err)
+				}
+
+				var results []searchResult
+				if ddg.AbstractText != "" {
+					results = append(results, searchResult{
+						Title:   ddg.AbstractText[:min(100, len(ddg.AbstractText))],
+						URL:     ddg.AbstractURL,
+						Snippet: ddg.AbstractText,
+					})
+				}
+
+				for _, r := range ddg.Results {
+					if len(results) >= max {
+						break
+					}
+					results = append(results, searchResult{
+						Title: r.Text,
+						URL:   r.URL,
+					})
+				}
+
+				if len(results) > 0 {
+					return results, nil
+				}
 			}
 		}
 	}
@@ -297,13 +322,17 @@ func searchDuckDuckGo(query string, max int) ([]searchResult, error) {
 	// Fallback to HTML scraping
 	url = fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", netURL.QueryEscape(query))
 
-	resp, err = http.Get(url)
+	clientHTML := &http.Client{Timeout: 30 * time.Second}
+	resp, err = clientHTML.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DuckDuckGo HTML response: %w", err)
+	}
 	html := string(body)
 
 	var results []searchResult
@@ -363,7 +392,10 @@ func searchGemini(query string, max int) ([]searchResult, error) {
 		},
 	}
 
-	bodyBytes, _ := json.Marshal(requestBody)
+	bodyBytes, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal Gemini request: %w", err)
+	}
 	req, err := http.NewRequest("POST", url, strings.NewReader(string(bodyBytes)))
 	if err != nil {
 		return nil, err
@@ -377,7 +409,10 @@ func searchGemini(query string, max int) ([]searchResult, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Gemini response: %w", err)
+	}
 
 	var geminiResp struct {
 		Candidates []struct {
@@ -454,7 +489,10 @@ func cveSearch(args map[string]string) (tools.Result, error) {
 		return tools.Result{Output: fmt.Sprintf("CVE not found: %s\n", cveID)}, nil
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return tools.Result{Output: fmt.Sprintf("Failed to read CVE API response for %s: %v\n", cveID, err)}, nil
+	}
 
 	var nvd struct {
 		ResultsPerPage  int `json:"resultsPerPage"`

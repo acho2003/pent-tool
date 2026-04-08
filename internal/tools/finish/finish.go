@@ -2,7 +2,7 @@
 package finish
 
 import (
-	"github.com/xalgord/xalgorix/internal/tools"
+	"github.com/xalgord/xalgorix/v3/internal/tools"
 )
 
 // Register adds the finish tool to the registry.

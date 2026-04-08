@@ -4,22 +4,50 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/internal/config"
-	"github.com/xalgord/xalgorix/internal/tui"
-	"github.com/xalgord/xalgorix/internal/web"
+	"github.com/xalgord/xalgorix/v3/internal/config"
+	"github.com/xalgord/xalgorix/v3/internal/tui"
+	"github.com/xalgord/xalgorix/v3/internal/web"
 )
 
-const version = "3.19.19"
+const version = "3.19.18"
 
 func main() {
+	// Top-level crash recovery — catches panics that escape all other handlers.
+	// Critical for service mode where stderr may not be visible.
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+
+			crashMsg := fmt.Sprintf(
+				"[FATAL CRASH] %v\nHeap: %d MB | Sys: %d MB | Goroutines: %d\n\nStack:\n%s",
+				r, m.HeapAlloc/1024/1024, m.Sys/1024/1024, runtime.NumGoroutine(), string(stack),
+			)
+
+			// Log to stderr
+			fmt.Fprintf(os.Stderr, "\n%s\n", crashMsg)
+
+			// Also log to a file so it survives systemd journal rotation
+			if f, err := os.OpenFile("/tmp/xalgorix-crash.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+				fmt.Fprintf(f, "\n=== CRASH @ %s ===\n%s\n", time.Now().Format(time.RFC3339), crashMsg)
+				f.Close()
+			}
+
+			os.Exit(2)
+		}
+	}()
+
 	args := parseArgs()
 
 	// Handle start command
@@ -51,110 +79,37 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Auto-update check on every start (skip if --update flag is used since that handles it)
+	if !args.update {
+		autoUpdate()
+	}
+
 	if args.update {
 		fmt.Println("Updating xalgorix to latest version...")
 
-		// Get the latest release version from GitHub
-		resp, err := http.Get("https://api.github.com/repos/xalgord/xalgorix/releases/latest")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to check for updates: %v\n", err)
-			os.Exit(1)
-		}
-		defer resp.Body.Close()
-
-		var release struct {
-			TagName string `json:"tag_name"`
-			Assets  []struct {
-				Name string `json:"name"`
-				URL  string `json:"browser_download_url"`
-			} `json:"assets"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to parse release info: %v\n", err)
-			os.Exit(1)
-		}
-
-		// Find the linux amd64 binary
-		var downloadURL string
-		for _, asset := range release.Assets {
-			if strings.Contains(asset.Name, "linux") && strings.Contains(asset.Name, "amd64") {
-				downloadURL = asset.URL
-				break
-			}
-		}
-
-		if downloadURL == "" {
-			fmt.Fprintln(os.Stderr, "No suitable binary found for this platform")
-			os.Exit(1)
-		}
-
-		// Download the binary
-		fmt.Printf("Downloading %s...\n", release.TagName)
-
-		req, _ := http.NewRequest("GET", downloadURL, nil)
-		req.Header.Set("Accept", "application/octet-stream")
-		client := &http.Client{}
-		resp, err = client.Do(req)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Download failed: %v\n", err)
-			os.Exit(1)
-		}
-		defer resp.Body.Close()
-
-		// Write to temp file
-		tmpFile, err := os.CreateTemp("", "xalgorix-*")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to create temp file: %v\n", err)
-			os.Exit(1)
-		}
-		defer os.Remove(tmpFile.Name())
-
-		_, err = io.Copy(tmpFile, resp.Body)
-		tmpFile.Close()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to save download: %v\n", err)
-			os.Exit(1)
-		}
-
-		// Make executable
-		os.Chmod(tmpFile.Name(), 0755)
-
-		// Determine install path - use GOPATH if available
-		goPath := os.Getenv("GOPATH")
-		if goPath == "" {
-			goPath = filepath.Join(os.Getenv("HOME"), "go")
-		}
-		installPath := filepath.Join(goPath, "bin", "xalgorix")
-
-		// Create bin directory if needed
-		os.MkdirAll(filepath.Join(goPath, "bin"), 0755)
-
-		// First try to remove existing binary (might fail if running)
-		os.Remove(installPath + ".new")
-
-		// Copy to .new extension first
-		cmd := exec.Command("cp", tmpFile.Name(), installPath+".new")
+		// Use go install — clean, handles all architectures, always gets latest tagged version
+		// GOPROXY=direct bypasses proxy cache which can be 30+ min stale
+		cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v3/cmd/xalgorix@latest")
+		cmd.Env = append(os.Environ(),
+			"GOPROXY=direct",
+			"GONOSUMCHECK=github.com/xalgord/*",
+			"GONOSUMDB=github.com/xalgord/*",
+		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			// Try with sudo
-			cmd = exec.Command("sudo", "cp", tmpFile.Name(), installPath+".new")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to install binary: %v\n", err)
-				os.Exit(1)
-			}
+			fmt.Fprintf(os.Stderr, "❌ Update failed: %v\n", err)
+			os.Exit(1)
 		}
-
-		// Rename to actual path (atomic on same filesystem)
-		os.Rename(installPath+".new", installPath)
 
 		fmt.Println("✅ Updated successfully!")
 
 		// Show the new version
-		verCmd := exec.Command(installPath, "--version")
+		goPath := os.Getenv("GOPATH")
+		if goPath == "" {
+			goPath = filepath.Join(os.Getenv("HOME"), "go")
+		}
+		verCmd := exec.Command(filepath.Join(goPath, "bin", "xalgorix"), "--version")
 		verCmd.Stdout = os.Stdout
 		verCmd.Stderr = os.Stderr
 		verCmd.Run()
@@ -357,15 +312,19 @@ func handleStart() {
 		os.Exit(1)
 	}
 
-	// Kill any existing xalgorix processes first
+	// Kill any existing xalgorix processes first (ignore if none running)
 	exec.Command("pkill", "-f", "xalgorix.*--web").Run()
 	time.Sleep(1 * time.Second)
 
-	// Also kill anything using port 1337
+	// Also kill anything using port 1337 (ignore if port is free)
 	exec.Command("fuser", "-k", "1337/tcp").Run()
 	time.Sleep(1 * time.Second)
 
 	// Create systemd service file
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/root"
+	}
 	serviceContent := fmt.Sprintf(`[Unit]
 Description=Xalgorix - Autonomous AI Pentesting Engine
 After=network.target
@@ -373,10 +332,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root
-Environment="PATH=$HOME/go/bin:/home/vulture/go/bin:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="GOPATH=/root/.go"
-Environment="GOPATH=/root/go"
+WorkingDirectory=%s
+Environment="PATH=%s/go/bin:%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="GOPATH=%s/go"
 EnvironmentFile=%s/.xalgorix.env
 ExecStart=%s --web
 Restart=always
@@ -384,7 +342,7 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-`, os.Getenv("HOME"), installPath)
+`, home, home, home, home, home, installPath)
 	// Try to write service file (requires sudo)
 	servicePath := "/etc/systemd/system/xalgorix.service"
 	err := os.WriteFile(servicePath, []byte(serviceContent), 0644)
@@ -406,7 +364,9 @@ WantedBy=multi-user.target
 	// Reload systemd and enable service
 	var cmd *exec.Cmd
 	cmd = exec.Command("systemctl", "daemon-reload")
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		log.Printf("Warning: systemctl daemon-reload failed: %v", err)
+	}
 
 	cmd = exec.Command("systemctl", "enable", "xalgorix")
 	if err := cmd.Run(); err != nil {
@@ -441,7 +401,11 @@ func startBackground() {
 	installPath := filepath.Join(goPath, "bin", "xalgorix")
 
 	// Start via bash to source env file
-	startCmd := exec.Command("/bin/bash", "-c", "source /root/.xalgorix.env && "+installPath+" --web")
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/root"
+	}
+	startCmd := exec.Command("/bin/bash", "-c", "source "+homeDir+"/.xalgorix.env && "+installPath+" --web")
 	startCmd.Stdout = logFile
 	startCmd.Stderr = logFile
 	startCmd.Env = os.Environ()
@@ -475,8 +439,8 @@ func handleStop() {
 	err := cmd.Run()
 
 	if err != nil {
-		// Fallback: pkill
-		cmd = exec.Command("pkill", "-f", "xalgorix")
+		// Fallback: pkill (exclude the current --stop process)
+		cmd = exec.Command("pkill", "-f", "xalgorix.*--web")
 		cmd.Run()
 	}
 
@@ -538,4 +502,95 @@ func handleUninstall() {
 
 	fmt.Println()
 	fmt.Println("✅ Uninstall complete!")
+}
+
+// autoUpdate checks GitHub for a newer release and self-updates if found.
+func autoUpdate() {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/xalgord/xalgorix/releases/latest")
+	if err != nil {
+		return // silently skip if network is unavailable
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return
+	}
+
+	latestVer := strings.TrimPrefix(release.TagName, "v")
+	if latestVer == "" || latestVer == version {
+		return
+	}
+
+	if !isNewer(latestVer, version) {
+		return
+	}
+
+	fmt.Printf("\n🔄 New version available: v%s → v%s\n", version, latestVer)
+	fmt.Println("   Installing update via go install...")
+
+	cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v3/cmd/xalgorix@v"+latestVer)
+	cmd.Env = append(os.Environ(),
+		"GOPROXY=direct",
+		"GONOSUMCHECK=github.com/xalgord/*",
+		"GONOSUMDB=github.com/xalgord/*",
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("   ⚠️  Auto-update failed: %v (run 'xalgorix --update' manually)\n", err)
+		return
+	}
+
+	fmt.Printf("   ✅ Updated to v%s! Restarting...\n\n", latestVer)
+
+	// Re-exec with same args
+	execPath, err := os.Executable()
+	if err != nil {
+		fmt.Printf("   ⚠️  Restart failed: %v (please restart manually)\n", err)
+		os.Exit(0)
+	}
+	execPath, _ = filepath.EvalSymlinks(execPath)
+	execErr := execRestart(execPath, os.Args, os.Environ())
+	if execErr != nil {
+		fmt.Printf("   ⚠️  Restart failed: %v (please restart manually)\n", execErr)
+	}
+	os.Exit(0)
+}
+
+// isNewer returns true if a is newer than b (semver comparison).
+func isNewer(a, b string) bool {
+	partsA := strings.Split(a, ".")
+	partsB := strings.Split(b, ".")
+
+	for i := 0; i < len(partsA) && i < len(partsB); i++ {
+		var numA, numB int
+		fmt.Sscanf(partsA[i], "%d", &numA)
+		fmt.Sscanf(partsB[i], "%d", &numB)
+		if numA > numB {
+			return true
+		}
+		if numA < numB {
+			return false
+		}
+	}
+	return len(partsA) > len(partsB)
+}
+
+// execRestart re-executes the current process with the same arguments.
+func execRestart(path string, argv, env []string) error {
+	cmd := exec.Command(path, argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = env
+	return cmd.Run()
 }

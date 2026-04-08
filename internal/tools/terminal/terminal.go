@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,17 +17,149 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xalgord/xalgorix/internal/config"
-	"github.com/xalgord/xalgorix/internal/tools"
+	"github.com/xalgord/xalgorix/v3/internal/config"
+	"github.com/xalgord/xalgorix/v3/internal/tools"
 )
 
 const maxOutputLen = 20000
+
+// Per-command timeout tiers
+const (
+	defaultCmdTimeout = 10 * time.Minute  // most commands
+	heavyCmdTimeout   = 30 * time.Minute  // nmap, nuclei, ffuf, gobuster, sqlmap, masscan
+	hardMaxTimeout    = 2 * time.Hour     // absolute ceiling — nothing runs longer
+)
 
 // Global process tracker for stop functionality
 var (
 	processGroup = make(map[*exec.Cmd]context.CancelFunc)
 	processMutex sync.Mutex
+
+	// activeCommand tracks what command is currently executing (for watchdog)
+	activeCommand   string
+	activeCommandMu sync.RWMutex
+	activeStartTime time.Time
+
+	// streamCallbacks holds functions to call with partial output
+	streamCallbackMu sync.Mutex
+	streamCallback   func(partialOutput string)
 )
+
+// heavyToolPatterns are commands that get extended timeouts.
+var heavyToolPatterns = []string{
+	"nmap", "nuclei", "ffuf", "gobuster", "dirsearch", "feroxbuster",
+	"sqlmap", "masscan", "wpscan", "joomscan", "dalfox", "katana",
+	"gospider", "subfinder", "amass", "rustscan",
+}
+
+// computeTimeout decides how long a command is allowed to run.
+func computeTimeout(command string) time.Duration {
+	lower := strings.ToLower(command)
+	for _, tool := range heavyToolPatterns {
+		if strings.Contains(lower, tool) {
+			return heavyCmdTimeout
+		}
+	}
+	return defaultCmdTimeout
+}
+
+// ActiveProcessCount returns the number of currently running processes.
+func ActiveProcessCount() int {
+	processMutex.Lock()
+	defer processMutex.Unlock()
+	return len(processGroup)
+}
+
+// GetActiveCommand returns the currently running command and how long it's been running.
+func GetActiveCommand() (string, time.Duration) {
+	activeCommandMu.RLock()
+	defer activeCommandMu.RUnlock()
+	if activeCommand == "" {
+		return "", 0
+	}
+	return activeCommand, time.Since(activeStartTime)
+}
+
+// GetActiveCommandStartTime returns the start time of the active command.
+func GetActiveCommandStartTime() time.Time {
+	activeCommandMu.RLock()
+	defer activeCommandMu.RUnlock()
+	return activeStartTime
+}
+
+// TrackProcess registers a command to be tracked by the watchdog and killed on Stop.
+func TrackProcess(cmd *exec.Cmd, cancel context.CancelFunc, commandStr string) {
+	processMutex.Lock()
+	processGroup[cmd] = cancel
+	processMutex.Unlock()
+
+	activeCommandMu.Lock()
+	if len(commandStr) > 200 {
+		activeCommand = commandStr[:200] + "..."
+	} else {
+		activeCommand = commandStr
+	}
+	activeStartTime = time.Now()
+	activeCommandMu.Unlock()
+}
+
+// UntrackProcess removes a command from tracking once it completes.
+func UntrackProcess(cmd *exec.Cmd) {
+	processMutex.Lock()
+	delete(processGroup, cmd)
+	processMutex.Unlock()
+
+	activeCommandMu.Lock()
+	activeCommand = ""
+	activeCommandMu.Unlock()
+}
+
+// ReapDeadProcesses checks all tracked processes and removes any that have
+// already exited. This prevents the watchdog from keeping the scan alive
+// when a process finished but wasn't properly untracked.
+func ReapDeadProcesses() int {
+	processMutex.Lock()
+	defer processMutex.Unlock()
+
+	reaped := 0
+	for cmd, cancel := range processGroup {
+		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			// Process has exited but wasn't untracked
+			log.Printf("[REAP] Removing dead process from tracker: pid=%d", cmd.Process.Pid)
+			delete(processGroup, cmd)
+			if cancel != nil {
+				cancel()
+			}
+			reaped++
+		}
+	}
+
+	if reaped > 0 {
+		// Clear active command if no processes remain
+		if len(processGroup) == 0 {
+			activeCommandMu.Lock()
+			activeCommand = ""
+			activeCommandMu.Unlock()
+		}
+	}
+
+	return reaped
+}
+
+// SetStreamCallback sets a callback that receives partial output from running commands.
+// The callback is called periodically with the latest output chunk.
+func SetStreamCallback(cb func(partialOutput string)) {
+	streamCallbackMu.Lock()
+	defer streamCallbackMu.Unlock()
+	streamCallback = cb
+}
+
+// ClearStreamCallback removes the stream callback.
+func ClearStreamCallback() {
+	streamCallbackMu.Lock()
+	defer streamCallbackMu.Unlock()
+	streamCallback = nil
+}
 
 // KillAllProcesses kills all running processes (called on stop)
 func KillAllProcesses() {
@@ -45,19 +178,32 @@ func KillAllProcesses() {
 		}
 	}
 	processGroup = make(map[*exec.Cmd]context.CancelFunc)
+
+	// Clear active command
+	activeCommandMu.Lock()
+	activeCommand = ""
+	activeCommandMu.Unlock()
 }
 
-// Global working directory override for terminal commands
-var workDirOverride string
+// Global working directory for terminal commands.
+// Since concurrent scan sessions are limited to 1, we don't need goroutine isolation.
+var (
+	workDir   string
+	workDirMu sync.RWMutex
+)
 
-// SetWorkDir sets the working directory for terminal commands
+// SetWorkDir sets the working directory for terminal commands.
 func SetWorkDir(dir string) {
-	workDirOverride = dir
+	workDirMu.Lock()
+	workDir = dir
+	workDirMu.Unlock()
 }
 
-// GetWorkDir returns the current working directory override
+// GetWorkDir returns the current working directory.
 func GetWorkDir() string {
-	return workDirOverride
+	workDirMu.RLock()
+	defer workDirMu.RUnlock()
+	return workDir
 }
 
 // Common command → package mappings for auto-install.
@@ -86,19 +232,28 @@ var packageMap = map[string]string{
 	"http":   "httpie",
 	// SSL/TLS
 	"openssl": "openssl",
-	// Recon / enumeration
-	"nikto":       "nikto",
+	// Recon / enumeration (Go tools — resolved to go install in installPackage)
 	"dirb":        "dirb",
 	"gobuster":    "gobuster",
 	"ffuf":        "ffuf",
 	"subfinder":   "subfinder",
-	"findomain":   "findomain",
 	"assetfinder": "assetfinder",
 	"masscan":     "masscan",
 	"wfuzz":       "wfuzz",
 	"httpx":       "httpx",
 	"dnsx":        "dnsx",
 	"nuclei":      "nuclei",
+	"katana":      "katana",
+	"gospider":    "gospider",
+	"gau":         "gau",
+	"waybackurls": "waybackurls",
+	"hakrawler":   "hakrawler",
+	"naabu":       "naabu",
+	"dalfox":      "dalfox",
+	"paramspider": "paramspider",
+	"feroxbuster": "feroxbuster",
+	// Findomain — Rust binary, installed via package manager or cargo
+	"findomain": "findomain",
 	// Text processing
 	"jq":        "jq",
 	"xmllint":   "libxml2-utils",
@@ -109,8 +264,8 @@ var packageMap = map[string]string{
 	"python3":     "python3",
 	"pip3":        "python3-pip",
 	"pip":         "python3-pip",
-	"scrapling":   "pipx install scrapling", // Web scraping with anti-bot bypass
-	"python-venv": "python3-venv",           // For venv-based Python tools
+	"scrapling":   "scrapling",   // Handled by pipx in installPackage
+	"python-venv": "python3-venv",
 	// General
 	"tree":    "tree",
 	"unzip":   "unzip",
@@ -145,13 +300,48 @@ func decodeHex(s string) ([]byte, error) {
 func Register(r *tools.Registry) {
 	r.Register(&tools.Tool{
 		Name:        "terminal_execute",
-		Description: "Execute a shell command in the terminal. Returns stdout, stderr, and exit code. Automatically installs missing tools.",
+		Description: "Execute a shell command in the terminal. Returns stdout, stderr, and exit code. Automatically installs missing tools. Commands have a 10-minute timeout by default (30 minutes for heavy tools like nmap/nuclei). Use targeted scans to stay within limits.",
 		Parameters: []tools.Parameter{
 			{Name: "command", Description: "The shell command to execute", Required: true},
-			{Name: "timeout", Description: "Timeout in seconds (default: 120)", Required: false},
 		},
 		Execute: executeCommand,
 	})
+}
+
+// toolExists checks if a tool is available in the expanded PATH
+// (same directories as runShell uses). This is more reliable than
+// exec.LookPath which only searches the Go process's own PATH.
+func toolExists(name string) bool {
+	// First try the standard PATH
+	if _, err := exec.LookPath(name); err == nil {
+		return true
+	}
+
+	// Then check expanded locations that runShell adds
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/root"
+	}
+	goPath := os.Getenv("GOPATH")
+	if goPath == "" {
+		goPath = homeDir + "/go"
+	}
+
+	extraDirs := []string{
+		goPath + "/bin",
+		homeDir + "/go/bin",
+		homeDir + "/.local/bin",
+		homeDir + "/.cargo/bin",
+		"/usr/local/bin",
+		"/snap/bin",
+	}
+
+	for _, dir := range extraDirs {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func executeCommand(args map[string]string) (tools.Result, error) {
@@ -165,43 +355,32 @@ func executeCommand(args map[string]string) (tools.Result, error) {
 		return tools.Result{Output: fmt.Sprintf("[BLOCKED] Destructive command rejected: %s. Xalgorix is read-only — it tests for vulnerabilities without causing damage.", reason)}, nil
 	}
 
-	// Pre-check: extract and verify all required tools are available
-	// This ensures tools are installed BEFORE command runs
+	// Pre-check: install missing tools BEFORE running the command.
+	// Use the same expanded PATH as runShell so we find tools in ~/.cargo/bin, ~/go/bin, etc.
+	var preInstalled []string
 	toolsToCheck := extractCommands(command)
 	for _, tool := range toolsToCheck {
-		if _, err := exec.LookPath(tool); err != nil {
-			// Tool not found, try to install it
+		if !toolExists(tool) {
 			pkg := resolvePackage(tool)
 			if pkg != "" {
-				installOutput := installPackage(pkg)
-				// Add install info to output
-				_ = installOutput // logged in installPackage
+				installPackage(pkg)
+				preInstalled = append(preInstalled, tool)
 			}
 		}
 	}
 
-	timeoutSec := 120
-	if t, ok := args["timeout"]; ok {
-		fmt.Sscanf(t, "%d", &timeoutSec)
-	}
-
 	// Run the command
-	if t, ok := args["timeout"]; ok {
-		fmt.Sscanf(t, "%d", &timeoutSec)
-	}
+	output, exitCode := runShell(command)
 
-	// Run the command
-	output, exitCode := runShell(command, timeoutSec)
-
-	// Check for "command not found" and auto-install
+	// If it still fails with "command not found", try one more install+retry.
+	// This catches tools not in extractCommands' list (e.g. piped commands).
 	if exitCode == 127 || isCommandNotFound(output) {
 		missingCmd := extractMissingCommand(output)
 		if missingCmd != "" {
 			pkg := resolvePackage(missingCmd)
 			if pkg != "" {
 				installOutput := installPackage(pkg)
-				// Retry the original command
-				retryOutput, retryExit := runShell(command, timeoutSec)
+				retryOutput, retryExit := runShell(command)
 				combined := fmt.Sprintf("[auto-installed %s (%s)]\n%s\n%s",
 					missingCmd, pkg, installOutput, retryOutput)
 				if retryExit != 0 {
@@ -210,6 +389,11 @@ func executeCommand(args map[string]string) (tools.Result, error) {
 				return tools.Result{Output: combined}, nil
 			}
 		}
+	}
+
+	// Prepend install info if we installed anything
+	if len(preInstalled) > 0 {
+		output = fmt.Sprintf("[pre-installed: %s]\n%s", strings.Join(preInstalled, ", "), output)
 	}
 
 	return tools.Result{Output: output}, nil
@@ -227,11 +411,13 @@ func ensureVenv() {
 		// Create venv
 		fmt.Println("Creating Python virtual environment at ~/venv...")
 		cmd := exec.Command("python3", "-m", "venv", venvPath)
-		cmd.Run()
+		if err := cmd.Run(); err != nil {
+			log.Printf("Warning: failed to create Python venv at %s: %v", venvPath, err)
+		}
 	}
 }
 
-func runShell(command string, timeoutSec int) (string, int) {
+func runShell(command string) (string, int) {
 	// Ensure venv exists
 	ensureVenv()
 
@@ -239,19 +425,24 @@ func runShell(command string, timeoutSec int) (string, int) {
 	if homeDir == "" {
 		homeDir = "/root"
 	}
-	venvActivate := "source " + filepath.Join(homeDir, "venv", "bin", "activate") + " && "
+	// Activate venv if it exists — use semicolon so failure doesn't block the command
+	venvActivate := "source " + filepath.Join(homeDir, "venv", "bin", "activate") + " 2>/dev/null; "
 
 	// Wrap command with venv activation
 	command = venvActivate + command
 
-	cfg := config.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	// Compute timeout based on command type
+	timeout := computeTimeout(command)
+	if timeout > hardMaxTimeout {
+		timeout = hardMaxTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Set PATH to include common tool locations (dynamic - works for any user)
-	// homeDir already set above
+	cfg := config.Get()
 
-	// Also check GOPATH
+	// Set PATH to include common tool locations (dynamic - works for any user)
 	goPath := os.Getenv("GOPATH")
 	if goPath == "" {
 		goPath = homeDir + "/go"
@@ -259,8 +450,8 @@ func runShell(command string, timeoutSec int) (string, int) {
 
 	// Build dynamic PATH including all possible tool locations
 	dynamicPath := goPath + "/bin:" + homeDir + "/go/bin:" + homeDir + "/.local/bin"
-
-	// Also add paths from other common locations
+	dynamicPath += ":" + homeDir + "/.cargo/bin" // Rust tools (findomain, rustscan)
+	dynamicPath += ":/usr/local/bin:/snap/bin"   // Common install locations
 	dynamicPath += ":/home/*/go/bin:/home/*/.local/bin"
 
 	cmdEnv := append(os.Environ(),
@@ -269,9 +460,9 @@ func runShell(command string, timeoutSec int) (string, int) {
 	)
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	// Use workDirOverride if set, otherwise default to config workspace
-	if workDirOverride != "" {
-		cmd.Dir = workDirOverride
+	// Use goroutine-scoped workdir if set, otherwise default to config workspace
+	if wd := GetWorkDir(); wd != "" {
+		cmd.Dir = wd
 	} else {
 		cmd.Dir = cfg.Workspace
 	}
@@ -282,29 +473,117 @@ func runShell(command string, timeoutSec int) (string, int) {
 		Setpgid: true,
 	}
 
+	// Store a clean version of the command (strip venv activation prefix)
+	cleanCmd := strings.TrimPrefix(command, venvActivate)
+
+	// Use pipes for real-time output streaming
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Sprintf("Failed to create stdout pipe: %v", err), -1
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Sprintf("Failed to create stderr pipe: %v", err), -1
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Sprintf("Failed to start command: %v", err), -1
+	}
+	
+	TrackProcess(cmd, cancel, cleanCmd)
+	defer UntrackProcess(cmd)
+
+	// Read output in goroutines with periodic streaming
+	// Buffers are capped at 5MB to prevent OOM on huge command output
+	const maxBufSize = 5 * 1024 * 1024
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var stdoutOverflow, stderrOverflow bool
+	var wg sync.WaitGroup
 
-	// Register process for tracking
-	processMutex.Lock()
-	processGroup[cmd] = cancel
-	processMutex.Unlock()
+	// Stream stdout
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 32768)
+		lastStream := time.Now()
+		for {
+			n, err := stdoutPipe.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				// Cap buffer size to prevent OOM
+				if stdout.Len()+n > maxBufSize {
+					if !stdoutOverflow {
+						stdoutOverflow = true
+					}
+					// Keep only the last part — discard old data
+					stdout.Reset()
+					stdout.WriteString("[OUTPUT TRUNCATED — exceeded 5MB]\n")
+				}
+				stdout.Write(chunk)
 
-	err := cmd.Run()
+				// Stream partial output every 10 seconds
+				streamCallbackMu.Lock()
+				cb := streamCallback
+				streamCallbackMu.Unlock()
+				if cb != nil && time.Since(lastStream) > 10*time.Second {
+					// Send last 2000 chars of accumulated output
+					out := stdout.String()
+					if len(out) > 2000 {
+						out = "...\n" + out[len(out)-2000:]
+					}
+					cb(out)
+					lastStream = time.Now()
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
 
-	// Unregister process after completion
-	processMutex.Lock()
-	delete(processGroup, cmd)
-	processMutex.Unlock()
+	// Stream stderr (also capped)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 32768)
+		for {
+			n, err := stderrPipe.Read(buf)
+			if n > 0 {
+				if stderr.Len()+n > maxBufSize {
+					if !stderrOverflow {
+						stderrOverflow = true
+					}
+					stderr.Reset()
+					stderr.WriteString("[STDERR TRUNCATED — exceeded 5MB]\n")
+				}
+				stderr.Write(buf[:n])
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	// Wait for output readers to finish
+	wg.Wait()
+
+	// Wait for command to finish
+	err = cmd.Wait()
+	// Note: process unregistration is handled by defer UntrackProcess(cmd) above
 
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Sprintf("Command timed out after %d seconds.\nPartial stdout:\n%s\nPartial stderr:\n%s",
-				timeoutSec, truncate(stdout.String()), truncate(stderr.String())), -1
+			// Command was killed by timeout
+			return fmt.Sprintf("[TIMEOUT] Command killed after %s. Use more targeted scans (fewer ports, specific paths, smaller scope) to stay within the time limit.\nPartial stdout:\n%s\nPartial stderr:\n%s",
+				timeout.Round(time.Second), truncate(stdout.String()), truncate(stderr.String())), -1
+		} else if ctx.Err() == context.Canceled {
+			// Context was cancelled (Stop or watchdog kill)
+			return fmt.Sprintf("Command cancelled.\nPartial stdout:\n%s\nPartial stderr:\n%s",
+				truncate(stdout.String()), truncate(stderr.String())), -1
 		}
 	}
 
@@ -358,19 +637,44 @@ func resolvePackage(cmd string) string {
 	if pkg, ok := packageMap[cmd]; ok {
 		return pkg
 	}
-	// Fallback: try the command name itself as the package name
-	return cmd
+	// Don't blindly fall back — only return if we know the package
+	return ""
 }
 
 func installPackage(pkg string) string {
+	// Special handling for pipx-installed tools
+	pipxTools := map[string]string{
+		"scrapling": "scrapling",
+	}
+
 	// Special handling for Go-installed tools
 	goTools := map[string]string{
-		"nuclei":      "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
-		"httpx":       "github.com/projectdiscovery/httpx/cmd/httpx@latest",
-		"dnsx":        "github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
-		"subfinder":   "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
-		"findomain":   "github.com/findomain/findomain@latest",
+		// ProjectDiscovery suite
+		"nuclei":    "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+		"httpx":     "github.com/projectdiscovery/httpx/cmd/httpx@latest",
+		"dnsx":      "github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+		"subfinder": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+		"katana":    "github.com/projectdiscovery/katana/cmd/katana@latest",
+		"naabu":     "github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
+		// Web crawlers & URL discovery
+		"gospider":    "github.com/jaeles-project/gospider@latest",
+		"gau":         "github.com/lc/gau/v2/cmd/gau@latest",
+		"waybackurls": "github.com/tomnomnom/waybackurls@latest",
+		"hakrawler":   "github.com/hakluke/hakrawler@latest",
+		// Fuzzing & enumeration
+		"gobuster":    "github.com/OJ/gobuster/v3@latest",
+		"ffuf":        "github.com/ffuf/ffuf/v2@latest",
+		"feroxbuster": "github.com/epi052/feroxbuster@latest",
 		"assetfinder": "github.com/tomnomnom/assetfinder@latest",
+		// Vulnerability scanners
+		"dalfox": "github.com/hahwul/dalfox/v2@latest",
+		// Parameter discovery
+		"paramspider": "github.com/devanshbatham/paramspider@latest",
+	}
+
+	// npm-installed tools
+	npmTools := map[string]string{
+		"playwright-cli": "@anthropic-ai/playwright-cli",
 	}
 
 	homeDir := os.Getenv("HOME")
@@ -384,18 +688,29 @@ func installPackage(pkg string) string {
 		goPath = homeDir + "/go"
 	}
 
+	// pipx-installed tools (Python)
+	if pipxPkg, ok := pipxTools[pkg]; ok {
+		installCmd := fmt.Sprintf("pipx install %s 2>&1 || pip3 install %s 2>&1", pipxPkg, pipxPkg)
+		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Sprintf("[install %s via pipx/pip failed: %s]\n%s", pkg, err, truncate(string(out)))
+		}
+		return fmt.Sprintf("[installed %s via pipx successfully]", pkg)
+	}
+
 	if goPkg, ok := goTools[pkg]; ok {
-		// Try with GOPROXY first to handle Go version issues
-		installCmd := fmt.Sprintf("GOBIN=%s/go/bin GOPROXY=direct go install -v %s 2>&1", homeDir, goPkg)
-		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		installCmd := fmt.Sprintf("GOBIN=%s/go/bin go install -v %s 2>&1", homeDir, goPkg)
+		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
 		out, err := cmd.CombinedOutput()
 
-		// If direct proxy fails, try with version override
-		if err != nil && strings.Contains(string(out), "invalid go version") {
-			// Extract the module and try with -build flag
-			installCmd = fmt.Sprintf("GOBIN=/root/go/bin go install -v -buildflags '-mod=mod' %s 2>&1", goPkg)
+		// If default proxy fails, retry with GOPROXY=direct
+		if err != nil {
+			installCmd = fmt.Sprintf("GOBIN=%s/go/bin GOPROXY=direct go install -v %s 2>&1", homeDir, goPkg)
 			cmd = exec.CommandContext(ctx, "bash", "-c", installCmd)
 			out, err = cmd.CombinedOutput()
 		}
@@ -403,7 +718,26 @@ func installPackage(pkg string) string {
 		if err != nil {
 			return fmt.Sprintf("[install %s failed: %s]\n%s", pkg, err, truncate(string(out)))
 		}
-		return fmt.Sprintf("[installed %s successfully]", pkg)
+		return fmt.Sprintf("[installed %s via go install successfully]", pkg)
+	}
+
+	// Special handling for npm-installed tools
+	if npmPkg, ok := npmTools[pkg]; ok {
+		installCmd := fmt.Sprintf("npm install -g %s 2>&1", npmPkg)
+		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second) // 10 min for npm install
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			// Try with sudo
+			installCmd = "sudo " + installCmd
+			cmd = exec.CommandContext(ctx, "bash", "-c", installCmd)
+			out, err = cmd.CombinedOutput()
+		}
+		if err != nil {
+			return fmt.Sprintf("[install %s via npm failed: %s]\n%s", pkg, err, truncate(string(out)))
+		}
+		return fmt.Sprintf("[installed %s via npm successfully]", pkg)
 	}
 
 	// Detect package manager and build install command
@@ -428,7 +762,7 @@ func installPackage(pkg string) string {
 		installCmd = "sudo " + installCmd
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second) // 10 min for pkg install
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
@@ -497,10 +831,11 @@ var blockedPatterns = []struct {
 	{"drop database", "SQL DROP DATABASE"},
 	{"delete from", "SQL DELETE FROM"},
 	{"truncate table", "SQL TRUNCATE TABLE"},
-	{"update ", "SQL UPDATE (use SELECT to verify instead)"},
 	// Python destructive
 	{"shutil.rmtree", "recursive directory removal"},
 	{"os.remove", "file deletion"},
+	// Noisy / false-positive-heavy tools
+	{"nikto", "nikto is blocked — too many false positives. Use nuclei or manual testing instead"},
 }
 
 // isBlockedCommand checks if a command matches any blocked pattern.
@@ -623,8 +958,6 @@ func tryURLDecode(cmd string) string {
 		return ""
 	}
 
-	// Use already imported net/url
-	// Since we don't have net/url imported, we'll do simple decoding
 	decoded := simpleURLDecode(cmd)
 	return decoded
 }
@@ -666,8 +999,8 @@ func simpleURLDecode(s string) string {
 // extractCommands extracts all unique tool/command names from a shell command
 func extractCommands(cmd string) []string {
 	// Common security tools to look for
-	tools := []string{
-		"nmap", "nikto", "sqlmap", "gobuster", "ffuf", "dirb", "curl", "wget",
+	toolsList := []string{
+		"nmap", "sqlmap", "gobuster", "ffuf", "dirb", "curl", "wget",
 		"nuclei", "httpx", "dnsx", "subfinder", "findomain", "assetfinder",
 		"masscan", "nc", "netcat", "socat", "openssl", "whatweb", "wafw00f",
 		"gospider", "katana", "hakrawler", "gau", "waybackurls", "paramspider",
@@ -679,7 +1012,7 @@ func extractCommands(cmd string) []string {
 	found := make(map[string]bool)
 	lowerCmd := strings.ToLower(cmd)
 
-	for _, tool := range tools {
+	for _, tool := range toolsList {
 		// Check if tool appears as a standalone word in the command
 		patterns := []string{
 			" " + tool + " ",
@@ -700,6 +1033,16 @@ func extractCommands(cmd string) []string {
 	for t := range found {
 		result = append(result, t)
 	}
+
+	// Also check if the command starts with a known tool
+	cmdTrimmed := strings.TrimSpace(lowerCmd)
+	for _, tool := range toolsList {
+		if (strings.HasPrefix(cmdTrimmed, tool+" ") || cmdTrimmed == tool) && !found[tool] {
+			found[tool] = true
+			result = append(result, tool)
+		}
+	}
+
 	return result
 }
 
@@ -715,16 +1058,16 @@ func checkObfuscation(cmd string) string {
 	}{
 		{"chr\\s*\\(", "character code obfuscation"},
 		{"\\\\x[0-9a-f]{2}", "hex escape obfuscation"},
-		{"\\$\\s*\\{", "variable expansion obfuscation"},
 	}
 
 	for _, op := range obfuscationPatterns {
 		if matched, _ := regexp.MatchString(op.pattern, lower); matched {
-			// Check if the deobfuscated content would be dangerous
-			// For now, just warn about the obfuscation attempt
 			return "obfuscated command detected: " + op.reason
 		}
 	}
 
 	return ""
 }
+
+// Silence the log import
+var _ = log.Println

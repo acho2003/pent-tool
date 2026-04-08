@@ -4,15 +4,17 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/internal/config"
+	"github.com/xalgord/xalgorix/v3/internal/config"
 )
 
 // Message represents a chat message.
@@ -36,6 +38,7 @@ type Client struct {
 	mu         sync.Mutex
 	totalIn    int
 	totalOut   int
+	ctx        context.Context // agent context for cancellation
 }
 
 // TokenUsage holds cumulative token counts.
@@ -54,12 +57,18 @@ func (c *Client) GetTokens() (promptTokens, completionTokens, totalTokens int) {
 
 // NewClient creates a new LLM client.
 func NewClient(cfg *config.Config) *Client {
-	apiModel, _ := cfg.ResolveModel()
+	apiModel, _ := cfg.ResolveModel() // second return is provider name
 	return &Client{
 		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 5 * time.Minute},
+		httpClient: &http.Client{Timeout: 10 * time.Minute},
 		apiModel:   apiModel,
+		ctx:        context.Background(), // default context, overridden by SetContext
 	}
+}
+
+// SetContext sets the context for HTTP requests, enabling cancellation.
+func (c *Client) SetContext(ctx context.Context) {
+	c.ctx = ctx
 }
 
 // chatRequest is the OpenAI-compatible chat completion request.
@@ -98,34 +107,41 @@ func (c *Client) resolveEndpoint() (string, string) {
 		model = model[idx+1:]
 	}
 
-	// Auto-detect API base based on provider prefix if XALGORIX_API_BASE not set
-	if apiBase == "" {
-		switch provider {
-		case "openai":
-			apiBase = "https://api.openai.com/v1"
-		case "anthropic":
-			apiBase = "https://api.anthropic.com"
-		case "minimax":
-			apiBase = "https://api.minimax.io/v1"
-		case "deepseek":
-			apiBase = "https://api.deepseek.com/v1"
-		case "groq":
-			apiBase = "https://api.groq.com/openai/v1"
-		case "ollama":
-			apiBase = "http://localhost:11434/v1"
-		case "google", "gemini":
-			apiBase = "https://generativelanguage.googleapis.com/v1"
-		default:
-			// No prefix or unknown - default to OpenAI
-			apiBase = "https://api.openai.com/v1"
-		}
+	// Provider prefix in model name is the source of truth for API base.
+	// XALGORIX_API_BASE is only used for unknown/custom providers.
+	providerBases := map[string]string{
+		"openai":    "https://api.openai.com/v1",
+		"anthropic": "https://api.anthropic.com",
+		"minimax":   "https://api.minimax.io/v1",
+		"deepseek":  "https://api.deepseek.com/v1",
+		"groq":      "https://api.groq.com/openai/v1",
+		"ollama":    "http://localhost:11434/v1",
+		"google":    "https://generativelanguage.googleapis.com/v1",
+		"gemini":    "https://generativelanguage.googleapis.com/v1",
+	}
+
+	if knownBase, ok := providerBases[provider]; ok {
+		// Known provider — always use its correct base, ignore XALGORIX_API_BASE
+		apiBase = knownBase
+	} else if apiBase == "" {
+		// Unknown/no provider and no API base set — default to OpenAI
+		apiBase = "https://api.openai.com/v1"
 	}
 
 	apiBase = strings.TrimRight(apiBase, "/")
 
 	// Build the URL based on provider
 	url := apiBase
-	if !strings.Contains(apiBase, "anthropic") && !strings.Contains(apiBase, "google") {
+	if strings.Contains(apiBase, "anthropic") {
+		// Anthropic uses /v1/messages
+		if !strings.HasSuffix(apiBase, "/v1") && !strings.Contains(apiBase, "/v1/") {
+			url += "/v1"
+		}
+		url += "/messages"
+	} else if strings.Contains(apiBase, "google") || strings.Contains(apiBase, "generativelanguage") {
+		// Google Gemini uses /v1beta/models/MODEL:generateContent
+		url += "beta/models/" + model + ":generateContent"
+	} else {
 		if !strings.HasSuffix(apiBase, "/v1") && !strings.Contains(apiBase, "/v1/") {
 			url += "/v1"
 		}
@@ -142,11 +158,35 @@ func (c *Client) Chat(messages []Message) (string, error) {
 
 func (c *Client) chatWithRetry(messages []Message, _ bool) (string, error) {
 	maxRetries := c.cfg.LLMMaxRetries
+	if maxRetries < 3 {
+		maxRetries = 3
+	}
 	var lastErr error
 
 	for attempt := range maxRetries {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*2) * time.Second)
+			// Smart backoff based on error type
+			backoff := time.Duration(attempt*3) * time.Second
+			if lastErr != nil {
+				errStr := lastErr.Error()
+				if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate") {
+					backoff = 30 * time.Second // rate limit: wait longer
+				} else if strings.Contains(errStr, "connection") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "EOF") {
+					backoff = time.Duration(attempt*10) * time.Second // network: longer backoff
+				} else if strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") {
+					backoff = time.Duration(attempt*5) * time.Second // server error
+				}
+			}
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
+			log.Printf("[llm] Retry %d/%d after %s (last error: %v)", attempt+1, maxRetries, backoff, lastErr)
+			time.Sleep(backoff)
+		}
+
+		// Check if context is cancelled before retrying
+		if c.ctx != nil && c.ctx.Err() != nil {
+			return "", fmt.Errorf("LLM request cancelled: %w", c.ctx.Err())
 		}
 
 		result, err := c.doChat(messages)
@@ -174,8 +214,16 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 			Stream:   true,
 		}
 
-		body, _ := json.Marshal(reqBody)
-		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		body, err := json.Marshal(reqBody)
+		if err != nil {
+			ch <- StreamChunk{Err: fmt.Errorf("failed to marshal request: %w", err)}
+			return
+		}
+		reqCtx := c.ctx
+		if reqCtx == nil {
+			reqCtx = context.Background()
+		}
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
 			ch <- StreamChunk{Err: err}
 			return
@@ -194,7 +242,11 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(resp.Body)
+			respBody, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				ch <- StreamChunk{Err: fmt.Errorf("API returned %d (failed to read body: %v)", resp.StatusCode, readErr)}
+				return
+			}
 			ch <- StreamChunk{Err: fmt.Errorf("API returned %d: %s", resp.StatusCode, string(respBody))}
 			return
 		}
@@ -246,6 +298,7 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 // doChat performs a single non-streaming API call.
 func (c *Client) doChat(messages []Message) (string, error) {
 	url, model := c.resolveEndpoint()
+	log.Printf("[llm] Request → URL=%s model=%s apiModel=%s cfgLLM=%s cfgAPIBase=%s", url, model, c.apiModel, c.cfg.LLM, c.cfg.APIBase)
 
 	reqBody := chatRequest{
 		Model:    model,
@@ -253,8 +306,16 @@ func (c *Client) doChat(messages []Message) (string, error) {
 		Stream:   false,
 	}
 
-	body, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+	// Use agent context so cancel/stop can interrupt this request
+	reqCtx := c.ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -270,7 +331,10 @@ func (c *Client) doChat(messages []Message) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("API returned %d: %s", resp.StatusCode, string(respBody))
 	}

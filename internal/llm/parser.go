@@ -32,6 +32,18 @@ var (
 
 	// Normalize quotes around = in tags: <function = "name"> → <function=name>
 	stripQuotesRe = regexp.MustCompile(`<(function|parameter)\s*=\s*["']?([^>"']+?)["']?\s*>`)
+
+	// CleanContent regexes — compiled once
+	toolPattern    = regexp.MustCompile(`(?s)<function=[^>]+>.*?</function>`)
+	incompleteFunc = regexp.MustCompile(`(?s)<function=[^>]+>.*$`)
+	interAgentRe   = regexp.MustCompile(`(?is)<inter_agent_message>.*?</inter_agent_message>`)
+	agentReportRe  = regexp.MustCompile(`(?is)<agent_completion_report>.*?</agent_completion_report>`)
+	multiBlankRe   = regexp.MustCompile(`\n\s*\n`)
+
+	// Strategy 2 lenient param matching (fallback)
+	lenientParamRe = regexp.MustCompile(`(?s)<parameter[^>]*?(\w+)\s*>(.*?)</parameter>`)
+	// Split identifier on punctuation/whitespace
+	identSplitRe = regexp.MustCompile(`[.\s,;:!?]+`)
 )
 
 // ParseToolCalls extracts tool calls from LLM XML output.
@@ -82,8 +94,7 @@ func extractParams(body string) map[string]string {
 
 	// Strategy 2: Ultra-lenient — match anything that looks like <parameter...>...</parameter>
 	// Catches: <parameter = command>, <parameter  command >, etc.
-	lenientParam := regexp.MustCompile(`(?s)<parameter[^>]*?(\w+)\s*>(.*?)</parameter>`)
-	for _, pm := range lenientParam.FindAllStringSubmatch(body, -1) {
+	for _, pm := range lenientParamRe.FindAllStringSubmatch(body, -1) {
 		pName := sanitizeParamName(pm[1])
 		if pName != "" {
 			args[pName] = html.UnescapeString(strings.TrimSpace(pm[2]))
@@ -111,7 +122,7 @@ func sanitizeParamName(raw string) string {
 		return raw
 	}
 
-	parts := regexp.MustCompile(`[.\s,;:!?]+`).Split(raw, -1)
+	parts := identSplitRe.Split(raw, -1)
 	for i := len(parts) - 1; i >= 0; i-- {
 		p := strings.TrimSpace(parts[i])
 		if isIdentifier(p) {
@@ -178,9 +189,15 @@ func fixIncomplete(content string) string {
 // FormatToolCall formats a tool call back into XML for display.
 func FormatToolCall(name string, args map[string]string) string {
 	var b strings.Builder
-	b.WriteString("<function=" + name + ">\n")
+	b.WriteString("<function=")
+	b.WriteString(name)
+	b.WriteString(">\n")
 	for k, v := range args {
-		b.WriteString("<parameter=" + k + ">" + v + "</parameter>\n")
+		b.WriteString("<parameter=")
+		b.WriteString(k)
+		b.WriteString(">")
+		b.WriteString(v)
+		b.WriteString("</parameter>\n")
 	}
 	b.WriteString("</function>")
 	return b.String()
@@ -191,22 +208,11 @@ func CleanContent(content string) string {
 	content = normalizeFormat(content)
 	content = fixIncomplete(content)
 
-	toolPattern := regexp.MustCompile(`(?s)<function=[^>]+>.*?</function>`)
 	cleaned := toolPattern.ReplaceAllString(content, "")
-
-	incomplete := regexp.MustCompile(`(?s)<function=[^>]+>.*$`)
-	cleaned = incomplete.ReplaceAllString(cleaned, "")
-
-	for _, pat := range []string{
-		`<inter_agent_message>.*?</inter_agent_message>`,
-		`<agent_completion_report>.*?</agent_completion_report>`,
-	} {
-		re := regexp.MustCompile(`(?is)` + pat)
-		cleaned = re.ReplaceAllString(cleaned, "")
-	}
-
-	multiBlank := regexp.MustCompile(`\n\s*\n`)
-	cleaned = multiBlank.ReplaceAllString(cleaned, "\n\n")
+	cleaned = incompleteFunc.ReplaceAllString(cleaned, "")
+	cleaned = interAgentRe.ReplaceAllString(cleaned, "")
+	cleaned = agentReportRe.ReplaceAllString(cleaned, "")
+	cleaned = multiBlankRe.ReplaceAllString(cleaned, "\n\n")
 
 	return strings.TrimSpace(cleaned)
 }

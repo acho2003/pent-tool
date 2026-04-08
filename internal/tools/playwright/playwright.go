@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/internal/config"
-	"github.com/xalgord/xalgorix/internal/tools"
+	"github.com/xalgord/xalgorix/v3/internal/config"
+	"github.com/xalgord/xalgorix/v3/internal/tools"
 )
 
 var (

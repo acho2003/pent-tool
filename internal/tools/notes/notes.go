@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/xalgord/xalgorix/internal/tools"
+	"github.com/xalgord/xalgorix/v3/internal/tools"
 )
 
 var (
@@ -77,4 +77,15 @@ func readNotes(args map[string]string) (tools.Result, error) {
 		b.WriteString(fmt.Sprintf("📝 %s:\n%s\n\n", k, v))
 	}
 	return tools.Result{Output: b.String()}, nil
+}
+
+// GetAllNotes returns all notes as a map (for server-side access).
+func GetAllNotes() map[string]string {
+	mu.RLock()
+	defer mu.RUnlock()
+	result := make(map[string]string, len(store))
+	for k, v := range store {
+		result[k] = v
+	}
+	return result
 }

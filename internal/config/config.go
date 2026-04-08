@@ -5,6 +5,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,6 +48,10 @@ type Config struct {
 	AgentMailAPIKey string // AGENTMAIL_API_KEY - AgentMail API key
 	AgentMailPod    string // AGENTMAIL_POD - AgentMail pod (e.g., "am_us_pod_47")
 
+	// Dashboard auth
+	Username string // XALGORIX_USERNAME - dashboard login username
+	Password string // XALGORIX_PASSWORD - dashboard login password
+
 	// Paths
 	HomeDir   string // ~/.xalgorix
 	SkillsDir string // embedded or local skills directory
@@ -74,15 +79,23 @@ func load() *Config {
 	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
 		loadEnvFile(filepath.Join("/home", sudoUser, ".xalgorix.env"))
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("Warning: failed to get home directory: %v (using /root)", err)
+		home = "/root"
+	}
 	loadEnvFile(filepath.Join(home, ".xalgorix.env"))
 
 	xalgorixHome := filepath.Join(home, ".xalgorix")
 
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Printf("Warning: failed to get working directory: %v", err)
+		cwd = home
+	}
 	workspace := envOr("XALGORIX_WORKSPACE", cwd)
 
-	return &Config{
+	cfg := &Config{
 		// LLM
 		LLM:             envOr("XALGORIX_LLM", ""),
 		APIBase:         envOr("XALGORIX_API_BASE", ""),
@@ -114,10 +127,25 @@ func load() *Config {
 		AgentMailAPIKey: envOr("AGENTMAIL_API_KEY", ""),
 		AgentMailPod:    envOr("AGENTMAIL_POD", ""),
 
+		// Dashboard auth
+		Username: envOr("XALGORIX_USERNAME", ""),
+		Password: envOr("XALGORIX_PASSWORD", ""),
+
 		// Paths
 		HomeDir:   xalgorixHome,
 		SkillsDir: filepath.Join(xalgorixHome, "skills"),
 	}
+
+	// Debug: show loaded config so users can verify correct env was picked up
+	maskedKey := ""
+	if len(cfg.APIKey) > 8 {
+		maskedKey = cfg.APIKey[:4] + "****" + cfg.APIKey[len(cfg.APIKey)-4:]
+	} else if cfg.APIKey != "" {
+		maskedKey = "****"
+	}
+	fmt.Printf("[config] Loaded: LLM=%q APIBase=%q APIKey=%s\n", cfg.LLM, cfg.APIBase, maskedKey)
+
+	return cfg
 }
 
 // ResolveModel resolves a model name.
@@ -185,9 +213,10 @@ func CheckEnvFile() error {
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 
-		if key == "XALGORIX_LLM" {
+		switch key {
+		case "XALGORIX_LLM":
 			llm = value
-		} else if key == "XALGORIX_API_KEY" {
+		case "XALGORIX_API_KEY":
 			apiKey = value
 		}
 	}
@@ -223,7 +252,8 @@ func envOrBool(key string, fallback bool) bool {
 	return fallback
 }
 
-// loadEnvFile reads a KEY=VALUE env file and sets env vars that aren't already set.
+// loadEnvFile reads a KEY=VALUE env file and sets env vars.
+// Later calls override earlier ones, so higher-priority files should be loaded last.
 func loadEnvFile(path string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -248,9 +278,7 @@ func loadEnvFile(path string) {
 		value := strings.TrimSpace(parts[1])
 		// Strip surrounding quotes
 		value = strings.Trim(value, "\"'")
-		// Only set if not already defined in environment
-		if os.Getenv(key) == "" {
-			os.Setenv(key, value)
-		}
+		// Always set — later files override earlier ones
+		os.Setenv(key, value)
 	}
 }

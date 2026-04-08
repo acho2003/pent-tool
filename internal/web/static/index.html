@@ -10,6 +10,7 @@
 </head>
 <body>
   <div class="bg-grid"></div>
+  <div class="toast-container" id="toast-container"></div>
   
   <div class="app">
     <!-- Header -->
@@ -18,7 +19,7 @@
         <img src="/static/logo.png" alt="Xalgorix" style="height:40px;margin-right:10px;">
         <div>
           <div class="logo-text">XAL<span>GORIX</span></div>
-          <div class="logo-tag">Most Powerful Open-Source AI Pentesting</div>
+          <div class="logo-tag">Most Powerful Open-Source AI Pentesting Agent</div>
         </div>
       </a>
       
@@ -52,6 +53,131 @@
     </header>
     
     <div class="container">
+      <!-- Dashboard View (shown at /) -->
+      <div class="dashboard-view" id="dashboard-view">
+        <div class="dashboard-header">
+          <div class="dashboard-title-row">
+            <div>
+              <h2 class="dashboard-title">🎯 Scan Instances</h2>
+              <p class="dashboard-subtitle">Monitor and manage concurrent scan sessions</p>
+            </div>
+            <button class="btn btn-primary btn-new-scan" id="new-scan-btn" onclick="showNewScanPanel()">
+              <span>＋</span> New Scan
+            </button>
+          </div>
+        </div>
+        
+        <!-- New Scan inline panel (hidden by default) -->
+        <div class="new-scan-panel hidden" id="new-scan-panel">
+          <div class="input-row">
+            <select id="dash-scan-mode" class="input-field input-select">
+              <option value="single">🎯 Single Site Scan</option>
+              <option value="dast">🔍 DAST - Scan Specific URLs</option>
+              <option value="wildcard">🌐 Wildcard - Scan All Subdomains</option>
+            </select>
+            <input type="text" id="dash-target-input" class="input-field" placeholder="https://target.com — Target URL, domain, or IP">
+            <label class="file-btn" title="Upload targets file">
+              📂
+              <input type="file" id="dash-targets-file" accept=".txt,.csv,.list" style="display:none" onchange="handleDashTargetsFile(this)">
+            </label>
+          </div>
+
+          <div class="input-row severity-row">
+            <span class="severity-label">🎯 Severity Filter:</span>
+            <label class="severity-checkbox critical">
+              <input type="checkbox" id="dash-sev-critical" value="critical" checked>
+              <span>Critical</span>
+            </label>
+            <label class="severity-checkbox high">
+              <input type="checkbox" id="dash-sev-high" value="high" checked>
+              <span>High</span>
+            </label>
+            <label class="severity-checkbox medium">
+              <input type="checkbox" id="dash-sev-medium" value="medium" checked>
+              <span>Medium</span>
+            </label>
+            <label class="severity-checkbox low">
+              <input type="checkbox" id="dash-sev-low" value="low">
+              <span>Low</span>
+            </label>
+            <label class="severity-checkbox info">
+              <input type="checkbox" id="dash-sev-info" value="info">
+              <span>Info</span>
+            </label>
+          </div>
+
+          <div class="input-row">
+            <textarea id="dash-instruction-input" class="input-field input-textarea" placeholder="Custom instructions (optional) — or upload a file"></textarea>
+            <label class="file-btn" title="Upload instructions file">
+              📄
+              <input type="file" id="dash-instructions-file" accept=".txt,.md,.text" style="display:none" onchange="handleDashInstructionsFile(this)">
+            </label>
+          </div>
+
+          <details class="settings-toggle">
+            <summary>🤖 LLM Provider Settings</summary>
+            <div class="settings-panel">
+              <select id="dash-llm-provider" class="input-field">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="google">Google Gemini</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="groq">Groq</option>
+                <option value="minimax">MiniMax</option>
+                <option value="ollama">Ollama (Local)</option>
+                <option value="custom">Custom Provider</option>
+              </select>
+              <input type="text" id="dash-llm-model" class="input-field" placeholder="Model (e.g. gpt-5.4, claude-sonnet-4.6)">
+              <input type="password" id="dash-llm-apikey" class="input-field" placeholder="API Key" autocomplete="new-password">
+              <input type="text" id="dash-llm-apibase" class="input-field" placeholder="API Base URL">
+            </div>
+          </details>
+
+          <details class="settings-toggle">
+            <summary>🔔 Discord Notifications</summary>
+            <div class="settings-panel">
+              <input type="text" id="dash-discord-webhook" class="input-field" style="width: 100%;" placeholder="Discord Webhook URL">
+            </div>
+          </details>
+
+          <details class="settings-toggle">
+            <summary>⚡ Rate Limiting</summary>
+            <div class="settings-panel" style="grid-template-columns: 1fr 1fr;">
+              <input type="number" id="dash-rate-requests" class="input-field" placeholder="Requests (1-1000)" min="1" max="1000">
+              <input type="number" id="dash-rate-window" class="input-field" placeholder="Window (10-3600s)" min="10" max="3600">
+            </div>
+          </details>
+
+          <details class="settings-toggle">
+            <summary>📧 AgentMail (Email Verification)</summary>
+            <div class="settings-panel">
+              <input type="text" id="dash-agentmail-pod" class="input-field" placeholder="AgentMail Pod (e.g. am_us_pod_47)">
+              <input type="password" id="dash-agentmail-apikey" class="input-field" placeholder="AgentMail API Key">
+            </div>
+          </details>
+
+          <div class="btn-group">
+            <button class="btn btn-primary" onclick="startDashboardScan()">▶ Start Scan</button>
+            <button class="btn btn-secondary" onclick="hideNewScanPanel()">✕ Cancel</button>
+          </div>
+        </div>
+
+        <div class="instance-grid" id="instance-grid">
+          <div class="empty-state" id="dashboard-empty">
+            <div class="empty-icon">🛡️</div>
+            <div class="empty-title">No Active Scans</div>
+            <div class="empty-desc">Click "New Scan" to start your first pentesting session</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scan View (shown at /{instance_id}) -->
+      <div class="scan-view hidden" id="scan-view">
+        <div class="scan-view-nav">
+          <button class="btn btn-secondary btn-back" onclick="navigateToDashboard()">← Dashboard</button>
+          <span class="scan-view-instance-id" id="scan-view-instance-id"></span>
+        </div>
+
       <!-- Queue Bar -->
       <div class="queue-bar" id="queue-bar">
         <div class="queue-info">
@@ -126,7 +252,7 @@
                 <option value="custom">Custom Provider</option>
               </select>
               <input type="text" id="llm-model" class="input-field" placeholder="Model (e.g. gpt-5.4, claude-sonnet-4.6)">
-              <input type="password" id="llm-apikey" class="input-field" placeholder="API Key">
+              <input type="password" id="llm-apikey" class="input-field" placeholder="API Key" autocomplete="new-password">
               <input type="text" id="llm-apibase" class="input-field" placeholder="API Base URL">
             </div>
           </details>
@@ -180,6 +306,9 @@
             <div class="feed-header">
               <span class="feed-title">Live Feed</span>
               <div class="feed-actions">
+                <button class="scroll-toggle active" id="scroll-toggle" onclick="toggleAutoScroll()" title="Auto-scroll">
+                  <span class="scroll-dot"></span> Auto-scroll
+                </button>
                 <button class="feed-btn" onclick="downloadEvents()">Export</button>
                 <button class="feed-btn" onclick="scrollToBottom()">Latest</button>
               </div>
@@ -192,14 +321,13 @@
               </div>
             </div>
             <!-- Chat Input -->
-            <div id="chat-input-container" style="padding: 12px; background: #0a0a0b; border-top: 1px solid #1a1a1c; position: sticky; bottom: 0;">
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <input type="text" id="chat-input" placeholder="Send a message to Xalgorix during scan..." 
-                  style="flex:1; padding: 12px; background: #141416; border: 1px solid #2a2a2e; border-radius: 8px; color: #f0f0f2; font-size: 14px;"
+            <div id="chat-input-container" class="chat-container" style="display:none">
+              <div class="chat-row">
+                <input type="text" id="chat-input" class="chat-input" placeholder="Send a message to Xalgorix during scan..."
                   onkeypress="if(event.key==='Enter')sendChatMessage()">
-                <button onclick="sendChatMessage()" style="padding: 12px 20px; background: #00ff88; border: none; border-radius: 8px; color: #0a0a0b; cursor: pointer; font-weight: 700; font-size: 14px;">Send</button>
+                <button onclick="sendChatMessage()" class="chat-send">Send</button>
               </div>
-              <div style="font-size: 11px; color: #888; margin-top: 6px;">Chat is active during scans</div>
+              <div class="chat-hint">Chat is active during scans</div>
             </div>
           </div>
         </div>
@@ -252,6 +380,7 @@
           </div>
         </div>
       </div>
+      </div> <!-- end scan-view -->
       
       <!-- Footer -->
       <footer class="footer">
@@ -314,8 +443,14 @@
         <div class="modal-section">
           <div class="modal-label">Keyboard Shortcuts</div>
           <div class="modal-value">
-            <code style="background:var(--bg-tertiary);padding:4px 8px;border-radius:4px;font-size:12px">Enter</code> — Start scan<br>
-            <code style="background:var(--bg-tertiary);padding:4px 8px;border-radius:4px;font-size:12px">Esc</code> — Close modal
+            <div class="shortcut-row">
+              <span class="shortcut-key">Enter</span>
+              <span class="shortcut-desc">Start scan</span>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-key">Esc</span>
+              <span class="shortcut-desc">Close modal</span>
+            </div>
           </div>
         </div>
       </div>
