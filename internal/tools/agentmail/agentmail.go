@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v3/internal/config"
-	"github.com/xalgord/xalgorix/v3/internal/tools"
+	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
 const baseURL = "https://api.agentmail.to/v0"

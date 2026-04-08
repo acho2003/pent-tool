@@ -31,15 +31,15 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/xalgord/xalgorix/v3/internal/agent"
-	"github.com/xalgord/xalgorix/v3/internal/config"
-	"github.com/xalgord/xalgorix/v3/internal/tools/agentsgraph"
-	"github.com/xalgord/xalgorix/v3/internal/tools/notes"
-	"github.com/xalgord/xalgorix/v3/internal/tools/reporting"
-	"github.com/xalgord/xalgorix/v3/internal/tools/terminal"
+	"github.com/xalgord/xalgorix/v4/internal/agent"
+	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
+	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
+	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
+	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
 
-const version = "3.19.21"
+const version = "4.0.0"
 
 //go:embed static/*
 var staticFiles embed.FS

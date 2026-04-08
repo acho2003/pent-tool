@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/v3/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/config"
 )
 
 // Message represents a chat message.

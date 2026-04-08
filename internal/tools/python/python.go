@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v3/internal/config"
-	"github.com/xalgord/xalgorix/v3/internal/tools"
-	"github.com/xalgord/xalgorix/v3/internal/tools/terminal"
+	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/tools"
+	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
 
 // Register adds the python_action tool to the registry.

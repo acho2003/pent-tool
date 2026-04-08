@@ -9,9 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/xalgord/xalgorix/v3/internal/agent"
-	"github.com/xalgord/xalgorix/v3/internal/config"
-	"github.com/xalgord/xalgorix/v3/internal/tools/reporting"
+	"github.com/xalgord/xalgorix/v4/internal/agent"
+	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 )
 
 // ─── Color Palette ────────────────────────────────────────────────────────────

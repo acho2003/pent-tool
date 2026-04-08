@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v3/internal/tools"
+	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
 //go:embed data/*/*

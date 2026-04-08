@@ -1,4 +1,4 @@
-module github.com/xalgord/xalgorix/v3
+module github.com/xalgord/xalgorix/v4
 
 go 1.24.2
 

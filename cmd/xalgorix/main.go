@@ -14,12 +14,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v3/internal/config"
-	"github.com/xalgord/xalgorix/v3/internal/tui"
-	"github.com/xalgord/xalgorix/v3/internal/web"
+	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/tui"
+	"github.com/xalgord/xalgorix/v4/internal/web"
 )
 
-const version = "3.19.21"
+const version = "4.0.0"
 
 func main() {
 	// Top-level crash recovery — catches panics that escape all other handlers.
@@ -89,7 +89,7 @@ func main() {
 
 		// Use go install — clean, handles all architectures, always gets latest tagged version
 		// GOPROXY=direct bypasses proxy cache which can be 30+ min stale
-		cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v3/cmd/xalgorix@latest")
+		cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v4/cmd/xalgorix@latest")
 		cmd.Env = append(os.Environ(),
 			"GOPROXY=direct",
 			"GONOSUMCHECK=github.com/xalgord/*",
@@ -537,7 +537,7 @@ func autoUpdate() {
 	fmt.Printf("\n🔄 New version available: v%s → v%s\n", version, latestVer)
 	fmt.Println("   Installing update via go install...")
 
-	cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v3/cmd/xalgorix@v"+latestVer)
+	cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
 	cmd.Env = append(os.Environ(),
 		"GOPROXY=direct",
 		"GONOSUMCHECK=github.com/xalgord/*",
