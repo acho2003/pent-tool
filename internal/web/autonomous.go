@@ -118,18 +118,18 @@ For testing that requires a real browser (JavaScript execution, login flows, DOM
 
 **Key commands:** launch, goto, snapshot, click, type, submit, fill_form, get_cookies, save_session, wait, iframe, extract_links, execute_js, screenshot
 
-**Login/Signup Workflow:**
-1. ` + "`" + `browser_action` + "`" + ` command=launch url=https://TARGET/login
-2. ` + "`" + `browser_action` + "`" + ` command=snapshot → Returns element tree: ` + "`" + `[@e3] input(email) name="email"` + "`" + `, ` + "`" + `[@e5] input(password)` + "`" + `, etc.
-3. ` + "`" + `browser_action` + "`" + ` command=type selector=@e3 text=user@email.com
-4. ` + "`" + `browser_action` + "`" + ` command=type selector=@e5 text=password123
-5. ` + "`" + `browser_action` + "`" + ` command=submit → auto-clicks the submit button
-6. ` + "`" + `browser_action` + "`" + ` command=wait text=navigation → waits for redirect
-7. ` + "`" + `browser_action` + "`" + ` command=get_cookies → capture session tokens
-8. ` + "`" + `browser_action` + "`" + ` command=save_session → persist for later
+**Login/Signup Workflow (ALWAYS use agentmail):**
+1. Create agentmail inbox FIRST: ` + "`" + `agentmail` + "`" + ` action=create_inbox name=signup_test1
+2. Use that email (signup_test1@...) for ALL login/signup forms
+3. If signup requires email verification:
+   - After submitting form, call ` + "`" + `agentmail` + "`" + ` action=wait_for_email inbox_id=XXX subject=verify timeout=120
+   - Extract verification link from the email
+   - Navigate to that link in the browser to complete signup
+4. After login, ALWAYS: ` + "`" + `browser_action` + "`" + ` command=get_cookies then ` + "`" + `save_session
+5. Use saved session for IDOR, authenticated API testing, etc.
 
 **Multi-field form shortcut:**
-` + "`" + `browser_action` + "`" + ` command=fill_form fields=email=user@mail.com|password=Pass123!|name=Test
+` + "`" + `browser_action` + "`" + ` command=fill_form fields=email={{AGENTMAIL_EMAIL}}|password=Pass123!|name=Test
 
 **Iframe handling (for CAPTCHAs, embedded forms):**
 ` + "`" + `browser_action` + "`" + ` command=iframe selector=iframe#captcha-frame
@@ -309,6 +309,12 @@ Call report_vulnerability with exploitation_proof showing actual output.
 
 ## UNIVERSAL EMAIL USAGE
 When you need email for any test, use the agentmail tool — NEVER use random/fake emails.
+
+## LOGIN/SIGNUP TESTING (ALWAYS use agentmail):
+1. Create agentmail inbox FIRST: ` + "`" + `agentmail` + "`" + ` action=create_inbox name=test1
+2. If target has login/signup: use agentmail email + browser_action to test
+3. For signup with email verification: wait for email with ` + "`" + `agentmail` + "`" + ` action=wait_for_email inbox_id=XXX
+4. After login: ` + "`" + `browser_action` + "`" + ` command=save_session for IDOR testing
 
 Be efficient. If this subdomain is a duplicate or uninteresting, finish fast and move on.
 `
