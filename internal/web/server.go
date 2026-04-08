@@ -1247,9 +1247,18 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 	}
 
 	if evt.Type == "finished" {
+		// Build set of vulns already broadcast in real-time to avoid duplicates
+		seen := make(map[string]bool)
+		for _, v := range sess.record.Vulns {
+			seen[v.ID] = true
+		}
 		vulns := reporting.GetVulnerabilities()
-		log.Printf("[VULN] Finished event: total vulns in system: %d", len(vulns))
+		log.Printf("[VULN] Finished event: total vulns in system: %d, already broadcast: %d", len(vulns), len(seen))
 		for _, v := range vulns {
+			if seen[v.ID] {
+				log.Printf("[VULN] Finished: skipping already-broadcast vuln: %s %s", v.ID, v.Title)
+				continue
+			}
 			vs := vulnToSummary(v)
 			allowed := true
 			if len(sess.severityFilter) > 0 {
@@ -1263,7 +1272,7 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 			}
 			if allowed {
 				wsEvt.Vulns = append(wsEvt.Vulns, vs)
-				log.Printf("[VULN] Finished: adding vuln to final broadcast: %s %s", vs.Severity, vs.Title)
+				log.Printf("[VULN] Finished: adding new vuln to final broadcast: %s %s", vs.Severity, vs.Title)
 			} else {
 				log.Printf("[VULN] Finished: filtered vuln (not added to broadcast): %s (filter: %v)", vs.Severity, sess.severityFilter)
 			}
