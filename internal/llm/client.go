@@ -57,7 +57,7 @@ func (c *Client) GetTokens() (promptTokens, completionTokens, totalTokens int) {
 
 // NewClient creates a new LLM client.
 func NewClient(cfg *config.Config) *Client {
-	apiModel, _ := cfg.ResolveModel() // second return is provider name
+	apiModel := cfg.ResolveModel()
 	return &Client{
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 10 * time.Minute},
@@ -153,10 +153,10 @@ func (c *Client) resolveEndpoint() (string, string) {
 
 // Chat sends a non-streaming chat request and returns the full response.
 func (c *Client) Chat(messages []Message) (string, error) {
-	return c.chatWithRetry(messages, false)
+	return c.chatWithRetry(messages)
 }
 
-func (c *Client) chatWithRetry(messages []Message, _ bool) (string, error) {
+func (c *Client) chatWithRetry(messages []Message) (string, error) {
 	maxRetries := c.cfg.LLMMaxRetries
 	if maxRetries < 3 {
 		maxRetries = 3

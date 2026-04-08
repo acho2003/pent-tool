@@ -525,15 +525,17 @@ func runShell(command string) (string, int) {
 				// Stream partial output every 10 seconds
 				streamCallbackMu.Lock()
 				cb := streamCallback
-				streamCallbackMu.Unlock()
 				if cb != nil && time.Since(lastStream) > 10*time.Second {
-					// Send last 2000 chars of accumulated output
+					// Hold lock during callback to prevent ClearStreamCallback racing
 					out := stdout.String()
 					if len(out) > 2000 {
 						out = "...\n" + out[len(out)-2000:]
 					}
 					cb(out)
 					lastStream = time.Now()
+					streamCallbackMu.Unlock()
+				} else {
+					streamCallbackMu.Unlock()
 				}
 			}
 			if err != nil {

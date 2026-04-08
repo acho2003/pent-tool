@@ -149,13 +149,12 @@ func load() *Config {
 }
 
 // ResolveModel resolves a model name.
-// Returns (apiModel, displayModel).
-func (c *Config) ResolveModel() (string, string) {
+func (c *Config) ResolveModel() string {
 	model := c.LLM
 	if model == "" {
-		return "", ""
+		return ""
 	}
-	return model, model
+	return model
 }
 
 // WorkspacePath resolves a path relative to the workspace.

@@ -275,7 +275,7 @@ func (m *Model) handleEvent(evt agent.Event) {
 
 	// Keep log manageable
 	if len(m.chatLog) > 500 {
-		m.chatLog = m.chatLog[len(m.chatLog)-400:]
+		m.chatLog = m.chatLog[len(m.chatLog)-500:]
 	}
 }
 

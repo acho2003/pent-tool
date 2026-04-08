@@ -175,7 +175,7 @@ func (a *Agent) sinceActivity() time.Duration {
 
 // startWatchdog starts a background monitor that enforces:
 // 1. Per-process timeout: kills individual commands running > 30 minutes
-// 2. Scan-level timeout: force-stops entire scan after 2 hours
+// 2. Scan-level timeout: force-stops entire scan after 20 hours
 // 3. Idle detection: kills agent stuck with no processes and no LLM response for 15 minutes
 func (a *Agent) startWatchdog() func() {
 	stopChan := make(chan struct{})

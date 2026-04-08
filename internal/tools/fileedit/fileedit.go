@@ -87,8 +87,15 @@ func viewFile(path, viewRange string) (tools.Result, error) {
 	if viewRange != "" {
 		parts := strings.SplitN(viewRange, "-", 2)
 		if len(parts) == 2 {
-			startLine, _ = strconv.Atoi(parts[0])
-			endLine, _ = strconv.Atoi(parts[1])
+			var err error
+			startLine, err = strconv.Atoi(parts[0])
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("invalid start line in view_range: %s", parts[0])
+			}
+			endLine, err = strconv.Atoi(parts[1])
+			if err != nil {
+				return tools.Result{}, fmt.Errorf("invalid end line in view_range: %s", parts[1])
+			}
 		}
 	}
 
@@ -151,7 +158,10 @@ func insertInFile(path, newStr, insertLineStr string) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("cannot read file: %w", err)
 	}
 
-	insertLine, _ := strconv.Atoi(insertLineStr)
+	insertLine, err := strconv.Atoi(insertLineStr)
+	if err != nil {
+		return tools.Result{}, fmt.Errorf("invalid insert_line %q: %w", insertLineStr, err)
+	}
 	lines := strings.Split(string(data), "\n")
 
 	if insertLine < 0 || insertLine > len(lines) {

@@ -274,10 +274,8 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 
 	agentsMu.Lock()
 	state, exists := agents[agentID]
-	agentsMu.Unlock()
-
 	if !exists {
-		// List available agents
+		agentsMu.Unlock()
 		return tools.Result{
 			Output: fmt.Sprintf("❌ Agent '%s' not found.\n\nAvailable agents:\n%s", agentID, listAllAgents()),
 		}, nil
@@ -290,12 +288,10 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 	case "running":
 		b.WriteString(fmt.Sprintf("🔄 Agent '%s' (%s) — RUNNING for %s\n", state.Name, state.ID, elapsed))
 		b.WriteString(fmt.Sprintf("Task: %s\n", truncTask(state.Task, 150)))
-
-		// Show partial results if available
+		// Hold agentsMu while acquiring partialMu to prevent CleanupCompleted from freeing state
 		state.partialMu.Lock()
 		if len(state.partialResults) > 0 {
 			b.WriteString("\n--- Partial Results ---\n")
-			// Show last 5 partial results
 			start := 0
 			if len(state.partialResults) > 5 {
 				start = len(state.partialResults) - 5
@@ -307,6 +303,7 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 			b.WriteString("\n(No partial results yet — agent is still working)\n")
 		}
 		state.partialMu.Unlock()
+		agentsMu.Unlock()
 
 	case "completed":
 		completedElapsed := state.CompletedAt.Sub(state.StartedAt).Round(time.Second)
@@ -317,6 +314,7 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 			result = result[:5000] + "\n... [truncated]"
 		}
 		b.WriteString(result)
+		agentsMu.Unlock()
 
 	case "failed":
 		b.WriteString(fmt.Sprintf("❌ Agent '%s' (%s) — FAILED after %s\n", state.Name, state.ID, elapsed))
@@ -325,6 +323,7 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 			b.WriteString("\n--- Partial Results ---\n")
 			b.WriteString(state.Result)
 		}
+		agentsMu.Unlock()
 	}
 
 	return tools.Result{
@@ -397,20 +396,23 @@ func waitAgent(args map[string]string) (tools.Result, error) {
 func AddPartialResult(agentID string, result string) {
 	agentsMu.Lock()
 	state, exists := agents[agentID]
-	agentsMu.Unlock()
-
-	if !exists || state.Status != "running" {
+	if !exists {
+		agentsMu.Unlock()
 		return
 	}
-
+	// Hold agentsMu while acquiring partialMu to prevent CleanupCompleted from freeing state
 	state.partialMu.Lock()
-	defer state.partialMu.Unlock()
+	agentsMu.Unlock()
 
-	// Keep last 50 partial results
+	if state.Status != "running" {
+		state.partialMu.Unlock()
+		return
+	}
 	state.partialResults = append(state.partialResults, result)
 	if len(state.partialResults) > 50 {
 		state.partialResults = state.partialResults[len(state.partialResults)-50:]
 	}
+	state.partialMu.Unlock()
 }
 
 // GetRunningCount returns the number of running sub-agents.
