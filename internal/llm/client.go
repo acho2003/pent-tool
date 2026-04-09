@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -111,7 +110,8 @@ type geminiContent struct {
 }
 
 type geminiRequest struct {
-	Contents []geminiContent `json:"contents"`
+	Contents          []geminiContent `json:"contents,omitempty"`
+	SystemInstruction *geminiContent  `json:"system_instruction,omitempty"`
 }
 
 type geminiCandidate struct {
@@ -248,18 +248,26 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 
 		var body []byte
 		if isGoogle {
-			contents := make([]geminiContent, len(messages))
-			for i, m := range messages {
-				contents[i] = geminiContent{Role: m.Role, Parts: []geminiPart{{Text: m.Content}}}
+			// Google Gemini streaming: use streamGenerateContent endpoint
+			endpoint = strings.TrimSuffix(endpoint, "generateContent") + "streamGenerateContent"
+			var systemParts []geminiPart
+			contents := make([]geminiContent, 0, len(messages))
+			for _, m := range messages {
+				if m.Role == "system" {
+					systemParts = append(systemParts, geminiPart{Text: m.Content})
+				} else {
+					role := m.Role
+					if role == "assistant" {
+						role = "model"
+					}
+					contents = append(contents, geminiContent{Role: role, Parts: []geminiPart{{Text: m.Content}}})
+				}
 			}
 			gemReq := geminiRequest{Contents: contents}
-			body, _ = json.Marshal(gemReq)
-			// Google streaming uses alt=sse
-			if !strings.Contains(endpoint, "?") {
-				endpoint += "?alt=sse"
-			} else {
-				endpoint += "&alt=sse"
+			if len(systemParts) > 0 {
+				gemReq.SystemInstruction = &geminiContent{Role: "user", Parts: systemParts}
 			}
+			body, _ = json.Marshal(gemReq)
 		} else {
 			reqBody := chatRequest{Model: model, Messages: messages, Stream: true}
 			body, _ = json.Marshal(reqBody)
@@ -278,12 +286,7 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 		req.Header.Set("Content-Type", "application/json")
 		if isGoogle {
 			if c.cfg.APIKey != "" {
-				sep := "?"
-				if strings.Contains(endpoint, "?") {
-					sep = "&"
-				}
-				req.URL, _ = url.Parse(endpoint + sep + "key=" + c.cfg.APIKey)
-				req.Host = req.URL.Host
+				req.Header.Set("x-goog-api-key", c.cfg.APIKey)
 			}
 		} else if c.cfg.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
@@ -369,12 +372,26 @@ func (c *Client) doChat(messages []Message) (string, error) {
 	var body []byte
 	var err error
 	if isGoogle {
-		// Google Gemini uses contents/parts format
-		contents := make([]geminiContent, len(messages))
-		for i, m := range messages {
-			contents[i] = geminiContent{Role: m.Role, Parts: []geminiPart{{Text: m.Content}}}
+		// Google Gemini: extract system messages, convert roles
+		var systemParts []geminiPart
+		contents := make([]geminiContent, 0, len(messages))
+		for _, m := range messages {
+			if m.Role == "system" {
+				// System messages go to system_instruction
+				systemParts = append(systemParts, geminiPart{Text: m.Content})
+			} else {
+				// Map "assistant" to "model", keep "user" as-is
+				role := m.Role
+				if role == "assistant" {
+					role = "model"
+				}
+				contents = append(contents, geminiContent{Role: role, Parts: []geminiPart{{Text: m.Content}}})
+			}
 		}
 		gemReq := geminiRequest{Contents: contents}
+		if len(systemParts) > 0 {
+			gemReq.SystemInstruction = &geminiContent{Role: "user", Parts: systemParts}
+		}
 		body, err = json.Marshal(gemReq)
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal Gemini request: %w", err)
@@ -398,14 +415,9 @@ func (c *Client) doChat(messages []Message) (string, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 	if isGoogle {
-		// Google AI API uses ?key= query parameter, not Bearer token
+		// Google AI API uses x-goog-api-key header
 		if c.cfg.APIKey != "" {
-			sep := "?"
-			if strings.Contains(endpoint, "?") {
-				sep = "&"
-			}
-			req.URL, _ = url.Parse(endpoint + sep + "key=" + c.cfg.APIKey)
-			req.Host = req.URL.Host
+			req.Header.Set("x-goog-api-key", c.cfg.APIKey)
 		}
 	} else if c.cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
