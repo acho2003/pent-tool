@@ -203,7 +203,7 @@ nano ~/.xalgorix.env
 
 ```bash
 # Required
-XALGORIX_LLM=openai/gpt-4.5
+XALGORIX_LLM=openai/gpt-4o
 XALGORIX_API_KEY=your_api_key
 # OR use Anthropic:
 # XALGORIX_LLM=anthropic/claude-sonnet-4.7
@@ -321,7 +321,7 @@ xalgorix --target https://example.com
 
 Xalgorix supports multiple LLM providers:
 
-- **OpenAI** — `openai/gpt-4o`, `openai/gpt-5`, `openai/o1`, `openai/o3`
+- **OpenAI** — `openai/gpt-4o`, `openai/o1`, `openai/o3`
 - **Anthropic** — `anthropic/claude-opus-4.8`, `anthropic/claude-sonnet-4.7`
 - **DeepSeek** — `deepseek/deepseek-chat-v3`, `deepseek/deepseek-v3`, `deepseek/deepseek-coder`
 - **Google** — `google/gemini-2.0-flash`, `google/gemini-2.0-flash`
@@ -401,7 +401,7 @@ xalgorix/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `XALGORIX_LLM` | — | Model (e.g., `openai/gpt-4.5`, `anthropic/claude-sonnet-4.7`) |
+| `XALGORIX_LLM` | — | Model (e.g., `openai/gpt-4o`, `anthropic/claude-sonnet-4.7`) |
 | `XALGORIX_API_KEY` | — | Your API key |
 | `XALGORIX_API_BASE` | Auto-detected | API endpoint (set for custom providers) |
 | `XALGORIX_DISCORD_WEBHOOK` | — | Discord webhook URL |
@@ -416,7 +416,7 @@ xalgorix/
 
 | Provider | Model Example |
 |----------|--------------|
-| 🟢 OpenAI | `openai/gpt-4o`, `openai/gpt-5`, `openai/o1`, `openai/o3` |
+| 🟢 OpenAI | `openai/gpt-4o`, `openai/o1`, `openai/o3` |
 | 🔴 Anthropic | `anthropic/claude-opus-4.8`, `anthropic/claude-sonnet-4.7` |
 | 🟣 DeepSeek | `deepseek/deepseek-chat-v3`, `deepseek/deepseek-v3` |
 | 🟠 Google | `google/gemini-2.0-flash`, `google/gemini-2.0-flash` |
