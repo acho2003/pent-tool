@@ -108,7 +108,7 @@ func (c *Client) resolveEndpoint() (string, string) {
 	}
 
 	// Provider prefix in model name is the source of truth for API base.
-	// XALGORIX_API_BASE is only used for unknown/custom providers.
+	// However, if a non-empty API base was explicitly set (e.g., from web UI), use it.
 	providerBases := map[string]string{
 		"openai":    "https://api.openai.com/v1",
 		"anthropic": "https://api.anthropic.com",
@@ -120,12 +120,14 @@ func (c *Client) resolveEndpoint() (string, string) {
 		"gemini":    "https://generativelanguage.googleapis.com/v1",
 	}
 
-	if knownBase, ok := providerBases[provider]; ok {
-		// Known provider — always use its correct base, ignore XALGORIX_API_BASE
-		apiBase = knownBase
-	} else if apiBase == "" {
-		// Unknown/no provider and no API base set — default to OpenAI
-		apiBase = "https://api.openai.com/v1"
+	if apiBase == "" {
+		// No explicit API base set — use provider default
+		if knownBase, ok := providerBases[provider]; ok {
+			apiBase = knownBase
+		} else {
+			// Unknown/no provider — default to OpenAI
+			apiBase = "https://api.openai.com/v1"
+		}
 	}
 
 	apiBase = strings.TrimRight(apiBase, "/")

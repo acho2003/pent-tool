@@ -73,14 +73,49 @@
     };
 
     const LLM_PROVIDERS = {
-        openai: { model: 'gpt-5.4', prefix: 'openai', base: 'https://api.openai.com/v1' },
-        anthropic: { model: 'claude-sonnet-4-6', prefix: 'anthropic', base: 'https://api.anthropic.com/' },
-        google: { model: 'gemini-3-flash-preview', prefix: 'google', base: 'https://generativelanguage.googleapis.com/v1beta/openai/' },
-        deepseek: { model: 'deepseek-chat-v3', prefix: 'deepseek', base: 'https://api.deepseek.com/' },
-        groq: { model: 'llama-3.3-70b', prefix: 'groq', base: 'https://api.groq.com/openai/v1' },
-        minimax: { model: 'MiniMax-M2.7', prefix: 'minimax', base: 'https://api.minimax.io/' },
-        ollama: { model: 'llama-3.3-70b-instruct', prefix: 'ollama', base: 'http://localhost:11434/v1' },
-        custom: { model: '', prefix: '', base: '' },
+        openai: {
+            prefix: 'openai',
+            models: ['gpt-5.4', 'gpt-4o', 'o3', 'o4-mini', 'gpt-4o-mini'],
+            bases: [{ label: 'Global (Default)', value: 'https://api.openai.com/v1' }],
+        },
+        anthropic: {
+            prefix: 'anthropic',
+            models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+            bases: [{ label: 'Global (Default)', value: 'https://api.anthropic.com' }],
+        },
+        google: {
+            prefix: 'google',
+            models: ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash'],
+            bases: [{ label: 'Global (Default)', value: 'https://generativelanguage.googleapis.com/v1' }],
+        },
+        deepseek: {
+            prefix: 'deepseek',
+            models: ['deepseek-chat-v3', 'deepseek-v3', 'deepseek-coder'],
+            bases: [{ label: 'Global (Default)', value: 'https://api.deepseek.com/v1' }],
+        },
+        groq: {
+            prefix: 'groq',
+            models: ['llama-3.3-70b', 'qwen-3', 'mixtral-8x7b'],
+            bases: [{ label: 'Global (Default)', value: 'https://api.groq.com/openai/v1' }],
+        },
+        minimax: {
+            prefix: 'minimax',
+            models: ['MiniMax-M2.7', 'Text-01'],
+            bases: [
+                { label: '🌏 Global', value: 'https://api.minimax.io/v1' },
+                { label: '🇨🇳 China', value: 'https://api.minimax.cn/v1' },
+            ],
+        },
+        ollama: {
+            prefix: 'ollama',
+            models: ['llama-3.3-70b', 'qwen-3', 'mistral-nemo'],
+            bases: [{ label: 'Localhost (Default)', value: 'http://localhost:11434/v1' }],
+        },
+        custom: {
+            prefix: '',
+            models: [],
+            bases: [{ label: 'Custom Endpoint', value: '' }],
+        },
     };
 
     // ── WebSocket with Improved Reconnection ────────────────
@@ -1152,9 +1187,86 @@
     window.onProviderChange = function () {
         const provider = document.getElementById('llm-provider').value;
         const p = LLM_PROVIDERS[provider] || {};
-        document.getElementById('llm-model').value = p.model || '';
-        document.getElementById('llm-apibase').value = p.base || '';
-        document.getElementById('llm-model').placeholder = p.model ? `e.g. ${p.model}` : 'Model name';
+
+        // Rebuild model dropdown
+        const modelSelect = document.getElementById('llm-model');
+        modelSelect.innerHTML = '';
+        if (p.models && p.models.length > 0) {
+            p.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                modelSelect.appendChild(opt);
+            });
+            modelSelect.disabled = false;
+        } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'No models available';
+            modelSelect.appendChild(opt);
+            modelSelect.disabled = true;
+        }
+
+        // Rebuild API base dropdown
+        const baseSelect = document.getElementById('llm-apibase');
+        baseSelect.innerHTML = '';
+        if (p.bases && p.bases.length > 0) {
+            p.bases.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.value;
+                opt.textContent = b.label;
+                baseSelect.appendChild(opt);
+            });
+            baseSelect.disabled = false;
+        } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Custom';
+            baseSelect.appendChild(opt);
+            baseSelect.disabled = false;
+        }
+    };
+
+    // Same as onProviderChange but for dashboard header panel
+    window.onDashProviderChange = function () {
+        const provider = document.getElementById('dash-llm-provider').value;
+        const p = LLM_PROVIDERS[provider] || {};
+
+        const modelSelect = document.getElementById('dash-llm-model');
+        modelSelect.innerHTML = '';
+        if (p.models && p.models.length > 0) {
+            p.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                modelSelect.appendChild(opt);
+            });
+            modelSelect.disabled = false;
+        } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'No models available';
+            modelSelect.appendChild(opt);
+            modelSelect.disabled = true;
+        }
+
+        const baseSelect = document.getElementById('dash-llm-apibase');
+        baseSelect.innerHTML = '';
+        if (p.bases && p.bases.length > 0) {
+            p.bases.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.value;
+                opt.textContent = b.label;
+                baseSelect.appendChild(opt);
+            });
+            baseSelect.disabled = false;
+        } else {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Custom';
+            baseSelect.appendChild(opt);
+            baseSelect.disabled = false;
+        }
     };
 
     // Rate Limiting
@@ -1252,6 +1364,7 @@
 
     // Initialize
     window.onProviderChange();
+    window.onDashProviderChange();
     loadRateLimitSettings();
 
     // Load AgentMail settings
@@ -1545,14 +1658,22 @@
             severity_filter: severities,
         };
         
+        const provider = document.getElementById('dash-llm-provider').value;
         const model = (document.getElementById('dash-llm-model') || {}).value;
         const apiKey = (document.getElementById('dash-llm-apikey') || {}).value;
         const apiBase = (document.getElementById('dash-llm-apibase') || {}).value;
         const discord = (document.getElementById('dash-discord-webhook') || {}).value;
-        
-        if (model) payload.model = model;
-        if (apiKey) payload.api_key = apiKey;
-        if (apiBase) payload.api_base = apiBase;
+        const p = LLM_PROVIDERS[provider] || {};
+
+        if (apiKey) {
+            // Only send LLM overrides if API key is provided
+            const effectiveModel = model || p.models?.[0] || '';
+            if (effectiveModel) {
+                payload.model = p.prefix ? `${p.prefix}/${effectiveModel}` : effectiveModel;
+            }
+            payload.api_key = apiKey;
+            if (apiBase) payload.api_base = apiBase;
+        }
         if (discord) payload.discord_webhook = discord;
         
         fetch('/api/scan', {

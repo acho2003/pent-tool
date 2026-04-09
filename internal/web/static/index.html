@@ -117,7 +117,7 @@
           <details class="settings-toggle">
             <summary>🤖 LLM Provider Settings</summary>
             <div class="settings-panel">
-              <select id="dash-llm-provider" class="input-field">
+              <select id="dash-llm-provider" class="input-field" onchange="onDashProviderChange()">
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic (Claude)</option>
                 <option value="google">Google Gemini</option>
@@ -127,9 +127,9 @@
                 <option value="ollama">Ollama (Local)</option>
                 <option value="custom">Custom Provider</option>
               </select>
-              <input type="text" id="dash-llm-model" class="input-field" placeholder="Model (e.g. gpt-5.4, claude-sonnet-4-6)">
+              <select id="dash-llm-model" class="input-field"></select>
               <input type="password" id="dash-llm-apikey" class="input-field" placeholder="API Key" autocomplete="new-password">
-              <input type="text" id="dash-llm-apibase" class="input-field" placeholder="API Base URL">
+              <select id="dash-llm-apibase" class="input-field"></select>
             </div>
           </details>
 
@@ -251,9 +251,9 @@
                 <option value="ollama">Ollama (Local)</option>
                 <option value="custom">Custom Provider</option>
               </select>
-              <input type="text" id="llm-model" class="input-field" placeholder="Model (e.g. gpt-5.4, claude-sonnet-4-6)">
+              <select id="llm-model" class="input-field"></select>
               <input type="password" id="llm-apikey" class="input-field" placeholder="API Key" autocomplete="new-password">
-              <input type="text" id="llm-apibase" class="input-field" placeholder="API Base URL">
+              <select id="llm-apibase" class="input-field"></select>
             </div>
           </details>
           
