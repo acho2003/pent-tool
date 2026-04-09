@@ -124,6 +124,13 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Global thin scrollbar — matches cyberpunk aesthetic */
+html::-webkit-scrollbar { width: 4px; }
+html::-webkit-scrollbar-track { background: transparent; }
+html::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+html::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+html { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
 body {
   font-family: var(--font);
   background: var(--bg-primary);
