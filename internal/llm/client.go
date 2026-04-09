@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -208,7 +209,7 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 	go func() {
 		defer close(ch)
 
-		url, model := c.resolveEndpoint()
+		endpoint, model := c.resolveEndpoint()
 
 		reqBody := chatRequest{
 			Model:    model,
@@ -225,14 +226,25 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 		if reqCtx == nil {
 			reqCtx = context.Background()
 		}
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			ch <- StreamChunk{Err: err}
 			return
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		if c.cfg.APIKey != "" {
+		if strings.Contains(endpoint, "generativelanguage") || strings.Contains(endpoint, "google") {
+			// Google AI API uses ?key= parameter, not Bearer token
+			if c.cfg.APIKey != "" {
+				if strings.Contains(endpoint, "?") {
+					endpoint += "&key=" + c.cfg.APIKey
+				} else {
+					endpoint += "?key=" + c.cfg.APIKey
+				}
+				req.URL, _ = url.Parse(endpoint)
+				req.Host = req.URL.Host
+			}
+		} else if c.cfg.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 		}
 
@@ -299,8 +311,8 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 
 // doChat performs a single non-streaming API call.
 func (c *Client) doChat(messages []Message) (string, error) {
-	url, model := c.resolveEndpoint()
-	log.Printf("[llm] Request → URL=%s model=%s apiModel=%s cfgLLM=%s cfgAPIBase=%s", url, model, c.apiModel, c.cfg.LLM, c.cfg.APIBase)
+	endpoint, model := c.resolveEndpoint()
+	log.Printf("[llm] Request → URL=%s model=%s apiModel=%s cfgLLM=%s cfgAPIBase=%s", endpoint, model, c.apiModel, c.cfg.LLM, c.cfg.APIBase)
 
 	reqBody := chatRequest{
 		Model:    model,
@@ -317,13 +329,24 @@ func (c *Client) doChat(messages []Message) (string, error) {
 	if reqCtx == nil {
 		reqCtx = context.Background()
 	}
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if c.cfg.APIKey != "" {
+	if strings.Contains(endpoint, "generativelanguage") || strings.Contains(endpoint, "google") {
+		// Google AI API uses ?key= parameter, not Bearer token
+		if c.cfg.APIKey != "" {
+			if strings.Contains(endpoint, "?") {
+				endpoint += "&key=" + c.cfg.APIKey
+			} else {
+				endpoint += "?key=" + c.cfg.APIKey
+			}
+			req.URL, _ = url.Parse(endpoint)
+			req.Host = req.URL.Host
+		}
+	} else if c.cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	}
 
