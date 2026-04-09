@@ -3,6 +3,7 @@ package agentsgraph
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,6 +199,17 @@ func spawnAgent(args map[string]string) (tools.Result, error) {
 
 	// Launch in background goroutine
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[PANIC] spawnAgent goroutine panicked: %v", r)
+				agentsMu.Lock()
+				state.Status = "failed"
+				state.Error = fmt.Sprintf("panic: %v", r)
+				state.CompletedAt = time.Now()
+				agentsMu.Unlock()
+			}
+		}()
+
 		// Check if reset was requested before acquiring slot
 		if agentsStopped.Load() {
 			agentsMu.Lock()

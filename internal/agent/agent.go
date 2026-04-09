@@ -183,7 +183,7 @@ func (a *Agent) startWatchdog() func() {
 	const (
 		processMaxDuration = 30 * time.Minute  // kill single process after this
 		scanMaxDuration    = 20 * time.Hour    // kill entire scan after this
-		idleKillThreshold  = 15 * time.Minute  // kill if truly idle this long
+		idleKillThreshold  = 60 * time.Minute  // kill if truly idle this long
 	)
 
 	go func() {

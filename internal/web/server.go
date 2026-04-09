@@ -1108,7 +1108,11 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		defer func() { recover() }() // never panic in event processor
+		defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC] Event processor panicked: %v — continuing", r)
+		}
+	}() // never let panic escape event processor
 		for evt := range events {
 			s.processEvent(evt, sess)
 		}
