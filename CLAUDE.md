@@ -11,12 +11,15 @@ Xalgorix is an autonomous AI pentesting agent written in Go. It uses an LLM-driv
 ## Build Commands
 
 ```bash
-make build       # Build binary to ./build/xalgorix
+make build       # Build binary to ./build/xalgorix (v4.0.3 with injected LDFLAGS)
 make run         # Run with: go run ./cmd/xalgorix/ [args]
 make test        # Run all tests
 make lint        # go fmt + go vet
 make tidy        # go mod tidy
 make all         # tidy + lint + build
+make install     # Build and install to /usr/local/bin/xalgorix
+make clean       # Remove ./build and run go clean
+go test ./... -v -run TestName    # Run a single test
 ```
 
 Binary is also pre-built at `./xalgorix` (Linux amd64).
@@ -25,59 +28,76 @@ Binary is also pre-built at `./xalgorix` (Linux amd64).
 
 ### Core Layers
 
-1. **cmd/xalgorix/** — CLI entry point; parses flags, starts web server or runs agent
+1. **cmd/xalgorix/** — CLI entry point; parses flags, handles systemd service lifecycle (--start/--stop/--restart/--uninstall), triggers auto-update from GitHub
 2. **internal/agent/** — Agent loop: LLM client + tool registry + event emitter; runs the 20-phase pentest methodology
 3. **internal/llm/** — LLM client wrapping OpenAI/Anthropic/etc. API with streaming support
 4. **internal/web/** — HTTP+WebSocket server for the dashboard; serves embedded static UI
-5. **internal/tui/** — Terminal UI using charmbretea
+5. **internal/tui/** — Terminal UI using charmbracelet/bubbletea
 6. **internal/config/** — Environment-based configuration (XALGORIX_* env vars)
-7. **internal/tools/** — Tool implementations (11 built-in tools registered via registry)
+7. **internal/tools/** — Tool implementations registered via registry
 
 ### Tool System
 
-Tools are registered in `internal/tools/registry.go` via `Register(*tools.Registry)` functions in each sub-package:
+Tools are registered in `internal/tools/registry.go` via `Register(*tools.Registry)` in each sub-package:
 
 | Package | Tool Name | Purpose |
 |---------|-----------|---------|
-| `terminal` | `terminal_action` | Shell command execution with safety filters |
+| `terminal` | `terminal_action` | Shell command execution with safety filters + auto-install |
 | `browser` | `browser_action` | Headless Chrome via go-rod |
 | `python` | `python_action` | Python script execution |
-| `reporting` | `report_vulns` | Vulnerability report generation |
+| `reporting` | `report_vulns` | Vulnerability report generation with strict gates |
 | `websearch` | `websearch_action` | Web search via Gemini/Brave/Google |
-| `fileedit` | `file_edit` | File read/write (restricted) |
+| `fileedit` | `file_edit` | Restricted file read/write |
 | `finish` | `finish_scan` | Mark scan complete |
-| `notes` | `notes_action` | Notes |
+| `notes` | `notes_action` | Scan notes |
 | `proxy` | `proxy_action` | Caido proxy integration |
 | `agentmail` | `agentmail_action` | Temp email for sign-up verification |
 | `skills` | `skills_action` | Vulnerability methodology knowledge |
+| `agentsgraph` | — | Spawns sub-agents via callback |
+
+Skills are loaded from `internal/tools/skills/data/` (40+ skill files covering vulnerabilities, frameworks, protocols, cloud, reconnaissance).
+
+### Agent Loop (internal/agent/agent.go Run())
+
+1. Build system prompt with tool schema, targets, and 20-phase methodology checklist
+2. Iteratively call `client.Chat(messages)` → parse XML tool calls → execute tools → append results
+3. `canFinish()` gate: rejects finish if recon not done, < 5 commands, or missing key phases
+4. Watchdog: 30min per-process timeout, 20hr scan timeout, 60min idle kill
+5. Message pruning after 100 messages: keeps system prompt + continuation marker + 60 recent
+6. Circuit breaker: 5 consecutive failures → 60s block per tool
+
+### Scan Modes
+
+- **Single Scan** — Direct target scan
+- **DAST Scan** — URL crawl → param discovery → vulnerability testing
+- **Wildcard Scan** — Two-phase: Phase 1 subdomain enum via agent → Phase 2 per-subdomain full scan (10s cooldown between subs, runtime.GC() between scans)
 
 ### Data Flow
 
 ```
 User → Web Server → Agent → Tools → Results
               ↓              ↓
-         WebSocket       State File
-         (live feed)     (scan.json)
+         WebSocket       scan.json
+         (live feed)     ~/xalgorix-data/<target>/<date>/<slug>/
 ```
 
 ### Web Server Architecture
 
 The HTTP server (`internal/web/server.go`) handles:
 - Static file serving (embedded via `go:embed static/*`)
-- WebSocket endpoint for live agent events
-- REST API (`/api/scan`, `/api/stop`, `/api/status`, etc.)
+- WebSocket endpoint (`/ws`) for live agent events
+- REST API (`/api/scan`, `/api/stop`, `/api/status`, `/api/chat`, etc.)
 - Rate limiting per client IP
 - Optional dashboard authentication
+- Discord webhook notifications on scan start/vuln/completion
 
-### Scan Modes
+### Auto-Install System
 
-- **Single Scan** — One target, full vulnerability testing
-- **DAST Scan** — Specific URL with crawling → param discovery → vuln testing
-- **Wildcard Scan** — Subdomain enumeration then scan each subdomain
+The `terminal` tool pre-checks and auto-installs missing tools before running (70+ tool→package mappings: apt, go install, cargo, pip, etc.). A `fixHttpxConflict()` at agent init removes Python httpx if it shadows ProjectDiscovery's httpx.
 
 ## Configuration
 
-All config is via environment variables (loaded from `~/.xalgorix.env` and `/etc/xalgorix.env`):
+All config via environment variables (loaded from `~/.xalgorix.env` and `/etc/xalgorix.env`):
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -94,8 +114,9 @@ Supported provider prefixes: `openai/`, `anthropic/`, `deepseek/`, `groq/`, `goo
 
 ## Key Implementation Details
 
-- Agent uses a `messages []llm.Message` slice as conversation history; append-only with memory compression when context exceeds limits
+- Agent uses `messages []llm.Message` as conversation history; append-only with pruning
 - Tools return `tools.Result` with `stdout`, `stderr`, `error`, `success` fields
-- Safety filters in `terminal` tool block destructive commands (rm -rf /, DROP TABLE, etc.) and detect encoding bypasses (base64, hex, URL encoding)
-- Circuit breaker: after 5 consecutive failures, a tool is blocked for 60s
-- Scan state persisted to `~/xalgorix-data/<target>/<date>/scan.json` for resume support
+- Safety filters block destructive commands (rm -rf /, DROP TABLE, etc.) and detect encoding bypasses (base64, hex, URL encoding)
+- Process group tracking: all spawned processes tracked in `processGroup` map, killed via `KillAllProcesses()` (SIGKILL to process group)
+- Scan state persisted to `~/xalgorix-data/<target>/<date>/scan.json`; 30-day auto-cleanup
+- Binary pre-built at `./xalgorix` (Linux amd64); `xalgorix --update` or `go install` for updates
