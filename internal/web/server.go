@@ -39,7 +39,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
 
-const version = "4.0.8"
+const version = "4.0.9"
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -507,6 +507,7 @@ type ScanRecord struct {
 	StartedAt   string      `json:"started_at"`
 	FinishedAt  string      `json:"finished_at,omitempty"`
 	Status      string      `json:"status"` // running, finished, stopped
+	StopReason  string      `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
 	Events      []WSEvent   `json:"events"`
 	Vulns       []VulnSummary `json:"vulns"`
 	TotalTokens int         `json:"total_tokens"`
@@ -531,6 +532,7 @@ type ScanInstance struct {
 	Status      string             `json:"status"` // running, finished, stopped
 	StartedAt   string             `json:"started_at"`
 	FinishedAt  string             `json:"finished_at,omitempty"`
+	StopReason  string             `json:"stop_reason,omitempty"` // why stopped (user, error, watchdog)
 	Iterations  int                `json:"iterations"`
 	ToolCalls   int                `json:"tool_calls"`
 	VulnCount   int                `json:"vuln_count"`
@@ -616,7 +618,7 @@ func NewServer(cfg *config.Config, port int) *Server {
 	// Rate limit from config (defaults: 60 requests per minute)
 	rl := NewRateLimiter(cfg.RateLimitRequests, time.Duration(cfg.RateLimitWindow)*time.Second)
 	
-	return &Server{
+	srv := &Server{
 		cfg:            cfg,
 		port:           port,
 		clients:        make(map[*wsClient]bool),
@@ -625,6 +627,11 @@ func NewServer(cfg *config.Config, port int) *Server {
 		rateLimiter:    rl,
 		instances:      make(map[string]*ScanInstance),
 	}
+
+	// Rebuild instances map from disk so dashboard shows historical scans on startup
+	srv.rebuildInstancesFromDisk()
+
+	return srv
 }
 
 // Start launches the web server.
@@ -836,6 +843,8 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		inst.mu.Lock()
 		if inst.Status == "running" {
 			inst.Status = "stopped"
+			inst.StopReason = "user_stopped"
+			inst.FinishedAt = time.Now().Format(time.RFC3339)
 			if inst.cancel != nil {
 				inst.cancel()
 			}
@@ -948,6 +957,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		inst.mu.Lock()
 		if inst.Status == "running" {
 			inst.Status = "stopped"
+			inst.StopReason = "user_stopped"
 			inst.FinishedAt = time.Now().Format(time.RFC3339)
 			if inst.cancel != nil {
 				inst.cancel()
@@ -1393,6 +1403,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 			// If cancelled while pending
 			s.instancesMu.Lock()
 			instance.Status = "stopped"
+			instance.StopReason = "user_stopped"
 			instance.FinishedAt = time.Now().Format(time.RFC3339)
 			s.instancesMu.Unlock()
 			s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
@@ -1507,8 +1518,8 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		// Update queue state after each target
 		s.saveQueueState(req.Targets, i, req.Instruction, req.ScanMode)
 
-		// Per-target context with 2-hour timeout (use stop button for manual control)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+		// No per-target timeout — let scans run indefinitely; user uses stop button
+		ctx, cancel := context.WithCancel(context.Background())
 		s.mu.Lock()
 		s.cancelScan = cancel
 		s.mu.Unlock()
@@ -2225,7 +2236,13 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 		return "", nil
 	}
 
-	// First: try direct path (legacy flat structure)
+	// First: walk the nested tree to find the scan by ID (dataDir/target/date/slug/scan.json)
+	for _, entry := range s.findAllScans() {
+		if entry.rec.ID == scanID || filepath.Base(entry.dir) == scanID {
+			return entry.dir, &entry.rec
+		}
+	}
+	// Second: try legacy flat path as fallback (dataDir/scanID/scan.json)
 	direct := filepath.Join(s.dataDir, scanID, "scan.json")
 	if data, err := os.ReadFile(direct); err == nil {
 		var rec ScanRecord
@@ -2233,13 +2250,27 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 			return filepath.Join(s.dataDir, scanID), &rec
 		}
 	}
-	// Second: walk the tree to find the scan by ID
-	for _, entry := range s.findAllScans() {
-		if entry.rec.ID == scanID || filepath.Base(entry.dir) == scanID {
-			return entry.dir, &entry.rec
-		}
-	}
 	return "", nil
+}
+
+// rebuildInstancesFromDisk populates s.instances from all saved scan.json files on disk.
+// This ensures the dashboard shows historical scans immediately after server restart.
+func (s *Server) rebuildInstancesFromDisk() {
+	for _, entry := range s.findAllScans() {
+		inst := &ScanInstance{
+			ID:          entry.rec.ID,
+			Targets:     entry.rec.Target,
+			Status:      entry.rec.Status,
+			StartedAt:   entry.rec.StartedAt,
+			FinishedAt:  entry.rec.FinishedAt,
+			StopReason:  entry.rec.StopReason,
+			Iterations:  entry.rec.Iterations,
+			ToolCalls:   entry.rec.ToolCalls,
+			VulnCount:   len(entry.rec.Vulns),
+			TotalTokens: entry.rec.TotalTokens,
+		}
+		s.instances[entry.rec.ID] = inst
+	}
 }
 
 // handleListScans returns a list of all saved scans (sorted newest first).

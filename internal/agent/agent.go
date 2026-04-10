@@ -175,15 +175,15 @@ func (a *Agent) sinceActivity() time.Duration {
 
 // startWatchdog starts a background monitor that enforces:
 // 1. Per-process timeout: kills individual commands running > 30 minutes
-// 2. Scan-level timeout: force-stops entire scan after 20 hours
-// 3. Idle detection: kills agent stuck with no processes and no LLM response for 15 minutes
+// 2. Scan-level timeout: force-stops entire scan after scanMaxDuration (0 = infinite)
+// 3. Idle detection: kills agent stuck with no processes and no LLM response (0 = disabled)
 func (a *Agent) startWatchdog() func() {
 	stopChan := make(chan struct{})
 
 	const (
-		processMaxDuration = 30 * time.Minute  // kill single process after this
-		scanMaxDuration    = 20 * time.Hour    // kill entire scan after this
-		idleKillThreshold  = 60 * time.Minute  // kill if truly idle this long
+		processMaxDuration = 30 * time.Minute // kill single process after this
+		scanMaxDuration    = 0               // 0 = infinite (no scan-level timeout)
+		idleKillThreshold  = 0 * time.Minute // 0 = disabled (was 60min)
 	)
 
 	go func() {
@@ -203,16 +203,18 @@ func (a *Agent) startWatchdog() func() {
 					return
 				}
 
-				// ── Check 1: Scan-level timeout (2 hours) ──
-				scanDuration := time.Since(a.scanStart)
-				if scanDuration > scanMaxDuration {
-					a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Scan timeout: scan has been running for %s (max %s). Force stopping.", scanDuration.Round(time.Minute), scanMaxDuration)})
-					a.stopped.Store(true)
-					if a.cancel != nil {
-						a.cancel()
+				// ── Check 1: Scan-level timeout (0 = infinite/disabled) ──
+				if scanMaxDuration > 0 {
+					scanDuration := time.Since(a.scanStart)
+					if scanDuration > time.Duration(scanMaxDuration)*time.Hour {
+						a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Scan timeout: scan has been running for %s (max %s). Force stopping.", scanDuration.Round(time.Minute), time.Duration(scanMaxDuration)*time.Hour)})
+						a.stopped.Store(true)
+						if a.cancel != nil {
+							a.cancel()
+						}
+						terminal.KillAllProcesses()
+						return
 					}
-					terminal.KillAllProcesses()
-					return
 				}
 
 				// ── Reap dead processes that weren't properly untracked ──
@@ -256,24 +258,26 @@ func (a *Agent) startWatchdog() func() {
 					continue
 				}
 
-				// ── Check 3: Idle detection (no processes, no LLM response) ──
-				idleTime := a.sinceActivity()
-				if idleTime > 5*time.Minute && idleTime <= 10*time.Minute {
-					a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ Watchdog: No activity for %s. No active processes.", idleTime.Round(time.Second))})
-				}
-
-				if idleTime > 10*time.Minute && idleTime <= idleKillThreshold {
-					a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ Watchdog: Idle for %s. Will force-stop at %s.", idleTime.Round(time.Second), idleKillThreshold)})
-				}
-
-				if idleTime > idleKillThreshold {
-					a.emit(Event{Type: "error", Content: fmt.Sprintf("⚠️ Watchdog: Agent truly stuck for %s (no active processes, no LLM response). Force stopping.", idleTime.Round(time.Second))})
-					a.stopped.Store(true)
-					if a.cancel != nil {
-						a.cancel()
+				// ── Check 3: Idle detection (idleKillThreshold = 0 means disabled) ──
+				if idleKillThreshold > 0 {
+					idleTime := a.sinceActivity()
+					if idleTime > 5*time.Minute && idleTime <= 10*time.Minute {
+						a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ Watchdog: No activity for %s. No active processes.", idleTime.Round(time.Second))})
 					}
-					terminal.KillAllProcesses()
-					return
+
+					if idleTime > 10*time.Minute && idleTime <= idleKillThreshold {
+						a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ Watchdog: Idle for %s. Will force-stop at %s.", idleTime.Round(time.Second), idleKillThreshold)})
+					}
+
+					if idleTime > idleKillThreshold {
+						a.emit(Event{Type: "error", Content: fmt.Sprintf("⚠️ Watchdog: Agent truly stuck for %s (no active processes, no LLM response). Force stopping.", idleTime.Round(time.Second))})
+						a.stopped.Store(true)
+						if a.cancel != nil {
+							a.cancel()
+						}
+						terminal.KillAllProcesses()
+						return
+					}
 				}
 			}
 		}

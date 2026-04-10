@@ -1158,6 +1158,10 @@
                 document.getElementById('target-input').value = scan.target;
             }
 
+            // Switch to scan view and render the instance grid so dashboard shows the loaded scan
+            currentView = 'scan';
+            renderInstanceGrid();
+
             feed.scrollTop = feed.scrollHeight;
         } catch (e) {
             console.log('No previous scan to restore');
