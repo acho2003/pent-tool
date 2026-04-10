@@ -502,10 +502,11 @@ type VulnSummary struct {
 
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
-	ID          string      `json:"id"`
-	Target      string      `json:"target"`
-	StartedAt   string      `json:"started_at"`
-	FinishedAt  string      `json:"finished_at,omitempty"`
+	ID           string      `json:"id"`
+	Target       string      `json:"target"`
+	ParentTarget string      `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
+	StartedAt    string      `json:"started_at"`
+	FinishedAt   string      `json:"finished_at,omitempty"`
 	Status      string      `json:"status"` // running, finished, stopped
 	StopReason  string      `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
 	Events      []WSEvent   `json:"events"`
@@ -527,8 +528,9 @@ type QueueState struct {
 
 // ScanInstance represents a running or completed scan instance.
 type ScanInstance struct {
-	ID          string             `json:"id"`
-	Targets     string             `json:"targets"`
+	ID           string             `json:"id"`
+	Targets      string             `json:"targets"`
+	ParentTarget string             `json:"parent_target,omitempty"` // parent domain for subdomain scans
 	Status      string             `json:"status"` // running, finished, stopped
 	StartedAt   string             `json:"started_at"`
 	FinishedAt  string             `json:"finished_at,omitempty"`
@@ -1765,12 +1767,13 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				newVulns := allVulns[vulnCountBefore:]
 				if len(newVulns) > 0 {
 					subScanRecord := ScanRecord{
-						ID:         filepath.Base(subScanDir),
-						Target:     subdomain,
-						StartedAt:  time.Now().Format(time.RFC3339),
-						Status:     "finished",
-						FinishedAt: time.Now().Format(time.RFC3339),
-						Vulns:      []VulnSummary{},
+						ID:           filepath.Base(subScanDir),
+						Target:       subdomain,
+						ParentTarget: target,
+						StartedAt:    time.Now().Format(time.RFC3339),
+						Status:       "finished",
+						FinishedAt:   time.Now().Format(time.RFC3339),
+						Vulns:        []VulnSummary{},
 					}
 					for _, v := range newVulns {
 						subScanRecord.Vulns = append(subScanRecord.Vulns, vulnToSummary(v))
@@ -2258,16 +2261,17 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 func (s *Server) rebuildInstancesFromDisk() {
 	for _, entry := range s.findAllScans() {
 		inst := &ScanInstance{
-			ID:          entry.rec.ID,
-			Targets:     entry.rec.Target,
-			Status:      entry.rec.Status,
-			StartedAt:   entry.rec.StartedAt,
-			FinishedAt:  entry.rec.FinishedAt,
-			StopReason:  entry.rec.StopReason,
-			Iterations:  entry.rec.Iterations,
-			ToolCalls:   entry.rec.ToolCalls,
-			VulnCount:   len(entry.rec.Vulns),
-			TotalTokens: entry.rec.TotalTokens,
+			ID:           entry.rec.ID,
+			Targets:      entry.rec.Target,
+			ParentTarget: entry.rec.ParentTarget,
+			Status:       entry.rec.Status,
+			StartedAt:    entry.rec.StartedAt,
+			FinishedAt:   entry.rec.FinishedAt,
+			StopReason:   entry.rec.StopReason,
+			Iterations:   entry.rec.Iterations,
+			ToolCalls:    entry.rec.ToolCalls,
+			VulnCount:    len(entry.rec.Vulns),
+			TotalTokens:  entry.rec.TotalTokens,
 		}
 		s.instances[entry.rec.ID] = inst
 	}
@@ -2634,10 +2638,24 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, rec := s.findScanByID(scanID)
+	dir, rec := s.findScanByID(scanID)
 	if rec == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`null`))
+		return
+	}
+
+	// DELETE /api/scans/{id} — delete scan from disk and memory
+	if r.Method == http.MethodDelete {
+		if dir != "" {
+			os.RemoveAll(dir)
+		}
+		// Remove from in-memory instances map
+		s.instancesMu.Lock()
+		delete(s.instances, scanID)
+		s.instancesMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"deleted"}`))
 		return
 	}
 

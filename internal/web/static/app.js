@@ -1762,11 +1762,13 @@
             const modeIcons = { single: '🎯', dast: '🔍', wildcard: '🌐' };
             const modeIcon = modeIcons[inst.scan_mode] || '🎯';
             const elapsed = inst.started_at ? getElapsed(inst.started_at) : '—';
-            
+            const displayTarget = inst.parent_target ? `${inst.targets} (via ${inst.parent_target})` : inst.targets;
+            const displayTitle = inst.parent_target ? `Parent: ${inst.parent_target}` : inst.targets;
+
             return `
             <div class="instance-card ${inst.status}" onclick="navigateToInstance('${inst.id}')" title="Click to view">
                 <div class="instance-card-header">
-                    <span class="instance-card-target" title="${escapeHtml(inst.targets)}">${escapeHtml(inst.targets)}</span>
+                    <span class="instance-card-target" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTarget)}</span>
                     <span class="instance-card-status ${inst.status}">
                         <span class="status-dot"></span>
                         ${inst.status}
@@ -1794,10 +1796,11 @@
                     <span class="instance-card-mode">${modeIcon} ${(inst.scan_mode || 'single').toUpperCase()}</span>
                     <span class="instance-card-time">${elapsed}</span>
                 </div>
-                ${inst.status === 'running' || inst.status === 'pending' ? `
-                <div class="instance-card-actions">
-                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">■ Cancel</button>
-                </div>` : ''}
+                <div class="instance-card-actions" style="display:flex;gap:6px;margin-top:6px;">
+                    ${inst.status === 'running' || inst.status === 'pending' ? `
+                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">■ Cancel</button>` : ''}
+                    <button class="btn btn-secondary" onclick="event.stopPropagation(); deleteInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">🗑 Delete</button>
+                </div>
             </div>`;
         }).join('');
         
@@ -1846,7 +1849,22 @@
             showToast('Failed to stop instance', 'error');
         }
     };
-    
+
+    window.deleteInstance = async function(instanceId) {
+        if (!confirm('Delete this scan? This cannot be undone.')) return;
+        try {
+            const resp = await fetch('/api/scans/' + instanceId, { method: 'DELETE' });
+            if (resp.ok) {
+                showToast('Scan deleted', 'success');
+                refreshInstances();
+            } else {
+                showToast('Failed to delete scan', 'error');
+            }
+        } catch (e) {
+            showToast('Failed to delete scan', 'error');
+        }
+    };
+
     // Handle browser back/forward
     window.addEventListener('popstate', () => {
         const path = window.location.pathname;
