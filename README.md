@@ -192,7 +192,7 @@ cd xalgorix
 make install
 
 # Or install via Go (use explicit version, not @latest)
-GOPROXY=direct go install -v github.com/xalgord/xalgorix/v4/cmd/xalgorix@v4.0.12
+GOPROXY=direct go install -v github.com/xalgord/xalgorix/v4/cmd/xalgorix@latest
 ```
 
 > **💡 Update:** Run `xalgorix --update` to get the latest version. Xalgorix also auto-updates on every start by downloading binaries from GitHub releases.
