@@ -25,7 +25,6 @@
     let iterCount = 0;
     let toolCount = 0;
     let vulnCount = 0;
-    let eventCount = 0;
     let scanStart = null;
     let autoScroll = true;
     const toolUsage = {};
@@ -57,12 +56,10 @@
     }
 
     // Multi-target queue
-    let loadedTargets = [];
     let currentTargetIdx = 0;
     let totalTargets = 0;
     let currentSubIdx = 0;
     let totalSubTargets = 0;
-    let parentTarget = '';
 
     const TOOL_ICONS = {
         terminal_execute: '⚡', browser_action: '🌐', view_file: '📝', create_file: '📝',
@@ -122,7 +119,6 @@
     let wsReconnectAttempts = 0;
     let wsReconnectDelay = 1000;
     const wsMaxReconnectDelay = 30000;
-    let wsReconnecting = false;
     let isConnecting = false; // prevent duplicate connection attempts
     let wsReconnectTimer = null; // track scheduled reconnect to cancel on manual reconnect
     
@@ -151,7 +147,6 @@
             console.log('WS connected');
             wsReconnectAttempts = 0;
             wsReconnectDelay = 1000;
-            wsReconnecting = false;
             isConnecting = false;
             updateConnectionStatus('connected');
             
@@ -164,7 +159,6 @@
         ws.onclose = (e) => {
             console.log('WS disconnected', e.code, e.reason);
             isConnecting = false;
-            wsReconnecting = true;
             updateConnectionStatus('disconnected');
             
             // Don't reconnect if closed cleanly by server
@@ -283,7 +277,6 @@
             }
         }
 
-        eventCount++;
         hideEmptyState();
 
         switch (evt.type) {
@@ -305,12 +298,10 @@
                 if (evt.sub_target_index && evt.sub_target_total) {
                     currentSubIdx = evt.sub_target_index;
                     totalSubTargets = evt.sub_target_total;
-                    parentTarget = evt.parent_target || '';
                     updateQueueBar(currentTargetIdx, totalTargets, evt.target, currentSubIdx, totalSubTargets);
                 } else {
                     currentSubIdx = 0;
                     totalSubTargets = 0;
-                    parentTarget = '';
                     updateQueueBar(currentTargetIdx, totalTargets, evt.target);
                 }
                 if (totalTargets > 1 || totalSubTargets > 0) showQueueBar();
@@ -755,14 +746,6 @@
     }
 
     // ── Timer ──────────────────────────────────────────────
-    function formatDuration(totalSeconds) {
-        const h = Math.floor(totalSeconds / 3600);
-        const m = Math.floor((totalSeconds % 3600) / 60);
-        const s = totalSeconds % 60;
-        // Fixed format: HH:MM:SS
-        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    }
-
     function startTimer(startFrom) {
         scanStart = startFrom ? new Date(startFrom).getTime() : Date.now();
         // Show chat input when scan starts
@@ -868,7 +851,6 @@
             .then(data => {
                 if (data.targets && data.targets.length > 0) {
                     document.getElementById('target-input').value = data.targets.join(', ');
-                    loadedTargets = data.targets;
                     input.closest('.file-btn').classList.add('loaded');
                 }
             })
@@ -923,7 +905,7 @@
         const targets = targetVal.split(/[, \n\r\t]+/).map(t => t.trim()).filter(Boolean);
 
         // Reset state
-        iterCount = 0; toolCount = 0; vulnCount = 0; eventCount = 0;
+        iterCount = 0; toolCount = 0; vulnCount = 0;
         currentTargetIdx = 0; totalTargets = targets.length;
         Object.keys(toolUsage).forEach(k => delete toolUsage[k]);
         
@@ -940,7 +922,7 @@
         if (reportBtn) reportBtn.remove();
         
         // Clear uploaded targets after sending
-        loadedTargets = [];
+
 
         scanRunning = true;
         toggleButtons(true);
@@ -1320,7 +1302,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pod, apiKey })
             });
-            const data = await resp.json();
+            await resp.json();
             
             const statusEl = document.getElementById('agentmail-status');
             statusEl.textContent = '✅ Saved AgentMail settings';
@@ -1529,7 +1511,7 @@
         }
         
         // Reset scan view state
-        iterCount = 0; toolCount = 0; vulnCount = 0; eventCount = 0;
+        iterCount = 0; toolCount = 0; vulnCount = 0;
         Object.keys(toolUsage).forEach(k => delete toolUsage[k]);
         ['stat-iter', 'stat-tools', 'stat-vulns'].forEach(id => {
             const el = document.getElementById(id);
