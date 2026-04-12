@@ -13,6 +13,7 @@ build/
 *.json
 !go.sum
 !package.json
+!internal/web/static/.eslintrc.json
 xalgorix-data/
 *_assessment/
 
