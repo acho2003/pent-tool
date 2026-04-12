@@ -4,9 +4,9 @@
 
 <br/>
 
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.24-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-00ff88?style=for-the-badge)](LICENSE)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/xalgorix)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/xalgord)
 
 <p><i>The most powerful open-source AI autonomous pentesting agent.</i></p>
 
@@ -327,7 +327,7 @@ Xalgorix supports multiple LLM providers:
 - **OpenAI** — `openai/gpt-5.4`, `openai/gpt-4o`, `openai/o3`
 - **Anthropic** — `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`
 - **DeepSeek** — `deepseek/deepseek-chat-v3`, `deepseek/deepseek-v3`, `deepseek/deepseek-coder`
-- **Google** — `google/gemini-3-flash-preview`, `google/gemini-3-flash-preview`
+- **Google** — `google/gemini-3-flash-preview`, `google/gemini-3-pro-preview`
 - **Groq** — hosts Llama 4, Qwen 3, Mixtral (use model name directly)
 - **Ollama** — `ollama/llama-3.3-70b`, `ollama/qwen3` (local)
 - **MiniMax** — `minimax/M2.7`, `minimax/Text-01`
@@ -393,39 +393,8 @@ xalgorix/
 │   │   ├── server.go      # 🌎 HTTP + WebSocket
 │   │   └── static/        # 🎨 Web UI (HTML/CSS/JS)
 │   └── tui/               # 📟 Terminal UI
-└── skills/                # 📚 Vulnerability knowledge
+└── internal/tools/skills/  # 📚 Vulnerability knowledge
 ```
-
----
-
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `XALGORIX_LLM` | — | Model (e.g., `openai/gpt-5.4`, `anthropic/claude-sonnet-4-6`) |
-| `XALGORIX_API_KEY` | — | Your API key |
-| `XALGORIX_API_BASE` | Auto-detected | API endpoint (set for custom providers) |
-| `XALGORIX_DISCORD_WEBHOOK` | — | Discord webhook URL |
-| `XALGORIX_RATE_LIMIT_REQUESTS` | 100 | Requests per window |
-| `XALGORIX_RATE_LIMIT_WINDOW` | 60 | Window in seconds |
-| `XALGORIX_MAX_ITERATIONS` | 0 | 0 = unlimited |
-| `XALGORIX_DISABLE_BROWSER` | false | Disable headless Chrome |
-| `CAIDO_PORT` | 8080 | Caido proxy port for browser integration |
-| `CAIDO_API_TOKEN` | — | Caido GraphQL API token |
-
-### Supported LLM Providers
-
-| Provider | Model Example |
-|----------|--------------|
-| 🟢 OpenAI | `openai/gpt-5.4`, `openai/gpt-4o`, `openai/o3` |
-| 🔴 Anthropic | `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6` |
-| 🟣 DeepSeek | `deepseek/deepseek-chat-v3`, `deepseek/deepseek-v3` |
-| 🟠 Google | `google/gemini-3-flash-preview`, `google/gemini-3-flash-preview` |
-| 🟡 Groq | `llama-3.3-70b`, `qwen3`, `mixtral` (uses model name directly) |
-| ⚫ Ollama | `ollama/llama-3.3-70b`, `ollama/qwen3` (local) |
-| 🔵 MiniMax | `minimax/M2.7`, `minimax/Text-01` |
 
 ---
 
@@ -529,7 +498,7 @@ Xalgorix intelligently auto-resolves, installs, and manages **70+ security tools
 14. 📧 **Email** — SPF, DKIM, DMARC
 15. ☁️ **Cloud** — S3, Azure, GCP, K8s
 16. 🔌 **WebSocket** — Origin, injection
-17. CMS | WordPress, Joomla, Drupal
+17. 🔌 **CMS** — WordPress, Joomla, Drupal
 18. 🔗 **Links** — Broken link hijacking
 19. 📦 **Supply Chain** — JS libs, dependencies
 20. 📝 **Report** — JSON + PDF
