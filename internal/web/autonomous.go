@@ -79,6 +79,19 @@ Call report_vulnerability with:
 | DNS configuration (SPF, DMARC, TXT) | REJECT | Out of scope, do not report |
 | Nuclei template match (no manual verify) | REJECT | Must manually verify |
 | Directory listing (no sensitive files) | INFO only | Unless sensitive data found |
+| Autodiscover/mail config disclosure | REJECT | Standard protocol behavior — designed to expose mail server config. Hostnames/IPs/ports in autodiscover XML are PUBLIC mail infrastructure, same as MX records |
+| MX/DNS record information | REJECT | Public DNS records are not vulnerabilities |
+| WHOIS data exposure | REJECT | Public registration data is not a vulnerability |
+| Standard service ports visible (SMTP/IMAP/POP3) | REJECT | Mail ports are meant to be publicly accessible for email clients |
+| Publicly hosted service infrastructure details | REJECT | Third-party hosting provider hostnames (e.g., hostnext.net, amazonaws.com, cloudflare) are not "internal" infrastructure |
+| Technology stack fingerprinting alone | REJECT | Knowing a site runs nginx/Apache/IIS is not exploitable without a specific CVE |
+
+## CRITICAL: STANDARD PROTOCOL BEHAVIOR IS NOT A VULNERABILITY
+Before reporting ANY "information disclosure", ask: "Is this service DESIGNED to expose this data?"
+- Autodiscover, MX records, WHOIS, DNS TXT, certificate transparency — these are PUBLIC BY DESIGN
+- Mail server hostnames and standard ports (25, 465, 587, 993, 143) are meant to be publicly accessible
+- A third-party hosting provider's hostname is NOT "internal infrastructure"
+- If the information is obtainable via ` + "`" + `dig MX target.com` + "`" + ` or ` + "`" + `whois target.com` + "`" + `, it is NOT a vulnerability
 
 ## SELF-CRITIQUE BEFORE REPORTING
 
@@ -87,8 +100,11 @@ Before calling report_vulnerability, ask yourself:
 2. "Could this be a false positive? What would make it one?"
 3. "Is my proof concrete — would another pentester accept this?"
 4. "Am I reporting the right severity, or inflating it?"
+5. "Is this standard protocol/service behavior? Is the service DESIGNED to expose this data?"
+6. "Would a bug bounty program accept this? Or would they mark it as Informative/N/A?"
 
 If the answer to #1 is "just detected" → GO EXPLOIT IT FIRST.
+If the answer to #5 is "yes, it's designed to work this way" → DO NOT REPORT IT.
 
 ## DEDUPLICATION
 
@@ -192,6 +208,12 @@ You MUST provide CVSS score + vector string with every report. Severity MUST mat
 - Scanner output without manual verification = REJECTED
 - SSL/TLS issues (weak ciphers, old TLS) = REJECTED (Do not report)
 - DNS configuration (SPF, DMARC, TXT) = REJECTED (Do not report)
+- Autodiscover/mail config disclosure = REJECTED (standard protocol behavior, same as MX records)
+- MX/DNS/WHOIS public record data = REJECTED (public by design)
+- Standard mail ports (SMTP/IMAP/POP3) visible = REJECTED (meant to be publicly accessible)
+- Third-party hosting provider hostnames = NOT "internal infrastructure" — REJECT
+- Technology fingerprinting alone (nginx/Apache/IIS version) = REJECT unless you exploit a specific CVE
+- If data is obtainable via dig/whois/nslookup, it is NOT a vulnerability
 
 ## DEDUPLICATION:
 Same endpoint + same vulnerability = skip (already reported)
@@ -310,6 +332,11 @@ Call report_vulnerability with exploitation_proof showing actual output.
 - Scanner-only findings without manual verification = REJECTED
 - SSL/TLS issues = REJECTED (Do not report)
 - DNS configuration = REJECTED (Do not report)
+- Autodiscover/mail config disclosure = REJECTED (standard protocol, same as MX records)
+- MX/DNS/WHOIS public record data = REJECTED (public by design)
+- Standard mail ports visible = REJECTED (meant to be public)
+- Third-party hosting provider hostnames = NOT "internal infrastructure" — REJECT
+- If data is obtainable via dig/whois/nslookup, it is NOT a vulnerability
 
 ## SAFE EXPLOITATION RULES:
 - NEVER delete data, drop tables, or modify production state
