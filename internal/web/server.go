@@ -1529,14 +1529,9 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 
 		switch req.ScanMode {
 		case "wildcard":
-			// If the user supplied multiple targets in wildcard mode, those ARE the
-			// subdomains — skip Phase 1 and scan each directly as a subdomain.
-			// Phase 1 discovery only makes sense when a single root domain is given.
-			if totalTargets > 1 {
-				s.runSingleTarget(ctx, scanCfg, req, target, i, totalTargets)
-			} else {
-				s.runWildcardTarget(ctx, scanCfg, req, target, i, totalTargets)
-			}
+			// Each target gets full wildcard treatment: Phase 1 subdomain discovery + Phase 2 per-subdomain scan.
+			// This applies whether the user provides 1 or 300+ root domains.
+			s.runWildcardTarget(ctx, scanCfg, req, target, i, totalTargets)
 		case "dast":
 			s.runDASTTarget(ctx, scanCfg, req, target, i, totalTargets)
 		default:
