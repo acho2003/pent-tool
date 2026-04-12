@@ -1798,7 +1798,7 @@
                 </div>
                 <div class="instance-card-actions" style="display:flex;gap:6px;margin-top:6px;">
                     ${inst.status === 'running' || inst.status === 'pending' ? `
-                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">■ Cancel</button>` : ''}
+                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">■ Stop</button>` : ''}
                     <button class="btn btn-secondary" onclick="event.stopPropagation(); deleteInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">🗑 Delete</button>
                 </div>
             </div>`;
