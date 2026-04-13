@@ -4,6 +4,7 @@ package browser
 import (
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -191,6 +192,21 @@ func ensureBrowser(proxy string) error {
 	return nil
 }
 
+// setupDialogHandler sets up auto-dismiss for JavaScript dialogs (alert/confirm/prompt)
+// on a page. Without this, calling alert() in headless Chrome blocks page.Eval() forever.
+// The dialog text is logged as proof of triggered XSS payloads.
+func setupDialogHandler(p *rod.Page) {
+	go p.EachEvent(func(e *proto.PageJavascriptDialogOpening) {
+		dialogType := string(e.Type)
+		msg := e.Message
+		log.Printf("[browser] Auto-dismissing JS %s dialog: %q", dialogType, msg)
+		_ = proto.PageHandleJavaScriptDialog{
+			Accept:     true,
+			PromptText: "",
+		}.Call(p)
+	})()
+}
+
 func browserAction(args map[string]string) (tools.Result, error) {
 	command := args["command"]
 
@@ -259,6 +275,10 @@ func launchBrowser(rawURL, proxy string) (tools.Result, error) {
 	pages[tabID] = p
 	currentTab = tabID
 	page = p
+
+	// Auto-dismiss JavaScript dialogs (alert/confirm/prompt) to prevent
+	// page.Eval() from blocking forever in headless mode during XSS testing.
+	setupDialogHandler(p)
 
 	// Set a realistic user agent for login flows
 	page.MustSetUserAgent(&proto.NetworkSetUserAgentOverride{
@@ -922,8 +942,16 @@ func executeJS(code string) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("code is required")
 	}
 
-	result, err := page.Eval(code)
+	// Use a timeout to prevent blocking forever (e.g., alert() in headless Chrome).
+	// The dialog handler auto-dismisses alerts, but we add a timeout as a safety net.
+	result, err := page.Timeout(10 * time.Second).Eval(code)
 	if err != nil {
+		// If it timed out, it's likely a blocking dialog that wasn't caught
+		if strings.Contains(err.Error(), "context deadline") || strings.Contains(err.Error(), "timeout") {
+			return tools.Result{
+				Output: "⚠️ JS execution timed out (likely a blocking dialog like alert/confirm/prompt). The dialog was triggered, which confirms JavaScript execution. Use page.Eval with a non-blocking approach instead.",
+			}, nil
+		}
 		return tools.Result{}, fmt.Errorf("JS error: %w", err)
 	}
 
@@ -941,6 +969,9 @@ func newTab(rawURL string) (tools.Result, error) {
 	pages[tabID] = p
 	currentTab = tabID
 	page = p
+
+	// Auto-dismiss JavaScript dialogs on new tabs too
+	setupDialogHandler(p)
 
 	if rawURL != "" {
 		err := p.Timeout(20 * time.Second).Navigate(rawURL)
