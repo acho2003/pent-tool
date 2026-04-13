@@ -168,6 +168,9 @@ func main() {
 
 	cfg := config.Get()
 
+	// Set web package version from main — single source of truth
+	web.Version = version
+
 	if args.model != "" {
 		cfg.LLM = args.model
 	}

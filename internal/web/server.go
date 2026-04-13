@@ -39,7 +39,8 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
 
-const version = "4.0.15"
+// Version is set by main.go at startup — single source of truth.
+var Version = "dev"
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -2509,7 +2510,7 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"version": version,
+		"version": Version,
 	})
 }
 
