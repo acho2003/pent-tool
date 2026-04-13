@@ -25,9 +25,9 @@ func ResetNotes() {
 func Register(r *tools.Registry) {
 	r.Register(&tools.Tool{
 		Name:        "add_note",
-		Description: "Add a note to the agent's memory. Notes persist across iterations.",
+		Description: "Add a note to persistent memory. Use this to track: discovered endpoints, parameters, tech stack, CSRF tokens, session cookies, exploit chain state, intermediate findings, and anything needed across multiple iterations. Notes persist for the entire scan. Use structured keys like 'csrf_token', 'admin_endpoint', 'sqli_confirmed', 'angular_version'.",
 		Parameters: []tools.Parameter{
-			{Name: "key", Description: "Unique key for the note", Required: true},
+			{Name: "key", Description: "Unique key for the note (e.g., 'csrf_token', 'admin_endpoint', 'angular_version', 'exploit_chain_step1')", Required: true},
 			{Name: "value", Description: "Note content", Required: true},
 		},
 		Execute: addNote,

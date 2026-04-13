@@ -1162,7 +1162,7 @@ You have access to **expert-level vulnerability skills** via the read_skill and 
 ## Assessment Methodology
 %s
 
-START with Phase 1 recon. After each phase, review your notes, identify gaps, and test deeper. After recon, call list_skills and load relevant skills before vulnerability testing!`, toolSchema, strings.Join(targets, "\n"), checklist)
+%s`, toolSchema, strings.Join(targets, "\n"), checklist, a.buildClosingInstruction(instruction))
 }
 
 const defaultChecklist = `
@@ -1980,12 +1980,161 @@ For EVERY potential vulnerability found in previous phases:
 - Call finish with a complete summary: targets, vulns by severity, and remediation priorities.
 `
 
-func (a *Agent) buildInitialUserMessage(targets []string, instruction string) string {
-	msg := fmt.Sprintf("Begin security assessment of: %s\nUse the terminal_execute tool to start.", strings.Join(targets, ", "))
-	if instruction != "" {
-		msg += "\n\nAdditional instructions: " + instruction
+// buildClosingInstruction returns the final instruction appended to the system prompt.
+// When the user provides custom instructions mentioning specific vulnerability classes,
+// the agent skips full recon and immediately loads the relevant skill + attacks.
+func (a *Agent) buildClosingInstruction(instruction string) string {
+	if instruction == "" {
+		return "START with Phase 1 recon. After each phase, review your notes, identify gaps, and test deeper. After recon, call list_skills and load relevant skills before vulnerability testing!"
 	}
-	return msg
+
+	// Detect specific vulnerability classes in the custom instruction
+	lower := strings.ToLower(instruction)
+
+	// Build targeted skill loading suggestions
+	var skillHints []string
+
+	if strings.Contains(lower, "xss") || strings.Contains(lower, "cross-site scripting") || strings.Contains(lower, "angularjs") || strings.Contains(lower, "angular") || strings.Contains(lower, "sandbox escape") {
+		skillHints = append(skillHints, "read_skill(name=\"xss\")", "read_skill(name=\"dom-xss\")")
+	}
+	if strings.Contains(lower, "sql") || strings.Contains(lower, "sqli") || strings.Contains(lower, "injection") {
+		skillHints = append(skillHints, "read_skill(name=\"sql-injection\")")
+	}
+	if strings.Contains(lower, "smuggl") || strings.Contains(lower, "desync") || strings.Contains(lower, "cl.te") || strings.Contains(lower, "te.cl") {
+		skillHints = append(skillHints, "read_skill(name=\"http-request-smuggling\")")
+	}
+	if strings.Contains(lower, "ssti") || strings.Contains(lower, "template injection") || strings.Contains(lower, "server-side template") {
+		skillHints = append(skillHints, "read_skill(name=\"ssti\")")
+	}
+	if strings.Contains(lower, "template") && !strings.Contains(lower, "ssti") {
+		skillHints = append(skillHints, "read_skill(name=\"xss\")", "read_skill(name=\"ssti\")")
+	}
+	if strings.Contains(lower, "prototype") || strings.Contains(lower, "pollution") || strings.Contains(lower, "__proto__") {
+		skillHints = append(skillHints, "read_skill(name=\"prototype-pollution\")")
+	}
+	if strings.Contains(lower, "cache") || strings.Contains(lower, "poisoning") {
+		skillHints = append(skillHints, "read_skill(name=\"cache-poisoning\")")
+	}
+	if strings.Contains(lower, "deserializ") || strings.Contains(lower, "gadget") || strings.Contains(lower, "ysoserial") {
+		skillHints = append(skillHints, "read_skill(name=\"insecure-deserialization\")")
+	}
+	if strings.Contains(lower, "ssrf") {
+		skillHints = append(skillHints, "read_skill(name=\"ssrf\")")
+	}
+	if strings.Contains(lower, "oauth") || strings.Contains(lower, "openid") {
+		skillHints = append(skillHints, "read_skill(name=\"oauth2-attacks\")")
+	}
+	if strings.Contains(lower, "race") || strings.Contains(lower, "toctou") {
+		skillHints = append(skillHints, "read_skill(name=\"race-conditions\")")
+	}
+	if strings.Contains(lower, "csrf") {
+		skillHints = append(skillHints, "read_skill(name=\"csrf\")")
+	}
+	if strings.Contains(lower, "xxe") || strings.Contains(lower, "xml") {
+		skillHints = append(skillHints, "read_skill(name=\"xxe\")")
+	}
+	if strings.Contains(lower, "nosql") || strings.Contains(lower, "mongo") {
+		skillHints = append(skillHints, "read_skill(name=\"nosql-injection\")")
+	}
+	if strings.Contains(lower, "cors") {
+		skillHints = append(skillHints, "read_skill(name=\"cors-exploitation\")")
+	}
+	if strings.Contains(lower, "websocket") {
+		skillHints = append(skillHints, "read_skill(name=\"websocket-hijacking\")")
+	}
+	if strings.Contains(lower, "csp") {
+		skillHints = append(skillHints, "read_skill(name=\"xss\")")
+	}
+	if strings.Contains(lower, "dom") && (strings.Contains(lower, "clobber") || strings.Contains(lower, "xss")) {
+		skillHints = append(skillHints, "read_skill(name=\"dom-xss\")")
+	}
+	if strings.Contains(lower, "idor") || strings.Contains(lower, "access control") || strings.Contains(lower, "bac") || strings.Contains(lower, "bola") {
+		skillHints = append(skillHints, "read_skill(name=\"idor\")")
+	}
+	if strings.Contains(lower, "jwt") || strings.Contains(lower, "json web token") || strings.Contains(lower, "algorithm confusion") || strings.Contains(lower, "kid") || strings.Contains(lower, "jku") {
+		skillHints = append(skillHints, "read_skill(name=\"authentication-jwt\")")
+	}
+	if strings.Contains(lower, "clickjack") || strings.Contains(lower, "click jack") || strings.Contains(lower, "ui redress") || strings.Contains(lower, "x-frame-options") {
+		skillHints = append(skillHints, "read_skill(name=\"clickjacking\")")
+	}
+	if strings.Contains(lower, "llm") || strings.Contains(lower, "prompt injection") || strings.Contains(lower, "chatbot") || strings.Contains(lower, "ai assistant") {
+		skillHints = append(skillHints, "read_skill(name=\"web-llm-attacks\")")
+	}
+	if strings.Contains(lower, "cache deception") || (strings.Contains(lower, "cache") && strings.Contains(lower, "deception")) {
+		skillHints = append(skillHints, "read_skill(name=\"web-cache-deception\")")
+	}
+	if strings.Contains(lower, "file upload") || strings.Contains(lower, "upload") || strings.Contains(lower, "webshell") {
+		skillHints = append(skillHints, "read_skill(name=\"insecure-file-uploads\")")
+	}
+	if strings.Contains(lower, "host header") {
+		skillHints = append(skillHints, "read_skill(name=\"host-header-attacks\")")
+	}
+	if strings.Contains(lower, "graphql") {
+		skillHints = append(skillHints, "read_skill(name=\"graphql-advanced\")")
+	}
+	if strings.Contains(lower, "path traversal") || strings.Contains(lower, "directory traversal") || strings.Contains(lower, "lfi") || strings.Contains(lower, "rfi") {
+		skillHints = append(skillHints, "read_skill(name=\"path-traversal-lfi-rfi\")")
+	}
+	if strings.Contains(lower, "command injection") || strings.Contains(lower, "os command") || strings.Contains(lower, "rce") {
+		skillHints = append(skillHints, "read_skill(name=\"rce\")")
+	}
+	if strings.Contains(lower, "information disclosure") || strings.Contains(lower, "info disclosure") {
+		skillHints = append(skillHints, "read_skill(name=\"information-disclosure\")")
+	}
+	if strings.Contains(lower, "business logic") {
+		skillHints = append(skillHints, "read_skill(name=\"business-logic\")")
+	}
+	if strings.Contains(lower, "2fa") || strings.Contains(lower, "mfa") || strings.Contains(lower, "two-factor") || strings.Contains(lower, "multi-factor") {
+		skillHints = append(skillHints, "read_skill(name=\"2fa-mfa-bypass\")")
+	}
+
+	if len(skillHints) > 0 {
+		// Deduplicate
+		seen := map[string]bool{}
+		var unique []string
+		for _, h := range skillHints {
+			if !seen[h] {
+				seen[h] = true
+				unique = append(unique, h)
+			}
+		}
+		return fmt.Sprintf(`## PRIORITY: CUSTOM INSTRUCTIONS DETECTED
+
+The user has given you SPECIFIC instructions about what to test. Follow them as your TOP PRIORITY.
+
+**MANDATORY FIRST STEPS:**
+1. Load the relevant deep knowledge skills IMMEDIATELY: %s
+2. Do quick recon (technology fingerprinting with curl -sI, identify framework/version) — spend MAX 2-3 iterations on recon
+3. Then IMMEDIATELY start testing for the specific vulnerability class described in the instructions
+4. Use the EXACT payloads and techniques from the loaded skills
+5. DO NOT waste time on full subdomain enumeration, port scanning, or directory brute-forcing unless the custom instructions require it
+
+**Your custom instructions are your MISSION. The default methodology is secondary.**
+
+After addressing the custom instructions, if time permits, continue with the standard assessment methodology.`, strings.Join(unique, ", "))
+	}
+
+	// Generic custom instruction — still prioritize it but include standard methodology
+	return fmt.Sprintf(`## PRIORITY: CUSTOM INSTRUCTIONS DETECTED
+
+The user has given you SPECIFIC instructions. Follow them as your TOP PRIORITY.
+
+**MANDATORY FIRST STEPS:**
+1. Call list_skills to see available knowledge, then load relevant skills for the target's technology stack
+2. Do quick recon (technology fingerprinting) — spend MAX 3-4 iterations
+3. Then focus on what the user asked you to test
+4. Load relevant skills BEFORE testing any vulnerability class
+
+After addressing the custom instructions, continue with standard methodology.
+
+START with a quick technology fingerprint (curl -sI, whatweb), then load relevant skills and start testing.`)
+}
+
+func (a *Agent) buildInitialUserMessage(targets []string, instruction string) string {
+	if instruction != "" {
+		return fmt.Sprintf("Your PRIMARY MISSION: %s\n\nTarget(s): %s\n\nStart by loading the relevant skills (read_skill), doing a quick technology fingerprint (curl -sI), then immediately focus on the vulnerability class described in your mission. Use the terminal_execute tool to start.", instruction, strings.Join(targets, ", "))
+	}
+	return fmt.Sprintf("Begin security assessment of: %s\nUse the terminal_execute tool to start.", strings.Join(targets, ", "))
 }
 
 func truncStr(s string, max int) string {
