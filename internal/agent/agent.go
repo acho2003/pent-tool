@@ -530,16 +530,17 @@ func (a *Agent) Run(targets []string, instruction string) {
 
 		if err != nil {
 			consecutiveErrors++
-			a.emit(Event{Type: "error", Content: fmt.Sprintf("LLM error (attempt %d/12): %s", consecutiveErrors, err.Error()), TotalTokens: tokenCount()})
-			if consecutiveErrors >= 12 {
+			a.emit(Event{Type: "error", Content: fmt.Sprintf("LLM error (attempt %d/25): %s", consecutiveErrors, err.Error()), TotalTokens: tokenCount()})
+			if consecutiveErrors >= 25 {
 				a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Agent stopped: LLM failed %d consecutive times. Last error: %s", consecutiveErrors, err.Error()), TotalTokens: tokenCount()})
 				a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: LLM failed %d consecutive times. Last error: %s", consecutiveErrors, err.Error()), TotalTokens: tokenCount()})
 				return
 			}
-			// Exponential backoff: 5s, 10s, 15s... capped at 60s
-			backoff := time.Duration(consecutiveErrors*5) * time.Second
-			if backoff > 60*time.Second {
-				backoff = 60 * time.Second
+			// Exponential backoff: 10s, 20s, 30s... capped at 120s
+			// Long-running wildcard scans need more tolerance for transient API issues
+			backoff := time.Duration(consecutiveErrors*10) * time.Second
+			if backoff > 120*time.Second {
+				backoff = 120 * time.Second
 			}
 			time.Sleep(backoff)
 			continue

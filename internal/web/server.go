@@ -509,6 +509,7 @@ type ScanRecord struct {
 	FinishedAt   string      `json:"finished_at,omitempty"`
 	Status      string      `json:"status"` // running, finished, stopped
 	StopReason  string      `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
+	ScanMode    string      `json:"scan_mode,omitempty"` // single, wildcard, dast
 	Events      []WSEvent   `json:"events"`
 	Vulns       []VulnSummary `json:"vulns"`
 	TotalTokens int         `json:"total_tokens"`
@@ -1014,6 +1015,7 @@ type scanSession struct {
 	genReport      bool
 	resetState     bool
 	instanceID     string // parent instance ID for multi-instance tracking
+	scanMode       string // single, wildcard, dast — persisted so dashboard shows correct mode
 }
 
 // cleanup tears down all per-session resources. Every sub-operation
@@ -1111,6 +1113,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 		ID:           sess.id,
 		Target:       sess.target,
 		ParentTarget: sess.parentTarget,
+		ScanMode:     sess.scanMode,
 		StartedAt:    time.Now().Format(time.RFC3339),
 		Status:       "running",
 		Events:       []WSEvent{},
@@ -1599,6 +1602,7 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 		genReport:      true,
 		resetState:     true,
 		instanceID:     req.InstanceID,
+		scanMode:       "single",
 	}
 	s.executeScanSession(sess)
 
@@ -1641,6 +1645,7 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 		genReport:      true,
 		resetState:     true,
 		instanceID:     req.InstanceID,
+		scanMode:       "dast",
 	}
 	s.executeScanSession(sess)
 
@@ -1684,6 +1689,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		genReport:      false,
 		resetState:     true,
 		instanceID:     req.InstanceID,
+		scanMode:       "wildcard",
 	}
 	s.executeScanSession(discoverySess)
 
@@ -1763,6 +1769,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				genReport:      false,
 				resetState:     false, // accumulate vulns across subdomains
 				instanceID:     req.InstanceID,
+				scanMode:       "wildcard",
 			}
 			s.executeScanSession(subSess)
 
@@ -2287,6 +2294,7 @@ func (s *Server) rebuildInstancesFromDisk() {
 			ToolCalls:    entry.rec.ToolCalls,
 			VulnCount:    len(entry.rec.Vulns),
 			TotalTokens:  entry.rec.TotalTokens,
+			ScanMode:     entry.rec.ScanMode,
 		}
 		// If scan was "running" from a previous server instance, it's no longer active
 		if inst.Status == "running" {
