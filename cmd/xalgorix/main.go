@@ -20,7 +20,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/web"
 )
 
-const version = "4.0.20"
+const version = "4.0.21"
 
 func main() {
 	// Top-level crash recovery — catches panics that escape all other handlers.
@@ -637,9 +637,10 @@ func fetchLatestRelease() (version string, downloadURL string) {
 		return "", ""
 	}
 
-	// Find the binary asset (name == "xalgorix" — the plain Linux binary)
+	// Find the binary asset for this OS/arch
+	wantName := fmt.Sprintf("xalgorix-%s-%s", runtime.GOOS, runtime.GOARCH)
 	for _, asset := range release.Assets {
-		if asset.Name == "xalgorix" {
+		if asset.Name == wantName || asset.Name == "xalgorix" {
 			return ver, asset.BrowserDownloadURL
 		}
 	}
