@@ -401,9 +401,9 @@ func (a *Agent) Run(targets []string, instruction string) {
 	consecutiveWebSearches := 0      // consecutive web_search calls
 	stuckDomain := ""                // domain the agent is stuck on
 	stuckIterations := 0             // total iterations stuck on same domain
-	const stuckBrowserThreshold = 10 // browser actions before nudge
-	const stuckSearchThreshold = 8   // web searches before nudge
-	const stuckHardLimit = 15        // total stuck iterations before force-skip
+	const stuckBrowserThreshold = 40 // browser actions before nudge
+	const stuckSearchThreshold = 30  // web searches before nudge
+	const stuckHardLimit = 50        // total stuck iterations before force-skip
 
 	// Smart finish evaluation: decides if the agent has done enough work
 	canFinish := func(iter int) (bool, string) {
@@ -559,14 +559,14 @@ func (a *Agent) Run(targets []string, instruction string) {
 
 		if response == "" {
 			emptyResponseCount++
-			a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ LLM returned empty response (%d/6)", emptyResponseCount), TotalTokens: tokenCount()})
-			if emptyResponseCount >= 6 {
-				// 6 empty responses = LLM is broken or stuck, force finish
-				a.emit(Event{Type: "error", Content: "⛔ LLM returned 6 consecutive empty responses. Force finishing to prevent infinite loop.", TotalTokens: tokenCount()})
+			a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ LLM returned empty response (%d/12)", emptyResponseCount), TotalTokens: tokenCount()})
+			if emptyResponseCount >= 12 {
+				// 12 empty responses = LLM is broken or stuck, force finish
+				a.emit(Event{Type: "error", Content: "⛔ LLM returned 12 consecutive empty responses. Force finishing to prevent infinite loop.", TotalTokens: tokenCount()})
 				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM returned too many empty responses", TotalTokens: tokenCount()})
 				return
 			}
-			if emptyResponseCount >= 3 {
+			if emptyResponseCount >= 5 {
 				nudge := "Your last responses were empty. You MUST call a tool NOW. Use terminal_execute to run your next command, or call finish if you are truly done."
 				a.msgMu.Lock()
 				a.messages = append(a.messages, llm.Message{Role: "user", Content: nudge})
@@ -595,10 +595,10 @@ func (a *Agent) Run(targets []string, instruction string) {
 		if len(toolCalls) == 0 {
 			noToolCount++
 
-			// Hard limit: 8 consecutive no-tool responses = LLM is looping
-			if noToolCount >= 8 {
-				a.emit(Event{Type: "error", Content: "⛔ LLM failed to call any tools for 8 consecutive responses. Force finishing.", TotalTokens: tokenCount()})
-				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM refused to call tools after 8 attempts", TotalTokens: tokenCount()})
+			// Hard limit: 15 consecutive no-tool responses = LLM is looping
+			if noToolCount >= 15 {
+				a.emit(Event{Type: "error", Content: "⛔ LLM failed to call any tools for 15 consecutive responses. Force finishing.", TotalTokens: tokenCount()})
+				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM refused to call tools after 15 attempts", TotalTokens: tokenCount()})
 				return
 			}
 
