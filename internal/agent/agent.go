@@ -329,10 +329,16 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 
-	// Hard timeout safety net: no single tool call should take more than 5 minutes.
-	// This prevents infinite hangs (e.g., blocking JS dialogs, unresponsive processes)
-	// from keeping the agent stuck forever via heartbeat masking.
-	hardTimeout := time.After(5 * time.Minute)
+	// Hard timeout safety net: prevents infinite hangs (e.g., blocking JS dialogs,
+	// unresponsive processes) from keeping the agent stuck forever via heartbeat masking.
+	// Terminal commands get a longer timeout to accommodate heavy tools (sqlmap, nuclei, ffuf).
+	hardTimeoutDuration := 15 * time.Minute // default for most tools
+	if toolName == "terminal_execute" {
+		hardTimeoutDuration = 35 * time.Minute // heavy tools (nmap, nuclei, sqlmap) need up to 30min
+	} else if toolName == "browser_action" {
+		hardTimeoutDuration = 10 * time.Minute // browser interactions can be slow
+	}
+	hardTimeout := time.After(hardTimeoutDuration)
 
 	for {
 		select {
@@ -346,9 +352,9 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 			a.touchActivity()
 
 		case <-hardTimeout:
-			// Tool has been running for 5+ minutes — force return
-			a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Tool '%s' timed out after 5 minutes. Force-returning to prevent infinite hang.", toolName)})
-			return tools.Result{Error: fmt.Sprintf("tool '%s' timed out after 5 minutes", toolName)}, nil
+			// Tool exceeded its hard timeout — force return
+			a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Tool '%s' timed out after %s. Force-returning to prevent infinite hang.", toolName, hardTimeoutDuration)})
+			return tools.Result{Error: fmt.Sprintf("tool '%s' timed out after %s", toolName, hardTimeoutDuration)}, nil
 
 		case <-a.ctx.Done():
 			// Agent was stopped/cancelled
