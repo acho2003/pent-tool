@@ -26,7 +26,7 @@ const maxOutputLen = 20000
 // Per-command timeout tiers
 const (
 	defaultCmdTimeout = 10 * time.Minute  // most commands
-	heavyCmdTimeout   = 30 * time.Minute  // nmap, nuclei, ffuf, gobuster, sqlmap, masscan
+	heavyCmdTimeout   = 60 * time.Minute  // nmap, nuclei, ffuf, gobuster, sqlmap, masscan
 	hardMaxTimeout    = 2 * time.Hour     // absolute ceiling — nothing runs longer
 )
 

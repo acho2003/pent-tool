@@ -334,7 +334,7 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 	// Terminal commands get a longer timeout to accommodate heavy tools (sqlmap, nuclei, ffuf).
 	hardTimeoutDuration := 15 * time.Minute // default for most tools
 	if toolName == "terminal_execute" {
-		hardTimeoutDuration = 35 * time.Minute // heavy tools (nmap, nuclei, sqlmap) need up to 30min
+		hardTimeoutDuration = 65 * time.Minute // heavy tools (nmap, nuclei, sqlmap) need up to 60min
 	} else if toolName == "browser_action" {
 		hardTimeoutDuration = 10 * time.Minute // browser interactions can be slow
 	}
