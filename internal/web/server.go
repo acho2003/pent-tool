@@ -2013,6 +2013,13 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 	seen := make(map[string]bool)
 	var subdomains []string
 
+	// Normalize target to root domain — strip www. prefix so "www.zooptos.com" → "zooptos.com"
+	// This ensures api.zooptos.com matches when user entered www.zooptos.com
+	rootTarget := target
+	if strings.HasPrefix(rootTarget, "www.") {
+		rootTarget = rootTarget[4:]
+	}
+
 	// Helper: extract valid subdomains from a file (must be subdomains of the target)
 	extractFromFile := func(path string) []string {
 		data, err := os.ReadFile(path)
@@ -2032,10 +2039,8 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 			if len(parts) > 0 {
 				domain := strings.TrimRight(parts[0], "/.,;:")
 				domain = strings.ToLower(domain)
-				// CRITICAL: Only accept subdomains that actually belong to the target domain.
-				// Recon tools (subfinder, crt.sh, assetfinder) often return related but
-				// unrelated domains from certificate chains, DNS records, etc.
-				if strings.Contains(domain, ".") && strings.HasSuffix(domain, "."+target) && !seen[domain] {
+				// Accept: exact root domain OR any subdomain of root domain
+				if strings.Contains(domain, ".") && (domain == rootTarget || strings.HasSuffix(domain, "."+rootTarget)) && !seen[domain] {
 					seen[domain] = true
 					found = append(found, domain)
 				}
@@ -2059,7 +2064,8 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 			parts := strings.Fields(line)
 			if len(parts) > 0 {
 				domain := strings.TrimRight(parts[0], "/.,;:")
-				if strings.Contains(domain, ".") && strings.Contains(domain, target) && !seen[domain] {
+				domain = strings.ToLower(domain)
+				if strings.Contains(domain, ".") && (domain == rootTarget || strings.HasSuffix(domain, "."+rootTarget)) && !seen[domain] {
 					seen[domain] = true
 					found = append(found, domain)
 				}
@@ -2082,6 +2088,17 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 			subdomains = append(subdomains, found...)
 			if name == "live_subdomains.txt" || name == "live_resolved.txt" {
 				break
+			}
+		}
+	}
+
+	// Layer 1.5: Check /tmp — agents often save recon files here
+	if len(subdomains) == 0 {
+		for _, name := range subdomainFileNames {
+			path := filepath.Join("/tmp", name)
+			if found := extractFromFile(path); len(found) > 0 {
+				log.Printf("[INFO] Found %d subdomains from /tmp/%s", len(found), name)
+				subdomains = append(subdomains, found...)
 			}
 		}
 	}
@@ -2126,7 +2143,7 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 	}
 
 	if len(subdomains) == 0 {
-		log.Printf("[WARN] No subdomains found after all fallback layers for target: %s", target)
+		log.Printf("[WARN] No subdomains found after all fallback layers for target: %s (rootTarget: %s)", target, rootTarget)
 	}
 
 	return subdomains

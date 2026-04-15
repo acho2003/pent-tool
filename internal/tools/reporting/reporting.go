@@ -432,6 +432,55 @@ func checkFalsePositive(title, description, severity, proof string) string {
 		}
 	}
 
+	// Pattern 15: Client-side JavaScript config disclosure — PUBLIC_ENV, Sentry DSN, etc.
+	// These are intentionally public client-side configurations, not secrets.
+	jsConfigKeywords := []string{"sentry dsn", "public_env", "publicenv", "public env",
+		"client-side javascript", "client side javascript", "javascript source",
+		"next_public_", "react_app_", "vite_", "nuxt_public_",
+		"window.__singletons", "window.__next", "window.__nuxt",
+		"bundled javascript", "js chunk", "js bundle", "webpack chunk",
+		"/_next/static", "/_nuxt/", "/static/js/",
+		"application version", "app version"}
+	jsConfigHits := 0
+	for _, kw := range jsConfigKeywords {
+		if strings.Contains(lower, kw) {
+			jsConfigHits++
+		}
+	}
+	// If 2+ JS config keywords match AND the "proof" is just viewing source/devtools
+	if jsConfigHits >= 2 && isHighSev {
+		lowerProof := strings.ToLower(proof)
+		realExploitKeywords := []string{"rce", "shell", "admin access", "account takeover", "database",
+			"password", "credential", "private key", "secret key", "aws_secret", "payment", "credit card"}
+		hasRealExploit := false
+		for _, ek := range realExploitKeywords {
+			if strings.Contains(lowerProof, ek) {
+				hasRealExploit = true
+				break
+			}
+		}
+		if !hasRealExploit {
+			return "❌ REJECTED: Client-side JavaScript configuration (Sentry DSN, PUBLIC_ENV, API endpoints, app version) is NOT a vulnerability. These are PUBLIC client-side values shipped intentionally in JS bundles. Sentry DSNs are public by design. NEXT_PUBLIC_* vars are meant to be public. Bug bounty programs mark this as Informational or N/A. Do not report."
+		}
+	}
+
+	// Pattern 16: Sentry DSN specifically — always public, never a vuln
+	if strings.Contains(lower, "sentry") && (strings.Contains(lower, "dsn") || strings.Contains(lower, "ingest.sentry.io")) {
+		return "❌ REJECTED: Sentry DSN is a PUBLIC client-side key designed to be embedded in JavaScript. It only allows sending error reports — no read access, no data extraction. This is NOT a vulnerability. Do not report."
+	}
+
+	// Pattern 17: Generic "information found in JavaScript source" without real impact
+	if (strings.Contains(lower, "javascript") || strings.Contains(lower, "js source") || strings.Contains(lower, "source code")) &&
+		(strings.Contains(lower, "information disclosure") || strings.Contains(lower, "sensitive information") || strings.Contains(lower, "exposed in")) {
+		lowerProof := strings.ToLower(proof)
+		// Only reject if proof is just "view source" style — not actual secret leakage
+		if !strings.Contains(lowerProof, "password") && !strings.Contains(lowerProof, "private key") &&
+			!strings.Contains(lowerProof, "aws_secret") && !strings.Contains(lowerProof, "database_url") &&
+			isHighSev {
+			return "❌ REJECTED: Finding configuration in client-side JavaScript is expected behavior — frontend apps MUST include API endpoints, service URLs, and public keys to function. This is only a vulnerability if ACTUAL SECRETS (passwords, private keys, database credentials) are exposed. Sentry DSNs, API base URLs, and app versions are NOT secrets."
+		}
+	}
+
 	return ""
 }
 
@@ -608,6 +657,10 @@ func classifySeverity(title, description, severity, proof string) (string, strin
 			"Analytics writeKeys are public client-side tokens — not a security vulnerability"},
 		{[]string{"rate limit", "rate-limit", "no rate limit", "brute force", "account lockout", "missing rate limit"},
 			"Missing rate limiting is informational — most bug bounty programs exclude this"},
+		{[]string{"sentry dsn", "ingest.sentry.io", "sentry.io/api"},
+			"Sentry DSN is a public client-side key — not a vulnerability"},
+		{[]string{"public_env", "next_public_", "react_app_", "window.__singletons"},
+			"Client-side environment variables (PUBLIC_ENV, NEXT_PUBLIC_*) are public by design"},
 	}
 
 	for _, p := range infoOnlyPatterns {
