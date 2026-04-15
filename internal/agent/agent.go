@@ -22,6 +22,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/fileedit"
 	"github.com/xalgord/xalgorix/v4/internal/tools/finish"
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
+	"github.com/xalgord/xalgorix/v4/internal/tools/pageagent"
 	"github.com/xalgord/xalgorix/v4/internal/tools/proxy"
 	"github.com/xalgord/xalgorix/v4/internal/tools/python"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
@@ -81,6 +82,7 @@ func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
 	fileedit.Register(reg)
 	proxy.Register(reg)
 	browser.Register(reg)
+	pageagent.Register(reg)
 	// NOTE: playwright.Register removed — it registered the same "browser_action" name
 	// and overwrote the enhanced rod browser with a weaker curl-based stub.
 	notes.Register(reg)

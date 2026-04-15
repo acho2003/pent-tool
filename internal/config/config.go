@@ -53,8 +53,9 @@ type Config struct {
 	Password string // XALGORIX_PASSWORD - dashboard login password
 
 	// Paths
-	HomeDir   string // ~/.xalgorix
-	SkillsDir string // embedded or local skills directory
+	HomeDir     string // ~/.xalgorix
+	SkillsDir   string // embedded or local skills directory
+	BrowserPath string // XALGORIX_BROWSER_PATH — override auto-download with custom Chrome path
 }
 
 var (
@@ -132,8 +133,9 @@ func load() *Config {
 		Password: envOr("XALGORIX_PASSWORD", ""),
 
 		// Paths
-		HomeDir:   xalgorixHome,
-		SkillsDir: filepath.Join(xalgorixHome, "skills"),
+		HomeDir:     xalgorixHome,
+		SkillsDir:   filepath.Join(xalgorixHome, "skills"),
+		BrowserPath: envOr("XALGORIX_BROWSER_PATH", ""),
 	}
 
 	// Debug: show loaded config so users can verify correct env was picked up

@@ -2,13 +2,14 @@
 package browser
 
 import (
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -56,6 +57,22 @@ func SetSessionPath(dir string) {
 	} else {
 		sessionPath = ""
 	}
+}
+
+// GetCurrentPage returns the currently active page, or nil if the browser
+// is not launched.  Thread-safe.  Used by the pageagent tool to inject
+// in-page scripts without duplicating browser management.
+func GetCurrentPage() *rod.Page {
+	mu.Lock()
+	defer mu.Unlock()
+	return page
+}
+
+// GetBrowser returns the active browser instance, or nil.
+func GetBrowser() *rod.Browser {
+	mu.Lock()
+	defer mu.Unlock()
+	return browser
 }
 
 func init() {
@@ -133,6 +150,88 @@ func detectCaidoPort() int {
 	return 8080
 }
 
+// Embedded extension files extracted at launch time.
+//go:embed extension/*
+var extensionFS embed.FS
+
+// getChromiumPath returns the path to a Chromium binary.
+// Priority: 1) XALGORIX_BROWSER_PATH env  2) Rod auto-download (~170MB first run)
+func getChromiumPath() (string, error) {
+	// User override via config
+	if p := config.Get().BrowserPath; p != "" {
+		if _, err := os.Stat(p); err == nil {
+			log.Printf("[browser] Using custom browser path: %s", p)
+			return p, nil
+		}
+		return "", fmt.Errorf("XALGORIX_BROWSER_PATH set to %q but file not found", p)
+	}
+
+	// Auto-download via Rod's built-in browser manager
+	cacheDir := filepath.Join(config.Get().HomeDir, "browser")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create browser cache dir: %w", err)
+	}
+
+	log.Printf("[browser] Ensuring Chromium binary in %s (auto-download on first run)", cacheDir)
+	b := launcher.NewBrowser()
+	b.RootDir = cacheDir
+	path, err := b.Get()
+	if err != nil {
+		return "", fmt.Errorf("failed to get/download Chromium: %w", err)
+	}
+
+	log.Printf("[browser] Chromium ready at: %s", path)
+	return path, nil
+}
+
+// extractExtension writes the embedded extension files to disk so Chrome
+// can load them via --load-extension. Returns the extension directory path.
+// Files are only re-written if the directory doesn't exist or manifest changed.
+func extractExtension() (string, error) {
+	extDir := filepath.Join(config.Get().HomeDir, "extension")
+	manifestPath := filepath.Join(extDir, "manifest.json")
+
+	// Check if already extracted and up-to-date
+	embeddedManifest, err := fs.ReadFile(extensionFS, "extension/manifest.json")
+	if err != nil {
+		return "", fmt.Errorf("embedded manifest not found: %w", err)
+	}
+
+	if existing, err := os.ReadFile(manifestPath); err == nil {
+		if string(existing) == string(embeddedManifest) {
+			log.Printf("[browser] Extension already extracted at %s", extDir)
+			return extDir, nil
+		}
+	}
+
+	// Extract all files
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir extension dir: %w", err)
+	}
+
+	entries, err := fs.ReadDir(extensionFS, "extension")
+	if err != nil {
+		return "", fmt.Errorf("read embedded extension: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := fs.ReadFile(extensionFS, "extension/"+entry.Name())
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", entry.Name(), err)
+		}
+		dst := filepath.Join(extDir, entry.Name())
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return "", fmt.Errorf("write %s: %w", entry.Name(), err)
+		}
+	}
+
+	log.Printf("[browser] Extension extracted to %s (%d files)", extDir, len(entries))
+	return extDir, nil
+}
+
 func ensureBrowser(proxy string) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -141,57 +240,26 @@ func ensureBrowser(proxy string) error {
 		return nil
 	}
 
-	path, exists := launcher.LookPath()
-	if !exists {
-		// Fallback 1: Use Go's exec.LookPath which respects $PATH
-		for _, name := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
-			if p, err := exec.LookPath(name); err == nil {
-				path = p
-				exists = true
-				break
-			}
-		}
-	}
-	if !exists {
-		// Fallback 2: Check common Linux paths directly
-		fallbacks := []string{
-			"/usr/bin/chromium",
-			"/usr/bin/google-chrome",
-			"/usr/bin/chromium-browser",
-			"/usr/bin/google-chrome-stable",
-			"/snap/bin/chromium",
-			"/usr/lib/chromium/chromium",
-			"/usr/lib/chromium-browser/chromium-browser",
-			"/opt/google/chrome/google-chrome",
-			"/usr/local/bin/chromium",
-		}
-		for _, p := range fallbacks {
-			if _, err := os.Stat(p); err == nil {
-				path = p
-				exists = true
-				break
-			}
-		}
-	}
-	if !exists {
-		// Fallback 3: Try to auto-install chromium
-		installCmd := exec.Command("bash", "-c", "apt-get install -y -q chromium 2>&1 || apt-get install -y -q chromium-browser 2>&1")
-		if out, err := installCmd.CombinedOutput(); err == nil {
-			for _, name := range []string{"chromium", "chromium-browser"} {
-				if p, err := exec.LookPath(name); err == nil {
-					path = p
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				return fmt.Errorf("Chromium installed but not found in PATH. Install output: %s", string(out))
-			}
-		} else {
-			return fmt.Errorf("Chromium/Chrome not found and auto-install failed. Install manually with: sudo apt install chromium")
-		}
+	// 1. Get Chromium binary (auto-download if needed)
+	path, err := getChromiumPath()
+	if err != nil {
+		return fmt.Errorf("chromium: %w", err)
 	}
 
+	// 2. Extract embedded extension
+	extDir, err := extractExtension()
+	if err != nil {
+		log.Printf("[browser] WARNING: Extension extraction failed: %v (launching without extension)", err)
+		extDir = ""
+	}
+
+	// 3. Start WebSocket bridge for extension communication
+	bridge := GetBridge()
+	if err := bridge.Start(); err != nil {
+		log.Printf("[browser] WARNING: WebSocket bridge start failed: %v", err)
+	}
+
+	// 4. Configure launcher
 	ln := launcher.New().
 		Bin(path).
 		Headless(true).
@@ -201,6 +269,15 @@ func ensureBrowser(proxy string) error {
 		Set("disable-web-security").           // Allow cross-origin for testing
 		Set("allow-running-insecure-content"). // Allow mixed content
 		Set("window-size", "1920,1080")
+
+	// Load extension if extracted successfully
+	if extDir != "" {
+		ln = ln.
+			Delete("headless").                    // Remove --headless set by Headless(true)
+			Set("headless", "new").                // Chrome 112+ new headless supports extensions
+			Set("load-extension", extDir).
+			Set("disable-extensions-except", extDir)
+	}
 
 	if proxy == "caido" {
 		caidoPort := detectCaidoPort()
@@ -214,6 +291,7 @@ func ensureBrowser(proxy string) error {
 	u := ln.MustLaunch()
 
 	browser = rod.New().ControlURL(u).MustConnect()
+	log.Printf("[browser] Standalone browser launched (extension=%v)", extDir != "")
 	return nil
 }
 
