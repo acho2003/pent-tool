@@ -460,6 +460,7 @@ type ScanRequest struct {
 	DiscordWebhook string   `json:"discord_webhook"` // Discord webhook URL
 	SeverityFilter []string `json:"severity_filter"` // e.g. ["critical", "high"]
 	InstanceID     string   `json:"-"`               // internal: parent instance ID
+	IsResume       bool     `json:"-"`               // internal: true when auto-resuming after restart
 }
 
 // WSEvent is a WebSocket message sent to clients.
@@ -733,6 +734,7 @@ func (s *Server) Start() error {
 			Targets:     remaining,
 			Instruction: state.Instruction,
 			ScanMode:    state.ScanMode,
+			IsResume:    true,
 		}
 		scanCfg := *s.cfg
 		s.runMultiScan(req, &scanCfg)
@@ -1614,15 +1616,27 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	}
 
 	// ── GLOBAL STATE RESET: Prevent previous scan targets from leaking into current scan ──
-	// This is the DEFINITIVE reset point — every new scan starts with a clean slate.
-	func() {
-		defer func() { recover() }()
-		reporting.ResetVulnerabilities()
-		notes.ResetNotes()
-		terminal.SetWorkDir("") // clear stale working directory
-		terminal.KillAllProcesses() // kill any orphaned processes from previous scans
-		cleanTmpSubdomainFiles() // remove stale /tmp files from previous scans
-	}()
+	// Skip reset on resume — we want to keep accumulated vulns, notes, and recon files.
+	if req.IsResume {
+		log.Printf("[AUTO-RESUME] Skipping state reset — preserving vulns, notes, and recon files from previous session")
+		// Only kill orphan processes — don't wipe data
+		func() {
+			defer func() { recover() }()
+			terminal.KillAllProcesses()
+		}()
+		// Restore notes from disk if available
+		notes.LoadFromDisk()
+	} else {
+		// Fresh scan — clean slate
+		func() {
+			defer func() { recover() }()
+			reporting.ResetVulnerabilities()
+			notes.ResetNotes()
+			terminal.SetWorkDir("") // clear stale working directory
+			terminal.KillAllProcesses() // kill any orphaned processes from previous scans
+			cleanTmpSubdomainFiles() // remove stale /tmp files from previous scans
+		}()
+	}
 	totalTargets := len(req.Targets)
 
 	// Save queue state for persistence
