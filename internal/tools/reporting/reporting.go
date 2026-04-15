@@ -383,6 +383,55 @@ func checkFalsePositive(title, description, severity, proof string) string {
 		}
 	}
 
+	// Pattern 12: Analytics API writeKey "bypass" — these are public client-side tokens by design
+	analyticsKeywords := []string{"writekey", "write_key", "write key", "analytics key", "segment key", "analytics api"}
+	analyticsEndpoints := []string{"/v1/i", "/v1/t", "/v1/p", "/v1/batch", "/v1/identify", "/v1/track", "/v1/page", "/v1/screen", "/v1/group", "/v1/alias"}
+	isAnalyticsFP := false
+	for _, kw := range analyticsKeywords {
+		if strings.Contains(lower, kw) {
+			isAnalyticsFP = true
+			break
+		}
+	}
+	if !isAnalyticsFP {
+		for _, ep := range analyticsEndpoints {
+			if strings.Contains(lower, ep) {
+				isAnalyticsFP = true
+				break
+			}
+		}
+	}
+	if isAnalyticsFP && (strings.Contains(lower, "analytics") || strings.Contains(lower, "validation") || strings.Contains(lower, "writekey") || strings.Contains(lower, "write_key") || strings.Contains(lower, "write key")) {
+		return "❌ REJECTED: Analytics API writeKey bypass is NOT a vulnerability. writeKeys are PUBLIC client-side tokens shipped in JavaScript (Segment, Amplitude, Mixpanel, etc.). They are designed to be exposed. Bug bounty programs mark this as N/A or Informational. Do not report."
+	}
+
+	// Pattern 13: Rate limiting / brute force — almost always informational
+	rateLimitKeywords := []string{"rate limit", "rate-limit", "no rate limit", "brute force", "brute-force",
+		"account lockout", "missing rate limit", "unlimited requests", "no lockout", "login throttling"}
+	for _, kw := range rateLimitKeywords {
+		if strings.Contains(lower, kw) && isHighSev {
+			return "❌ REJECTED: Missing rate limiting / brute force is INFORMATIONAL on HackerOne. Most programs explicitly exclude this. Re-report as 'info' at most."
+		}
+	}
+
+	// Pattern 14: Success response without actual impact — APIs returning success:true
+	if strings.Contains(lower, "success") && strings.Contains(lower, "true") &&
+		(strings.Contains(lower, "any value") || strings.Contains(lower, "arbitrary") || strings.Contains(lower, "without validation")) {
+		// Check if proof shows actual data modification or access
+		lowerProof := strings.ToLower(proof)
+		hasRealImpact := false
+		impactWords := []string{"admin access", "modified", "deleted", "created user", "escalat", "bypass", "account", "password", "database"}
+		for _, iw := range impactWords {
+			if strings.Contains(lowerProof, iw) {
+				hasRealImpact = true
+				break
+			}
+		}
+		if !hasRealImpact && isHighSev {
+			return "❌ REJECTED: API returning success:true without input validation is NOT automatically a vulnerability. You must demonstrate ACTUAL IMPACT — data was modified, accounts were affected, or access was gained. A success response alone proves nothing. Re-report as 'info' with real impact proof, or move on."
+		}
+	}
+
 	return ""
 }
 
@@ -555,6 +604,10 @@ func classifySeverity(title, description, severity, proof string) (string, strin
 			"Email disclosure is informational"},
 		{[]string{"dns zone transfer", "zone transfer"},
 			"DNS zone transfer is informational in most contexts"},
+		{[]string{"writekey", "write_key", "write key", "analytics key", "segment key", "analytics api key"},
+			"Analytics writeKeys are public client-side tokens — not a security vulnerability"},
+		{[]string{"rate limit", "rate-limit", "no rate limit", "brute force", "account lockout", "missing rate limit"},
+			"Missing rate limiting is informational — most bug bounty programs exclude this"},
 	}
 
 	for _, p := range infoOnlyPatterns {
