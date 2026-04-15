@@ -111,9 +111,31 @@
         custom: {
             prefix: '',
             models: [],
-            bases: [{ label: 'Custom Endpoint', value: '' }],
+            bases: [],
+            isCustom: true,
         },
     };
+
+    // Helper: Replace a <select> with a text <input> (returns the new input element)
+    function switchToTextInput(selectEl, placeholder) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = selectEl.id;
+        input.className = selectEl.className;
+        input.placeholder = placeholder;
+        input.value = '';
+        selectEl.replaceWith(input);
+        return input;
+    }
+
+    // Helper: Replace a text <input> back to a <select> (returns the new select element)
+    function switchToSelect(inputEl) {
+        const select = document.createElement('select');
+        select.id = inputEl.id;
+        select.className = inputEl.className;
+        inputEl.replaceWith(select);
+        return select;
+    }
 
     // ── WebSocket with Improved Reconnection ────────────────
     let wsReconnectAttempts = 0;
@@ -1174,42 +1196,62 @@
         const provider = document.getElementById('llm-provider').value;
         const p = LLM_PROVIDERS[provider] || {};
 
-        // Rebuild model dropdown
-        const modelSelect = document.getElementById('llm-model');
-        modelSelect.innerHTML = '';
-        if (p.models && p.models.length > 0) {
-            p.models.forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m;
-                opt.textContent = m;
-                modelSelect.appendChild(opt);
-            });
-            modelSelect.disabled = false;
-        } else {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = 'No models available';
-            modelSelect.appendChild(opt);
-            modelSelect.disabled = true;
-        }
+        if (p.isCustom) {
+            // Custom provider: swap dropdowns to text inputs
+            let modelEl = document.getElementById('llm-model');
+            if (modelEl.tagName === 'SELECT') {
+                modelEl = switchToTextInput(modelEl, 'Model name (e.g. gpt-4o, claude-3.5-sonnet)');
+            }
+            modelEl.disabled = false;
 
-        // Rebuild API base dropdown
-        const baseSelect = document.getElementById('llm-apibase');
-        baseSelect.innerHTML = '';
-        if (p.bases && p.bases.length > 0) {
-            p.bases.forEach(b => {
-                const opt = document.createElement('option');
-                opt.value = b.value;
-                opt.textContent = b.label;
-                baseSelect.appendChild(opt);
-            });
-            baseSelect.disabled = false;
+            let baseEl = document.getElementById('llm-apibase');
+            if (baseEl.tagName === 'SELECT') {
+                baseEl = switchToTextInput(baseEl, 'API endpoint URL (e.g. https://api.example.com/v1)');
+            }
+            baseEl.disabled = false;
         } else {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = 'Custom';
-            baseSelect.appendChild(opt);
-            baseSelect.disabled = false;
+            // Known provider: ensure we have <select> elements
+            let modelEl = document.getElementById('llm-model');
+            if (modelEl.tagName === 'INPUT') {
+                modelEl = switchToSelect(modelEl);
+            }
+            modelEl.innerHTML = '';
+            if (p.models && p.models.length > 0) {
+                p.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.textContent = m;
+                    modelEl.appendChild(opt);
+                });
+                modelEl.disabled = false;
+            } else {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No models available';
+                modelEl.appendChild(opt);
+                modelEl.disabled = true;
+            }
+
+            let baseEl = document.getElementById('llm-apibase');
+            if (baseEl.tagName === 'INPUT') {
+                baseEl = switchToSelect(baseEl);
+            }
+            baseEl.innerHTML = '';
+            if (p.bases && p.bases.length > 0) {
+                p.bases.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.value;
+                    opt.textContent = b.label;
+                    baseEl.appendChild(opt);
+                });
+                baseEl.disabled = false;
+            } else {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Default';
+                baseEl.appendChild(opt);
+                baseEl.disabled = false;
+            }
         }
     };
 
@@ -1218,40 +1260,60 @@
         const provider = document.getElementById('dash-llm-provider').value;
         const p = LLM_PROVIDERS[provider] || {};
 
-        const modelSelect = document.getElementById('dash-llm-model');
-        modelSelect.innerHTML = '';
-        if (p.models && p.models.length > 0) {
-            p.models.forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m;
-                opt.textContent = m;
-                modelSelect.appendChild(opt);
-            });
-            modelSelect.disabled = false;
-        } else {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = 'No models available';
-            modelSelect.appendChild(opt);
-            modelSelect.disabled = true;
-        }
+        if (p.isCustom) {
+            let modelEl = document.getElementById('dash-llm-model');
+            if (modelEl.tagName === 'SELECT') {
+                modelEl = switchToTextInput(modelEl, 'Model name (e.g. gpt-4o, claude-3.5-sonnet)');
+            }
+            modelEl.disabled = false;
 
-        const baseSelect = document.getElementById('dash-llm-apibase');
-        baseSelect.innerHTML = '';
-        if (p.bases && p.bases.length > 0) {
-            p.bases.forEach(b => {
-                const opt = document.createElement('option');
-                opt.value = b.value;
-                opt.textContent = b.label;
-                baseSelect.appendChild(opt);
-            });
-            baseSelect.disabled = false;
+            let baseEl = document.getElementById('dash-llm-apibase');
+            if (baseEl.tagName === 'SELECT') {
+                baseEl = switchToTextInput(baseEl, 'API endpoint URL (e.g. https://api.example.com/v1)');
+            }
+            baseEl.disabled = false;
         } else {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = 'Custom';
-            baseSelect.appendChild(opt);
-            baseSelect.disabled = false;
+            let modelEl = document.getElementById('dash-llm-model');
+            if (modelEl.tagName === 'INPUT') {
+                modelEl = switchToSelect(modelEl);
+            }
+            modelEl.innerHTML = '';
+            if (p.models && p.models.length > 0) {
+                p.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.textContent = m;
+                    modelEl.appendChild(opt);
+                });
+                modelEl.disabled = false;
+            } else {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No models available';
+                modelEl.appendChild(opt);
+                modelEl.disabled = true;
+            }
+
+            let baseEl = document.getElementById('dash-llm-apibase');
+            if (baseEl.tagName === 'INPUT') {
+                baseEl = switchToSelect(baseEl);
+            }
+            baseEl.innerHTML = '';
+            if (p.bases && p.bases.length > 0) {
+                p.bases.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.value;
+                    opt.textContent = b.label;
+                    baseEl.appendChild(opt);
+                });
+                baseEl.disabled = false;
+            } else {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Default';
+                baseEl.appendChild(opt);
+                baseEl.disabled = false;
+            }
         }
     };
 

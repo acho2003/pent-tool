@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -712,7 +713,94 @@ func (s *Server) Start() error {
 	} else {
 		log.Printf("⚠️  Authentication disabled — set XALGORIX_USERNAME and XALGORIX_PASSWORD in ~/.xalgorix.env")
 	}
-	return http.ListenAndServe(addr, authMw(rlMiddleware(mux)))
+
+	// ── Auto-resume interrupted scan queue after short startup delay ──
+	go func() {
+		time.Sleep(5 * time.Second) // let HTTP server fully initialize
+		state := s.loadQueueState()
+		if state == nil || !state.Active {
+			return
+		}
+		remaining := state.Targets[state.CurrentIdx:]
+		if len(remaining) == 0 {
+			s.clearQueueState()
+			return
+		}
+		log.Printf("[AUTO-RESUME] Resuming interrupted scan queue: %d targets from index %d", len(remaining), state.CurrentIdx)
+		req := ScanRequest{
+			Targets:     remaining,
+			Instruction: state.Instruction,
+			ScanMode:    state.ScanMode,
+		}
+		scanCfg := *s.cfg
+		s.runMultiScan(req, &scanCfg)
+	}()
+
+	// ── Graceful shutdown on SIGTERM/SIGINT ──
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: authMw(rlMiddleware(mux)),
+	}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		sig := <-sigCh
+		log.Printf("[SHUTDOWN] Received signal %s — saving state and shutting down gracefully", sig)
+
+		// Stop all running scans so they save queue state
+		s.stopReq.Store(true)
+		s.mu.Lock()
+		if s.cancelScan != nil {
+			s.cancelScan()
+		}
+		if s.currentAgent != nil {
+			s.currentAgent.Stop()
+		}
+		s.mu.Unlock()
+
+		// Stop all instances
+		s.instancesMu.RLock()
+		for _, inst := range s.instances {
+			inst.mu.Lock()
+			if inst.Status == "running" {
+				inst.Status = "stopped"
+				inst.StopReason = "signal_" + sig.String()
+				inst.FinishedAt = time.Now().Format(time.RFC3339)
+				if inst.agent != nil {
+					inst.agent.Stop()
+				}
+			}
+			inst.mu.Unlock()
+		}
+		s.instancesMu.RUnlock()
+
+		terminal.KillAllProcesses()
+
+		// Send Discord notification
+		if s.discordWebhook != "" {
+			s.sendDiscord(0xff6b6b, "🔄 Xalgorix Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig))
+		}
+
+		// Give scans a moment to save their queue state
+		time.Sleep(2 * time.Second)
+
+		// Graceful HTTP shutdown (5s deadline for in-flight requests)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("[SHUTDOWN] HTTP shutdown error: %v", err)
+		}
+
+		s.rateLimiter.Stop()
+		log.Printf("[SHUTDOWN] Graceful shutdown complete")
+	}()
+
+	err = httpServer.ListenAndServe()
+	if err == http.ErrServerClosed {
+		return nil // graceful shutdown
+	}
+	return err
 }
 
 // initDataDir creates the data directory and cleans up old scans (>30 days).
@@ -738,11 +826,10 @@ func (s *Server) initDataDir() {
 		}
 	}
 
-	// Check for interrupted queue and offer recovery
+	// Check for interrupted queue — will auto-resume after server starts
 	if state := s.loadQueueState(); state != nil && state.Active {
-		log.Printf("Found interrupted scan queue: %d targets remaining from index %d", 
+		log.Printf("Found interrupted scan queue: %d targets remaining from index %d (will auto-resume in 5s)", 
 			len(state.Targets)-state.CurrentIdx, state.CurrentIdx)
-		// Queue will be offered for recovery via API
 	}
 }
 
@@ -1455,8 +1542,19 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		instance.FinishedAt = time.Now().Format(time.RFC3339)
 		instance.mu.Unlock()
 
-		// ALWAYS clean up, whether we finished normally or crashed
-		s.clearQueueState()
+		// Only clear queue state if scan finished normally (not from signal).
+		// Signal-stopped scans preserve queue state so auto-resume works on restart.
+		preserveQueue := false
+		instance.mu.RLock()
+		if strings.HasPrefix(instance.StopReason, "signal_") {
+			preserveQueue = true
+		}
+		instance.mu.RUnlock()
+		if !preserveQueue {
+			s.clearQueueState()
+		} else {
+			log.Printf("[SHUTDOWN] Preserving queue state for auto-resume after signal stop")
+		}
 		s.mu.Lock()
 		if s.currentScanID == instanceID {
 			s.cancelScan = nil
