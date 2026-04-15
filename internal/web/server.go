@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	mathrand "math/rand/v2"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -2159,6 +2160,11 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 	if len(subdomains) == 0 {
 		log.Printf("[WARN] No subdomains found after all fallback layers for target: %s (rootTarget: %s)", target, rootTarget)
 	}
+
+	// Shuffle so scan order is randomized — avoids predictable patterns
+	mathrand.Shuffle(len(subdomains), func(i, j int) {
+		subdomains[i], subdomains[j] = subdomains[j], subdomains[i]
+	})
 
 	return subdomains
 }
