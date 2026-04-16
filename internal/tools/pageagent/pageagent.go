@@ -321,6 +321,16 @@ func interact(id, action, text string) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("browser not launched — use browser_action launch first")
 	}
 
+	// ── Fast bail: element not in DOM at all ───────────────────────
+	// If the data-xpa-id doesn't exist, no tier can help — tell agent to re-discover.
+	has, _, _ := page.Has(selector)
+	if !has {
+		return tools.Result{}, fmt.Errorf(
+			"element @%s not found in DOM — the page may have changed. Run discover to get fresh element IDs",
+			xpaID,
+		)
+	}
+
 	// ── Native Rod Input (isTrusted:true) ──────────────────────────
 	// Try Rod's native element operations first — these go through
 	// Chrome's CDP Input domain producing real browser-level events.
@@ -418,9 +428,15 @@ func interact(id, action, text string) (tools.Result, error) {
 // nativeInteract uses Rod's native element methods for isTrusted:true interactions.
 // This goes through Chrome's CDP Input domain — the same pipeline as real human input.
 func nativeInteract(page *rod.Page, selector, xpaID, action, text string) error {
-	el, err := page.Timeout(5 * time.Second).Element(selector)
+	// Fast existence check — if element isn't in DOM, don't waste time waiting
+	has, _, err := page.Has(selector)
+	if err != nil || !has {
+		return fmt.Errorf("element @%s not in DOM (stale ID — re-discover needed)", xpaID)
+	}
+
+	el, err := page.Timeout(2 * time.Second).Element(selector)
 	if err != nil {
-		return fmt.Errorf("element %s not found: %w", xpaID, err)
+		return fmt.Errorf("element @%s not found: %w", xpaID, err)
 	}
 
 	switch action {
@@ -471,9 +487,13 @@ func nativeInteract(page *rod.Page, selector, xpaID, action, text string) error 
 
 // getElementLabel extracts a human-readable label for the element.
 func getElementLabel(page *rod.Page, selector string) string {
-	el, err := page.Timeout(2 * time.Second).Element(selector)
+	has, _, _ := page.Has(selector)
+	if !has {
+		return "element"
+	}
+	el, err := page.Timeout(500 * time.Millisecond).Element(selector)
 	if err != nil {
-		return "unknown"
+		return "element"
 	}
 	text, err := el.Text()
 	if err != nil || text == "" {
