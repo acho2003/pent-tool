@@ -41,7 +41,7 @@
 | **Most Complete** | ✅ Only open-source tool with Web UI + Live Feed + Chat + PDF + Discord |
 | **Most Thorough** | ✅ 3 scan modes: Single → DAST → Wildcard (subdomain enum → scan each) |
 | **Most Automated** | ✅ Auto-installs tools, auto-generates PDF, auto-sends Discord alerts |
-| **Most Flexible** | ✅ Works with any LLM (OpenAI, Anthropic, DeepSeek, MiniMax, Google, Groq, Ollama) |
+| **Most Flexible** | ✅ Works with any LLM (OpenAI, Anthropic, DeepSeek, **MiniMax ⭐**, Google, Groq, Ollama) |
 | **Most Production-Ready** | ✅ Rate limiting, circuit breaker, queue system, severity filtering |
 
 > **TL;DR:** Give it a target URL, and Xalgorix will find vulnerabilities, generate a professional PDF report, and send Discord alerts — all automatically.
@@ -205,15 +205,17 @@ nano ~/.xalgorix.env
 ```
 
 ```bash
-# Required
-XALGORIX_LLM=openai/gpt-5.4
-XALGORIX_API_KEY=your_api_key
+# ⭐ Recommended — MiniMax (best performance-to-cost ratio for pentesting)
+XALGORIX_LLM=minimax/M2.7
+XALGORIX_API_KEY=your_minimax_api_key
+
+# OR use OpenAI:
+# XALGORIX_LLM=openai/gpt-5.4
+# XALGORIX_API_KEY=sk-...
+
 # OR use Anthropic:
 # XALGORIX_LLM=anthropic/claude-sonnet-4-6
 # XALGORIX_API_KEY=sk-ant-...
-
-# Optional - for custom providers (MiniMax, Ollama, etc.)
-# XALGORIX_API_BASE=https://api.minimax.io/
 
 # Optional
 XALGORIX_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
@@ -324,13 +326,15 @@ xalgorix --target https://example.com
 
 Xalgorix supports multiple LLM providers:
 
+- ⭐ **MiniMax (Recommended)** — `minimax/M2.7`, `minimax/Text-01` — Best performance-to-cost for autonomous pentesting
 - **OpenAI** — `openai/gpt-5.4`, `openai/gpt-4o`, `openai/o3`
 - **Anthropic** — `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`
 - **DeepSeek** — `deepseek/deepseek-chat-v3`, `deepseek/deepseek-v3`, `deepseek/deepseek-coder`
 - **Google** — `google/gemini-3-flash-preview`, `google/gemini-3-pro-preview`
 - **Groq** — hosts Llama 4, Qwen 3, Mixtral (use model name directly)
 - **Ollama** — `ollama/llama-3.3-70b`, `ollama/qwen3` (local)
-- **MiniMax** — `minimax/M2.7`, `minimax/Text-01`
+
+> 🎁 **Exclusive 10% OFF MiniMax:** [Get your discount here](https://platform.minimax.io/subscribe/coding-plan?code=4ujDUlOIz3&source=link)
 
 ---
 
