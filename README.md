@@ -221,6 +221,8 @@ XALGORIX_API_KEY=your_minimax_api_key
 XALGORIX_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
 ```
 
+> 🎁 **Exclusive 10% OFF MiniMax:** [Get your discount here](https://platform.minimax.io/subscribe/coding-plan?code=4ujDUlOIz3&source=link)
+
 > ⚠️ **Note:** Xalgorix will refuse to start if `~/.xalgorix.env` is missing or missing required variables (`XALGORIX_LLM` and `XALGORIX_API_KEY`).
 
 ### 3️⃣ Run
