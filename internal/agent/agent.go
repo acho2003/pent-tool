@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -69,6 +68,8 @@ type Agent struct {
 	activityMu    sync.Mutex
 	scanStart     time.Time // when Run() was called
 	discoveryMode bool      // When true, allow finish at any iteration (for Phase 1 enumeration)
+	hooks         *HookRegistry // extensible lifecycle hooks
+	state         *ScanState    // shared mutable scan state for hooks
 }
 
 // NewAgent creates a new agent.
@@ -93,6 +94,9 @@ func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
 	agentmail.Register(reg)
 	skillstool.Register(reg, cfg.SkillsDir)
 
+	hookReg := NewHookRegistry()
+	RegisterDefaultHooks(hookReg)
+
 	a := &Agent{
 		ID:           fmt.Sprintf("agent_%d", time.Now().UnixNano()),
 		Name:         name,
@@ -103,6 +107,8 @@ func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
 		maxIter:      cfg.MaxIterations,
 		ctx:          context.Background(),
 		lastActivity: time.Now(),
+		hooks:        hookReg,
+		state:        NewScanState(),
 	}
 
 	// Create cancellable context
@@ -381,7 +387,9 @@ func (a *Agent) Run(targets []string, instruction string) {
 	userMsg := a.buildInitialUserMessage(targets, instruction)
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: userMsg})
 
-	noToolCount := 0
+	// Initialize scan state for hooks (replaces 17+ local tracking variables)
+	a.state = NewScanState()
+	a.state.DiscoveryMode = a.discoveryMode
 
 	// Helper to get current token count
 	tokenCount := func() int {
@@ -389,148 +397,10 @@ func (a *Agent) Run(targets []string, instruction string) {
 		return total
 	}
 
-	consecutiveErrors := 0
-	emptyResponseCount := 0
-	finishAttempts := 0      // Track how many times LLM tried to finish
-	terminalCalls := 0       // terminal_execute count
-	uniqueToolsUsed := map[string]bool{} // track distinct tool types used
-	reconDone := false       // set true when recon-like commands detected
-	injectionTested := false // set true when injection testing detected
-	scannerUsed := false     // set true when nuclei/sqlmap/dalfox/ffuf used (optional, not required)
-	dirBustingDone := false  // set true when ffuf/gobuster/dirsearch/feroxbuster detected
-	accessControlTested := false // set true when IDOR/auth bypass testing detected
-
-	// Stuck-loop detection: prevent infinite retries on blocked/WAF targets
-	consecutiveBrowserActions := 0   // consecutive browser_action calls
-	consecutiveWebSearches := 0      // consecutive web_search calls
-	stuckDomain := ""                // domain the agent is stuck on
-	stuckIterations := 0             // total iterations stuck on same domain
-	const stuckBrowserThreshold = 40 // browser actions before nudge
-	const stuckSearchThreshold = 30  // web searches before nudge
-	const stuckHardLimit = 50        // total stuck iterations before force-skip
-
-	// Smart finish evaluation: decides if the agent has done enough work
-	canFinish := func(iter int) (bool, string) {
-		// Discovery mode (Phase 1 enumeration): always allow finish
-		if a.discoveryMode {
-			return true, ""
-		}
-
-		// Absolute minimum: at least 3 iterations (sanity floor)
-		if iter < 3 {
-			return false, fmt.Sprintf("Only %d iterations completed. Run at least basic recon before finishing.", iter+1)
-		}
-
-		// If agent has done very little (< 5 terminal commands), reject
-		if terminalCalls < 5 {
-			return false, fmt.Sprintf("Only %d commands executed. You haven't done enough testing. Run port scanning, directory brute-forcing, and parameter testing before finishing.", terminalCalls)
-		}
-
-		// If recon wasn't done, reject
-		if !reconDone {
-			return false, "No reconnaissance detected. You must at least run: port scanning (nmap), directory discovery (ffuf/gobuster), and technology fingerprinting (whatweb/curl -sI) before finishing."
-		}
-
-		// After basic threshold, evaluate work quality
-		// Low bar: recon done + some testing + 10+ commands = acceptable early finish
-		// (this handles duplicate subdomains that serve the same content)
-		if terminalCalls >= 10 && reconDone {
-			// If < 15 iters, require injection testing AND directory busting
-			if iter < 15 {
-				missing := []string{}
-				if !injectionTested {
-					missing = append(missing, "manual injection testing (SQLi, XSS, SSRF, NoSQL, SSTI)")
-				}
-				if !dirBustingDone {
-					missing = append(missing, "directory brute-forcing (ffuf/gobuster/dirsearch)")
-				}
-				if !accessControlTested {
-					missing = append(missing, "access control testing (IDOR, auth bypass, role testing)")
-				}
-				if len(missing) > 0 {
-					return false, fmt.Sprintf("Recon is done but you haven't completed: %s. Continue testing before finishing.", strings.Join(missing, ", "))
-				}
-			}
-			return true, ""
-		}
-
-		// Generous allowance after 20 iterations regardless
-		if iter >= 20 {
-			return true, ""
-		}
-
-		// Between 10-20 iterations with < 10 commands: nudge to do more
-		missing := []string{}
-		if !injectionTested {
-			missing = append(missing, "manual parameter testing (SQLi, XSS, SSRF, NoSQL, SSTI, CRLF)")
-		}
-		if !dirBustingDone {
-			missing = append(missing, "directory discovery (ffuf/gobuster/dirsearch)")
-		}
-		if !accessControlTested {
-			missing = append(missing, "access control testing (IDOR, privilege escalation, auth bypass)")
-		}
-		if len(missing) > 0 {
-			return false, fmt.Sprintf("Still missing: %s. Continue testing before finishing.", strings.Join(missing, ", "))
-		}
-
-		return true, ""
-	}
-
-	// Track work done from tool calls
-	trackWork := func(toolName string, toolArgs map[string]string) {
-		uniqueToolsUsed[toolName] = true
-		if toolName == "terminal_execute" {
-			terminalCalls++
-			cmd := strings.ToLower(toolArgs["command"])
-			// Detect recon commands
-			if strings.Contains(cmd, "nmap") || strings.Contains(cmd, "whatweb") ||
-				strings.Contains(cmd, "curl -si") || strings.Contains(cmd, "curl -sk") ||
-				strings.Contains(cmd, "httpx") || strings.Contains(cmd, "wappalyzer") ||
-				strings.Contains(cmd, "ffuf") || strings.Contains(cmd, "gobuster") ||
-				strings.Contains(cmd, "dirsearch") || strings.Contains(cmd, "katana") ||
-				strings.Contains(cmd, "gospider") || strings.Contains(cmd, "wafw00f") {
-				reconDone = true
-			}
-			// Detect directory busting
-			if strings.Contains(cmd, "ffuf") || strings.Contains(cmd, "gobuster") ||
-				strings.Contains(cmd, "dirsearch") || strings.Contains(cmd, "feroxbuster") ||
-				strings.Contains(cmd, "dirb ") {
-				dirBustingDone = true
-			}
-			// Detect injection testing
-			if strings.Contains(cmd, "sqlmap") || strings.Contains(cmd, "dalfox") ||
-				strings.Contains(cmd, "sleep(") || strings.Contains(cmd, "alert(") ||
-				strings.Contains(cmd, "<script>") || strings.Contains(cmd, "' or ") ||
-				strings.Contains(cmd, "' and ") || strings.Contains(cmd, "{{7*7}}") ||
-				strings.Contains(cmd, "etc/passwd") || strings.Contains(cmd, "xalg0r1x") ||
-				strings.Contains(cmd, "$ne") || strings.Contains(cmd, "$gt") ||
-				strings.Contains(cmd, "__proto__") || strings.Contains(cmd, "%0d%0a") ||
-				strings.Contains(cmd, "content-length") && strings.Contains(cmd, "transfer-encoding") {
-				injectionTested = true
-			}
-			// Detect access control testing (IDOR, auth bypass)
-			if strings.Contains(cmd, "/user/1") || strings.Contains(cmd, "/user/2") ||
-				strings.Contains(cmd, "id=1") || strings.Contains(cmd, "id=2") ||
-				strings.Contains(cmd, "role=admin") || strings.Contains(cmd, "isadmin") ||
-				strings.Contains(cmd, "x-forwarded-for") || strings.Contains(cmd, "x-original-url") ||
-				(strings.Contains(cmd, "admin") && strings.Contains(cmd, "curl")) ||
-				strings.Contains(cmd, "authorization") {
-				accessControlTested = true
-			}
-			// Detect scanner usage
-			if strings.Contains(cmd, "nuclei") || strings.Contains(cmd, "sqlmap") ||
-				strings.Contains(cmd, "dalfox") || strings.Contains(cmd, "ffuf") ||
-				strings.Contains(cmd, "gobuster") ||
-				strings.Contains(cmd, "wpscan") || strings.Contains(cmd, "joomscan") {
-				scannerUsed = true
-			}
-		}
-	}
-
 	for iter := 0; (a.maxIter == 0 || iter < a.maxIter) && !a.stopped.Load() && (a.ctx == nil || a.ctx.Err() == nil); iter++ {
 		// Reset activity watchdog on each iteration — IMMEDIATELY, no delay
 		a.touchActivity()
+		a.state.Iteration = iter
 
 		if a.maxIter > 0 {
 			a.emit(Event{Type: "thinking", Content: fmt.Sprintf("Iteration %d/%d", iter+1, a.maxIter), TotalTokens: tokenCount()})
@@ -538,47 +408,57 @@ func (a *Agent) Run(targets []string, instruction string) {
 			a.emit(Event{Type: "thinking", Content: fmt.Sprintf("Iteration %d", iter+1), TotalTokens: tokenCount()})
 		}
 
+		// ── Hook: OnIterationStart ──
+		iterResult := a.hooks.Fire(OnIterationStart, a.state, nil)
+		if iterResult.Nudge != "" {
+			a.msgMu.Lock()
+			a.messages = append(a.messages, llm.Message{Role: "user", Content: iterResult.Nudge})
+			a.msgMu.Unlock()
+		}
+		if iterResult.EmitMessage != "" {
+			a.emit(Event{Type: "message", Content: iterResult.EmitMessage, TotalTokens: tokenCount()})
+		}
+
 		response, err := a.client.Chat(a.messages)
 		// Update activity after LLM response
 		a.touchActivity()
 
 		if err != nil {
-			consecutiveErrors++
-			a.emit(Event{Type: "error", Content: fmt.Sprintf("LLM error (attempt %d/25): %s", consecutiveErrors, err.Error()), TotalTokens: tokenCount()})
-			if consecutiveErrors >= 25 {
-				a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Agent stopped: LLM failed %d consecutive times. Last error: %s", consecutiveErrors, err.Error()), TotalTokens: tokenCount()})
-				a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: LLM failed %d consecutive times. Last error: %s", consecutiveErrors, err.Error()), TotalTokens: tokenCount()})
+			a.state.ConsecutiveErrors++
+			a.emit(Event{Type: "error", Content: fmt.Sprintf("LLM error (attempt %d/25): %s", a.state.ConsecutiveErrors, err.Error()), TotalTokens: tokenCount()})
+			if a.state.ConsecutiveErrors >= 25 {
+				a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Agent stopped: LLM failed %d consecutive times. Last error: %s", a.state.ConsecutiveErrors, err.Error()), TotalTokens: tokenCount()})
+				a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: LLM failed %d consecutive times. Last error: %s", a.state.ConsecutiveErrors, err.Error()), TotalTokens: tokenCount()})
 				return
 			}
 			// Exponential backoff: 10s, 20s, 30s... capped at 120s
 			// Long-running wildcard scans need more tolerance for transient API issues
-			backoff := time.Duration(consecutiveErrors*10) * time.Second
+			backoff := time.Duration(a.state.ConsecutiveErrors*10) * time.Second
 			if backoff > 120*time.Second {
 				backoff = 120 * time.Second
 			}
 			time.Sleep(backoff)
 			continue
 		}
-		consecutiveErrors = 0
+		// ConsecutiveErrors reset is handled by OnHealthyResponse hook below
 
+		// ── Hook: OnEmptyResponse ──
 		if response == "" {
-			emptyResponseCount++
-			a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ LLM returned empty response (%d/12)", emptyResponseCount), TotalTokens: tokenCount()})
-			if emptyResponseCount >= 12 {
-				// 12 empty responses = LLM is broken or stuck, force finish
-				a.emit(Event{Type: "error", Content: "⛔ LLM returned 12 consecutive empty responses. Force finishing to prevent infinite loop.", TotalTokens: tokenCount()})
+			emptyResult := a.hooks.Fire(OnEmptyResponse, a.state, nil)
+			a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ LLM returned empty response (%d/12)", a.state.EmptyResponseCount), TotalTokens: tokenCount()})
+			if emptyResult.ForceSkip {
+				a.emit(Event{Type: "error", Content: emptyResult.EmitMessage, TotalTokens: tokenCount()})
 				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM returned too many empty responses", TotalTokens: tokenCount()})
 				return
 			}
-			if emptyResponseCount >= 5 {
-				nudge := "Your last responses were empty. You MUST call a tool NOW. Use terminal_execute to run your next command, or call finish if you are truly done."
+			if emptyResult.Nudge != "" {
 				a.msgMu.Lock()
-				a.messages = append(a.messages, llm.Message{Role: "user", Content: nudge})
+				a.messages = append(a.messages, llm.Message{Role: "user", Content: emptyResult.Nudge})
 				a.msgMu.Unlock()
 			}
 			continue
 		}
-		emptyResponseCount = 0
+		// EmptyResponseCount reset is handled by OnHealthyResponse hook below
 
 		// Strip <think>...</think> blocks for parsing
 		responseClean := stripThink(response)
@@ -596,134 +476,54 @@ func (a *Agent) Run(targets []string, instruction string) {
 
 		toolCalls := llm.ParseToolCalls(responseClean)
 
+		// ── Hook: OnNoToolResponse ──
 		if len(toolCalls) == 0 {
-			noToolCount++
-
-			// Hard limit: 15 consecutive no-tool responses = LLM is looping
-			if noToolCount >= 15 {
-				a.emit(Event{Type: "error", Content: "⛔ LLM failed to call any tools for 15 consecutive responses. Force finishing.", TotalTokens: tokenCount()})
+			noToolResult := a.hooks.Fire(OnNoToolResponse, a.state, nil)
+			if noToolResult.ForceSkip {
+				a.emit(Event{Type: "error", Content: noToolResult.EmitMessage, TotalTokens: tokenCount()})
 				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM refused to call tools after 15 attempts", TotalTokens: tokenCount()})
 				return
 			}
-
-			if noToolCount >= 3 {
-				nudge := `You MUST use tools to interact with the target. Do not just explain — take action NOW.
-
-To execute a command, use:
-<function=terminal_execute>
-<parameter=command>your command here</parameter>
-</function>
-
-To finish the task, use:
-<function=finish>
-<parameter=summary>Your summary here</parameter>
-</function>
-
-Call a tool NOW in your next response.`
+			if noToolResult.Nudge != "" {
 				a.msgMu.Lock()
-				a.messages = append(a.messages, llm.Message{Role: "user", Content: nudge})
-				a.msgMu.Unlock()
-			} else {
-				a.msgMu.Lock()
-				a.messages = append(a.messages, llm.Message{
-					Role:    "user",
-					Content: "Please use the available tools by calling them with the XML format shown in the system prompt. Do not just describe what you would do — actually call the tools.",
-				})
+				a.messages = append(a.messages, llm.Message{Role: "user", Content: noToolResult.Nudge})
 				a.msgMu.Unlock()
 			}
 			continue
 		}
-
-		noToolCount = 0
+		// Non-empty response with tool calls = healthy. Reset all error counters.
+		a.hooks.Fire(OnHealthyResponse, a.state, nil)
 
 		for _, tc := range toolCalls {
 			if a.stopped.Load() {
 				break
 			}
 
-			// ── Stuck-loop detection ──
-			// Track consecutive browser_action / web_search calls that suggest
-			// the LLM is stuck trying to bypass Cloudflare / WAF / JS challenges
-			if tc.Name == "browser_action" {
-				consecutiveBrowserActions++
-				consecutiveWebSearches = 0 // mixed with browser = still stuck
-				// Extract domain from URL arg if present
-				if u := tc.Args["url"]; u != "" {
-					if parsed, parseErr := url.Parse(u); parseErr == nil && parsed.Host != "" {
-						host := parsed.Hostname()
-						if stuckDomain == "" || stuckDomain == host {
-							stuckDomain = host
-							stuckIterations++
-						} else {
-							// Different domain — reset
-							stuckDomain = host
-							stuckIterations = 1
-							consecutiveBrowserActions = 1
-						}
-					}
-				} else {
-					// No URL arg (snapshot, click, etc.) — still on same domain
-					stuckIterations++
-				}
-			} else if tc.Name == "web_search" {
-				consecutiveWebSearches++
-				q := strings.ToLower(tc.Args["query"])
-				// If searching for bypass/cloudflare/captcha/WAF, it's a stuck signal
-				if strings.Contains(q, "bypass") || strings.Contains(q, "cloudflare") ||
-					strings.Contains(q, "captcha") || strings.Contains(q, "waf") ||
-					strings.Contains(q, "javascript challenge") || strings.Contains(q, "security check") ||
-					strings.Contains(q, "403 forbidden") || strings.Contains(q, "access denied") {
-					stuckIterations++
-				}
-			} else {
-				// A non-browser, non-search tool call = real progress, reset counters
-				if tc.Name != "add_note" && tc.Name != "read_notes" {
-					consecutiveBrowserActions = 0
-					consecutiveWebSearches = 0
-					stuckIterations = 0
-					stuckDomain = ""
-				}
+			// ── Hook: OnToolCall (work tracking + stuck tracking) ──
+			toolArgs := map[string]string{
+				"tool_name": tc.Name,
 			}
-
-			// Soft nudge: tell agent to give up on this target
-			if (consecutiveBrowserActions >= stuckBrowserThreshold || consecutiveWebSearches >= stuckSearchThreshold) && stuckIterations >= stuckBrowserThreshold {
-				nudge := fmt.Sprintf(`⚠️ STUCK LOOP DETECTED: You have spent %d iterations trying to access %q with browser/search actions without making progress. This target is likely protected by Cloudflare, a WAF, or a JavaScript challenge that cannot be bypassed.
-
-STOP trying to access this target via browser. Instead:
-1. Close the browser: browser_action command=close
-2. Try using curl/httpx directly (they may get different responses)
-3. If curl also fails, SKIP this target and move to the next one
-4. Call finish if there are no more targets
-
-Do NOT continue browser retries or search for bypass methods.`, stuckIterations, stuckDomain)
-				a.emit(Event{Type: "error", Content: nudge, TotalTokens: tokenCount()})
-				a.msgMu.Lock()
-				a.messages = append(a.messages, llm.Message{Role: "user", Content: nudge})
-				a.msgMu.Unlock()
-				// Reset so the nudge doesn't fire every iteration
-				consecutiveBrowserActions = 0
-				consecutiveWebSearches = 0
+			for k, v := range tc.Args {
+				toolArgs[k] = v
 			}
+			a.hooks.Fire(OnToolCall, a.state, toolArgs)
 
-			// Hard limit: force-skip after too many stuck iterations
-			if stuckIterations >= stuckHardLimit {
-				forceMsg := fmt.Sprintf(`⛔ FORCE SKIP: You have been stuck on %q for %d iterations. This target is UNREACHABLE. Close the browser NOW and move to the next target or call finish. Any further browser_action calls to this domain will be blocked.`, stuckDomain, stuckIterations)
-				a.emit(Event{Type: "error", Content: forceMsg, TotalTokens: tokenCount()})
+			// ── Hook: OnStuckCheck (nudge/force-skip based on stuck counters) ──
+			stuckResult := a.hooks.Fire(OnStuckCheck, a.state, toolArgs)
+			if stuckResult.EmitMessage != "" {
+				a.emit(Event{Type: "error", Content: stuckResult.EmitMessage, TotalTokens: tokenCount()})
+			}
+			if stuckResult.Nudge != "" {
 				a.msgMu.Lock()
-				a.messages = append(a.messages, llm.Message{Role: "user", Content: forceMsg})
+				a.messages = append(a.messages, llm.Message{Role: "user", Content: stuckResult.Nudge})
 				a.msgMu.Unlock()
-				// Reset hard to prevent getting stuck again on the same domain
-				stuckIterations = 0
-				stuckDomain = ""
-				consecutiveBrowserActions = 0
-				consecutiveWebSearches = 0
-				// Force-close browser to break the cycle
+			}
+			if stuckResult.CleanupBrowser {
 				browser.CleanupBrowser()
+			}
+			if stuckResult.ForceSkip {
 				continue // skip executing this tool call
 			}
-
-			// Track work before execution
-			trackWork(tc.Name, tc.Args)
 
 			a.emit(Event{
 				Type:     "tool_call",
@@ -744,35 +544,25 @@ Do NOT continue browser retries or search for bypass methods.`, stuckIterations,
 				TotalTokens: tokenCount(),
 			})
 
+			// ── Hook: OnToolResult (WAF detection, tech detection) ──
+			resultArgs := map[string]string{
+				"tool_name": tc.Name,
+				"output":    result.Output,
+				"error":     result.Error,
+			}
+			toolResultHook := a.hooks.Fire(OnToolResult, a.state, resultArgs)
+			if toolResultHook.EmitMessage != "" {
+				a.emit(Event{Type: "message", Content: toolResultHook.EmitMessage, TotalTokens: tokenCount()})
+			}
+
+			// ── Hook: OnFinishAttempt ──
 			if tc.Name == "finish" || (result.Metadata != nil && result.Metadata["finished"] == true) {
-				finishAttempts++
-				allowed, reason := canFinish(iter)
-				if !allowed {
-					rejectMsg := fmt.Sprintf("⚠️ FINISH REJECTED — %s\n\nDO NOT call finish again until you have done more testing.\nContinue with the NEXT PHASE of testing NOW.", reason)
+				finishResult := a.hooks.Fire(OnFinishAttempt, a.state, nil)
+				if finishResult.Block {
+					rejectMsg := fmt.Sprintf("⚠️ FINISH REJECTED — %s\n\nDO NOT call finish again until you have done more testing.\nContinue with the NEXT PHASE of testing NOW.", finishResult.BlockReason)
 					a.emit(Event{Type: "tool_result", ToolName: "finish", ToolResult: tools.Result{Output: rejectMsg}, TotalTokens: tokenCount()})
 					a.msgMu.Lock()
 					a.messages = append(a.messages, llm.Message{Role: "user", Content: rejectMsg})
-					a.msgMu.Unlock()
-					continue
-				}
-				// First finish attempt: nudge to reconsider if < 20 iterations
-				if finishAttempts == 1 && iter < 20 && !a.discoveryMode {
-					scannerNote := ""
-					if !scannerUsed {
-						scannerNote = "\n- You haven't used any automated scanners (nuclei/ffuf) yet — consider running them on promising endpoints"
-					}
-					nudgeMsg := fmt.Sprintf(`⚠️ Are you SURE you want to finish? You still have capacity to test more.
-
-Before finishing, verify you have covered:
-- All discovered endpoints and parameters tested MANUALLY
-- Common vulnerability classes (SQLi, XSS, SSRF, IDOR, broken auth)
-- Technology-specific CVEs
-- API endpoints found in JavaScript files%s
-
-If you have truly covered everything, call finish again. Otherwise, continue testing.`, scannerNote)
-					a.emit(Event{Type: "tool_result", ToolName: "finish", ToolResult: tools.Result{Output: nudgeMsg}, TotalTokens: tokenCount()})
-					a.msgMu.Lock()
-					a.messages = append(a.messages, llm.Message{Role: "user", Content: nudgeMsg})
 					a.msgMu.Unlock()
 					continue
 				}

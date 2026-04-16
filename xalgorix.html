@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Complete Guide to Setting Up Xalgorix — The Most Powerful Open-Source AI Pentesting Agent</title>
+  <meta name="description" content="A step-by-step guide to setting up Xalgorix, the most powerful open-source autonomous AI pentesting agent.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Charter:ital,wght@0,400;0,700;1,400&family=Sohne:wght@400;500;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fff;
+      --bg-code: #f6f8fa;
+      --bg-callout: #fef9ef;
+      --bg-callout-blue: #eef6ff;
+      --bg-callout-red: #fff0f0;
+      --bg-callout-green: #f0fff4;
+      --text: #242424;
+      --text-secondary: #6b6b6b;
+      --text-light: #757575;
+      --accent: #1a8917;
+      --accent-hover: #0f730c;
+      --border: #e6e6e6;
+      --border-light: #f2f2f2;
+      --link: #1a8917;
+      --font-serif: 'Source Serif 4', 'Charter', Georgia, 'Times New Roman', serif;
+      --font-sans: 'Sohne', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font-serif);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.8;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ─── Top Bar ─── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(255,255,255,0.97);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+    }
+    .topbar-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .topbar-logo {
+      font-family: var(--font-sans);
+      font-weight: 700;
+      font-size: 1.4rem;
+      color: var(--text);
+      text-decoration: none;
+      letter-spacing: -0.5px;
+    }
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .topbar-actions a {
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      text-decoration: none;
+    }
+    .topbar-actions a:hover { color: var(--text); }
+    .btn-follow {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 999px;
+      font-family: var(--font-sans);
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .btn-follow:hover { background: var(--accent-hover); }
+
+    /* ─── Article Container ─── */
+    article {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    /* ─── Hero / Title Area ─── */
+    .article-header {
+      padding: 48px 0 32px;
+    }
+    .article-header h1 {
+      font-family: var(--font-serif);
+      font-size: 2.6rem;
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+    .article-subtitle {
+      font-family: var(--font-serif);
+      font-size: 1.3rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+      font-weight: 300;
+    }
+
+    /* ─── Author Card ─── */
+    .author-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 0 20px;
+      border-bottom: 1px solid var(--border-light);
+      margin-bottom: 32px;
+    }
+    .author-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #1a8917, #0f730c);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-family: var(--font-sans);
+      font-weight: 700;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+    .author-info { flex: 1; }
+    .author-name {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .author-name a { color: var(--text); text-decoration: none; }
+    .author-name a:hover { text-decoration: underline; }
+    .author-meta {
+      font-family: var(--font-sans);
+      font-size: 0.8rem;
+      color: var(--text-light);
+    }
+
+    /* ─── Hero Image ─── */
+    .hero-image {
+      margin: 0 -20px 8px;
+    }
+    .hero-image img {
+      width: 100%;
+      display: block;
+    }
+    .hero-caption {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-light);
+      padding: 8px 0 32px;
+      font-style: italic;
+    }
+
+    /* ─── Typography ─── */
+    .content p {
+      font-size: 1.18rem;
+      line-height: 1.85;
+      margin-bottom: 24px;
+      color: var(--text);
+    }
+    .content h2 {
+      font-family: var(--font-sans);
+      font-size: 1.65rem;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      margin: 56px 0 16px;
+      padding-top: 16px;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .content h3 {
+      font-family: var(--font-sans);
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin: 40px 0 12px;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .content h4 {
+      font-family: var(--font-sans);
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin: 28px 0 8px;
+      color: var(--text);
+    }
+    .content strong { font-weight: 700; }
+    .content em { font-style: italic; }
+
+    /* ─── Links ─── */
+    .content a {
+      color: inherit;
+      text-decoration: underline;
+      text-decoration-color: rgba(0,0,0,0.3);
+      text-underline-offset: 3px;
+    }
+    .content a:hover {
+      text-decoration-color: var(--text);
+    }
+
+    /* ─── Inline Code ─── */
+    .content code:not(pre code) {
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+      background: #f0f0f0;
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: #1a1a1a;
+    }
+
+    /* ─── Code Blocks ─── */
+    .content pre {
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px 24px;
+      margin: 16px 0 28px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+      line-height: 1.7;
+      color: #1f2328;
+    }
+    .content pre code {
+      font-family: inherit;
+      font-size: inherit;
+      background: none;
+      padding: 0;
+      border-radius: 0;
+    }
+    .comment { color: #6a737d; }
+    .env-var { color: #953800; }
+    .env-val { color: #0a3069; }
+
+    /* ─── Blockquote (Callouts) ─── */
+    .content blockquote {
+      border-left: 3px solid var(--border);
+      padding: 4px 0 4px 20px;
+      margin: 20px 0 28px;
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      font-style: italic;
+    }
+
+    /* ─── Callout Boxes ─── */
+    .callout {
+      padding: 16px 20px;
+      border-radius: 4px;
+      margin: 20px 0 28px;
+      font-size: 1rem;
+      line-height: 1.7;
+    }
+    .callout.tip {
+      background: var(--bg-callout-green);
+      border-left: 3px solid var(--accent);
+    }
+    .callout.warning {
+      background: var(--bg-callout);
+      border-left: 3px solid #e09200;
+    }
+    .callout.danger {
+      background: var(--bg-callout-red);
+      border-left: 3px solid #e02020;
+    }
+    .callout.info {
+      background: var(--bg-callout-blue);
+      border-left: 3px solid #1a73e8;
+    }
+
+    /* ─── Images ─── */
+    .content figure {
+      margin: 32px -20px;
+    }
+    .content figure img {
+      width: 100%;
+      display: block;
+    }
+    .content figcaption {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--text-light);
+      padding: 10px 20px 0;
+      font-style: italic;
+    }
+
+    /* ─── Lists ─── */
+    .content ul, .content ol {
+      margin: 8px 0 24px 24px;
+      font-size: 1.18rem;
+      line-height: 1.85;
+    }
+    .content li {
+      margin-bottom: 8px;
+    }
+    .content li::marker { color: var(--text-light); }
+
+    /* ─── Tables ─── */
+    .content .table-wrap {
+      overflow-x: auto;
+      margin: 16px 0 28px;
+    }
+    .content table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+      font-family: var(--font-sans);
+    }
+    .content thead th {
+      text-align: left;
+      padding: 10px 14px;
+      font-weight: 600;
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      border-bottom: 2px solid var(--border);
+    }
+    .content tbody td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-light);
+      vertical-align: top;
+    }
+    .content tbody tr:last-child td { border-bottom: none; }
+
+    /* ─── Separator ─── */
+    .content hr {
+      border: none;
+      text-align: center;
+      margin: 48px 0;
+    }
+    .content hr::before {
+      content: '• • •';
+      color: var(--text-light);
+      font-size: 1.2rem;
+      letter-spacing: 12px;
+    }
+
+    /* ─── Accordion / Details ─── */
+    .content details {
+      margin: 12px 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .content details summary {
+      padding: 14px 18px;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--text);
+      list-style: none;
+    }
+    .content details summary::-webkit-details-marker { display: none; }
+    .content details summary::before {
+      content: '▸ ';
+      color: var(--text-light);
+    }
+    .content details[open] summary::before { content: '▾ '; }
+    .content details .details-body {
+      padding: 0 18px 14px;
+      font-size: 1rem;
+    }
+
+    /* ─── Tag Pills ─── */
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 28px;
+    }
+    .tag {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    /* ─── Bottom Actions (Clap / Share) ─── */
+    .article-footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border-light);
+      margin-top: 48px;
+    }
+    .article-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 32px;
+    }
+    .article-tags a {
+      font-family: var(--font-sans);
+      font-size: 0.82rem;
+      padding: 8px 16px;
+      border-radius: 999px;
+      background: #f2f2f2;
+      color: var(--text-secondary);
+      text-decoration: none;
+    }
+    .article-tags a:hover { background: #e8e8e8; }
+
+    .actions-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0;
+      border-top: 1px solid var(--border-light);
+      border-bottom: 1px solid var(--border-light);
+    }
+    .actions-left {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-sans);
+      font-size: 0.85rem;
+      color: var(--text-light);
+      cursor: pointer;
+      background: none;
+      border: none;
+      text-decoration: none;
+    }
+    .action-btn:hover { color: var(--text); }
+    .action-btn svg { width: 24px; height: 24px; }
+
+    /* ─── Author Footer ─── */
+    .author-footer {
+      padding: 40px 0;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .author-footer .author-avatar { width: 56px; height: 56px; font-size: 1.2rem; }
+    .author-footer .author-bio {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+
+    /* ─── More from Author ─── */
+    .more-section {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+    }
+    .more-section h3 {
+      font-family: var(--font-sans);
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--text-light);
+      margin-bottom: 24px;
+    }
+    .more-links a {
+      display: block;
+      font-family: var(--font-sans);
+      font-size: 0.95rem;
+      color: var(--text);
+      text-decoration: none;
+      padding: 8px 0;
+    }
+    .more-links a:hover { text-decoration: underline; }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 720px) {
+      .article-header h1 { font-size: 2rem; }
+      .article-subtitle { font-size: 1.1rem; }
+      .content h2 { font-size: 1.4rem; }
+      .content figure { margin: 24px -10px; }
+      .hero-image { margin: 0 -10px 8px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════ Top Bar ═══════════ -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="#" class="topbar-logo">Xalgorix</a>
+    <div class="topbar-actions">
+      <a href="https://github.com/xalgord/xalgorix" target="_blank">GitHub</a>
+      <a href="https://docs.xalgorix.com" target="_blank">Docs</a>
+      <a href="https://github.com/xalgord/xalgorix" target="_blank" class="btn-follow">⭐ Star</a>
+    </div>
+  </div>
+</div>
+
+<article>
+
+  <!-- ═══════════ Title ═══════════ -->
+  <header class="article-header">
+    <h1>The Complete Guide to Setting Up Xalgorix — The Most Powerful Open-Source AI Pentesting Agent</h1>
+    <p class="article-subtitle">
+      Give it a target URL. Watch it find vulnerabilities. No human intervention needed. Here's how to set it up from scratch.
+    </p>
+  </header>
+
+  <!-- ═══════════ Author ═══════════ -->
+  <div class="author-card">
+    <div class="author-avatar">X</div>
+    <div class="author-info">
+      <div class="author-name"><a href="https://github.com/xalgord">xalgord</a></div>
+      <div class="author-meta">15 min read · Apr 16, 2026</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Hero Image ═══════════ -->
+  <div class="hero-image">
+    <img src="https://raw.githubusercontent.com/xalgord/xalgorix/main/assets/ui-screenshot-1.png" alt="Xalgorix Web UI Dashboard">
+  </div>
+  <p class="hero-caption">The Xalgorix Web UI Dashboard — real-time visibility into autonomous scans</p>
+
+  <!-- ═══════════ Content ═══════════ -->
+  <div class="content">
+
+    <p>Imagine having a <strong>senior penetration tester working 24/7</strong> — one that never gets tired, never forgets a technique, and uses 70+ security tools autonomously. That's Xalgorix.</p>
+
+    <p>Xalgorix is an AI-powered autonomous pentesting agent that combines the intelligence of large language models with a comprehensive arsenal of security tools. You give it a target URL, and it autonomously performs a <strong>full 20-phase penetration test</strong> — from reconnaissance through vulnerability exploitation to professional PDF report generation.</p>
+
+    <p>It runs locally on your machine. Your data never leaves your system. And it's <strong>completely free</strong>.</p>
+
+    <p>In this guide, I'll walk you through everything — from installing Go to running your first scan. By the end, you'll have a fully operational autonomous pentesting agent ready to hunt vulnerabilities.</p>
+
+    <hr>
+
+    <h2>Why Xalgorix?</h2>
+
+    <p>Before we dive into setup, let's talk about <em>why</em> Xalgorix stands out. There are several open-source pentesting agents, but here's what makes this one different:</p>
+
+    <ul>
+      <li><strong>🌐 Full Web UI Dashboard</strong> — The only open-source agent with a dark-mode dashboard, live feed, vulnerability view, token tracking, and in-scan chat. Most alternatives are terminal-only.</li>
+      <li><strong>🧠 Multi-LLM Support</strong> — Works with OpenAI, Anthropic, MiniMax ⭐, DeepSeek, Google, Groq, and local Ollama models. Not locked into one provider.</li>
+      <li><strong>🔧 70+ Auto-Installed Tools</strong> — From nmap to nuclei, tools install on-the-fly when the agent needs them. Zero manual dependency management.</li>
+      <li><strong>📊 Auto PDF Reports</strong> — Professional pentest reports generated automatically with cover page, executive summary, CVSS scores, and remediation advice.</li>
+      <li><strong>🔔 Discord Alerts</strong> — Real-time notifications when scans start, vulnerabilities are found, or scans complete. Bug bounty on autopilot.</li>
+      <li><strong>🛡️ Safety Rails</strong> — Blocks destructive commands (<code>rm -rf</code>, <code>DROP TABLE</code>), detects encoding bypasses (base64, hex, URL), and includes circuit breakers for failing tools.</li>
+    </ul>
+
+    <div class="callout tip">
+      <strong>💡 TL;DR:</strong> Give it a target URL, and Xalgorix will find vulnerabilities, generate a professional PDF report, and send Discord alerts — all automatically.
+    </div>
+
+    <hr>
+
+    <h2>Prerequisites</h2>
+
+    <p>Before installing Xalgorix, make sure you have the following:</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Requirement</th><th>Details</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Operating System</strong></td><td>Linux (Ubuntu/Debian recommended) or macOS</td></tr>
+          <tr><td><strong>Go Version</strong></td><td>Go 1.24 or higher — <a href="https://go.dev/dl/" target="_blank">download here</a></td></tr>
+          <tr><td><strong>LLM API Key</strong></td><td>Any supported provider (MiniMax, OpenAI, Anthropic, DeepSeek, Google, Groq)</td></tr>
+          <tr><td><strong>System Access</strong></td><td>Root/sudo for auto-installing security tools via apt</td></tr>
+          <tr><td><strong>Internet</strong></td><td>Required for LLM API calls and tool downloads</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warning">
+      <strong>⚠️ Go Version:</strong> Xalgorix requires Go 1.24+. Check with <code>go version</code>. If you're on an older version, the installation section covers upgrading.
+    </div>
+
+    <hr>
+
+    <h2>Step 1: Install Go 1.24+</h2>
+
+    <p>If you already have Go 1.24+, skip this step. Otherwise:</p>
+
+    <pre><code><span class="comment"># Remove old Go installation</span>
+sudo rm -rf /usr/local/go
+
+<span class="comment"># Download and install Go 1.24</span>
+wget -q https://go.dev/dl/go1.24.2.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz
+rm go1.24.2.linux-amd64.tar.gz
+
+<span class="comment"># Add to PATH (add to ~/.bashrc for persistence)</span>
+export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
+
+<span class="comment"># Verify</span>
+go version  <span class="comment"># Should show go1.24.x</span></code></pre>
+
+    <h2>Step 2: Install Xalgorix</h2>
+
+    <h3>Option A: Build from Source (Recommended)</h3>
+
+    <pre><code>git clone https://github.com/xalgord/xalgorix.git
+cd xalgorix
+make install</code></pre>
+
+    <h3>Option B: Install via Go</h3>
+
+    <pre><code>GOPROXY=direct go install -v github.com/xalgord/xalgorix/v4/cmd/xalgorix@latest</code></pre>
+
+    <h3>Verify Installation</h3>
+
+    <pre><code>xalgorix --version</code></pre>
+
+    <div class="callout tip">
+      <strong>💡 Auto-Update:</strong> Run <code>xalgorix --update</code> anytime to get the latest version. Xalgorix also auto-updates on every start by downloading binaries from GitHub releases.
+    </div>
+
+    <hr>
+
+    <h2>Step 3: Configure Your LLM Provider</h2>
+
+    <p>All configuration lives in a single environment file. Create it:</p>
+
+    <pre><code>nano ~/.xalgorix.env</code></pre>
+
+    <p>Now add your LLM configuration. Here are examples for each supported provider:</p>
+
+    <h3>⭐ MiniMax (Recommended — Best Cost/Performance)</h3>
+
+    <pre><code><span class="env-var">XALGORIX_LLM</span>=<span class="env-val">minimax/M2.7</span>
+<span class="env-var">XALGORIX_API_KEY</span>=<span class="env-val">your_minimax_api_key_here</span></code></pre>
+
+    <div class="callout tip">
+      <strong>🎁 Exclusive:</strong> Get 10% off MiniMax with our code → <a href="https://platform.minimax.io/subscribe/coding-plan?code=4ujDUlOIz3&source=link" target="_blank">Claim Discount</a>
+    </div>
+
+    <h3>OpenAI</h3>
+
+    <pre><code><span class="env-var">XALGORIX_LLM</span>=<span class="env-val">openai/gpt-5.4</span>
+<span class="env-var">XALGORIX_API_KEY</span>=<span class="env-val">sk-...</span></code></pre>
+
+    <h3>Anthropic</h3>
+
+    <pre><code><span class="env-var">XALGORIX_LLM</span>=<span class="env-val">anthropic/claude-sonnet-4-6</span>
+<span class="env-var">XALGORIX_API_KEY</span>=<span class="env-val">sk-ant-...</span></code></pre>
+
+    <h3>DeepSeek</h3>
+
+    <pre><code><span class="env-var">XALGORIX_LLM</span>=<span class="env-val">deepseek/deepseek-chat-v3</span>
+<span class="env-var">XALGORIX_API_KEY</span>=<span class="env-val">sk-...</span></code></pre>
+
+    <h3>Ollama (Free — Local Models)</h3>
+
+    <pre><code><span class="env-var">XALGORIX_LLM</span>=<span class="env-val">ollama/llama-3.3-70b</span>
+<span class="env-var">XALGORIX_API_KEY</span>=<span class="env-val">not-needed</span></code></pre>
+
+    <div class="callout danger">
+      <strong>🚨 Important:</strong> Xalgorix will refuse to start if <code>~/.xalgorix.env</code> is missing or doesn't contain both <code>XALGORIX_LLM</code> and <code>XALGORIX_API_KEY</code>.
+    </div>
+
+    <h3>Supported Provider Prefixes</h3>
+
+    <p>Xalgorix auto-detects the API base URL from the provider prefix. No need to set <code>XALGORIX_API_BASE</code> unless you're using a custom provider:</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Prefix</th><th>API Base (Auto-Set)</th></tr></thead>
+        <tbody>
+          <tr><td><code>openai/</code></td><td>https://api.openai.com/v1</td></tr>
+          <tr><td><code>anthropic/</code></td><td>https://api.anthropic.com</td></tr>
+          <tr><td><code>minimax/</code></td><td>https://api.minimax.io/v1</td></tr>
+          <tr><td><code>deepseek/</code></td><td>https://api.deepseek.com/v1</td></tr>
+          <tr><td><code>google/</code> or <code>gemini/</code></td><td>https://generativelanguage.googleapis.com/v1</td></tr>
+          <tr><td><code>groq/</code></td><td>https://api.groq.com/openai/v1</td></tr>
+          <tr><td><code>ollama/</code></td><td>http://localhost:11434/v1</td></tr>
+          <tr><td><code>custom/</code></td><td>Set via <code>XALGORIX_API_BASE</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <hr>
+
+    <h2>Step 4: Launch Xalgorix</h2>
+
+    <h3>Web UI (Recommended)</h3>
+
+    <pre><code><span class="comment"># Launch the dashboard (default port 1337)</span>
+xalgorix --web
+
+<span class="comment"># Custom port</span>
+xalgorix --web --port 8080</code></pre>
+
+    <p>Open <code>http://localhost:1337</code> in your browser. You'll see the full dashboard with scan controls, live feed, vulnerability panel, and chat interface.</p>
+
+    <h3>CLI Mode</h3>
+
+    <pre><code><span class="comment"># Quick single-target scan</span>
+xalgorix --target https://example.com
+
+<span class="comment"># With custom instructions</span>
+xalgorix --target https://example.com -i "Focus on SQLi and IDOR"
+
+<span class="comment"># Override LLM model for this session</span>
+xalgorix --target https://example.com --model openai/gpt-4o</code></pre>
+
+    <hr>
+
+    <h2>The Three Scan Modes</h2>
+
+    <p>Xalgorix supports three distinct scanning approaches, each designed for different use cases:</p>
+
+    <p><strong>🎯 Single Scan</strong> — Full 20-phase pentest against a single URL. Perfect for quick, targeted assessments. Enter a URL, click Start.</p>
+
+    <p><strong>🔍 DAST Scan</strong> — Deep Application Security Testing on specific URLs. Focuses heavily on injection, logic flaws, authentication bypass, and session management.</p>
+
+    <p><strong>🌐 Wildcard Scan</strong> — The big one. Enumerates all subdomains of a root domain, then queues each subdomain for individual full scanning. Maximum coverage for bug bounty targets.</p>
+
+    <figure>
+      <img src="https://raw.githubusercontent.com/xalgord/xalgorix/main/assets/ui-screenshot-3.png" alt="Vulnerability Details" loading="lazy">
+      <figcaption>Detailed vulnerability findings with CVSS scoring, proof of concept, and remediation advice</figcaption>
+    </figure>
+
+    <hr>
+
+    <h2>The 20-Phase Methodology</h2>
+
+    <p>Every scan follows a structured, comprehensive methodology modeled after professional pentesting frameworks. Here's what happens when you click "Start":</p>
+
+    <ol>
+      <li><strong>Reconnaissance</strong> — Subdomains, ports, directories, technology fingerprinting</li>
+      <li><strong>Vulnerability Scanning</strong> — Nuclei templates, nmap scripts, CVE detection</li>
+      <li><strong>Content Discovery</strong> — Hidden files, backup files, admin panels, sensitive endpoints</li>
+      <li><strong>SSL/TLS Analysis</strong> — Cipher suites, certificates, security headers</li>
+      <li><strong>Authentication Testing</strong> — SQL injection on logins, brute-force, OAuth flaws</li>
+      <li><strong>Injection Attacks</strong> — XSS, SQLi, Command Injection, XXE, SSTI</li>
+      <li><strong>SSRF Testing</strong> — Parameter fuzzing, cloud metadata access, internal service probing</li>
+      <li><strong>IDOR & Access Control</strong> — Horizontal/vertical privilege escalation, BAC</li>
+      <li><strong>API Security</strong> — GraphQL introspection, REST endpoint abuse, rate limiting bypass</li>
+      <li><strong>File Upload Testing</strong> — Extension bypass, webshell upload, MIME type abuse</li>
+      <li><strong>Remote Code Execution</strong> — Deserialization, Log4j, template injection chains</li>
+      <li><strong>Race Conditions</strong> — TOCTOU, business logic concurrency flaws</li>
+      <li><strong>Subdomain Takeover</strong> — Dangling CNAME records, unclaimed cloud services</li>
+      <li><strong>Email Security</strong> — SPF, DKIM, DMARC misconfiguration</li>
+      <li><strong>Cloud Security</strong> — Exposed S3 buckets, Azure blobs, GCP misconfig, K8s</li>
+      <li><strong>WebSocket Testing</strong> — Origin validation, injection, cross-site hijacking</li>
+      <li><strong>CMS-Specific</strong> — WordPress, Joomla, Drupal known vulnerabilities</li>
+      <li><strong>Broken Link Hijacking</strong> — External resource takeover opportunities</li>
+      <li><strong>Supply Chain</strong> — JavaScript library vulnerabilities, dependency confusion</li>
+      <li><strong>Report Generation</strong> — Professional PDF with all findings, CVSS, remediation</li>
+    </ol>
+
+    <hr>
+
+    <h2>The 70+ Tool Arsenal</h2>
+
+    <p>Xalgorix auto-installs every tool it needs on-the-fly. If the agent issues a command for a tool that isn't installed, Xalgorix pauses execution, installs the tool (via <code>apt</code>, <code>go install</code>, <code>cargo</code>, <code>pip</code>, etc.), and resumes transparently.</p>
+
+    <h4>🌐 Asset Discovery & Networking</h4>
+    <div class="tags">
+      <span class="tag">subfinder</span><span class="tag">findomain</span><span class="tag">assetfinder</span><span class="tag">dnsx</span><span class="tag">amass</span><span class="tag">nmap</span><span class="tag">masscan</span><span class="tag">naabu</span><span class="tag">netcat</span><span class="tag">socat</span><span class="tag">tcpdump</span><span class="tag">whois</span>
+    </div>
+
+    <h4>🔎 Web Crawling & URL Discovery</h4>
+    <div class="tags">
+      <span class="tag">katana</span><span class="tag">gospider</span><span class="tag">hakrawler</span><span class="tag">gau</span><span class="tag">waybackurls</span><span class="tag">paramspider</span><span class="tag">arjun</span>
+    </div>
+
+    <h4>💥 Vulnerability Scanners & Fuzzers</h4>
+    <div class="tags">
+      <span class="tag">nuclei</span><span class="tag">sqlmap</span><span class="tag">dalfox</span><span class="tag">ffuf</span><span class="tag">gobuster</span><span class="tag">wfuzz</span><span class="tag">feroxbuster</span><span class="tag">dirb</span><span class="tag">httpx</span><span class="tag">curl</span>
+    </div>
+
+    <h4>📦 Utilities & System</h4>
+    <div class="tags">
+      <span class="tag">jq</span><span class="tag">xmllint</span><span class="tag">html2text</span><span class="tag">openssl</span><span class="tag">base64</span><span class="tag">python3</span><span class="tag">git</span><span class="tag">strings</span><span class="tag">xxd</span>
+    </div>
+
+    <hr>
+
+    <h2>Advanced Configuration</h2>
+
+    <h3>Discord Alerts</h3>
+
+    <p>Get real-time notifications when scans start, vulnerabilities are found, or scans complete. Set up a Discord webhook and add it to your config:</p>
+
+    <pre><code><span class="env-var">XALGORIX_DISCORD_WEBHOOK</span>=<span class="env-val">https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN</span></code></pre>
+
+    <h3>Dashboard Authentication</h3>
+
+    <p>If you're exposing the dashboard on a network (especially a VPS), always enable authentication:</p>
+
+    <pre><code><span class="env-var">XALGORIX_USERNAME</span>=<span class="env-val">admin</span>
+<span class="env-var">XALGORIX_PASSWORD</span>=<span class="env-val">your_strong_password_here</span></code></pre>
+
+    <h3>Rate Limiting</h3>
+
+    <p>Protect your IP from being blocked by targets. Default is 60 requests per 60-second window:</p>
+
+    <pre><code><span class="env-var">XALGORIX_RATE_LIMIT_REQUESTS</span>=<span class="env-val">30</span>    <span class="comment"># More conservative</span>
+<span class="env-var">XALGORIX_RATE_LIMIT_WINDOW</span>=<span class="env-val">60</span>       <span class="comment"># Window in seconds</span></code></pre>
+
+    <h3>Web Search Enhancement</h3>
+
+    <p>Give the agent web search capabilities for CVE research and tech intelligence:</p>
+
+    <pre><code><span class="env-var">GEMINI_API_KEY</span>=<span class="env-val">AIza...</span>
+<span class="comment"># Falls back to Brave/Google/DuckDuckGo scraping if not set</span></code></pre>
+
+    <figure>
+      <img src="https://raw.githubusercontent.com/xalgord/xalgorix/main/assets/ui-screenshot-4.png" alt="Chat Interface" loading="lazy">
+      <figcaption>Chat with the agent during scanning — redirect its focus or ask questions in real-time</figcaption>
+    </figure>
+
+    <hr>
+
+    <h2>Running Xalgorix 24/7 (systemd Service)</h2>
+
+    <p>Want Xalgorix running permanently on a VPS? It has built-in systemd support — no manual service file creation needed:</p>
+
+    <pre><code><span class="comment"># Install and start as a systemd service</span>
+sudo xalgorix --start
+
+<span class="comment"># Check status</span>
+sudo systemctl status xalgorix
+
+<span class="comment"># Stop / Restart / Uninstall</span>
+sudo xalgorix --stop
+sudo xalgorix --restart
+sudo xalgorix --uninstall</code></pre>
+
+    <div class="callout info">
+      <strong>💡 VPS Tip:</strong> When running on a remote server, use <code>--port 443</code> and set up HTTPS with a reverse proxy (nginx/caddy) for secure remote access to the dashboard.
+    </div>
+
+    <hr>
+
+    <h2>Pro Tips for Maximum Results</h2>
+
+    <h3>1. Use Custom Instructions Wisely</h3>
+
+    <p>The agent is smart, but context makes it smarter. Always provide relevant instructions:</p>
+
+    <pre><code><span class="comment"># For bug bounty programs:</span>
+"This is a HackerOne program. Out of scope: DoS, social engineering, rate limiting."
+
+<span class="comment"># For authenticated testing:</span>
+"Login credentials: admin@example.com / Password123. Test all authenticated endpoints."
+
+<span class="comment"># For API-focused testing:</span>
+"API Key: Bearer abc123. Focus on GraphQL introspection and IDOR on /api/v2/ endpoints."
+
+<span class="comment"># For targeted vulnerability classes:</span>
+"Focus exclusively on SQL Injection and SSRF. Skip XSS and info disclosures."</code></pre>
+
+    <h3>2. Severity Filtering Saves Time</h3>
+
+    <p>For bug bounty, filter to <strong>Critical and High</strong> severity only. This prevents the agent from spending time on informational findings that won't earn a bounty. Set this in the Web UI before starting a scan.</p>
+
+    <h3>3. Wildcard Mode + Discord = Bug Bounty Autopilot</h3>
+
+    <p>Set up a wildcard scan on a bug bounty target, enable Discord alerts, and let it run overnight. You'll wake up to vulnerability notifications on your phone. This is the closest thing to passive income in bug bounty.</p>
+
+    <h3>4. Scan Persistence is Your Safety Net</h3>
+
+    <p>Xalgorix automatically saves scan progress. If your terminal crashes, internet drops, or you need to restart — your scan data is preserved. Resume interrupted scans from the queue management in the Web UI.</p>
+
+    <h3>5. Multi-Target Queue for Batch Testing</h3>
+
+    <p>Upload a <code>.txt</code> file with multiple targets (one per line) through the Web UI. Xalgorix queues them and scans sequentially, generating individual reports for each.</p>
+
+    <hr>
+
+    <h2>Quick CLI Reference</h2>
+
+    <pre><code><span class="comment"># Launch Web UI</span>
+xalgorix --web
+
+<span class="comment"># Custom port</span>
+xalgorix --web --port 8080
+
+<span class="comment"># CLI scan</span>
+xalgorix --target https://example.com
+
+<span class="comment"># CLI scan with instructions</span>
+xalgorix --target https://example.com -i "Focus on SQLi"
+
+<span class="comment"># Override LLM model</span>
+xalgorix --web --model openai/gpt-4o
+
+<span class="comment"># Update / Version</span>
+xalgorix --update
+xalgorix --version
+
+<span class="comment"># Run as service</span>
+sudo xalgorix --start
+sudo xalgorix --stop
+sudo xalgorix --restart</code></pre>
+
+    <hr>
+
+    <h2>Troubleshooting</h2>
+
+    <details>
+      <summary>❌ "xalgorix: command not found"</summary>
+      <div class="details-body">
+        <p>Make sure <code>$GOPATH/bin</code> is in your PATH. Run: <code>export PATH=$HOME/go/bin:$PATH</code> and add it to your <code>~/.bashrc</code>. If you built from source, check that <code>make install</code> completed without errors.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>❌ "missing required env: XALGORIX_LLM"</summary>
+      <div class="details-body">
+        <p>Create the file at <code>~/.xalgorix.env</code> with at minimum <code>XALGORIX_LLM</code> and <code>XALGORIX_API_KEY</code>. Make sure the file is in your home directory, not the project directory.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>❌ "API rate limit exceeded"</summary>
+      <div class="details-body">
+        <p>Lower the rate limiting settings: <code>XALGORIX_RATE_LIMIT_REQUESTS=30</code>. You can also switch to a different LLM provider, or increase <code>XALGORIX_LLM_MAX_RETRIES=10</code> for more resilience.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>❌ Tools failing to install</summary>
+      <div class="details-body">
+        <p>Ensure you have sudo access. Xalgorix needs root to install packages via apt/snap. If on a restricted system, pre-install tools manually. Run <code>sudo apt update</code> first to refresh package lists.</p>
+      </div>
+    </details>
+
+    <hr>
+
+    <h2>Conclusion</h2>
+
+    <p>Xalgorix represents a fundamental shift in how penetration testing is done. Instead of manually running dozens of tools, remembering command-line flags, and stitching together results — you now have an AI agent that does all of this autonomously, with the intelligence to make decisions like a senior pentester.</p>
+
+    <p>Here's what you've set up:</p>
+
+    <ul>
+      <li>✅ Installed Go 1.24+ and built Xalgorix from source</li>
+      <li>✅ Configured your LLM provider and API keys</li>
+      <li>✅ Launched the Web UI dashboard</li>
+      <li>✅ Understood the three scan modes (Single, DAST, Wildcard)</li>
+      <li>✅ Learned the 20-phase methodology and 70+ tool arsenal</li>
+      <li>✅ Configured advanced features like Discord alerts and auth</li>
+    </ul>
+
+    <blockquote>
+      The future of pentesting is autonomous. Whether you're hunting bugs on HackerOne, running internal security assessments, or learning about offensive security — Xalgorix puts enterprise-grade capabilities in your hands, completely free.
+    </blockquote>
+
+    <p>If this guide helped you, <a href="https://github.com/xalgord/xalgorix" target="_blank">give the repo a ⭐ on GitHub</a> and share it with your infosec community.</p>
+
+  </div><!-- .content -->
+
+  <!-- ═══════════ Article Footer ═══════════ -->
+  <div class="article-footer">
+    <div class="article-tags">
+      <a href="#">Cybersecurity</a>
+      <a href="#">Pentesting</a>
+      <a href="#">AI</a>
+      <a href="#">Bug Bounty</a>
+      <a href="#">Open Source</a>
+      <a href="#">Infosec</a>
+    </div>
+
+    <div class="actions-bar">
+      <div class="actions-left">
+        <button class="action-btn" onclick="this.querySelector('span').textContent = parseInt(this.querySelector('span').textContent) + 1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 11v8a1 1 0 01-1 1H4a1 1 0 01-1-1v-7a1 1 0 011-1h3zm0 0l4-8a3 3 0 013 3v4h5.5a2 2 0 012 2.2l-1.3 7a2 2 0 01-2 1.8H7"/></svg>
+          <span>247</span>
+        </button>
+        <span class="action-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 11.5a8.4 8.4 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.4 8.4 0 01-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8v.5z"/></svg>
+          12
+        </span>
+      </div>
+      <div>
+        <a href="https://github.com/xalgord/xalgorix" target="_blank" class="action-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13"/></svg>
+          Share
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Author Bio ═══════════ -->
+  <div class="author-footer">
+    <div class="author-avatar">X</div>
+    <div>
+      <div class="author-name" style="font-size: 1rem; margin-bottom: 4px;"><a href="https://github.com/xalgord">xalgord</a></div>
+      <div class="author-bio">Security researcher & open-source developer. Building autonomous AI tools for offensive security. Creator of Xalgorix.</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Links ═══════════ -->
+  <div class="more-section">
+    <h3>Resources</h3>
+    <div class="more-links">
+      <a href="https://github.com/xalgord/xalgorix" target="_blank">📦 GitHub Repository</a>
+      <a href="https://docs.xalgorix.com" target="_blank">📖 Documentation</a>
+      <a href="https://github.com/xalgord/xalgorix/issues" target="_blank">🐛 Report Issues</a>
+      <a href="https://buymeacoffee.com/xalgord" target="_blank">☕ Buy Me a Coffee</a>
+      <a href="https://platform.minimax.io/subscribe/coding-plan?code=4ujDUlOIz3&source=link" target="_blank">🎁 MiniMax 10% Discount</a>
+    </div>
+  </div>
+
+</article>
+
+</body>
+</html>
