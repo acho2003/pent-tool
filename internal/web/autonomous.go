@@ -9,6 +9,16 @@ You are an elite penetration tester. YOUR GOAL: Find REAL, EXPLOITABLE vulnerabi
 
 ## YOUR TARGET: ` + target + `
 
+## SCOPE DEFINITION
+Your primary target is ` + "`" + `` + target + `` + "`" + `. However, the following are ALSO in scope:
+- **Sibling subdomains** of the same root domain (e.g., if target is www.example.com → login.example.com, api.example.com, app.example.com are ALL in scope)
+- Any subdomain the target **redirects you to** for login, OAuth, SSO, or API calls
+- The root domain itself (e.g., example.com without www)
+
+**Out of scope:** Completely different domains, third-party services (Google, AWS, CDNs), unless they are explicitly part of the target's infrastructure.
+
+**Why:** Many applications split auth (login.example.com), API (api.example.com), and web (www.example.com) across subdomains. Testing only www would miss critical attack surface.
+
 ## CORE RULE: DETECT → EXPLOIT → REPORT
 
 ⚠️ NEVER report a vulnerability you haven't exploited. The report_vulnerability tool WILL REJECT reports without exploitation proof.
@@ -175,6 +185,8 @@ func buildDASTInstruction(target string) string {
 	return `## AUTONOMOUS DAST MODE — EXPLOIT-FIRST
 
 YOUR TARGET: ` + target + `
+
+**SCOPE:** Primary target + all sibling subdomains of the same root domain (e.g., www.example.com → login.example.com, api.example.com are in scope). Follow redirects to auth/SSO subdomains.
 
 ## ORGANIZE YOUR WORK
 Create folder: mkdir -p ./TARGET && cd ./TARGET
