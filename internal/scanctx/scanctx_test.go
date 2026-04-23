@@ -1,0 +1,701 @@
+package scanctx
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// ── Helpers ──
+
+func resetRegistry(t *testing.T) {
+	t.Helper()
+	ResetAll()
+}
+
+// ══════════════════════════════════════════════════════════
+// Registry lifecycle tests
+// ══════════════════════════════════════════════════════════
+
+func TestNew(t *testing.T) {
+	sc := New("test-1", "/tmp/scan")
+	if sc.ID != "test-1" {
+		t.Fatalf("ID = %q, want %q", sc.ID, "test-1")
+	}
+	if sc.ScanDir != "/tmp/scan" {
+		t.Fatalf("ScanDir = %q, want %q", sc.ScanDir, "/tmp/scan")
+	}
+	if sc.Vulns == nil || sc.Notes == nil || sc.Terminal == nil || sc.Browser == nil {
+		t.Fatal("sub-stores must not be nil after New()")
+	}
+	if sc.Ctx == nil || sc.Cancel == nil {
+		t.Fatal("context/cancel must not be nil after New()")
+	}
+	sc.Close()
+}
+
+func TestActivateDeactivate(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+
+	sc := New("a", "")
+	Activate(sc)
+
+	if got := Get("a"); got != sc {
+		t.Fatal("Get should return activated context")
+	}
+	if ActiveCount() != 1 {
+		t.Fatalf("ActiveCount = %d, want 1", ActiveCount())
+	}
+
+	Deactivate("a")
+
+	if got := Get("a"); got != nil {
+		t.Fatal("Get should return nil after Deactivate")
+	}
+	if ActiveCount() != 0 {
+		t.Fatalf("ActiveCount = %d, want 0", ActiveCount())
+	}
+}
+
+func TestDeactivatePromotesDefault(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+
+	a := New("a", "")
+	b := New("b", "")
+	Activate(a) // becomes default
+	Activate(b)
+
+	Deactivate("a") // should promote b
+
+	got := Default()
+	if got.ID != "b" {
+		t.Fatalf("Default().ID = %q, want %q", got.ID, "b")
+	}
+}
+
+func TestDefaultFallback(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+
+	got := Default()
+	if got == nil {
+		t.Fatal("Default() must never return nil")
+	}
+	if got.ID != "cli-default" {
+		t.Fatalf("fallback ID = %q, want %q", got.ID, "cli-default")
+	}
+	if ActiveCount() != 1 {
+		t.Fatal("fallback should register itself")
+	}
+	// Calling again should return the same instance
+	if Default() != got {
+		t.Fatal("Default() should be idempotent")
+	}
+}
+
+func TestDeactivateNonExistent(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+	// Should not panic
+	Deactivate("does-not-exist")
+}
+
+func TestGetNonExistent(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+	if Get("nope") != nil {
+		t.Fatal("Get for unknown ID should return nil")
+	}
+}
+
+func TestResetAll(t *testing.T) {
+	resetRegistry(t)
+
+	Activate(New("x", ""))
+	Activate(New("y", ""))
+	ResetAll()
+
+	if ActiveCount() != 0 {
+		t.Fatalf("ActiveCount after ResetAll = %d, want 0", ActiveCount())
+	}
+	if Get("x") != nil || Get("y") != nil {
+		t.Fatal("contexts should be gone after ResetAll")
+	}
+}
+
+func TestSummaryEmpty(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+	if s := Summary(); s != "No active scan contexts" {
+		t.Fatalf("unexpected summary: %s", s)
+	}
+}
+
+func TestSummaryWithContexts(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+
+	sc := New("sum-1", "/scans/x")
+	sc.Vulns.Add(map[string]interface{}{"title": "xss"})
+	sc.Notes.Set("key", "val")
+	Activate(sc)
+
+	s := Summary()
+	if !strings.Contains(s, "sum-1") || !strings.Contains(s, "vulns=1") || !strings.Contains(s, "notes=1") {
+		t.Fatalf("unexpected summary: %s", s)
+	}
+}
+
+// ══════════════════════════════════════════════════════════
+// Close idempotency
+// ══════════════════════════════════════════════════════════
+
+func TestCloseIdempotent(t *testing.T) {
+	sc := New("close-test", "")
+	sc.Close()
+	sc.Close() // must not panic
+	sc.Close()
+
+	// Context should be cancelled
+	if err := sc.Ctx.Err(); err != context.Canceled {
+		t.Fatalf("context err = %v, want Canceled", err)
+	}
+}
+
+// ══════════════════════════════════════════════════════════
+// VulnStore
+// ══════════════════════════════════════════════════════════
+
+func TestVulnStore_AddGetCount(t *testing.T) {
+	vs := NewVulnStore()
+	if vs.Count() != 0 {
+		t.Fatal("new store should be empty")
+	}
+
+	vs.Add(map[string]interface{}{"title": "SQLi", "severity": "high"})
+	vs.Add(map[string]interface{}{"title": "XSS", "severity": "medium"})
+
+	if vs.Count() != 2 {
+		t.Fatalf("Count = %d, want 2", vs.Count())
+	}
+
+	all := vs.GetAll()
+	if len(all) != 2 {
+		t.Fatalf("GetAll len = %d, want 2", len(all))
+	}
+	if all[0]["title"] != "SQLi" {
+		t.Fatalf("first vuln title = %v", all[0]["title"])
+	}
+}
+
+func TestVulnStore_GetAllReturnsCopy(t *testing.T) {
+	vs := NewVulnStore()
+	vs.Add(map[string]interface{}{"x": 1})
+
+	copy1 := vs.GetAll()
+	copy1[0]["x"] = 999
+
+	orig := vs.GetAll()
+	// The slice element is a shared map ref, but the slice itself is a copy
+	// so appending to copy1 doesn't affect orig length
+	if len(orig) != 1 {
+		t.Fatal("GetAll should return a slice copy")
+	}
+}
+
+func TestVulnStore_Reset(t *testing.T) {
+	vs := NewVulnStore()
+	vs.Add(map[string]interface{}{"a": 1})
+	vs.Reset()
+
+	if vs.Count() != 0 {
+		t.Fatal("Count should be 0 after Reset")
+	}
+
+	// Verify JSON is [] not null
+	j, err := vs.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON error: %v", err)
+	}
+	if j != "[]" {
+		t.Fatalf("ToJSON after Reset = %q, want %q", j, "[]")
+	}
+}
+
+func TestVulnStore_ToJSON(t *testing.T) {
+	vs := NewVulnStore()
+	vs.Add(map[string]interface{}{"id": "v1"})
+
+	j, err := vs.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON error: %v", err)
+	}
+
+	var parsed []map[string]interface{}
+	if err := json.Unmarshal([]byte(j), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(parsed) != 1 || parsed[0]["id"] != "v1" {
+		t.Fatalf("unexpected JSON: %s", j)
+	}
+}
+
+func TestVulnStore_EmptyToJSON(t *testing.T) {
+	vs := NewVulnStore()
+	j, err := vs.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON error: %v", err)
+	}
+	if j != "[]" {
+		t.Fatalf("empty ToJSON = %q, want %q", j, "[]")
+	}
+}
+
+// ══════════════════════════════════════════════════════════
+// NoteStore
+// ══════════════════════════════════════════════════════════
+
+func TestNoteStore_SetGetCount(t *testing.T) {
+	ns := NewNoteStore()
+	ns.Set("csrf", "abc123")
+	ns.Set("tech", "angular")
+
+	if ns.Count() != 2 {
+		t.Fatalf("Count = %d, want 2", ns.Count())
+	}
+
+	v, ok := ns.Get("csrf")
+	if !ok || v != "abc123" {
+		t.Fatalf("Get(csrf) = (%q, %v)", v, ok)
+	}
+
+	_, ok = ns.Get("missing")
+	if ok {
+		t.Fatal("Get(missing) should return false")
+	}
+}
+
+func TestNoteStore_GetAllReturnsCopy(t *testing.T) {
+	ns := NewNoteStore()
+	ns.Set("k", "v")
+
+	copy1 := ns.GetAll()
+	copy1["injected"] = "evil"
+
+	if ns.Count() != 1 {
+		t.Fatal("GetAll mutation should not affect store")
+	}
+}
+
+func TestNoteStore_Overwrite(t *testing.T) {
+	ns := NewNoteStore()
+	ns.Set("key", "old")
+	ns.Set("key", "new")
+	v, _ := ns.Get("key")
+	if v != "new" {
+		t.Fatalf("overwrite failed: got %q", v)
+	}
+}
+
+func TestNoteStore_Reset(t *testing.T) {
+	ns := NewNoteStore()
+	ns.Set("a", "1")
+	ns.Reset()
+	if ns.Count() != 0 {
+		t.Fatal("Reset should clear all notes")
+	}
+}
+
+func TestNoteStore_DiskPersistence(t *testing.T) {
+	dir := t.TempDir()
+	ns := NewNoteStore()
+	ns.SetPersistPath(dir)
+	ns.Set("token", "xyz")
+
+	// Verify file was written
+	data, err := os.ReadFile(filepath.Join(dir, "notes.json"))
+	if err != nil {
+		t.Fatalf("notes.json not written: %v", err)
+	}
+	var loaded map[string]string
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("invalid JSON on disk: %v", err)
+	}
+	if loaded["token"] != "xyz" {
+		t.Fatalf("disk value = %q, want %q", loaded["token"], "xyz")
+	}
+}
+
+func TestNoteStore_LoadFromDisk(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a seed file
+	seed := map[string]string{"pre": "existing"}
+	data, _ := json.Marshal(seed)
+	os.WriteFile(filepath.Join(dir, "notes.json"), data, 0644)
+
+	ns := NewNoteStore()
+	ns.SetPersistPath(dir)
+	count := ns.LoadFromDisk()
+
+	if count != 1 {
+		t.Fatalf("LoadFromDisk returned %d, want 1", count)
+	}
+	v, ok := ns.Get("pre")
+	if !ok || v != "existing" {
+		t.Fatal("loaded note not found")
+	}
+}
+
+func TestNoteStore_LoadFromDiskNoOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	seed := map[string]string{"key": "old"}
+	data, _ := json.Marshal(seed)
+	os.WriteFile(filepath.Join(dir, "notes.json"), data, 0644)
+
+	ns := NewNoteStore()
+	ns.Set("key", "current")
+	ns.SetPersistPath(dir)
+	count := ns.LoadFromDisk()
+
+	if count != 0 {
+		t.Fatalf("should not overwrite existing keys, loaded %d", count)
+	}
+	v, _ := ns.Get("key")
+	if v != "current" {
+		t.Fatalf("existing value clobbered: got %q", v)
+	}
+}
+
+func TestNoteStore_NoPersistPath(t *testing.T) {
+	ns := NewNoteStore()
+	ns.Set("a", "b") // should not panic even without persist path
+	if ns.LoadFromDisk() != 0 {
+		t.Fatal("LoadFromDisk with no path should return 0")
+	}
+}
+
+func TestNoteStore_FormatForContext(t *testing.T) {
+	ns := NewNoteStore()
+	if ns.FormatForContext() != "" {
+		t.Fatal("empty store should return empty string")
+	}
+
+	ns.Set("csrf", "token123")
+	out := ns.FormatForContext()
+	if !strings.Contains(out, "csrf") || !strings.Contains(out, "token123") {
+		t.Fatalf("format missing data: %s", out)
+	}
+	if !strings.Contains(out, "=== YOUR SAVED NOTES") {
+		t.Fatal("missing header")
+	}
+}
+
+func TestNoteStore_FormatTruncation(t *testing.T) {
+	ns := NewNoteStore()
+	ns.Set("big", strings.Repeat("x", 600))
+	out := ns.FormatForContext()
+	if !strings.Contains(out, "... (truncated)") {
+		t.Fatal("long values should be truncated")
+	}
+}
+
+func TestNoteStore_SetPersistPathEmpty(t *testing.T) {
+	ns := NewNoteStore()
+	ns.SetPersistPath("/tmp/test")
+	ns.SetPersistPath("") // clear it
+	ns.Set("k", "v")     // should not panic or write anywhere
+}
+
+// ══════════════════════════════════════════════════════════
+// TerminalState
+// ══════════════════════════════════════════════════════════
+
+func TestTerminalState_WorkDir(t *testing.T) {
+	ts := NewTerminalState()
+	if ts.GetWorkDir() != "" {
+		t.Fatal("initial workdir should be empty")
+	}
+	ts.SetWorkDir("/scans/target")
+	if ts.GetWorkDir() != "/scans/target" {
+		t.Fatalf("GetWorkDir = %q", ts.GetWorkDir())
+	}
+}
+
+func TestTerminalState_ActiveProcessCount(t *testing.T) {
+	ts := NewTerminalState()
+	if ts.ActiveProcessCount() != 0 {
+		t.Fatal("initial count should be 0")
+	}
+}
+
+func TestTerminalState_TrackUntrack(t *testing.T) {
+	ts := NewTerminalState()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := &exec.Cmd{}
+	ts.TrackProcess(cmd, cancel, "nmap -sV target")
+
+	if ts.ActiveProcessCount() != 1 {
+		t.Fatal("count should be 1 after track")
+	}
+	name, dur := ts.GetActiveCommand()
+	if name != "nmap -sV target" {
+		t.Fatalf("active command = %q", name)
+	}
+	if dur < 0 {
+		t.Fatal("duration should be non-negative")
+	}
+	_ = ctx
+
+	ts.UntrackProcess(cmd)
+	if ts.ActiveProcessCount() != 0 {
+		t.Fatal("count should be 0 after untrack")
+	}
+	name, _ = ts.GetActiveCommand()
+	if name != "" {
+		t.Fatal("active command should be cleared")
+	}
+}
+
+func TestTerminalState_TrackTruncatesLongCommand(t *testing.T) {
+	ts := NewTerminalState()
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	long := strings.Repeat("a", 250)
+	ts.TrackProcess(&exec.Cmd{}, cancel, long)
+
+	name, _ := ts.GetActiveCommand()
+	if len(name) != 203 { // 200 + "..."
+		t.Fatalf("truncated len = %d, want 203", len(name))
+	}
+}
+
+func TestTerminalState_StreamCallback(t *testing.T) {
+	ts := NewTerminalState()
+	if ts.GetStreamCallback() != nil {
+		t.Fatal("initial callback should be nil")
+	}
+
+	called := false
+	ts.SetStreamCallback(func(s string) { called = true })
+	cb := ts.GetStreamCallback()
+	if cb == nil {
+		t.Fatal("callback should be set")
+	}
+	cb("test")
+	if !called {
+		t.Fatal("callback was not invoked")
+	}
+
+	ts.ClearStreamCallback()
+	if ts.GetStreamCallback() != nil {
+		t.Fatal("callback should be nil after clear")
+	}
+}
+
+func TestTerminalState_KillAllClearsState(t *testing.T) {
+	ts := NewTerminalState()
+	_, cancel := context.WithCancel(context.Background())
+	ts.TrackProcess(&exec.Cmd{}, cancel, "sleep 99")
+
+	ts.KillAll()
+	if ts.ActiveProcessCount() != 0 {
+		t.Fatal("KillAll should clear process group")
+	}
+	name, _ := ts.GetActiveCommand()
+	if name != "" {
+		t.Fatal("KillAll should clear active command")
+	}
+}
+
+func TestTerminalState_KillAllIdempotent(t *testing.T) {
+	ts := NewTerminalState()
+	ts.KillAll()
+	ts.KillAll() // must not panic
+}
+
+// ══════════════════════════════════════════════════════════
+// BrowserState
+// ══════════════════════════════════════════════════════════
+
+func TestBrowserState_SessionPath(t *testing.T) {
+	bs := NewBrowserState()
+	if bs.GetSessionPath() != "" {
+		t.Fatal("initial path should be empty")
+	}
+	bs.SetSessionPath("/tmp/session")
+	if bs.GetSessionPath() != "/tmp/session" {
+		t.Fatalf("GetSessionPath = %q", bs.GetSessionPath())
+	}
+}
+
+func TestBrowserState_Launched(t *testing.T) {
+	bs := NewBrowserState()
+	if bs.IsLaunched() {
+		t.Fatal("should not be launched initially")
+	}
+	bs.SetLaunched(true)
+	if !bs.IsLaunched() {
+		t.Fatal("should be launched after SetLaunched(true)")
+	}
+}
+
+func TestBrowserState_Close(t *testing.T) {
+	bs := NewBrowserState()
+	bs.SetSessionPath("/tmp/x")
+	bs.SetLaunched(true)
+	bs.Close()
+
+	if bs.IsLaunched() {
+		t.Fatal("should not be launched after Close")
+	}
+	if bs.GetSessionPath() != "" {
+		t.Fatal("path should be cleared after Close")
+	}
+}
+
+func TestBrowserState_CloseIdempotent(t *testing.T) {
+	bs := NewBrowserState()
+	bs.Close()
+	bs.Close() // must not panic
+}
+
+// ══════════════════════════════════════════════════════════
+// Concurrency — run with -race
+// ══════════════════════════════════════════════════════════
+
+func TestConcurrentVulnStore(t *testing.T) {
+	vs := NewVulnStore()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			vs.Add(map[string]interface{}{"n": n})
+			vs.GetAll()
+			vs.Count()
+			vs.ToJSON()
+		}(i)
+	}
+	wg.Wait()
+
+	if vs.Count() != 100 {
+		t.Fatalf("Count = %d, want 100", vs.Count())
+	}
+}
+
+func TestConcurrentNoteStore(t *testing.T) {
+	ns := NewNoteStore()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			key := string(rune('a' + n%26))
+			ns.Set(key, "val")
+			ns.Get(key)
+			ns.GetAll()
+			ns.Count()
+			ns.FormatForContext()
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestConcurrentTerminalState(t *testing.T) {
+	ts := NewTerminalState()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ts.SetWorkDir("/tmp")
+			ts.GetWorkDir()
+			ts.ActiveProcessCount()
+			ts.GetActiveCommand()
+		}()
+	}
+	wg.Wait()
+}
+
+func TestConcurrentBrowserState(t *testing.T) {
+	bs := NewBrowserState()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			bs.SetSessionPath("/tmp")
+			bs.GetSessionPath()
+			bs.SetLaunched(n%2 == 0)
+			bs.IsLaunched()
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestConcurrentRegistry(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			id := string(rune('A' + n%26))
+			sc := New(id, "")
+			Activate(sc)
+			Get(id)
+			ActiveCount()
+			Summary()
+			Default()
+			Deactivate(id)
+		}(i)
+	}
+	wg.Wait()
+}
+
+// ══════════════════════════════════════════════════════════
+// Session isolation
+// ══════════════════════════════════════════════════════════
+
+func TestSessionIsolation(t *testing.T) {
+	resetRegistry(t)
+	defer resetRegistry(t)
+
+	a := New("session-a", "/a")
+	b := New("session-b", "/b")
+	Activate(a)
+	Activate(b)
+
+	a.Vulns.Add(map[string]interface{}{"from": "a"})
+	b.Notes.Set("from", "b")
+
+	if a.Vulns.Count() != 1 {
+		t.Fatal("a should have 1 vuln")
+	}
+	if b.Vulns.Count() != 0 {
+		t.Fatal("b should have 0 vulns")
+	}
+	if a.Notes.Count() != 0 {
+		t.Fatal("a should have 0 notes")
+	}
+	if b.Notes.Count() != 1 {
+		t.Fatal("b should have 1 note")
+	}
+}

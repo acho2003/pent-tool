@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
@@ -63,12 +64,68 @@ type Vulnerability struct {
 	AgentName          string  `json:"agent_name"`
 }
 
+// ── Per-instance vulnerability stores ──
+// Each scan context gets its own vulnerability list.
+// The global functions delegate to the active scan context's store.
 var (
-	vulnerabilities []Vulnerability
-	vulnMu          sync.RWMutex
+	stores   = make(map[string]*vulnStore) // scanContextID → store
+	storesMu sync.RWMutex
 )
 
+// vulnStore is a per-instance vulnerability list.
+type vulnStore struct {
+	mu    sync.RWMutex
+	vulns []Vulnerability
+}
+
+// getStoreByID returns the vulnerability store for a specific context ID.
+// Creates a new store if one doesn't exist.
+func getStoreByID(id string) *vulnStore {
+	storesMu.RLock()
+	s, ok := stores[id]
+	storesMu.RUnlock()
+	if ok {
+		return s
+	}
+
+	// Create store for this context
+	storesMu.Lock()
+	defer storesMu.Unlock()
+	if s, ok := stores[id]; ok {
+		return s // double-check after write lock
+	}
+	s = &vulnStore{}
+	stores[id] = s
+	return s
+}
+
+// getStore returns the vulnerability store for the default scan context.
+// Used by backward-compatible global functions (CLI mode).
+func getStore() *vulnStore {
+	return getStoreByID(scanctx.Default().ID)
+}
+
+// GetStoreForContext returns the vulnerability store for a specific context ID.
+func GetStoreForContext(contextID string) *vulnStore {
+	storesMu.RLock()
+	s, ok := stores[contextID]
+	storesMu.RUnlock()
+	if ok {
+		return s
+	}
+	storesMu.Lock()
+	defer storesMu.Unlock()
+	if s, ok := stores[contextID]; ok {
+		return s
+	}
+	s = &vulnStore{}
+	stores[contextID] = s
+	return s
+}
+
 // Register adds reporting tools to the registry.
+// The registry is captured in the closure so tools resolve the correct
+// ScanContext via registry.GetScanContextID() instead of scanctx.Default().
 func Register(r *tools.Registry) {
 	r.Register(&tools.Tool{
 		Name: "report_vulnerability",
@@ -101,11 +158,23 @@ func Register(r *tools.Registry) {
 			{Name: "poc_script_code", Description: "Reproducible PoC code (curl, python, etc.)", Required: false},
 			{Name: "remediation_steps", Description: "Remediation recommendations", Required: false},
 		},
-		Execute: reportVuln,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return reportVulnForRegistry(r, args)
+		},
 	})
 }
 
+// reportVulnForRegistry resolves the correct store via the registry's ScanContextID.
+func reportVulnForRegistry(reg *tools.Registry, args map[string]string) (tools.Result, error) {
+	return reportVulnWithContextID(reg.GetScanContextID(), args)
+}
+
+// reportVuln is the backward-compatible version using scanctx.Default().
 func reportVuln(args map[string]string) (tools.Result, error) {
+	return reportVulnWithContextID(scanctx.Default().ID, args)
+}
+
+func reportVulnWithContextID(contextID string, args map[string]string) (tools.Result, error) {
 	severity := strings.ToLower(strings.TrimSpace(args["severity"]))
 	proof := strings.TrimSpace(args["exploitation_proof"])
 	method := strings.ToLower(strings.TrimSpace(args["verification_method"]))
@@ -148,14 +217,15 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 	vulnType := extractVulnType(title, args["description"])
 	normalizedEndpoint := normalizeEndpoint(endpoint)
 
-	vulnMu.RLock()
-	for _, existing := range vulnerabilities {
+	store := getStoreByID(contextID)
+	store.mu.RLock()
+	for _, existing := range store.vulns {
 		existingType := extractVulnType(existing.Title, existing.Description)
 		existingNormEndpoint := normalizeEndpoint(existing.Endpoint)
 		
 		// Check 1: Exact title + endpoint match
 		if strings.EqualFold(existing.Title, title) && existing.Endpoint == endpoint {
-			vulnMu.RUnlock()
+			store.mu.RUnlock()
 			return tools.Result{
 				Output: fmt.Sprintf("⚠️ DUPLICATE: '%s' at endpoint '%s' already reported as %s. Skipping.", title, endpoint, existing.ID),
 			}, nil
@@ -163,14 +233,14 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		
 		// Check 2: Same vulnerability TYPE on same normalized endpoint
 		if vulnType != "" && vulnType == existingType && normalizedEndpoint == existingNormEndpoint && normalizedEndpoint != "" {
-			vulnMu.RUnlock()
+			store.mu.RUnlock()
 			return tools.Result{
 				Output: fmt.Sprintf("⚠️ DUPLICATE: Same vulnerability type '%s' already reported on endpoint '%s' as %s ('%s'). Skipping.\nIf this is genuinely different, use a distinct endpoint or describe how it differs.",
 					vulnType, endpoint, existing.ID, existing.Title),
 			}, nil
 		}
 	}
-	vulnMu.RUnlock()
+	store.mu.RUnlock()
 
 	// ── Gate 5: Severity classification — enforce max severity per vuln type ──
 	originalSeverity := ""
@@ -226,9 +296,10 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		}
 	}
 
-	vulnMu.Lock()
+	store = getStoreByID(contextID) // re-resolve in case of race
+	store.mu.Lock()
 	vuln := Vulnerability{
-		ID:                 fmt.Sprintf("XALG-%d", len(vulnerabilities)+1),
+		ID:                 fmt.Sprintf("XALG-%d", len(store.vulns)+1),
 		Title:              title,
 		Severity:           severity,
 		OriginalSeverity:   originalSeverity,
@@ -250,8 +321,8 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		Timestamp:          time.Now().Format(time.RFC3339),
 	}
 
-	vulnerabilities = append(vulnerabilities, vuln)
-	vulnMu.Unlock()
+	store.vulns = append(store.vulns, vuln)
+	store.mu.Unlock()
 
 	msg := fmt.Sprintf("✅ Vulnerability reported: [%s] %s (%s | CVSS %.1f) — Verified: %v", vuln.ID, vuln.Title, strings.ToUpper(vuln.Severity), vuln.CVSS, vuln.Verified)
 	if originalSeverity != "" {
@@ -566,28 +637,95 @@ func formatValidMethods() string {
 	return strings.Join(methods, ", ")
 }
 
-// GetVulnerabilities returns all reported vulnerabilities.
+// GetVulnerabilities returns all reported vulnerabilities for the active scan context.
 func GetVulnerabilities() []Vulnerability {
-	vulnMu.RLock()
-	defer vulnMu.RUnlock()
-	// Return a copy to avoid data races on the caller's side
-	result := make([]Vulnerability, len(vulnerabilities))
-	copy(result, vulnerabilities)
+	store := getStore()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	result := make([]Vulnerability, len(store.vulns))
+	copy(result, store.vulns)
 	return result
 }
 
-// ResetVulnerabilities clears the vulnerability list (called at scan start).
-func ResetVulnerabilities() {
-	vulnMu.Lock()
-	defer vulnMu.Unlock()
-	vulnerabilities = nil
+// GetVulnerabilitiesForContext returns vulns for a specific context ID.
+func GetVulnerabilitiesForContext(contextID string) []Vulnerability {
+	store := GetStoreForContext(contextID)
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	result := make([]Vulnerability, len(store.vulns))
+	copy(result, store.vulns)
+	return result
 }
 
-// GetVulnsJSON returns vulnerabilities as JSON.
+// ResetVulnerabilities clears the vulnerability list for the active scan context.
+func ResetVulnerabilities() {
+	store := getStore()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.vulns = nil
+}
+
+// ResetVulnerabilitiesForContext clears vulns for a specific context ID.
+func ResetVulnerabilitiesForContext(contextID string) {
+	store := GetStoreForContext(contextID)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.vulns = nil
+}
+
+// CleanupContext removes the store for a context that has been deactivated.
+func CleanupContext(contextID string) {
+	storesMu.Lock()
+	defer storesMu.Unlock()
+	delete(stores, contextID)
+}
+
+// MergeVulnsToContext copies all vulnerabilities from srcContextID into dstContextID.
+// Duplicates (by vuln ID) are skipped. Used by wildcard scans to accumulate subdomain
+// vulns into a persistent parent context before the subdomain's context is cleaned up.
+func MergeVulnsToContext(srcContextID, dstContextID string) int {
+	if srcContextID == "" || dstContextID == "" || srcContextID == dstContextID {
+		return 0
+	}
+
+	// Read source vulns
+	srcStore := GetStoreForContext(srcContextID)
+	srcStore.mu.RLock()
+	srcVulns := make([]Vulnerability, len(srcStore.vulns))
+	copy(srcVulns, srcStore.vulns)
+	srcStore.mu.RUnlock()
+
+	if len(srcVulns) == 0 {
+		return 0
+	}
+
+	// Merge into destination, skipping duplicates
+	dstStore := GetStoreForContext(dstContextID)
+	dstStore.mu.Lock()
+	defer dstStore.mu.Unlock()
+
+	seen := make(map[string]bool, len(dstStore.vulns))
+	for _, v := range dstStore.vulns {
+		seen[v.ID] = true
+	}
+
+	added := 0
+	for _, v := range srcVulns {
+		if !seen[v.ID] {
+			dstStore.vulns = append(dstStore.vulns, v)
+			seen[v.ID] = true
+			added++
+		}
+	}
+	return added
+}
+
+// GetVulnsJSON returns vulnerabilities as JSON for the active scan context.
 func GetVulnsJSON() string {
-	vulnMu.RLock()
-	defer vulnMu.RUnlock()
-	data, err := json.Marshal(vulnerabilities)
+	store := getStore()
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	data, err := json.Marshal(store.vulns)
 	if err != nil {
 		return fmt.Sprintf(`{"error": "failed to marshal vulnerabilities: %s"}`, err.Error())
 	}

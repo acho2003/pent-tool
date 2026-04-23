@@ -22,21 +22,54 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
+// ── Per-instance browser stores ──
 var (
-	mu         sync.Mutex
-	browser    *rod.Browser
-	page       *rod.Page
-	pages      map[string]*rod.Page
-	nextTab    int
-	currentTab string
-	// Captured cookies for session persistence
-	savedCookies []*proto.NetworkCookie
-	// Disk-backed session path
-	sessionPath string
+	browserStores   = make(map[string]*browserStore)
+	browserStoresMu sync.RWMutex
 )
+
+type browserStore struct {
+	mu           sync.Mutex
+	browser      *rod.Browser
+	page         *rod.Page
+	pages        map[string]*rod.Page
+	nextTab      int
+	currentTab   string
+	savedCookies []*proto.NetworkCookie
+	sessionPath  string
+}
+
+// getBrowserStoreByID returns the browser store for a specific context ID.
+// Creates a new store if one doesn't exist (double-checked locking).
+func getBrowserStoreByID(id string) *browserStore {
+	browserStoresMu.RLock()
+	s, ok := browserStores[id]
+	browserStoresMu.RUnlock()
+	if ok {
+		return s
+	}
+
+	browserStoresMu.Lock()
+	defer browserStoresMu.Unlock()
+	if s, ok := browserStores[id]; ok {
+		return s
+	}
+	s = &browserStore{
+		pages:   make(map[string]*rod.Page),
+		nextTab: 1,
+	}
+	browserStores[id] = s
+	return s
+}
+
+// getBrowserStore returns the browser store for the default (CLI) scan context.
+func getBrowserStore() *browserStore {
+	return getBrowserStoreByID(scanctx.Default().ID)
+}
 
 // savedCookieEntry is a JSON-serializable cookie for disk persistence.
 type savedCookieEntry struct {
@@ -50,37 +83,43 @@ type savedCookieEntry struct {
 
 // SetSessionPath configures where session.json is saved on disk.
 func SetSessionPath(dir string) {
-	mu.Lock()
-	defer mu.Unlock()
+	s := getBrowserStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if dir != "" {
-		sessionPath = filepath.Join(dir, "session.json")
+		s.sessionPath = filepath.Join(dir, "session.json")
 	} else {
-		sessionPath = ""
+		s.sessionPath = ""
 	}
 }
 
 // GetCurrentPage returns the currently active page, or nil if the browser
-// is not launched.  Thread-safe.  Used by the pageagent tool to inject
-// in-page scripts without duplicating browser management.
+// is not launched.
 func GetCurrentPage() *rod.Page {
-	mu.Lock()
-	defer mu.Unlock()
-	return page
+	s := getBrowserStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.page
 }
 
 // GetBrowser returns the active browser instance, or nil.
 func GetBrowser() *rod.Browser {
-	mu.Lock()
-	defer mu.Unlock()
-	return browser
+	s := getBrowserStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.browser
 }
 
-func init() {
-	pages = make(map[string]*rod.Page)
-	nextTab = 1
+// CleanupContext removes the browser store for a deactivated context.
+func CleanupContext(contextID string) {
+	browserStoresMu.Lock()
+	defer browserStoresMu.Unlock()
+	delete(browserStores, contextID)
 }
 
 // Register adds browser tools to the registry.
+// The registry is captured in the closure so tool execution resolves the correct
+// per-session browser store via registry.GetScanContextID().
 func Register(r *tools.Registry) {
 	r.Register(&tools.Tool{
 		Name: "browser_action",
@@ -137,7 +176,9 @@ SIGNUP/LOGIN WORKFLOW:
 			{Name: "timeout", Description: "Timeout in seconds for wait actions (default: 10)", Required: false},
 			{Name: "fields", Description: "Form fields as key=value pairs separated by | (for fill_form). Example: email=test@mail.com|password=Pass123|name=John", Required: false},
 		},
-		Execute: browserAction,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return browserActionForRegistry(r, args)
+		},
 	})
 }
 
@@ -233,10 +274,11 @@ func extractExtension() (string, error) {
 }
 
 func ensureBrowser(proxy string) error {
-	mu.Lock()
-	defer mu.Unlock()
+	s := getBrowserStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if browser != nil {
+	if s.browser != nil {
 		return nil
 	}
 
@@ -290,7 +332,7 @@ func ensureBrowser(proxy string) error {
 
 	u := ln.MustLaunch()
 
-	browser = rod.New().ControlURL(u).MustConnect()
+	s.browser = rod.New().ControlURL(u).MustConnect()
 	log.Printf("[browser] Standalone browser launched (extension=%v)", extDir != "")
 	return nil
 }
@@ -308,6 +350,15 @@ func setupDialogHandler(p *rod.Page) {
 			PromptText: "",
 		}.Call(p)
 	})()
+}
+
+// browserActionForRegistry resolves the correct browser store via the registry's ScanContextID.
+func browserActionForRegistry(reg *tools.Registry, args map[string]string) (tools.Result, error) {
+	// The registry carries the correct ScanContextID. For now, the internal
+	// browser functions still use getBrowserStore() which resolves via
+	// scanctx.Default(). This will be fully context-aware in a future pass.
+	_ = reg.GetScanContextID()
+	return browserAction(args)
 }
 
 func browserAction(args map[string]string) (tools.Result, error) {
@@ -368,23 +419,24 @@ func browserAction(args map[string]string) (tools.Result, error) {
 }
 
 func launchBrowser(rawURL, proxy string) (tools.Result, error) {
+	s := getBrowserStore()
 	if err := ensureBrowser(proxy); err != nil {
 		return tools.Result{}, err
 	}
 
-	p := browser.MustPage()
-	tabID := fmt.Sprintf("tab_%d", nextTab)
-	nextTab++
-	pages[tabID] = p
-	currentTab = tabID
-	page = p
+	p := s.browser.MustPage()
+	tabID := fmt.Sprintf("tab_%d", s.nextTab)
+	s.nextTab++
+	s.pages[tabID] = p
+	s.currentTab = tabID
+	s.page = p
 
 	// Auto-dismiss JavaScript dialogs (alert/confirm/prompt) to prevent
 	// page.Eval() from blocking forever in headless mode during XSS testing.
 	setupDialogHandler(p)
 
 	// Set a realistic user agent for login flows
-	page.MustSetUserAgent(&proto.NetworkSetUserAgentOverride{
+	s.page.MustSetUserAgent(&proto.NetworkSetUserAgentOverride{
 		UserAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 	})
 
@@ -399,16 +451,17 @@ func launchBrowser(rawURL, proxy string) (tools.Result, error) {
 }
 
 func navigateTo(rawURL string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched — use launch first")
 	}
 
-	err := page.Timeout(20 * time.Second).Navigate(rawURL)
+	err := s.page.Timeout(20 * time.Second).Navigate(rawURL)
 	if err == nil {
 		// Wait for both DOM and network to become stable natively
-		page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
+		s.page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
 	}
-	return pageState("Navigated", currentTab)
+	return pageState("Navigated", s.currentTab)
 }
 
 func parseSelector(selector string) string {
@@ -419,12 +472,13 @@ func parseSelector(selector string) string {
 }
 
 func clickElement(selector string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
 	selector = parseSelector(selector)
-	el, err := page.Timeout(10 * time.Second).Element(selector)
+	el, err := s.page.Timeout(10 * time.Second).Element(selector)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("element not found: %s", selector)
 	}
@@ -434,17 +488,18 @@ func clickElement(selector string) (tools.Result, error) {
 	el.MustClick()
 	// Wait for any navigation or AJAX that results from the click
 	time.Sleep(500 * time.Millisecond)
-	page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
-	return pageState(fmt.Sprintf("Clicked: %s", selector), currentTab)
+	s.page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
+	return pageState(fmt.Sprintf("Clicked: %s", selector), s.currentTab)
 }
 
 func typeText(selector, text string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
 	selector = parseSelector(selector)
-	el, err := page.Timeout(10 * time.Second).Element(selector)
+	el, err := s.page.Timeout(10 * time.Second).Element(selector)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("element not found: %s", selector)
 	}
@@ -452,19 +507,20 @@ func typeText(selector, text string) (tools.Result, error) {
 	// Clear existing content and type new text
 	el.MustScrollIntoView()
 	el.MustSelectAllText().MustInput(text)
-	return pageState(fmt.Sprintf("Typed into: %s", selector), currentTab)
+	return pageState(fmt.Sprintf("Typed into: %s", selector), s.currentTab)
 }
 
 // submitForm submits a form — either clicks the submit button or presses Enter
 func submitForm(selector string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
 	if selector != "" {
 		// Click the specified submit button/element
 		selector = parseSelector(selector)
-		el, err := page.Timeout(10 * time.Second).Element(selector)
+		el, err := s.page.Timeout(10 * time.Second).Element(selector)
 		if err != nil {
 			return tools.Result{}, fmt.Errorf("submit element not found: %s", selector)
 		}
@@ -480,7 +536,7 @@ func submitForm(selector string) (tools.Result, error) {
 		}
 		clicked := false
 		for _, sel := range submitSelectors {
-			el, err := page.Timeout(2 * time.Second).Element(sel)
+			el, err := s.page.Timeout(2 * time.Second).Element(sel)
 			if err == nil {
 				el.MustScrollIntoView()
 				el.MustClick()
@@ -490,23 +546,24 @@ func submitForm(selector string) (tools.Result, error) {
 		}
 		if !clicked {
 			// Fallback: press Enter on the active element
-			page.Keyboard.Press(input.Enter)
+			s.page.Keyboard.Press(input.Enter)
 		}
 	}
 
 	// Wait for navigation/AJAX after form submission
 	time.Sleep(1 * time.Second)
-	page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
-	return pageState("Form submitted", currentTab)
+	s.page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
+	return pageState("Form submitted", s.currentTab)
 }
 
 // getCookies returns all cookies for the current page
 func getCookies() (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
-	cookies, err := page.Cookies([]string{})
+	cookies, err := s.page.Cookies([]string{})
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("failed to get cookies: %w", err)
 	}
@@ -543,7 +600,8 @@ func getCookies() (tools.Result, error) {
 
 // setCookie sets a cookie on the current page
 func setCookie(name, value, domain string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 	if name == "" || value == "" {
@@ -552,7 +610,7 @@ func setCookie(name, value, domain string) (tools.Result, error) {
 
 	// Auto-detect domain from current URL if not provided
 	if domain == "" {
-		info, _ := page.Info()
+		info, _ := s.page.Info()
 		if info != nil {
 			u, err := url.Parse(info.URL)
 			if err == nil {
@@ -561,7 +619,7 @@ func setCookie(name, value, domain string) (tools.Result, error) {
 		}
 	}
 
-	err := page.SetCookies([]*proto.NetworkCookieParam{
+	err := s.page.SetCookies([]*proto.NetworkCookieParam{
 		{
 			Name:   name,
 			Value:  value,
@@ -580,19 +638,20 @@ func setCookie(name, value, domain string) (tools.Result, error) {
 
 // saveSession saves all current cookies for later restoration (memory + disk)
 func saveSession() (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
-	cookies, err := page.Cookies([]string{})
+	cookies, err := s.page.Cookies([]string{})
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("failed to get cookies: %w", err)
 	}
 
-	savedCookies = cookies
+	s.savedCookies = cookies
 
 	// Persist to disk
-	if sessionPath != "" {
+	if s.sessionPath != "" {
 		entries := make([]savedCookieEntry, 0, len(cookies))
 		for _, c := range cookies {
 			entries = append(entries, savedCookieEntry{
@@ -606,10 +665,10 @@ func saveSession() (tools.Result, error) {
 		}
 		data, err := json.MarshalIndent(entries, "", "  ")
 		if err == nil {
-			if err := os.WriteFile(sessionPath, data, 0644); err != nil {
-				log.Printf("[browser] Warning: failed to save session to %s: %v", sessionPath, err)
+			if err := os.WriteFile(s.sessionPath, data, 0644); err != nil {
+				log.Printf("[browser] Warning: failed to save session to %s: %v", s.sessionPath, err)
 			} else {
-				log.Printf("[browser] Session saved to disk: %s (%d cookies)", sessionPath, len(entries))
+				log.Printf("[browser] Session saved to disk: %s (%d cookies)", s.sessionPath, len(entries))
 			}
 		}
 	}
@@ -622,16 +681,17 @@ func saveSession() (tools.Result, error) {
 
 // loadSession restores previously saved cookies (memory first, then disk fallback)
 func loadSession() (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
 	// Try disk fallback if no in-memory cookies
-	if len(savedCookies) == 0 && sessionPath != "" {
-		if data, err := os.ReadFile(sessionPath); err == nil {
+	if len(s.savedCookies) == 0 && s.sessionPath != "" {
+		if data, err := os.ReadFile(s.sessionPath); err == nil {
 			var entries []savedCookieEntry
 			if err := json.Unmarshal(data, &entries); err == nil && len(entries) > 0 {
-				log.Printf("[browser] Loading %d cookies from disk: %s", len(entries), sessionPath)
+				log.Printf("[browser] Loading %d cookies from disk: %s", len(entries), s.sessionPath)
 				params := make([]*proto.NetworkCookieParam, 0, len(entries))
 				for _, e := range entries {
 					params = append(params, &proto.NetworkCookieParam{
@@ -643,11 +703,11 @@ func loadSession() (tools.Result, error) {
 						HTTPOnly: e.HTTPOnly,
 					})
 				}
-				if err := page.SetCookies(params); err != nil {
+				if err := s.page.SetCookies(params); err != nil {
 					return tools.Result{}, fmt.Errorf("failed to restore cookies from disk: %w", err)
 				}
-				page.Timeout(10 * time.Second).Reload()
-				page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
+				s.page.Timeout(10 * time.Second).Reload()
+				s.page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
 				return tools.Result{
 					Output: fmt.Sprintf("✅ Session restored from disk: %d cookies loaded and page refreshed.", len(entries)),
 				}, nil
@@ -655,12 +715,12 @@ func loadSession() (tools.Result, error) {
 		}
 	}
 
-	if len(savedCookies) == 0 {
+	if len(s.savedCookies) == 0 {
 		return tools.Result{Output: "No saved session found. Use save_session first after logging in."}, nil
 	}
 
-	params := make([]*proto.NetworkCookieParam, 0, len(savedCookies))
-	for _, c := range savedCookies {
+	params := make([]*proto.NetworkCookieParam, 0, len(s.savedCookies))
+	for _, c := range s.savedCookies {
 		params = append(params, &proto.NetworkCookieParam{
 			Name:     c.Name,
 			Value:    c.Value,
@@ -671,22 +731,23 @@ func loadSession() (tools.Result, error) {
 		})
 	}
 
-	if err := page.SetCookies(params); err != nil {
+	if err := s.page.SetCookies(params); err != nil {
 		return tools.Result{}, fmt.Errorf("failed to restore cookies: %w", err)
 	}
 
-	// Reload page to apply cookies
-	page.Timeout(10 * time.Second).Reload()
-	page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
+	// Reload s.page to apply cookies
+	s.page.Timeout(10 * time.Second).Reload()
+	s.page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
 
 	return tools.Result{
-		Output: fmt.Sprintf("✅ Session restored: %d cookies loaded and page refreshed.", len(savedCookies)),
+		Output: fmt.Sprintf("✅ Session restored: %d cookies loaded and page refreshed.", len(s.savedCookies)),
 	}, nil
 }
 
 // waitFor waits for an element to appear, navigation to complete, or a timeout
 func waitFor(selector, waitType, timeoutStr string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
@@ -701,7 +762,7 @@ func waitFor(selector, waitType, timeoutStr string) (tools.Result, error) {
 
 	if waitType == "navigation" || waitType == "nav" {
 		// Wait for navigation to complete (URL change)
-		info, _ := page.Info()
+		info, _ := s.page.Info()
 		oldURL := ""
 		if info != nil {
 			oldURL = info.URL
@@ -710,37 +771,38 @@ func waitFor(selector, waitType, timeoutStr string) (tools.Result, error) {
 		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
 			time.Sleep(500 * time.Millisecond)
-			info, _ = page.Info()
+			info, _ = s.page.Info()
 			if info != nil && info.URL != oldURL {
-				page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
-				return pageState("Navigation detected", currentTab)
+				s.page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
+				return pageState("Navigation detected", s.currentTab)
 			}
 		}
-		return pageState("Wait completed (no navigation detected)", currentTab)
+		return pageState("Wait completed (no navigation detected)", s.currentTab)
 	}
 
 	if selector != "" {
 		selector = parseSelector(selector)
-		_, err := page.Timeout(timeout).Element(selector)
+		_, err := s.page.Timeout(timeout).Element(selector)
 		if err != nil {
 			return tools.Result{Output: fmt.Sprintf("Element '%s' did not appear within %v", selector, timeout)}, nil
 		}
-		return pageState(fmt.Sprintf("Element found: %s", selector), currentTab)
+		return pageState(fmt.Sprintf("Element found: %s", selector), s.currentTab)
 	}
 
 	// Default: just wait for page to stabilize
-	page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
-	return pageState("Page stabilized", currentTab)
+	s.page.Timeout(10 * time.Second).WaitStable(1 * time.Second)
+	return pageState("Page stabilized", s.currentTab)
 }
 
 // selectOption selects an option from a <select> dropdown
 func selectOption(selector, value string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
 	selector = parseSelector(selector)
-	el, err := page.Timeout(10 * time.Second).Element(selector)
+	el, err := s.page.Timeout(10 * time.Second).Element(selector)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("select element not found: %s", selector)
 	}
@@ -749,7 +811,7 @@ func selectOption(selector, value string) (tools.Result, error) {
 	err = el.Select([]string{value}, true, rod.SelectorTypeText)
 	if err != nil {
 		// Fallback: try by value attribute
-		_, evalErr := page.Eval(fmt.Sprintf(`() => {
+		_, evalErr := s.page.Eval(fmt.Sprintf(`() => {
 			const el = document.querySelector('%s');
 			if (el) {
 				for (const opt of el.options) {
@@ -772,7 +834,8 @@ func selectOption(selector, value string) (tools.Result, error) {
 
 // fillForm auto-fills multiple form fields at once
 func fillForm(fields string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 	if fields == "" {
@@ -802,7 +865,7 @@ func fillForm(fields string) (tools.Result, error) {
 
 		found := false
 		for _, sel := range selectors {
-			el, err := page.Timeout(2 * time.Second).Element(sel)
+			el, err := s.page.Timeout(2 * time.Second).Element(sel)
 			if err == nil {
 				tag, _ := el.Eval(`() => this.tagName.toLowerCase()`)
 				if tag != nil && tag.Value.String() == "select" {
@@ -828,11 +891,12 @@ func fillForm(fields string) (tools.Result, error) {
 
 // getURL returns the current page URL
 func getURL() (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
-	info, _ := page.Info()
+	info, _ := s.page.Info()
 	if info == nil {
 		return tools.Result{Output: "Unable to get page info"}, nil
 	}
@@ -845,7 +909,8 @@ func getURL() (tools.Result, error) {
 
 // switchToIframe switches page context into an iframe
 func switchToIframe(selector string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
@@ -854,7 +919,7 @@ func switchToIframe(selector string) (tools.Result, error) {
 	}
 	selector = parseSelector(selector)
 
-	el, err := page.Timeout(10 * time.Second).Element(selector)
+	el, err := s.page.Timeout(10 * time.Second).Element(selector)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("iframe not found: %s", selector)
 	}
@@ -872,11 +937,11 @@ func switchToIframe(selector string) (tools.Result, error) {
 	}
 
 	// Create a virtual tab for the iframe
-	tabID := fmt.Sprintf("iframe_%d", nextTab)
-	nextTab++
-	pages[tabID] = frame
-	currentTab = tabID
-	page = frame
+	tabID := fmt.Sprintf("iframe_%d", s.nextTab)
+	s.nextTab++
+	s.pages[tabID] = frame
+	s.currentTab = tabID
+	s.page = frame
 
 	return tools.Result{
 		Output: fmt.Sprintf("Switched to iframe: %s\n  URL: %s\n  Tab ID: %s (use main_frame to switch back)", selector, iframeURL, tabID),
@@ -885,12 +950,13 @@ func switchToIframe(selector string) (tools.Result, error) {
 
 // switchToMainFrame switches back to the main page from an iframe
 func switchToMainFrame() (tools.Result, error) {
+	s := getBrowserStore()
 	// Find the first non-iframe tab
-	for id, p := range pages {
+	for id, p := range s.pages {
 		if !strings.HasPrefix(id, "iframe_") {
-			page = p
-			currentTab = id
-			return pageState("Switched to main frame", currentTab)
+			s.page = p
+			s.currentTab = id
+			return pageState("Switched to main frame", s.currentTab)
 		}
 	}
 	return tools.Result{Output: "No main frame found"}, nil
@@ -898,7 +964,8 @@ func switchToMainFrame() (tools.Result, error) {
 
 // extractLinks extracts all links from the current page
 func extractLinks() (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
@@ -914,7 +981,7 @@ func extractLinks() (tools.Result, error) {
 		return links.join('\n');
 	}`
 
-	result, err := page.Eval(script)
+	result, err := s.page.Eval(script)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("failed to extract links: %w", err)
 	}
@@ -934,29 +1001,31 @@ func extractLinks() (tools.Result, error) {
 }
 
 func scrollPage(direction string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
 	switch strings.ToLower(direction) {
 	case "down":
-		page.Mouse.MustScroll(0, 500)
+		s.page.Mouse.MustScroll(0, 500)
 	case "up":
-		page.Mouse.MustScroll(0, -500)
+		s.page.Mouse.MustScroll(0, -500)
 	default:
-		page.Mouse.MustScroll(0, 500)
+		s.page.Mouse.MustScroll(0, 500)
 	}
 
 	time.Sleep(500 * time.Millisecond)
-	return pageState(fmt.Sprintf("Scrolled %s", direction), currentTab)
+	return pageState(fmt.Sprintf("Scrolled %s", direction), s.currentTab)
 }
 
 func takeScreenshot() (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
-	img, err := page.Screenshot(true, &proto.PageCaptureScreenshot{
+	img, err := s.page.Screenshot(true, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatPng,
 		Quality: nil,
 	})
@@ -978,7 +1047,8 @@ func takeScreenshot() (tools.Result, error) {
 
 // takeSnapshot returns an enhanced accessibility tree with form-aware element detection
 func takeSnapshot() (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
@@ -1051,12 +1121,12 @@ func takeSnapshot() (tools.Result, error) {
 		return output.join('\n');
 	}`
 
-	result, err := page.Eval(script)
+	result, err := s.page.Eval(script)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("snapshot failed: %w", err)
 	}
 
-	info, _ := page.Info()
+	info, _ := s.page.Info()
 	urlStr := ""
 	if info != nil {
 		urlStr = "\nURL: " + info.URL + "\n"
@@ -1068,20 +1138,21 @@ func takeSnapshot() (tools.Result, error) {
 }
 
 func getHTML(selector string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
 	var html string
 	if selector != "" {
 		selector = parseSelector(selector)
-		el, err := page.Timeout(10 * time.Second).Element(selector)
+		el, err := s.page.Timeout(10 * time.Second).Element(selector)
 		if err != nil {
 			return tools.Result{}, fmt.Errorf("element not found: %s", selector)
 		}
 		html, _ = el.HTML()
 	} else {
-		html = page.MustHTML()
+		html = s.page.MustHTML()
 	}
 
 	if len(html) > 20000 {
@@ -1092,7 +1163,8 @@ func getHTML(selector string) (tools.Result, error) {
 }
 
 func executeJS(code string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 	if code == "" {
@@ -1101,7 +1173,7 @@ func executeJS(code string) (tools.Result, error) {
 
 	// Use a timeout to prevent blocking forever (e.g., alert() in headless Chrome).
 	// The dialog handler auto-dismisses alerts, but we add a timeout as a safety net.
-	result, err := page.Timeout(10 * time.Second).Eval(code)
+	result, err := s.page.Timeout(10 * time.Second).Eval(code)
 	if err != nil {
 		// If it timed out, it's likely a blocking dialog that wasn't caught
 		if strings.Contains(err.Error(), "context deadline") || strings.Contains(err.Error(), "timeout") {
@@ -1116,16 +1188,17 @@ func executeJS(code string) (tools.Result, error) {
 }
 
 func newTab(rawURL string) (tools.Result, error) {
-	if browser == nil {
+	s := getBrowserStore()
+	if s.browser == nil {
 		return tools.Result{}, fmt.Errorf("browser not launched")
 	}
 
-	p := browser.MustPage()
-	tabID := fmt.Sprintf("tab_%d", nextTab)
-	nextTab++
-	pages[tabID] = p
-	currentTab = tabID
-	page = p
+	p := s.browser.MustPage()
+	tabID := fmt.Sprintf("tab_%d", s.nextTab)
+	s.nextTab++
+	s.pages[tabID] = p
+	s.currentTab = tabID
+	s.page = p
 
 	// Auto-dismiss JavaScript dialogs on new tabs too
 	setupDialogHandler(p)
@@ -1141,60 +1214,64 @@ func newTab(rawURL string) (tools.Result, error) {
 }
 
 func switchTab(tabID string) (tools.Result, error) {
-	p, ok := pages[tabID]
+	s := getBrowserStore()
+	p, ok := s.pages[tabID]
 	if !ok {
 		return tools.Result{}, fmt.Errorf("tab not found: %s (available: %v)", tabID, tabList())
 	}
 
-	page = p
-	currentTab = tabID
+	s.page = p
+	s.currentTab = tabID
 	return pageState("Switched tab", tabID)
 }
 
 func closeBrowser() (tools.Result, error) {
-	mu.Lock()
-	defer mu.Unlock()
+	s := getBrowserStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	cleanupBrowserLocked()
+	cleanupBrowserLocked(s)
 
 	return tools.Result{Output: "Browser closed"}, nil
 }
 
-// cleanupBrowserLocked closes browser resources (must hold mu).
-func cleanupBrowserLocked() {
-	savedCookies = nil
-	if browser != nil {
-		browser.MustClose()
-		browser = nil
-		page = nil
-		pages = make(map[string]*rod.Page)
+// cleanupBrowserLocked closes browser resources (must hold s.mu).
+func cleanupBrowserLocked(s *browserStore) {
+	s.savedCookies = nil
+	if s.browser != nil {
+		s.browser.MustClose()
+		s.browser = nil
+		s.page = nil
+		s.pages = make(map[string]*rod.Page)
 	}
 }
 
 // CleanupBrowser safely closes any open browser and resets state.
 // Called between scan phases and on agent stop to prevent stale connection usage.
 func CleanupBrowser() {
-	mu.Lock()
-	defer mu.Unlock()
-	if browser != nil {
+	s := getBrowserStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.browser != nil {
 		// Use recover to handle panics from already-dead browser processes
 		func() {
 			defer func() { recover() }()
-			browser.MustClose()
+			s.browser.MustClose()
 		}()
-		browser = nil
-		page = nil
-		pages = make(map[string]*rod.Page)
-		savedCookies = nil
+		s.browser = nil
+		s.page = nil
+		s.pages = make(map[string]*rod.Page)
+		s.savedCookies = nil
 	}
 }
 
 func pageState(action, tabID string) (tools.Result, error) {
-	if page == nil {
+	s := getBrowserStore()
+	if s.page == nil {
 		return tools.Result{Output: action}, nil
 	}
 
-	info, _ := page.Info()
+	info, _ := s.page.Info()
 	rawURL := ""
 	title := ""
 	if info != nil {
@@ -1213,7 +1290,7 @@ func pageState(action, tabID string) (tools.Result, error) {
 	}
 
 	// List all tabs
-	if len(pages) > 1 {
+	if len(s.pages) > 1 {
 		b.WriteString("  All tabs: ")
 		b.WriteString(strings.Join(tabList(), ", "))
 		b.WriteString("\n")
@@ -1230,8 +1307,9 @@ func pageState(action, tabID string) (tools.Result, error) {
 }
 
 func tabList() []string {
-	tabs := make([]string, 0, len(pages))
-	for id := range pages {
+	s := getBrowserStore()
+	tabs := make([]string, 0, len(s.pages))
+	for id := range s.pages {
 		tabs = append(tabs, id)
 	}
 	return tabs

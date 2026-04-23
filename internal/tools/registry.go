@@ -112,6 +112,7 @@ type Registry struct {
 	mu             sync.RWMutex
 	tools          map[string]*Tool
 	circuitBreaker *CircuitBreaker
+	scanContextID  string // ID of the ScanContext this registry belongs to
 }
 
 // NewRegistry creates a new tool registry.
@@ -120,6 +121,21 @@ func NewRegistry() *Registry {
 		tools:          make(map[string]*Tool),
 		circuitBreaker: NewCircuitBreaker(5, 60), // 5 failures, 60s recovery
 	}
+}
+
+// SetScanContextID associates this registry with a ScanContext.
+// Tools can then use scanctx.Get(id) to access session-scoped state.
+func (r *Registry) SetScanContextID(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.scanContextID = id
+}
+
+// GetScanContextID returns the associated ScanContext ID.
+func (r *Registry) GetScanContextID() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.scanContextID
 }
 
 // Register adds a tool to the registry.

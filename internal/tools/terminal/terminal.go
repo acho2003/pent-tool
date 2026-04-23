@@ -16,8 +16,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/resources"
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
@@ -30,20 +33,45 @@ const (
 	hardMaxTimeout    = 2 * time.Hour     // absolute ceiling — nothing runs longer
 )
 
-// Global process tracker for stop functionality
+// ── Per-instance terminal stores ──
 var (
-	processGroup = make(map[*exec.Cmd]context.CancelFunc)
-	processMutex sync.Mutex
-
-	// activeCommand tracks what command is currently executing (for watchdog)
-	activeCommand   string
-	activeCommandMu sync.RWMutex
-	activeStartTime time.Time
-
-	// streamCallbacks holds functions to call with partial output
-	streamCallbackMu sync.Mutex
-	streamCallback   func(partialOutput string)
+	termStores   = make(map[string]*termStore)
+	termStoresMu sync.RWMutex
 )
+
+type termStore struct {
+	mu              sync.Mutex
+	processGroup    map[*exec.Cmd]context.CancelFunc
+	activeCommand   string
+	activeStartTime time.Time
+	streamCallback  func(string)
+	workDir         string
+}
+
+// getTermStoreByID returns the terminal store for a specific context ID.
+// Creates a new store if one doesn't exist (double-checked locking).
+func getTermStoreByID(id string) *termStore {
+	termStoresMu.RLock()
+	s, ok := termStores[id]
+	termStoresMu.RUnlock()
+	if ok {
+		return s
+	}
+
+	termStoresMu.Lock()
+	defer termStoresMu.Unlock()
+	if s, ok := termStores[id]; ok {
+		return s
+	}
+	s = &termStore{processGroup: make(map[*exec.Cmd]context.CancelFunc)}
+	termStores[id] = s
+	return s
+}
+
+// getTermStore returns the terminal store for the default (CLI) scan context.
+func getTermStore() *termStore {
+	return getTermStoreByID(scanctx.Default().ID)
+}
 
 // heavyToolPatterns are commands that get extended timeouts.
 var heavyToolPatterns = []string{
@@ -52,81 +80,134 @@ var heavyToolPatterns = []string{
 	"gospider", "subfinder", "amass", "rustscan",
 }
 
-// computeTimeout decides how long a command is allowed to run.
-func computeTimeout(command string) time.Duration {
+// isHeavyTool returns true if the command involves a resource-intensive tool.
+// Used for both timeout selection and resource throttling (Layer 2).
+func isHeavyTool(command string) bool {
 	lower := strings.ToLower(command)
 	for _, tool := range heavyToolPatterns {
 		if strings.Contains(lower, tool) {
-			return heavyCmdTimeout
+			return true
 		}
+	}
+	return false
+}
+
+// computeTimeout decides how long a command is allowed to run.
+func computeTimeout(command string) time.Duration {
+	if isHeavyTool(command) {
+		return heavyCmdTimeout
 	}
 	return defaultCmdTimeout
 }
 
+// setProcessLimits applies resource constraints to a child process:
+// - Adjusts OOM score so the kernel kills scan tools before xalgorix
+// - Sets RLIMIT_AS (virtual memory limit) for heavy tools
+func setProcessLimits(cmd *exec.Cmd, heavy bool) {
+	if cmd.Process == nil {
+		return
+	}
+	pid := cmd.Process.Pid
+
+	// ── OOM score adjustment ──
+	// Score 500 = "kill me before most things, but not before 1000"
+	// xalgorix itself stays at default (0), so kernel prefers killing children.
+	oomPath := fmt.Sprintf("/proc/%d/oom_score_adj", pid)
+	if err := os.WriteFile(oomPath, []byte("500"), 0644); err != nil {
+		// Not fatal — best effort. Fails if not running as root.
+		log.Printf("[RESOURCES] Cannot set OOM score for PID %d: %v", pid, err)
+	}
+
+	// ── Memory limit for heavy tools ──
+	// Uses prlimit64 syscall to set RLIMIT_AS on the child process.
+	// If the tool exceeds this, it gets ENOMEM / SIGSEGV — xalgorix survives.
+	if heavy && resources.HeavyToolMemLimitBytes > 0 {
+		newLimit := syscall.Rlimit{
+			Cur: uint64(resources.HeavyToolMemLimitBytes),
+			Max: uint64(resources.HeavyToolMemLimitBytes),
+		}
+		// prlimit64(pid, resource, new_rlimit*, old_rlimit*)
+		_, _, errno := syscall.RawSyscall6(
+			syscall.SYS_PRLIMIT64,
+			uintptr(pid),
+			uintptr(syscall.RLIMIT_AS),
+			uintptr(unsafe.Pointer(&newLimit)),
+			0, // old limit — don't need it
+			0, 0,
+		)
+		if errno != 0 {
+			log.Printf("[RESOURCES] Cannot set RLIMIT_AS for PID %d: %v", pid, errno)
+		} else {
+			log.Printf("[RESOURCES] Heavy tool PID %d: OOM score=500, mem limit=%d MB",
+				pid, resources.HeavyToolMemLimitBytes/(1024*1024))
+		}
+	} else {
+		log.Printf("[RESOURCES] PID %d: OOM score set to 500", pid)
+	}
+}
+
 // ActiveProcessCount returns the number of currently running processes.
 func ActiveProcessCount() int {
-	processMutex.Lock()
-	defer processMutex.Unlock()
-	return len(processGroup)
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.processGroup)
 }
 
 // GetActiveCommand returns the currently running command and how long it's been running.
 func GetActiveCommand() (string, time.Duration) {
-	activeCommandMu.RLock()
-	defer activeCommandMu.RUnlock()
-	if activeCommand == "" {
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCommand == "" {
 		return "", 0
 	}
-	return activeCommand, time.Since(activeStartTime)
+	return s.activeCommand, time.Since(s.activeStartTime)
 }
 
 // GetActiveCommandStartTime returns the start time of the active command.
 func GetActiveCommandStartTime() time.Time {
-	activeCommandMu.RLock()
-	defer activeCommandMu.RUnlock()
-	return activeStartTime
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeStartTime
 }
 
 // TrackProcess registers a command to be tracked by the watchdog and killed on Stop.
 func TrackProcess(cmd *exec.Cmd, cancel context.CancelFunc, commandStr string) {
-	processMutex.Lock()
-	processGroup[cmd] = cancel
-	processMutex.Unlock()
-
-	activeCommandMu.Lock()
+	s := getTermStore()
+	s.mu.Lock()
+	s.processGroup[cmd] = cancel
 	if len(commandStr) > 200 {
-		activeCommand = commandStr[:200] + "..."
+		s.activeCommand = commandStr[:200] + "..."
 	} else {
-		activeCommand = commandStr
+		s.activeCommand = commandStr
 	}
-	activeStartTime = time.Now()
-	activeCommandMu.Unlock()
+	s.activeStartTime = time.Now()
+	s.mu.Unlock()
 }
 
 // UntrackProcess removes a command from tracking once it completes.
 func UntrackProcess(cmd *exec.Cmd) {
-	processMutex.Lock()
-	delete(processGroup, cmd)
-	processMutex.Unlock()
-
-	activeCommandMu.Lock()
-	activeCommand = ""
-	activeCommandMu.Unlock()
+	s := getTermStore()
+	s.mu.Lock()
+	delete(s.processGroup, cmd)
+	s.activeCommand = ""
+	s.mu.Unlock()
 }
 
 // ReapDeadProcesses checks all tracked processes and removes any that have
-// already exited. This prevents the watchdog from keeping the scan alive
-// when a process finished but wasn't properly untracked.
+// already exited.
 func ReapDeadProcesses() int {
-	processMutex.Lock()
-	defer processMutex.Unlock()
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	reaped := 0
-	for cmd, cancel := range processGroup {
+	for cmd, cancel := range s.processGroup {
 		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			// Process has exited but wasn't untracked
 			log.Printf("[REAP] Removing dead process from tracker: pid=%d", cmd.Process.Pid)
-			delete(processGroup, cmd)
+			delete(s.processGroup, cmd)
 			if cancel != nil {
 				cancel()
 			}
@@ -134,40 +215,35 @@ func ReapDeadProcesses() int {
 		}
 	}
 
-	if reaped > 0 {
-		// Clear active command if no processes remain
-		if len(processGroup) == 0 {
-			activeCommandMu.Lock()
-			activeCommand = ""
-			activeCommandMu.Unlock()
-		}
+	if reaped > 0 && len(s.processGroup) == 0 {
+		s.activeCommand = ""
 	}
-
 	return reaped
 }
 
 // SetStreamCallback sets a callback that receives partial output from running commands.
-// The callback is called periodically with the latest output chunk.
 func SetStreamCallback(cb func(partialOutput string)) {
-	streamCallbackMu.Lock()
-	defer streamCallbackMu.Unlock()
-	streamCallback = cb
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamCallback = cb
 }
 
 // ClearStreamCallback removes the stream callback.
 func ClearStreamCallback() {
-	streamCallbackMu.Lock()
-	defer streamCallbackMu.Unlock()
-	streamCallback = nil
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamCallback = nil
 }
 
-// KillAllProcesses kills all running processes (called on stop)
+// KillAllProcesses kills all running processes for the active scan context.
 func KillAllProcesses() {
-	processMutex.Lock()
-	defer processMutex.Unlock()
-	for cmd, cancel := range processGroup {
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for cmd, cancel := range s.processGroup {
 		if cmd != nil && cmd.Process != nil {
-			// Kill process group first
 			if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
 				syscall.Kill(-pgid, syscall.SIGKILL)
 			}
@@ -177,33 +253,31 @@ func KillAllProcesses() {
 			cancel()
 		}
 	}
-	processGroup = make(map[*exec.Cmd]context.CancelFunc)
-
-	// Clear active command
-	activeCommandMu.Lock()
-	activeCommand = ""
-	activeCommandMu.Unlock()
+	s.processGroup = make(map[*exec.Cmd]context.CancelFunc)
+	s.activeCommand = ""
 }
-
-// Global working directory for terminal commands.
-// Since concurrent scan sessions are limited to 1, we don't need goroutine isolation.
-var (
-	workDir   string
-	workDirMu sync.RWMutex
-)
 
 // SetWorkDir sets the working directory for terminal commands.
 func SetWorkDir(dir string) {
-	workDirMu.Lock()
-	workDir = dir
-	workDirMu.Unlock()
+	s := getTermStore()
+	s.mu.Lock()
+	s.workDir = dir
+	s.mu.Unlock()
 }
 
 // GetWorkDir returns the current working directory.
 func GetWorkDir() string {
-	workDirMu.RLock()
-	defer workDirMu.RUnlock()
-	return workDir
+	s := getTermStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workDir
+}
+
+// CleanupContext removes the terminal store for a deactivated context.
+func CleanupContext(contextID string) {
+	termStoresMu.Lock()
+	defer termStoresMu.Unlock()
+	delete(termStores, contextID)
 }
 
 // Common command → package mappings for auto-install.
@@ -297,6 +371,8 @@ func decodeHex(s string) ([]byte, error) {
 }
 
 // Register adds terminal tools to the registry.
+// The registry is captured in the closure so tool execution resolves the correct
+// per-session terminal store via registry.GetScanContextID().
 func Register(r *tools.Registry) {
 	r.Register(&tools.Tool{
 		Name:        "terminal_execute",
@@ -304,7 +380,9 @@ func Register(r *tools.Registry) {
 		Parameters: []tools.Parameter{
 			{Name: "command", Description: "The shell command to execute", Required: true},
 		},
-		Execute: executeCommand,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return executeCommandForRegistry(r, args)
+		},
 	})
 }
 
@@ -344,7 +422,17 @@ func toolExists(name string) bool {
 	return false
 }
 
+// executeCommandForRegistry resolves the correct terminal store via the registry's ScanContextID.
+func executeCommandForRegistry(reg *tools.Registry, args map[string]string) (tools.Result, error) {
+	return executeCommandWithContextID(reg.GetScanContextID(), args)
+}
+
+// executeCommand is the backward-compatible version using scanctx.Default().
 func executeCommand(args map[string]string) (tools.Result, error) {
+	return executeCommandWithContextID(scanctx.Default().ID, args)
+}
+
+func executeCommandWithContextID(contextID string, args map[string]string) (tools.Result, error) {
 	command := args["command"]
 	if command == "" {
 		return tools.Result{}, fmt.Errorf("command is required")
@@ -369,8 +457,8 @@ func executeCommand(args map[string]string) (tools.Result, error) {
 		}
 	}
 
-	// Run the command
-	output, exitCode := runShell(command)
+	// Run the command using the correct context's store
+	output, exitCode := runShellWithContext(contextID, command)
 
 	// If it still fails with "command not found", try one more install+retry.
 	// This catches tools not in extractCommands' list (e.g. piped commands).
@@ -380,7 +468,7 @@ func executeCommand(args map[string]string) (tools.Result, error) {
 			pkg := resolvePackage(missingCmd)
 			if pkg != "" {
 				installOutput := installPackage(pkg)
-				retryOutput, retryExit := runShell(command)
+				retryOutput, retryExit := runShellWithContext(contextID, command)
 				combined := fmt.Sprintf("[auto-installed %s (%s)]\n%s\n%s",
 					missingCmd, pkg, installOutput, retryOutput)
 				if retryExit != 0 {
@@ -417,7 +505,18 @@ func ensureVenv() {
 	}
 }
 
+// runShellWithContext executes a shell command using the terminal store for the
+// given context ID. This ensures streaming callbacks and process tracking are
+// routed through the correct per-session store instead of the global default.
+func runShellWithContext(contextID string, command string) (string, int) {
+	return runShellInternal(contextID, command)
+}
+
 func runShell(command string) (string, int) {
+	return runShellInternal(scanctx.Default().ID, command)
+}
+
+func runShellInternal(contextID string, command string) (string, int) {
 	// Ensure venv exists
 	ensureVenv()
 
@@ -475,6 +574,16 @@ func runShell(command string) (string, int) {
 	// Store a clean version of the command (strip venv activation prefix)
 	cleanCmd := strings.TrimPrefix(command, venvActivate)
 
+	// ── Layer 2: Pre-exec resource throttle ──
+	// Before launching, check if the system has enough resources.
+	// Heavy tools (nuclei, masscan, etc.) are gated more strictly.
+	heavy := isHeavyTool(command)
+	if heavy {
+		resources.WaitForResources(true, 2*time.Minute, cleanCmd)
+	} else {
+		resources.WaitForResources(false, 30*time.Second, cleanCmd)
+	}
+
 	// Use pipes for real-time output streaming
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -489,6 +598,10 @@ func runShell(command string) (string, int) {
 	if err := cmd.Start(); err != nil {
 		return fmt.Sprintf("Failed to start command: %v", err), -1
 	}
+
+	// ── Layer 3: Post-start process limits ──
+	// Set OOM score and memory limits on the child process.
+	setProcessLimits(cmd, heavy)
 	
 	TrackProcess(cmd, cancel, cleanCmd)
 	defer UntrackProcess(cmd)
@@ -522,19 +635,19 @@ func runShell(command string) (string, int) {
 				stdout.Write(chunk)
 
 				// Stream partial output every 10 seconds
-				streamCallbackMu.Lock()
-				cb := streamCallback
+				s := getTermStoreByID(contextID)
+				s.mu.Lock()
+				cb := s.streamCallback
 				if cb != nil && time.Since(lastStream) > 10*time.Second {
-					// Hold lock during callback to prevent ClearStreamCallback racing
 					out := stdout.String()
 					if len(out) > 2000 {
 						out = "...\n" + out[len(out)-2000:]
 					}
 					cb(out)
 					lastStream = time.Now()
-					streamCallbackMu.Unlock()
+					s.mu.Unlock()
 				} else {
-					streamCallbackMu.Unlock()
+					s.mu.Unlock()
 				}
 			}
 			if err != nil {

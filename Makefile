@@ -2,7 +2,7 @@
 
 BINARY=xalgorix
 BUILD_DIR=./build
-VERSION=4.2.0
+VERSION=4.2.1
 LDFLAGS=-ldflags "-s -w -X main.version=$(VERSION)"
 
 build:

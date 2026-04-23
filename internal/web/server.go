@@ -35,6 +35,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/xalgord/xalgorix/v4/internal/agent"
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
+	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
 	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
@@ -545,16 +547,21 @@ type ScanInstance struct {
 	VulnCount   int                `json:"vuln_count"`
 	TotalTokens int                `json:"total_tokens"`
 	ScanMode    string             `json:"scan_mode"`
+	Instruction string             `json:"instruction,omitempty"` // custom scan instructions for restart
+	SeverityFilter []string        `json:"severity_filter,omitempty"` // severity filter for restart
+	DiscordWebhook string          `json:"-"` // discord webhook (not exposed to API)
 	Vulns       []VulnSummary      `json:"vulns,omitempty"`
 	agent       *agent.Agent
 	cancel      context.CancelFunc
 	scanDir     string
+	sctx        *scanctx.ScanContext // per-instance session state (vulns, notes, terminal, browser)
 	events      []WSEvent // buffered events for replay
 	mu          sync.RWMutex
 	lastSessionTokens int // tracks token count from current session for delta calculation
 }
 
-const maxConcurrentInstances = 1
+// maxConcurrentInstances removed — replaced by dynamic resource-aware
+// admission via resources.CanAdmitScan(). See internal/resources/.
 
 // saveQueueState saves the current queue state to disk
 func (s *Server) saveQueueState(targets []string, idx int, instruction, scanMode string) {
@@ -602,7 +609,7 @@ type Server struct {
 	port           int
 	clients        map[*wsClient]bool
 	mu             sync.RWMutex
-	currentAgent   *agent.Agent     // current agent for chat support
+	currentAgents  map[string]*agent.Agent // scanID → agent (replaces singleton currentAgent)
 	cancelScan     context.CancelFunc // cancels the current scan session context
 	running        atomic.Bool
 	stopReq        atomic.Bool
@@ -630,6 +637,7 @@ func NewServer(cfg *config.Config, port int) *Server {
 		cfg:            cfg,
 		port:           port,
 		clients:        make(map[*wsClient]bool),
+		currentAgents:  make(map[string]*agent.Agent),
 		dataDir:        dataDir,
 		discordWebhook: os.Getenv("XALGORIX_DISCORD_WEBHOOK"),
 		rateLimiter:    rl,
@@ -759,8 +767,10 @@ func (s *Server) Start() error {
 		if s.cancelScan != nil {
 			s.cancelScan()
 		}
-		if s.currentAgent != nil {
-			s.currentAgent.Stop()
+		for _, agnt := range s.currentAgents {
+			if agnt != nil {
+				agnt.Stop()
+			}
 		}
 		s.mu.Unlock()
 
@@ -909,6 +919,10 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		scanCfg.APIBase = req.APIBase
 	}
 
+	// Clear global stop flag so the new scan isn't immediately aborted
+	// (fixes starvation bug where scans stay "pending" after Stop All)
+	s.stopReq.Store(false)
+
 	instanceID := randomSlug()
 	go s.runMultiScan(req, &scanCfg, instanceID)
 
@@ -923,20 +937,26 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	// Cancel the current scan session context (interrupts LLM calls, tool execution)
 	s.mu.Lock()
 	cancel := s.cancelScan
-	agnt := s.currentAgent
+	// Stop all tracked agents (safe for multi-instance)
+	var agents []*agent.Agent
+	for _, a := range s.currentAgents {
+		agents = append(agents, a)
+	}
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if agnt != nil {
-		agnt.Stop()
+	for _, agnt := range agents {
+		if agnt != nil {
+			agnt.Stop()
+		}
 	}
 
-	// Stop ALL running instances
-	s.instancesMu.RLock()
+	// Stop ALL running instances (use write lock since we're modifying instance state)
+	s.instancesMu.Lock()
 	for _, inst := range s.instances {
 		inst.mu.Lock()
-		if inst.Status == "running" {
+		if inst.Status == "running" || inst.Status == "pending" {
 			inst.Status = "stopped"
 			inst.StopReason = "user_stopped"
 			inst.FinishedAt = time.Now().Format(time.RFC3339)
@@ -949,7 +969,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		}
 		inst.mu.Unlock()
 	}
-	s.instancesMu.RUnlock()
+	s.instancesMu.Unlock()
 
 	// Kill all spawned processes as a safety net
 	terminal.KillAllProcesses()
@@ -969,16 +989,30 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.instancesMu.RLock()
 	runningCount := 0
 	for _, inst := range s.instances {
+		inst.mu.RLock()
 		if inst.Status == "running" {
 			runningCount++
 		}
+		inst.mu.RUnlock()
+	}
+	s.instancesMu.RUnlock()
+
+	// Aggregate vulns across all active instances via their per-session context
+	totalVulns := 0
+	s.instancesMu.RLock()
+	for _, inst := range s.instances {
+		inst.mu.RLock()
+		if inst.sctx != nil {
+			totalVulns += len(reporting.GetVulnerabilitiesForContext(inst.sctx.ID))
+		}
+		inst.mu.RUnlock()
 	}
 	s.instancesMu.RUnlock()
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"running":           s.running.Load() || runningCount > 0,
 		"scan_id":           scanID,
-		"vulns":             len(reporting.GetVulnerabilities()),
+		"vulns":             totalVulns,
 		"running_instances": runningCount,
 	})
 }
@@ -1017,7 +1051,23 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		return instances[i].StartedAt > instances[j].StartedAt
 	})
 
-	json.NewEncoder(w).Encode(instances)
+	// Include resource stats so the UI can explain why scans are pending
+	stats := resources.GetStats()
+	level, reason := resources.CurrentLevel()
+	response := map[string]any{
+		"instances": instances,
+		"resources": map[string]any{
+			"cpu_cores":         stats.CPUCores,
+			"cpu_load_1m":       stats.LoadAvg1m,
+			"ram_total_mb":      stats.MemTotalMB,
+			"ram_available_mb":  stats.MemAvailableMB,
+			"disk_free_mb":      stats.DiskFreeMB,
+			"level":             level.String(),
+			"reason":            reason,
+			"max_instances":     resources.MaxInstances(),
+		},
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleInstanceAction handles per-instance operations (stop, etc)
@@ -1072,6 +1122,32 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// POST /api/instances/{id}/restart — restart scan with same config
+	if len(parts) >= 2 && parts[1] == "restart" && r.Method == http.MethodPost {
+		inst.mu.RLock()
+		targets := strings.Split(inst.Targets, ", ")
+		instruction := inst.Instruction
+		scanMode := inst.ScanMode
+		severityFilter := inst.SeverityFilter
+		discordWebhook := inst.DiscordWebhook
+		inst.mu.RUnlock()
+
+		// Build a new ScanRequest from stored config
+		req := ScanRequest{
+			Targets:        targets,
+			Instruction:    instruction,
+			ScanMode:       scanMode,
+			SeverityFilter: severityFilter,
+			DiscordWebhook: discordWebhook,
+		}
+
+		scanCfg := *s.cfg // shallow copy
+		go s.runMultiScan(req, &scanCfg)
+
+		json.NewEncoder(w).Encode(map[string]string{"status": "restarted"})
+		return
+	}
+
 	// GET /api/instances/{id}/events — return buffered event history
 	if len(parts) >= 2 && parts[1] == "events" && r.Method == http.MethodGet {
 		inst.mu.RLock()
@@ -1108,16 +1184,71 @@ type scanSession struct {
 	resetState     bool
 	instanceID     string // parent instance ID for multi-instance tracking
 	scanMode       string // single, wildcard, dast — persisted so dashboard shows correct mode
+	sctx           *scanctx.ScanContext // per-session isolated state
+
+	// Wildcard lifecycle flags
+	skipNotesCleanup    bool   // when true, don't delete notes store on cleanup (discovery phase)
+	parentReportingCtxID string // stable context ID for accumulating vulns across wildcard subdomain scans
 }
 
 // cleanup tears down all per-session resources. Every sub-operation
 // has its own panic guard so cleanup NEVER panics upward.
 func (sess *scanSession) cleanup() {
-	// Kill all processes spawned during this session
-	func() {
-		defer func() { recover() }()
-		terminal.KillAllProcesses()
-	}()
+	// Deactivate and close the per-session ScanContext (if set).
+	// Close() calls Terminal.KillAll() and Browser.Close() internally,
+	// so no redundant calls are needed below.
+	if sess.sctx != nil {
+		func() {
+			defer func() { recover() }()
+			scanctx.Deactivate(sess.sctx.ID)
+			sess.sctx.Close()
+		}()
+	}
+
+	// Clean up tool-level context stores to prevent unbounded memory growth.
+	// Each tool package maintains a map[contextID]→store that must be cleared.
+	if sess.sctx != nil {
+		// Wildcard vuln accumulation: merge this session's vulns into the parent
+		// reporting context BEFORE we delete this session's reporting store.
+		if sess.parentReportingCtxID != "" {
+			func() {
+				defer func() { recover() }()
+				merged := reporting.MergeVulnsToContext(sess.sctx.ID, sess.parentReportingCtxID)
+				if merged > 0 {
+					log.Printf("[wildcard] Merged %d vulns from session %s into parent context %s", merged, sess.sctx.ID, sess.parentReportingCtxID)
+				}
+			}()
+		}
+
+		func() {
+			defer func() { recover() }()
+			reporting.CleanupContext(sess.sctx.ID)
+		}()
+		if !sess.skipNotesCleanup {
+			func() {
+				defer func() { recover() }()
+				notes.CleanupContext(sess.sctx.ID)
+			}()
+		} else {
+			log.Printf("[wildcard] Skipping notes cleanup for discovery session %s (notes preserved for subdomain collection)", sess.sctx.ID)
+		}
+		func() {
+			defer func() { recover() }()
+			terminal.CleanupContext(sess.sctx.ID)
+		}()
+		func() {
+			defer func() { recover() }()
+			browser.CleanupContext(sess.sctx.ID)
+		}()
+	}
+
+	// Fallback process kill if sctx was never initialized
+	if sess.sctx == nil {
+		func() {
+			defer func() { recover() }()
+			terminal.KillAllProcesses()
+		}()
+	}
 
 	// Stop agent if still running
 	if sess.agent != nil {
@@ -1127,23 +1258,37 @@ func (sess *scanSession) cleanup() {
 		}()
 	}
 
-	// Clear sub-agent state to prevent memory/goroutine leaks across scans
-	func() {
-		defer func() { recover() }()
-		agentsgraph.Reset()
-	}()
+	// Clear sub-agent state to prevent memory/goroutine leaks across scans.
+	// Only safe when this is the sole running scan — global reset would corrupt
+	// concurrent sessions.
+	sess.server.instancesMu.RLock()
+	runningCount := 0
+	for _, inst := range sess.server.instances {
+		if inst.Status == "running" {
+			runningCount++
+		}
+	}
+	sess.server.instancesMu.RUnlock()
+	if runningCount <= 1 {
+		func() {
+			defer func() { recover() }()
+			agentsgraph.Reset()
+		}()
+	}
 
 	// Clear terminal working directory to prevent stale workdir leaking to next session
 	func() {
 		defer func() { recover() }()
-		terminal.SetWorkDir("")
+		if sess.sctx != nil && sess.sctx.Terminal != nil {
+			sess.sctx.Terminal.SetWorkDir("")
+		} else {
+			terminal.SetWorkDir("") // fallback if sctx not initialized
+		}
 	}()
 
 	// Clear server references under lock
 	sess.server.mu.Lock()
-	if sess.server.currentAgent == sess.agent {
-		sess.server.currentAgent = nil
-	}
+	delete(sess.server.currentAgents, sess.id)
 	sess.server.mu.Unlock()
 }
 
@@ -1154,36 +1299,58 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[CRITICAL] scanSession %s panicked: %v", sess.id, r)
-			s.broadcast(WSEvent{Type: "error", Content: fmt.Sprintf("⛔ Scan %s crashed: %v — continuing", sess.target, r)})
+			if sess.instanceID != "" {
+				s.broadcastToInstance(sess.instanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⛔ Scan %s crashed: %v — continuing", sess.target, r)})
+			} else {
+				s.broadcast(WSEvent{Type: "error", Content: fmt.Sprintf("⛔ Scan %s crashed: %v — continuing", sess.target, r)})
+			}
 		}
 		// ALWAYS clean up, whether normal exit or panic
 		sess.cleanup()
 	}()
 
-	// 1. Reset global state if requested (with its own panic guard)
+	// 0. Create and activate a per-session ScanContext for isolation.
+	//    This must happen BEFORE any tool state is touched.
+	sctx := scanctx.New(sess.id, sess.scanDir)
+	scanctx.Activate(sctx)
+	sess.sctx = sctx
+	log.Printf("[scanctx] Activated context %s for target %s (dir=%s)", sctx.ID, sess.target, sess.scanDir)
+
+	// Propagate ScanContext to parent instance (if multi-instance mode)
+	if sess.instanceID != "" {
+		s.instancesMu.RLock()
+		if inst, ok := s.instances[sess.instanceID]; ok {
+			inst.mu.Lock()
+			inst.sctx = sctx
+			inst.mu.Unlock()
+		}
+		s.instancesMu.RUnlock()
+	}
+
+	// 1. Reset per-context state if requested (context-aware)
 	if sess.resetState {
 		func() {
 			defer func() { recover() }()
-			reporting.ResetVulnerabilities()
-			notes.ResetNotes()
+			reporting.ResetVulnerabilitiesForContext(sctx.ID)
+			notes.ResetNotesForContext(sctx.ID)
 		}()
 	}
 
 	// 1b. Configure notes disk persistence → saves notes.json in scan directory
-	notes.SetPersistPath(sess.scanDir)
+	notes.SetPersistPathForContext(sctx.ID, sess.scanDir)
 	if !sess.resetState {
 		// Resume scenario: load previously saved notes from disk
-		notes.LoadFromDisk()
+		notes.LoadFromDiskForContext(sctx.ID)
 	}
 
-	// 2. Set working directory
-	terminal.SetWorkDir(sess.scanDir)
-	browser.SetSessionPath(sess.scanDir)
+	// 2. Set working directory (context-aware)
+	sctx.Terminal.SetWorkDir(sess.scanDir)
+	sctx.Browser.SetSessionPath(sess.scanDir)
 
-	// 3. Create agent with session's config
+	// 3. Create agent with session's config AND ScanContext
 	events := make(chan agent.Event, 512)
 	sess.events = events
-	agnt := agent.NewAgent(sess.cfg, "XalgorixAgent", events)
+	agnt := agent.NewAgent(sess.cfg, "XalgorixAgent", events, sctx)
 	if sess.discoveryMode {
 		agnt.SetDiscoveryMode(true)
 	}
@@ -1193,7 +1360,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	s.mu.Lock()
 	s.currentScanDir = sess.scanDir
 	s.currentScanID = sess.id
-	s.currentAgent = agnt
+	s.currentAgents[sess.id] = agnt
 	s.mu.Unlock()
 
 	// Register agent with parent instance if applicable
@@ -1255,7 +1422,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 
 	// Refresh vulns from reporting module
 	sess.record.Vulns = nil
-	for _, v := range reporting.GetVulnerabilities() {
+	for _, v := range reporting.GetVulnerabilitiesForContext(sess.sctx.ID) {
 		sess.record.Vulns = append(sess.record.Vulns, vulnToSummary(v))
 	}
 
@@ -1268,7 +1435,11 @@ func (s *Server) executeScanSession(sess *scanSession) {
 			desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found\n**Completed at:** %s",
 				sess.target, len(sess.record.Vulns), time.Now().Format("15:04:05 MST"))
 			s.sendDiscordWithFile(0x3b82f6, "✅ Scan Finished - Report Ready", desc, p)
-			s.broadcast(WSEvent{Type: "report_ready", Content: fmt.Sprintf("/api/report/%s", sess.id)})
+			if sess.instanceID != "" {
+				s.broadcastToInstance(sess.instanceID, WSEvent{Type: "report_ready", Content: fmt.Sprintf("/api/report/%s", sess.id)})
+			} else {
+				s.broadcast(WSEvent{Type: "report_ready", Content: fmt.Sprintf("/api/report/%s", sess.id)})
+			}
 		} else {
 			log.Printf("Failed to generate PDF report: %v", err)
 		}
@@ -1293,7 +1464,7 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 
 		// Push vuln to UI in real-time when report_vulnerability succeeds
 		if evt.ToolName == "report_vulnerability" && evt.ToolResult.Error == "" {
-			vulns := reporting.GetVulnerabilities()
+			vulns := reporting.GetVulnerabilitiesForContext(sess.sctx.ID)
 			log.Printf("[VULN] report_vulnerability tool succeeded, vulns in list: %d", len(vulns))
 			if len(vulns) > 0 {
 				latest := vulns[len(vulns)-1]
@@ -1374,7 +1545,7 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 		for _, v := range sess.record.Vulns {
 			seen[v.ID] = true
 		}
-		vulns := reporting.GetVulnerabilities()
+		vulns := reporting.GetVulnerabilitiesForContext(sess.sctx.ID)
 		log.Printf("[VULN] Finished event: total vulns in system: %d, already broadcast: %d", len(vulns), len(seen))
 		for _, v := range vulns {
 			if seen[v.ID] {
@@ -1432,8 +1603,13 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 				inst.TotalTokens += evt.TotalTokens - inst.lastSessionTokens
 				inst.lastSessionTokens = evt.TotalTokens
 			}
-			// Vulns: use global reporting store which accumulates across all sessions
-			inst.VulnCount = len(reporting.GetVulnerabilities())
+			// Vulns: use parent reporting context in wildcard mode,
+			// otherwise use session-specific context
+			if sess.parentReportingCtxID != "" {
+				inst.VulnCount = len(reporting.GetVulnerabilitiesForContext(sess.parentReportingCtxID))
+			} else {
+				inst.VulnCount = len(reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
+			}
 			inst.mu.Unlock()
 		}
 		s.instancesMu.RUnlock()
@@ -1503,11 +1679,14 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 
 	// Register instance as pending initially
 	instance := &ScanInstance{
-		ID:        instanceID,
-		Targets:   strings.Join(req.Targets, ", "),
-		Status:    "pending",
-		StartedAt: time.Now().Format(time.RFC3339),
-		ScanMode:  req.ScanMode,
+		ID:             instanceID,
+		Targets:        strings.Join(req.Targets, ", "),
+		Status:         "pending",
+		StartedAt:      time.Now().Format(time.RFC3339),
+		ScanMode:       req.ScanMode,
+		Instruction:    req.Instruction,
+		SeverityFilter: req.SeverityFilter,
+		DiscordWebhook: req.DiscordWebhook,
 	}
 	s.instancesMu.Lock()
 	s.instances[instanceID] = instance
@@ -1516,42 +1695,58 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Broadcast to dashboard
 	s.broadcastDashboard(WSEvent{Type: "instance_started", Content: instanceID})
 
-	// Wait in queue until slot is available
-	s.stopReq.Store(false) // clear global stop flag so new scans aren't immediately aborted
+	// Wait in queue until slot is available.
+	// CRITICAL: The slot check + status transition MUST be atomic under a single
+	// Lock to prevent a TOCTOU race where two goroutines both see runningCount=0
+	// and start simultaneously, causing mutual process kills.
 	for {
-		if s.stopReq.Load() {
-			// If cancelled while pending
-			s.instancesMu.Lock()
-			instance.Status = "stopped"
-			instance.StopReason = "user_stopped"
-			instance.FinishedAt = time.Now().Format(time.RFC3339)
-			s.instancesMu.Unlock()
+		// Check if THIS instance was stopped (via per-instance stop API)
+		instance.mu.RLock()
+		stopped := instance.Status == "stopped"
+		instance.mu.RUnlock()
+		if stopped {
 			s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
 			return
 		}
 
-		s.instancesMu.RLock()
+		// Also check global stop (user clicked "stop all")
+		if s.stopReq.Load() {
+			instance.mu.Lock()
+			if instance.Status == "pending" {
+				instance.Status = "stopped"
+				instance.StopReason = "user_stopped"
+				instance.FinishedAt = time.Now().Format(time.RFC3339)
+			}
+			instance.mu.Unlock()
+			s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
+			return
+		}
+
+		// ATOMIC: Check resource availability AND transition to running under a single lock.
+		// This eliminates the TOCTOU race window between resource check and status update.
+		gotSlot := false
+		s.instancesMu.Lock()
 		runningCount := 0
 		for _, inst := range s.instances {
 			if inst.Status == "running" {
 				runningCount++
 			}
 		}
-		s.instancesMu.RUnlock()
+		canAdmit, reason := resources.CanAdmitScan(runningCount)
+		if canAdmit && instance.Status == "pending" {
+			instance.Status = "running"
+			instance.StartedAt = time.Now().Format(time.RFC3339)
+			gotSlot = true
+			log.Printf("[ADMIT] Scan %s started (running: %d) — %s", instanceID, runningCount+1, reason)
+		}
+		s.instancesMu.Unlock()
 
-		if runningCount < maxConcurrentInstances {
+		if gotSlot {
 			break
 		}
 		time.Sleep(2 * time.Second)
 	}
 
-	// Transition to running
-	s.instancesMu.Lock()
-	if instance.Status == "pending" {
-		instance.Status = "running"
-		instance.StartedAt = time.Now().Format(time.RFC3339)
-	}
-	s.instancesMu.Unlock()
 	s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
 
 	// Top-level panic recovery
@@ -1584,7 +1779,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		s.mu.Lock()
 		if s.currentScanID == instanceID {
 			s.cancelScan = nil
-			s.currentAgent = nil
+			delete(s.currentAgents, instanceID)
 		}
 		s.mu.Unlock()
 		s.broadcastToInstance(instanceID, WSEvent{Type: "queue_finished", Content: "Scan queue ended"})
@@ -1607,35 +1802,31 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		log.Printf("[INFO] runMultiScan instance %s exited", instanceID)
 	}()
 
-	// Clear any previous queue state
+	// ── PRE-SESSION CLEANUP ──
+	// IMPORTANT: This runs AFTER the queue wait, so we only clean up global
+	// state once this instance has acquired a slot. This prevents a queued
+	// scan from destroying a running scan's processes and state.
 	s.clearQueueState()
 	s.running.Store(true)
-	s.stopReq.Store(false)
+	s.stopReq.Store(false) // clear global stop so this scan isn't immediately aborted
 	req.InstanceID = instanceID // thread instance ID to all target handlers
 	if req.DiscordWebhook != "" {
 		s.discordWebhook = req.DiscordWebhook
 	}
 
-	// ── GLOBAL STATE RESET: Prevent previous scan targets from leaking into current scan ──
-	// Skip reset on resume — we want to keep accumulated vulns, notes, and recon files.
 	if req.IsResume {
 		log.Printf("[AUTO-RESUME] Skipping state reset — preserving vulns, notes, and recon files from previous session")
-		// Only kill orphan processes — don't wipe data
-		func() {
-			defer func() { recover() }()
-			terminal.KillAllProcesses()
-		}()
-		// Restore notes from disk if available
-		notes.LoadFromDisk()
+		// NOTE: Do NOT call terminal.KillAllProcesses() here — it kills ALL
+		// processes globally, which would destroy a running instance's tools.
+		// Per-context cleanup handles process termination on session boundaries.
 	} else {
-		// Fresh scan — clean slate
+		// Fresh scan — only clean per-instance state, NOT global state.
+		// Global resets (reporting.ResetVulnerabilities, notes.ResetNotes,
+		// terminal.KillAllProcesses) would destroy another queued instance's
+		// methodology workflow. Per-context resets happen in executeScanSession.
 		func() {
 			defer func() { recover() }()
-			reporting.ResetVulnerabilities()
-			notes.ResetNotes()
-			terminal.SetWorkDir("") // clear stale working directory
-			terminal.KillAllProcesses() // kill any orphaned processes from previous scans
-			cleanTmpSubdomainFiles() // remove stale /tmp files from previous scans
+			cleanTmpSubdomainFiles()
 		}()
 	}
 	totalTargets := len(req.Targets)
@@ -1643,7 +1834,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Save queue state for persistence
 	s.saveQueueState(req.Targets, 0, req.Instruction, req.ScanMode)
 
-	s.broadcast(WSEvent{
+	s.broadcastToInstance(instanceID, WSEvent{
 		Type:         "queue_started",
 		Content:      fmt.Sprintf("Starting scan queue: %d target(s)", totalTargets),
 		TotalTargets: totalTargets,
@@ -1653,8 +1844,12 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	s.sendDiscord(0x00ff88, "🚀 Scan Started", fmt.Sprintf("**Targets:** %s\n**Mode:** %s\n**Total:** %d target(s)", strings.Join(req.Targets, ", "), req.ScanMode, totalTargets))
 
 	for i, target := range req.Targets {
-		if s.stopReq.Load() {
-			s.broadcast(WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
+		// Check both global stop and per-instance stop
+		instance.mu.RLock()
+		instStopped := instance.Status == "stopped"
+		instance.mu.RUnlock()
+		if s.stopReq.Load() || instStopped {
+			s.broadcastToInstance(instanceID, WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
 			break
 		}
 
@@ -1684,10 +1879,18 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Clear queue state when done
 	s.clearQueueState()
 
-	// Discord: scan finished
-	vulns := reporting.GetVulnerabilities()
-	if len(vulns) > 0 {
-		desc := fmt.Sprintf("**Targets:** %d completed\n**Vulnerabilities:** %d found\n**Completed at:** %s", totalTargets, len(vulns), time.Now().Format("15:04:05 MST"))
+	// Discord: scan finished — use instance's accumulated vuln count
+	// (don't read from inst.sctx.ID — it may point to a cleaned-up session context)
+	vulnCount := 0
+	s.instancesMu.RLock()
+	if inst, ok := s.instances[instanceID]; ok {
+		inst.mu.RLock()
+		vulnCount = inst.VulnCount
+		inst.mu.RUnlock()
+	}
+	s.instancesMu.RUnlock()
+	if vulnCount > 0 {
+		desc := fmt.Sprintf("**Targets:** %d completed\n**Vulnerabilities:** %d found\n**Completed at:** %s", totalTargets, vulnCount, time.Now().Format("15:04:05 MST"))
 		s.sendDiscord(0x3b82f6, "✅ Scan Finished - Vulnerabilities Found", desc)
 	} else {
 		s.sendDiscord(0x3b82f6, "✅ Scan Finished", fmt.Sprintf("**Targets:** %d completed\n**Vulnerabilities:** 0 found\n**Completed at:** %s", totalTargets, time.Now().Format("15:04:05 MST")))
@@ -1717,7 +1920,7 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 
 	instruction := "This is a SINGLE TARGET scan. Do NOT enumerate subdomains or perform wildcard discovery. Only test the exact target URL provided. Focus on the main domain/IP only. " + req.Instruction
 
-	s.broadcast(WSEvent{
+	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_started",
 		Content:      fmt.Sprintf("Scanning target %d/%d: %s", idx+1, total, target),
 		Target:       target,
@@ -1742,7 +1945,7 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 	}
 	s.executeScanSession(sess)
 
-	s.broadcast(WSEvent{
+	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_completed",
 		Content:      fmt.Sprintf("Target %d/%d completed: %s", idx+1, total, target),
 		Target:       target,
@@ -1760,7 +1963,7 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 		dastInstruction += "\n\n" + req.Instruction
 	}
 
-	s.broadcast(WSEvent{
+	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_started",
 		Content:      fmt.Sprintf("[DAST] Scanning URL: %s", target),
 		Target:       target,
@@ -1785,7 +1988,7 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 	}
 	s.executeScanSession(sess)
 
-	s.broadcast(WSEvent{
+	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_completed",
 		Content:      fmt.Sprintf("[DAST] Completed: %s", target),
 		Target:       target,
@@ -1796,6 +1999,17 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 
 // runWildcardTarget handles wildcard mode: Phase 1 subdomain discovery, then Phase 2 per-subdomain scanning.
 func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
+	// ── Stable parent reporting context for vuln accumulation ──
+	// All subdomain sessions merge their vulns into this context.
+	// It persists across the entire wildcard scan and is cleaned up at the end.
+	parentReportingCtxID := fmt.Sprintf("wc-%s-%s", req.InstanceID, sanitizeTarget(target))
+	reporting.ResetVulnerabilitiesForContext(parentReportingCtxID) // start clean
+	defer func() {
+		// Final cleanup of the parent reporting context
+		reporting.CleanupContext(parentReportingCtxID)
+		log.Printf("[wildcard] Cleaned up parent reporting context: %s", parentReportingCtxID)
+	}()
+
 	// ── PHASE 1: Subdomain Discovery ──
 	scanDir := s.makeScanDir(target)
 
@@ -1804,7 +2018,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		discoveryInstruction += "\n\n" + req.Instruction
 	}
 
-	s.broadcast(WSEvent{
+	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_started",
 		Content:      fmt.Sprintf("[PHASE 1] Discovering subdomains for: %s", target),
 		Target:       target,
@@ -1813,44 +2027,79 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		TotalTargets: total,
 	})
 
+	// Save the discovery session's context ID so we can read notes after cleanup.
+	// skipNotesCleanup=true prevents cleanup() from deleting the notes store,
+	// keeping them available for collectSubdomains' Layer 3 (notes fallback).
 	discoverySess := &scanSession{
-		id:             filepath.Base(scanDir),
-		target:         target,
-		scanDir:        scanDir,
-		cfg:            scanCfg,
-		server:         s,
-		instruction:    discoveryInstruction,
-		severityFilter: req.SeverityFilter,
-		discoveryMode:  true,
-		genReport:      false,
-		resetState:     true,
-		instanceID:     req.InstanceID,
-		scanMode:       "wildcard",
+		id:               filepath.Base(scanDir),
+		target:           target,
+		scanDir:          scanDir,
+		cfg:              scanCfg,
+		server:           s,
+		instruction:      discoveryInstruction,
+		severityFilter:   req.SeverityFilter,
+		discoveryMode:    true,
+		genReport:        false,
+		resetState:       true,
+		instanceID:       req.InstanceID,
+		scanMode:         "wildcard",
+		skipNotesCleanup: true, // preserve notes for subdomain collection
 	}
 	s.executeScanSession(discoverySess)
 
-	// Note: We do NOT check parentCtx here. Each subdomain scan has its own
-	// agent-level timeout. The parent 2h timeout should not abort the entire
-	// wildcard scan after just discovering subdomains.
+	// Capture the discovery session's context ID for notes lookup.
+	// The sctx was set during executeScanSession and its notes were preserved.
+	discoveryCtxID := ""
+	if discoverySess.sctx != nil {
+		discoveryCtxID = discoverySess.sctx.ID
+	}
 
-	// Read discovered subdomains from file
-	subdomains := s.collectSubdomains(scanDir, target)
+	// Read discovered subdomains — use discovery context ID for notes fallback
+	subdomains := s.collectSubdomains(scanDir, target, discoveryCtxID)
+
+	// Now clean up the discovery notes (deferred from skipNotesCleanup)
+	if discoveryCtxID != "" {
+		notes.CleanupContext(discoveryCtxID)
+		log.Printf("[wildcard] Cleaned up discovery notes context: %s", discoveryCtxID)
+	}
 
 	log.Printf("[INFO] Total subdomains found for %s: %d", target, len(subdomains))
 
-	s.broadcast(WSEvent{
-		Type:         "target_completed",
-		Content:      fmt.Sprintf("[PHASE 1] Discovery complete: found %d subdomains. Now scanning each individually.", len(subdomains)),
-		Target:       target,
-		TargetIndex:  idx + 1,
-		TotalTargets: total,
-	})
+	// Fallback: if discovery found 0 subdomains, scan the root domain itself
+	if len(subdomains) == 0 {
+		log.Printf("[INFO] No subdomains discovered for %s — falling back to root domain scan", target)
+		subdomains = []string{target}
+		s.broadcastToInstance(req.InstanceID, WSEvent{
+			Type:         "target_completed",
+			Content:      fmt.Sprintf("[PHASE 1] Discovery complete: found 0 subdomains. Falling back to root domain scan of %s.", target),
+			Target:       target,
+			TargetIndex:  idx + 1,
+			TotalTargets: total,
+		})
+	} else {
+		s.broadcastToInstance(req.InstanceID, WSEvent{
+			Type:         "target_completed",
+			Content:      fmt.Sprintf("[PHASE 1] Discovery complete: found %d subdomains. Now scanning each individually.", len(subdomains)),
+			Target:       target,
+			TargetIndex:  idx + 1,
+			TotalTargets: total,
+		})
+	}
 
 	// ── PHASE 2: Scan each subdomain individually ──
 	for j, subdomain := range subdomains {
-		if s.stopReq.Load() {
+		// Check both global stop and per-instance stop
+		var instStopped bool
+		s.instancesMu.RLock()
+		if inst, ok := s.instances[req.InstanceID]; ok {
+			inst.mu.RLock()
+			instStopped = inst.Status == "stopped"
+			inst.mu.RUnlock()
+		}
+		s.instancesMu.RUnlock()
+		if s.stopReq.Load() || instStopped {
 			log.Printf("[INFO] Subdomain loop stopped by user at %d/%d for %s", j+1, len(subdomains), target)
-			s.broadcast(WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
+			s.broadcastToInstance(req.InstanceID, WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
 			break
 		}
 
@@ -1870,14 +2119,14 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[PANIC] Subdomain %d/%d crashed (%s): %v — skipping to next", j+1, len(subdomains), subdomain, r)
-					s.broadcast(WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Subdomain %s crashed: %v — skipping", subdomain, r)})
+					s.broadcastToInstance(req.InstanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Subdomain %s crashed: %v — skipping", subdomain, r)})
 				}
 			}()
 
 			subScanDir := s.makeScanDir(subdomain)
 			scanInstruction := buildSubdomainScanInstruction(subdomain, target, req.Instruction)
 
-			s.broadcast(WSEvent{
+			s.broadcastToInstance(req.InstanceID, WSEvent{
 				Type:           "target_started",
 				Content:        fmt.Sprintf("[PHASE 2] Scanning subdomain %d/%d: %s", j+1, len(subdomains), subdomain),
 				Target:         subdomain,
@@ -1889,28 +2138,30 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				ParentTarget:   target,
 			})
 
-			// Track vulns BEFORE this subdomain scan to only count new ones
-			vulnCountBefore := len(reporting.GetVulnerabilities())
+			// Track vulns BEFORE this subdomain scan using the stable parent context
+			vulnCountBefore := len(reporting.GetVulnerabilitiesForContext(parentReportingCtxID))
 
 			subSess := &scanSession{
-				id:             filepath.Base(subScanDir),
-				target:         subdomain,
-				parentTarget:   target,
-				scanDir:        subScanDir,
-				cfg:            scanCfg,
-				server:         s,
-				instruction:    scanInstruction,
-				severityFilter: req.SeverityFilter,
-				discoveryMode:  false,
-				genReport:      false,
-				resetState:     false, // accumulate vulns across subdomains
-				instanceID:     req.InstanceID,
-				scanMode:       "wildcard",
+				id:                   filepath.Base(subScanDir),
+				target:               subdomain,
+				parentTarget:         target,
+				scanDir:              subScanDir,
+				cfg:                  scanCfg,
+				server:               s,
+				instruction:          scanInstruction,
+				severityFilter:       req.SeverityFilter,
+				discoveryMode:        false,
+				genReport:            false,
+				resetState:           false, // accumulate vulns across subdomains
+				instanceID:           req.InstanceID,
+				scanMode:             "wildcard",
+				parentReportingCtxID: parentReportingCtxID, // merge vulns into parent on cleanup
 			}
 			s.executeScanSession(subSess)
 
 			// Generate PDF for this subdomain if NEW vulnerabilities found
-			allVulns := reporting.GetVulnerabilities()
+			// Read from the stable parent context — guaranteed to have all accumulated vulns
+			allVulns := reporting.GetVulnerabilitiesForContext(parentReportingCtxID)
 			if vulnCountBefore <= len(allVulns) {
 				newVulns := allVulns[vulnCountBefore:]
 				if len(newVulns) > 0 {
@@ -1934,7 +2185,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				}
 			}
 
-			s.broadcast(WSEvent{
+			s.broadcastToInstance(req.InstanceID, WSEvent{
 				Type:           "target_completed",
 				Content:        fmt.Sprintf("[PHASE 2] Subdomain %d/%d completed: %s", j+1, len(subdomains), subdomain),
 				Target:         subdomain,
@@ -1948,7 +2199,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 
 		// ── Cooldown between subdomain scans ──
 		// Prevents LLM API rate-limiting and gives GC time to reclaim memory
-		if j < len(subdomains)-1 && !s.stopReq.Load() {
+		if j < len(subdomains)-1 && !s.stopReq.Load() && !instStopped {
 			log.Printf("[INFO] Cooldown: 10s pause before next subdomain (memory recovery + rate limit prevention)")
 			time.Sleep(10 * time.Second)
 		}
@@ -1956,8 +2207,20 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 
 	log.Printf("[INFO] Wildcard scan complete for %s: scanned %d subdomains", target, len(subdomains))
 	logMemStats(fmt.Sprintf("Wildcard scan complete for %s", target))
-	// Clean up processes before next target
-	terminal.KillAllProcesses()
+	// Clean up processes before next target — use instance's terminal if available
+	s.instancesMu.RLock()
+	if inst, ok := s.instances[req.InstanceID]; ok {
+		inst.mu.RLock()
+		if inst.sctx != nil && inst.sctx.Terminal != nil {
+			inst.sctx.Terminal.KillAll()
+		} else {
+			terminal.KillAllProcesses() // fallback
+		}
+		inst.mu.RUnlock()
+	} else {
+		terminal.KillAllProcesses() // fallback
+	}
+	s.instancesMu.RUnlock()
 }
 
 // buildDiscoveryInstruction creates the Phase 1 subdomain enumeration instruction.
@@ -2024,7 +2287,8 @@ DO NOT continue past this point. DO NOT scan for vulnerabilities. Call finish NO
 }
 
 // collectSubdomains reads discovered subdomains from all known file locations and agent notes.
-func (s *Server) collectSubdomains(scanDir, target string) []string {
+// contextID is used for context-aware notes lookup; if empty, falls back to global notes.
+func (s *Server) collectSubdomains(scanDir, target, contextID string) []string {
 	seen := make(map[string]bool)
 	var subdomains []string
 
@@ -2035,14 +2299,20 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 		rootTarget = rootTarget[4:]
 	}
 
+	// ansiRegex strips ANSI escape codes (color, cursor, etc.) from tool output.
+	// Tools like dnsx emit sequences like \x1b[35m that corrupt domain matching.
+	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
 	// Helper: extract valid subdomains from a file (must be subdomains of the target)
 	extractFromFile := func(path string) []string {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
+		// Strip all ANSI escape codes before parsing
+		clean := ansiRegex.ReplaceAllString(string(data), "")
 		var found []string
-		for _, line := range strings.Split(string(data), "\n") {
+		for _, line := range strings.Split(clean, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "Total") || strings.HasPrefix(line, "wc") {
 				continue
@@ -2064,35 +2334,111 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 		return found
 	}
 
+	// stripMarkdown removes common markdown formatting from a token
+	stripMarkdown := func(s string) string {
+		s = strings.ReplaceAll(s, "**", "")  // bold
+		s = strings.ReplaceAll(s, "__", "")  // bold alt
+		s = strings.ReplaceAll(s, "`", "")   // code
+		s = strings.ReplaceAll(s, "*", "")   // italic
+		s = strings.TrimRight(s, "/.,;:()[]{}\"'")
+		s = strings.TrimLeft(s, "/.,;:()[]{}\"'")
+		return s
+	}
+
+	// isDomainMatch checks if a cleaned string is a valid subdomain of rootTarget
+	isDomainMatch := func(domain string) bool {
+		domain = strings.ToLower(domain)
+		return strings.Contains(domain, ".") &&
+			(domain == rootTarget || strings.HasSuffix(domain, "."+rootTarget)) &&
+			!seen[domain]
+	}
+
+	// domainRegex matches potential domain names in free-form text
+	domainRegex := regexp.MustCompile(`(?i)\b([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+` + regexp.QuoteMeta(rootTarget) + `\b`)
+
 	// Helper: extract subdomains from a text blob (e.g., agent notes)
+	// Handles: plain lines, markdown lists (- , * , 1. ), bold (**...**), URLs, etc.
 	extractFromText := func(text string) []string {
+		// Strip ANSI escape codes from text blobs too (terminal captures may contain them)
+		text = ansiRegex.ReplaceAllString(text, "")
 		var found []string
+
+		// Pass 1: line-by-line parsing (handles structured lists)
 		for _, line := range strings.Split(text, "\n") {
 			line = strings.TrimSpace(line)
-			if line == "" {
+			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
+
+			// Strip common list prefixes: "- ", "* ", "1. ", "2) ", etc.
 			line = strings.TrimPrefix(line, "- ")
 			line = strings.TrimPrefix(line, "* ")
-			line = strings.TrimPrefix(line, "http://")
-			line = strings.TrimPrefix(line, "https://")
-			parts := strings.Fields(line)
-			if len(parts) > 0 {
-				domain := strings.TrimRight(parts[0], "/.,;:")
-				domain = strings.ToLower(domain)
-				if strings.Contains(domain, ".") && (domain == rootTarget || strings.HasSuffix(domain, "."+rootTarget)) && !seen[domain] {
+			// Strip numbered list prefixes: "1. ", "2. ", "10. ", etc.
+			if len(line) > 2 {
+				dotIdx := strings.Index(line, ". ")
+				if dotIdx > 0 && dotIdx <= 4 {
+					prefix := line[:dotIdx]
+					allDigits := true
+					for _, c := range prefix {
+						if c < '0' || c > '9' {
+							allDigits = false
+							break
+						}
+					}
+					if allDigits {
+						line = strings.TrimSpace(line[dotIdx+2:])
+					}
+				}
+			}
+
+			// Try each whitespace-delimited token in the line
+			for _, token := range strings.Fields(line) {
+				token = strings.TrimPrefix(token, "http://")
+				token = strings.TrimPrefix(token, "https://")
+				token = strings.TrimPrefix(token, "http[s]://")
+				// Strip path component
+				if idx := strings.Index(token, "/"); idx > 0 {
+					token = token[:idx]
+				}
+				domain := strings.ToLower(stripMarkdown(token))
+				if isDomainMatch(domain) {
 					seen[domain] = true
 					found = append(found, domain)
 				}
 			}
 		}
+
+		// Pass 2: regex fallback — catches domains embedded in any format
+		if len(found) == 0 {
+			lowerText := strings.ToLower(text)
+			if strings.Contains(lowerText, rootTarget) {
+				// Try regex extraction for subdomains
+				matches := domainRegex.FindAllString(lowerText, -1)
+				for _, m := range matches {
+					m = strings.TrimRight(m, "/.,;:")
+					if isDomainMatch(m) {
+						seen[m] = true
+						found = append(found, m)
+					}
+				}
+				// Also check bare rootTarget (e.g., "bild.tv" itself)
+				if !seen[rootTarget] {
+					seen[rootTarget] = true
+					found = append(found, rootTarget)
+				}
+			}
+		}
+
 		return found
 	}
 
 	subdomainFileNames := []string{
-		"live_subdomains.txt", "live_resolved.txt", "all_subdomains.txt",
-		"all_discovered_subdomains.txt", "subdomains.txt", "live_hosts.txt",
-		"passive_subfinder.txt", "passive_subfinder2.txt", "active_subfinder.txt",
+		"live_subdomains.txt", "live_subdomains_clean.txt", "live_resolved.txt",
+		"all_subdomains.txt", "all_discovered_subdomains.txt", "subdomains.txt",
+		"live_hosts.txt", "passive_subfinder.txt", "passive_subfinder2.txt",
+		"active_subfinder.txt", "passive_crt.txt", "passive_findomain.txt",
+		"passive_assetfinder.txt", "passive_dnsbufferover.txt", "archive_subdomains.txt",
+		"resolved_subdomains.txt", "httpx_output.txt", "dnsx_output.txt",
 	}
 
 
@@ -2107,6 +2453,30 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 		}
 	}
 
+	// Layer 1.25: Check workspace and terminal workdir — agents run commands here,
+	// so ./passive_subfinder.txt etc. land in these directories, NOT in scanDir.
+	if len(subdomains) == 0 {
+		checkDirs := []string{}
+		if wd := terminal.GetWorkDir(); wd != "" && wd != scanDir {
+			checkDirs = append(checkDirs, wd)
+		}
+		if s.cfg.Workspace != "" && s.cfg.Workspace != scanDir {
+			checkDirs = append(checkDirs, s.cfg.Workspace)
+		}
+		for _, dir := range checkDirs {
+			for _, name := range subdomainFileNames {
+				path := filepath.Join(dir, name)
+				if found := extractFromFile(path); len(found) > 0 {
+					log.Printf("[INFO] Found %d subdomains from %s/%s (agent workdir)", len(found), dir, name)
+					subdomains = append(subdomains, found...)
+				}
+			}
+			if len(subdomains) > 0 {
+				break
+			}
+		}
+	}
+
 	// Layer 1.5: Check /tmp — agents often save recon files here
 	if len(subdomains) == 0 {
 		for _, name := range subdomainFileNames {
@@ -2114,6 +2484,19 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 			if found := extractFromFile(path); len(found) > 0 {
 				log.Printf("[INFO] Found %d subdomains from /tmp/%s", len(found), name)
 				subdomains = append(subdomains, found...)
+			}
+		}
+	}
+
+	// Layer 1.75: Check home directory — some agents write to ~/
+	if len(subdomains) == 0 {
+		if homeDir, err := os.UserHomeDir(); err == nil && homeDir != scanDir {
+			for _, name := range subdomainFileNames {
+				path := filepath.Join(homeDir, name)
+				if found := extractFromFile(path); len(found) > 0 {
+					log.Printf("[INFO] Found %d subdomains from %s/%s (home dir)", len(found), homeDir, name)
+					subdomains = append(subdomains, found...)
+				}
 			}
 		}
 	}
@@ -2137,9 +2520,14 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 		})
 	}
 
-	// Layer 3: Parse agent notes for subdomain data
+	// Layer 3: Parse agent notes for subdomain data (context-aware)
 	if len(subdomains) == 0 {
-		allNotes := notes.GetAllNotes()
+		var allNotes map[string]string
+		if contextID != "" {
+			allNotes = notes.GetAllNotesForContext(contextID)
+		} else {
+			allNotes = notes.GetAllNotes()
+		}
 		for key, value := range allNotes {
 			lowerKey := strings.ToLower(key)
 			if strings.Contains(lowerKey, "subdomain") || strings.Contains(lowerKey, "live") || strings.Contains(lowerKey, "discovered") || strings.Contains(lowerKey, "domain") {
@@ -2173,11 +2561,12 @@ func (s *Server) collectSubdomains(scanDir, target string) []string {
 // that could contaminate subsequent scans with targets from previous runs.
 func cleanTmpSubdomainFiles() {
 	subdomainFileNames := []string{
-		"live_subdomains.txt", "live_resolved.txt", "all_subdomains.txt",
-		"all_discovered_subdomains.txt", "subdomains.txt", "live_hosts.txt",
-		"passive_subfinder.txt", "passive_subfinder2.txt", "active_subfinder.txt",
-		"passive_crt.txt", "passive_findomain.txt", "passive_assetfinder.txt",
-		"passive_dnsbufferover.txt", "archive_subdomains.txt",
+		"live_subdomains.txt", "live_subdomains_clean.txt", "live_resolved.txt",
+		"all_subdomains.txt", "all_discovered_subdomains.txt", "subdomains.txt",
+		"live_hosts.txt", "passive_subfinder.txt", "passive_subfinder2.txt",
+		"active_subfinder.txt", "passive_crt.txt", "passive_findomain.txt",
+		"passive_assetfinder.txt", "passive_dnsbufferover.txt", "archive_subdomains.txt",
+		"resolved_subdomains.txt", "httpx_output.txt", "dnsx_output.txt",
 	}
 
 	// Remove known subdomain file names from /tmp
@@ -2720,7 +3109,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	// Check if there's an active scan
 	s.mu.RLock()
-	agnt := s.currentAgent
+	agnt := s.currentAgents[s.currentScanID]
 	s.mu.RUnlock()
 	if agnt == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -2926,8 +3315,9 @@ func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
 	defer s.mu.RUnlock()
 
 	for client := range s.clients {
-		// Send to clients watching this specific instance, or unsubscribed clients (legacy)
-		if client.instanceID == instanceID || client.instanceID == "" {
+		// Send ONLY to clients explicitly subscribed to this instance.
+		// Dashboard clients (instanceID=="") receive updates via broadcastDashboard.
+		if client.instanceID == instanceID {
 			select {
 			case client.send <- data:
 			default:

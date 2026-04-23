@@ -14,6 +14,7 @@ import (
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentmail"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
@@ -57,6 +58,7 @@ type Agent struct {
 	cfg           *config.Config
 	client        *llm.Client
 	registry      *tools.Registry
+	scanCtx       *scanctx.ScanContext // per-session state (vulns, notes, terminal, browser)
 	messages      []llm.Message
 	msgMu         sync.Mutex
 	events        chan Event
@@ -73,11 +75,21 @@ type Agent struct {
 }
 
 // NewAgent creates a new agent.
-func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
+// If sc is nil, a default ScanContext is used (CLI mode backward compatibility).
+func NewAgent(cfg *config.Config, name string, events chan Event, sc ...*scanctx.ScanContext) *Agent {
 	// Fix Python httpx interfering with ProjectDiscovery httpx
 	fixHttpxConflict()
 
+	// Resolve ScanContext — use provided or fall back to default
+	var sctx *scanctx.ScanContext
+	if len(sc) > 0 && sc[0] != nil {
+		sctx = sc[0]
+	} else {
+		sctx = scanctx.Default()
+	}
+
 	reg := tools.NewRegistry()
+	reg.SetScanContextID(sctx.ID)
 
 	terminal.Register(reg)
 	fileedit.Register(reg)
@@ -103,6 +115,7 @@ func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
 		cfg:          cfg,
 		client:       llm.NewClient(cfg),
 		registry:     reg,
+		scanCtx:      sctx,
 		events:       events,
 		maxIter:      cfg.MaxIterations,
 		ctx:          context.Background(),
@@ -118,7 +131,7 @@ func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
 
 	agentsgraph.Register(reg, func(subName string, targets []string, task string) (string, error) {
 		subEvents := make(chan Event, 256)
-		subAgent := NewAgent(cfg, subName, subEvents)
+		subAgent := NewAgent(cfg, subName, subEvents, sctx)
 		var results strings.Builder
 		done := make(chan struct{})
 		go func() {
@@ -217,25 +230,25 @@ func (a *Agent) startWatchdog() func() {
 						if a.cancel != nil {
 							a.cancel()
 						}
-						terminal.KillAllProcesses()
+						a.scanCtx.Terminal.KillAll()
 						return
 					}
 				}
 
 				// ── Reap dead processes that weren't properly untracked ──
-				reaped := terminal.ReapDeadProcesses()
+				reaped := a.scanCtx.Terminal.ReapDead()
 				if reaped > 0 {
 					a.emit(Event{Type: "message", Content: fmt.Sprintf("🧹 Watchdog: reaped %d dead process(es) from tracker", reaped)})
 				}
 
-				activeProcs := terminal.ActiveProcessCount()
-				activeCmd, cmdDuration := terminal.GetActiveCommand()
+				activeProcs := a.scanCtx.Terminal.ActiveProcessCount()
+				activeCmd, cmdDuration := a.scanCtx.Terminal.GetActiveCommand()
 
 				// ── Check 2: Per-process timeout ──
 				// If a single process has been running too long, kill it
 				if activeProcs > 0 && cmdDuration > processMaxDuration {
 					a.emit(Event{Type: "error", Content: fmt.Sprintf("⚠️ Watchdog: Process running for %s (limit: %s), killing it: %s", cmdDuration.Round(time.Minute), processMaxDuration, activeCmd)})
-					terminal.KillAllProcesses()
+					a.scanCtx.Terminal.KillAll()
 					a.touchActivity() // reset idle timer since we just intervened
 					continue
 				}
@@ -280,7 +293,7 @@ func (a *Agent) startWatchdog() func() {
 						if a.cancel != nil {
 							a.cancel()
 						}
-						terminal.KillAllProcesses()
+						a.scanCtx.Terminal.KillAll()
 						return
 					}
 				}
@@ -299,7 +312,7 @@ func (a *Agent) startWatchdog() func() {
 func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (tools.Result, error) {
 	// Set up streaming callback for terminal commands
 	var lastPartialOutput string
-	terminal.SetStreamCallback(func(partial string) {
+	a.scanCtx.Terminal.SetStreamCallback(func(partial string) {
 		a.touchActivity()
 		// Only emit if output changed
 		if partial != lastPartialOutput {
@@ -315,7 +328,7 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 			})
 		}
 	})
-	defer terminal.ClearStreamCallback()
+	defer a.scanCtx.Terminal.ClearStreamCallback()
 
 	// Execute in goroutine with panic recovery
 	resultCh := make(chan toolExecResult, 1)
@@ -591,8 +604,11 @@ func (a *Agent) Stop() {
 		a.cancel()
 	}
 
-	terminal.KillAllProcesses()
-	browser.CleanupBrowser()
+	// NOTE: Do NOT call terminal.KillAllProcesses() or browser.CleanupBrowser()
+	// here — those are GLOBAL operations that kill processes across ALL instances.
+	// Per-instance cleanup is handled by sctx.Close() in sess.cleanup().
+	// The handleStop handler calls terminal.KillAllProcesses() directly for
+	// user-initiated "Stop All" operations.
 }
 
 // SendMessage allows sending additional messages to the agent during a scan.
@@ -701,7 +717,7 @@ func (a *Agent) pruneMessages() {
 	pruned = append(pruned, a.messages[0]) // system prompt
 
 	// Build continuation message with notes injection
-	notesContext := notes.FormatForContext()
+	notesContext := notes.FormatForContextID(a.scanCtx.ID)
 	var continuationMsg string
 	if notesContext != "" {
 		continuationMsg = fmt.Sprintf(`[CONTEXT PRUNED: %d older messages were trimmed to save context space. You are still in the MIDDLE of your scan. DO NOT call finish — continue testing from where you left off.
@@ -776,7 +792,13 @@ func (a *Agent) buildSystemPrompt(targets []string, instruction string) string {
 
 	checklist := defaultChecklist
 	if instruction != "" {
-		checklist = instruction + "\n\n" + checklist
+		if a.discoveryMode {
+			// Discovery mode: use ONLY the discovery instruction.
+			// The default checklist contradicts discovery (it says "don't finish after recon")
+			checklist = instruction
+		} else {
+			checklist = instruction + "\n\n" + checklist
+		}
 	}
 
 	return fmt.Sprintf(`You are an elite autonomous AI penetration tester and bug bounty hunter with the mindset of a top-10 HackerOne researcher. You don't just run tools — you THINK like an attacker. You analyze application logic, understand business flows, find edge cases that automated scanners miss, and chain low-severity findings into critical exploits.

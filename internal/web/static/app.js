@@ -1782,8 +1782,10 @@
     async function refreshInstances() {
         try {
             const resp = await fetch('/api/instances');
-            const instances = await resp.json();
-            renderInstanceGrid(instances || []);
+            const data = await resp.json();
+            // API returns { instances: [...], resources: {...} }
+            const instances = data.instances || data || [];
+            renderInstanceGrid(Array.isArray(instances) ? instances : []);
         } catch (e) {
             console.error('Failed to fetch instances:', e);
         }
@@ -1842,7 +1844,8 @@
                 </div>
                 <div class="instance-card-actions" style="display:flex;gap:6px;margin-top:6px;">
                     ${inst.status === 'running' || inst.status === 'pending' ? `
-                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">■ Stop</button>` : ''}
+                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">■ Stop</button>` : `
+                    <button class="btn btn-primary" onclick="event.stopPropagation(); restartInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">🔄 Restart</button>`}
                     <button class="btn btn-secondary" onclick="event.stopPropagation(); deleteInstance('${inst.id}')" style="font-size:11px;padding:4px 12px;">🗑 Delete</button>
                 </div>
             </div>`;
@@ -1906,6 +1909,20 @@
             }
         } catch (e) {
             showToast('Failed to delete scan', 'error');
+        }
+    };
+
+    window.restartInstance = async function(instanceId) {
+        try {
+            const resp = await fetch('/api/instances/' + instanceId + '/restart', { method: 'POST' });
+            if (resp.ok) {
+                showToast('🔄 Scan restarted with same config', 'success');
+                setTimeout(refreshInstances, 500);
+            } else {
+                showToast('Failed to restart scan', 'error');
+            }
+        } catch (e) {
+            showToast('Failed to restart scan', 'error');
         }
     };
 

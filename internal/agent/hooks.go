@@ -408,8 +408,14 @@ func hookTechDetector(state *ScanState, args map[string]string) HookResult {
 func hookFinishGatekeeper(state *ScanState, args map[string]string) HookResult {
 	state.FinishAttempts++
 
-	// Discovery mode (Phase 1 enumeration): always allow finish
+	// Discovery mode (Phase 1 enumeration): allow finish after minimum work
 	if state.DiscoveryMode {
+		if state.TerminalCalls < 3 {
+			return HookResult{
+				Block:       true,
+				BlockReason: fmt.Sprintf("Discovery phase: only %d commands executed. Run at least 3 enumeration tools (subfinder, crt.sh, findomain, assetfinder) before finishing.", state.TerminalCalls),
+			}
+		}
 		return HookResult{}
 	}
 

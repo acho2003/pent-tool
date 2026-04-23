@@ -36,9 +36,9 @@ var discoveryJS string
 //go:embed scripts/controller.js
 var controllerJS string
 
-// controllerInjected tracks whether the controller has been injected
-// into the current page to avoid re-injection.
-var controllerInjected bool
+// NOTE: controllerInjected was removed as global state.
+// ensureController() now queries the page directly to check if the
+// controller is already loaded, making it inherently session-scoped.
 
 // Register registers the page_agent tool in the tool registry.
 func Register(r *tools.Registry) {
@@ -113,13 +113,17 @@ func parseXPAID(id string) string {
 }
 
 // ensureController injects the controller.js script if not already injected.
+// Queries the page directly rather than relying on package-level state.
 func ensureController() error {
 	page := browser.GetCurrentPage()
 	if page == nil {
 		return fmt.Errorf("browser not launched — use browser_action launch first")
 	}
-	if controllerInjected {
-		return nil
+
+	// Check if controller is already loaded in this page's DOM
+	checkResult, err := page.Timeout(5 * time.Second).Eval(`(() => { return typeof window.__xpa_controller_loaded !== 'undefined' ? 'loaded' : 'missing'; })()`)
+	if err == nil && checkResult.Value.String() == "loaded" {
+		return nil // Already injected in this page
 	}
 
 	result, err := page.Timeout(15 * time.Second).Eval(controllerJS)
@@ -127,16 +131,15 @@ func ensureController() error {
 		return fmt.Errorf("failed to inject controller: %w", err)
 	}
 	if result.Value.String() == "xpa_controller_loaded" {
-		controllerInjected = true
 		log.Printf("[page_agent] Controller script injected successfully")
 	}
 	return nil
 }
 
-// resetControllerState marks the controller as needing re-injection
-// (called when the page navigates).
+// resetControllerState is a no-op — controller injection state is now
+// page-intrinsic (checked via DOM query in ensureController).
 func resetControllerState() {
-	controllerInjected = false
+	// No global state to reset — ensureController queries the page directly.
 }
 
 // ── Commands ───────────────────────────────────────────────────────────

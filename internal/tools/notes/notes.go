@@ -10,84 +10,139 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
+// ── Per-instance note stores ──
 var (
-	mu          sync.RWMutex
-	store       = make(map[string]string) // key → value
-	persistPath string                    // path to notes.json on disk (empty = no persistence)
+	noteStores   = make(map[string]*noteStore)
+	noteStoresMu sync.RWMutex
 )
 
+type noteStore struct {
+	mu          sync.RWMutex
+	store       map[string]string
+	persistPath string
+}
+
+func getNoteStoreByID(id string) *noteStore {
+	noteStoresMu.RLock()
+	s, ok := noteStores[id]
+	noteStoresMu.RUnlock()
+	if ok {
+		return s
+	}
+
+	noteStoresMu.Lock()
+	defer noteStoresMu.Unlock()
+	if s, ok := noteStores[id]; ok {
+		return s
+	}
+	s = &noteStore{store: make(map[string]string)}
+	noteStores[id] = s
+	return s
+}
+
+// getNoteStore returns the note store for the default (CLI) scan context.
+func getNoteStore() *noteStore {
+	return getNoteStoreByID(scanctx.Default().ID)
+}
+
+func getNoteStoreForContext(contextID string) *noteStore {
+	noteStoresMu.RLock()
+	s, ok := noteStores[contextID]
+	noteStoresMu.RUnlock()
+	if ok {
+		return s
+	}
+	noteStoresMu.Lock()
+	defer noteStoresMu.Unlock()
+	if s, ok := noteStores[contextID]; ok {
+		return s
+	}
+	s = &noteStore{store: make(map[string]string)}
+	noteStores[contextID] = s
+	return s
+}
+
 // SetPersistPath configures the directory where notes.json will be saved.
-// Call this before starting a scan to enable disk-backed persistence.
 func SetPersistPath(dir string) {
-	mu.Lock()
-	defer mu.Unlock()
+	s := getNoteStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if dir != "" {
-		persistPath = filepath.Join(dir, "notes.json")
+		s.persistPath = filepath.Join(dir, "notes.json")
 	} else {
-		persistPath = ""
+		s.persistPath = ""
 	}
 }
 
-// ResetNotes clears all notes (called at scan start).
+// ResetNotes clears all notes for the active scan context.
 func ResetNotes() {
-	mu.Lock()
-	store = make(map[string]string)
-	mu.Unlock()
+	s := getNoteStore()
+	s.mu.Lock()
+	s.store = make(map[string]string)
+	s.mu.Unlock()
 }
 
 // LoadFromDisk loads notes from the persist path if it exists.
-// Used for resuming interrupted scans.
 func LoadFromDisk() int {
-	mu.Lock()
-	defer mu.Unlock()
+	s := getNoteStore()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if persistPath == "" {
+	if s.persistPath == "" {
 		return 0
 	}
 
-	data, err := os.ReadFile(persistPath)
+	data, err := os.ReadFile(s.persistPath)
 	if err != nil {
-		return 0 // file doesn't exist yet — normal for new scans
+		return 0
 	}
 
 	loaded := make(map[string]string)
 	if err := json.Unmarshal(data, &loaded); err != nil {
-		log.Printf("[notes] Warning: failed to parse %s: %v", persistPath, err)
+		log.Printf("[notes] Warning: failed to parse %s: %v", s.persistPath, err)
 		return 0
 	}
 
-	// Merge loaded notes into store (don't overwrite existing keys from current scan)
 	count := 0
 	for k, v := range loaded {
-		if _, exists := store[k]; !exists {
-			store[k] = v
+		if _, exists := s.store[k]; !exists {
+			s.store[k] = v
 			count++
 		}
 	}
 
 	if count > 0 {
-		log.Printf("[notes] Loaded %d notes from disk: %s", count, persistPath)
+		log.Printf("[notes] Loaded %d notes from disk: %s", count, s.persistPath)
 	}
 	return count
 }
 
-// saveToDisk persists the current store to disk. Must be called with mu held.
-func saveToDisk() {
-	if persistPath == "" {
-		return
+// marshalSnapshot serializes the current store. Must be called with s.mu held.
+// Returns the serialized data and the persist path. If persistPath is empty,
+// returns nil data (meaning no write is needed).
+func (s *noteStore) marshalSnapshot() ([]byte, string) {
+	if s.persistPath == "" {
+		return nil, ""
 	}
-
-	data, err := json.MarshalIndent(store, "", "  ")
+	data, err := json.MarshalIndent(s.store, "", "  ")
 	if err != nil {
 		log.Printf("[notes] Warning: failed to marshal notes: %v", err)
+		return nil, ""
+	}
+	return data, s.persistPath
+}
+
+// writeFile persists serialized data to disk. Safe to call without holding s.mu.
+func (s *noteStore) writeFile(data []byte, path string) {
+	if data == nil || path == "" {
 		return
 	}
-
-	if err := os.WriteFile(persistPath, data, 0644); err != nil {
-		log.Printf("[notes] Warning: failed to save notes to %s: %v", persistPath, err)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		log.Printf("[notes] Warning: failed to save notes to %s: %v", path, err)
 	}
 }
 
@@ -117,10 +172,14 @@ func addNote(args map[string]string) (tools.Result, error) {
 	key := args["key"]
 	value := args["value"]
 
-	mu.Lock()
-	store[key] = value
-	saveToDisk()
-	mu.Unlock()
+	s := getNoteStore()
+	s.mu.Lock()
+	s.store[key] = value
+	data, path := s.marshalSnapshot()
+	s.mu.Unlock()
+
+	// Write to disk outside the lock — non-blocking for concurrent readers
+	s.writeFile(data, path)
 
 	return tools.Result{Output: fmt.Sprintf("Note saved: %s", key)}, nil
 }
@@ -128,54 +187,64 @@ func addNote(args map[string]string) (tools.Result, error) {
 func readNotes(args map[string]string) (tools.Result, error) {
 	key := args["key"]
 
-	mu.RLock()
-	defer mu.RUnlock()
+	s := getNoteStore()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	if key != "" {
-		v, ok := store[key]
+		v, ok := s.store[key]
 		if !ok {
 			return tools.Result{Output: fmt.Sprintf("No note found with key: %s", key)}, nil
 		}
 		return tools.Result{Output: v}, nil
 	}
 
-	if len(store) == 0 {
+	if len(s.store) == 0 {
 		return tools.Result{Output: "(no notes yet)"}, nil
 	}
 
 	var b strings.Builder
-	for k, v := range store {
+	for k, v := range s.store {
 		b.WriteString(fmt.Sprintf("📝 %s:\n%s\n\n", k, v))
 	}
 	return tools.Result{Output: b.String()}, nil
 }
 
-// GetAllNotes returns all notes as a map (for server-side access).
+// GetAllNotes returns all notes as a map for the active scan context.
 func GetAllNotes() map[string]string {
-	mu.RLock()
-	defer mu.RUnlock()
-	result := make(map[string]string, len(store))
-	for k, v := range store {
+	s := getNoteStore()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]string, len(s.store))
+	for k, v := range s.store {
 		result[k] = v
 	}
 	return result
 }
 
-// FormatForContext returns a compact summary of all notes, suitable for
-// injection into the LLM context window (e.g., after pruning).
-// Returns empty string if no notes exist.
+// FormatForContext returns a compact summary of all notes for the active scan context.
 func FormatForContext() string {
-	mu.RLock()
-	defer mu.RUnlock()
+	s := getNoteStore()
+	return formatStore(s)
+}
 
-	if len(store) == 0 {
+// FormatForContextID returns a compact summary of notes for a specific scan context ID.
+func FormatForContextID(contextID string) string {
+	s := getNoteStoreForContext(contextID)
+	return formatStore(s)
+}
+
+func formatStore(s *noteStore) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.store) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString("=== YOUR SAVED NOTES (from add_note) ===\n")
-	for k, v := range store {
-		// Truncate very long values to avoid bloating the context
+	for k, v := range s.store {
 		if len(v) > 500 {
 			v = v[:500] + "... (truncated)"
 		}
@@ -183,4 +252,78 @@ func FormatForContext() string {
 	}
 	b.WriteString("=== END NOTES ===")
 	return b.String()
+}
+
+// SetPersistPathForContext configures disk persistence for a specific context.
+func SetPersistPathForContext(contextID, dir string) {
+	s := getNoteStoreForContext(contextID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dir != "" {
+		s.persistPath = filepath.Join(dir, "notes.json")
+	} else {
+		s.persistPath = ""
+	}
+}
+
+// ResetNotesForContext clears all notes for a specific context.
+func ResetNotesForContext(contextID string) {
+	s := getNoteStoreForContext(contextID)
+	s.mu.Lock()
+	s.store = make(map[string]string)
+	s.mu.Unlock()
+}
+
+// LoadFromDiskForContext loads notes from disk for a specific context.
+func LoadFromDiskForContext(contextID string) int {
+	s := getNoteStoreForContext(contextID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.persistPath == "" {
+		return 0
+	}
+
+	data, err := os.ReadFile(s.persistPath)
+	if err != nil {
+		return 0
+	}
+
+	loaded := make(map[string]string)
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		log.Printf("[notes] Warning: failed to parse %s: %v", s.persistPath, err)
+		return 0
+	}
+
+	count := 0
+	for k, v := range loaded {
+		if _, exists := s.store[k]; !exists {
+			s.store[k] = v
+			count++
+		}
+	}
+
+	if count > 0 {
+		log.Printf("[notes] Loaded %d notes from: %s (context=%s)", count, s.persistPath, contextID)
+	}
+	return count
+}
+
+// GetAllNotesForContext returns all notes for a specific context.
+func GetAllNotesForContext(contextID string) map[string]string {
+	s := getNoteStoreForContext(contextID)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]string, len(s.store))
+	for k, v := range s.store {
+		result[k] = v
+	}
+	return result
+}
+
+// CleanupContext removes the note store for a deactivated context.
+func CleanupContext(contextID string) {
+	noteStoresMu.Lock()
+	defer noteStoresMu.Unlock()
+	delete(noteStores, contextID)
 }
