@@ -4,6 +4,7 @@ package agentsgraph
 import (
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -201,7 +202,7 @@ func spawnAgent(args map[string]string) (tools.Result, error) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[PANIC] spawnAgent goroutine panicked: %v", r)
+				log.Printf("[PANIC] spawnAgent goroutine panicked: %v\n%s", r, debug.Stack())
 				agentsMu.Lock()
 				state.Status = "failed"
 				state.Error = fmt.Sprintf("panic: %v", r)

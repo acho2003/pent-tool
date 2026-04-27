@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -104,6 +106,14 @@ func Get(id string) *ScanContext {
 
 // Default returns the default (CLI-mode) ScanContext.
 // If no context is active, creates and returns a temporary one.
+//
+// IMPORTANT: From the web server, callers MUST resolve the context via
+// the agent/session that owns the request (registry.GetScanContextID,
+// session.sctx, etc). Reaching Default() from a web-mode goroutine
+// indicates a wiring bug — a tool would land in the shared CLI bucket
+// where state from one scan would leak into another. The fallback creation
+// log line is *the* signal that this regression has happened; grep for
+// "[scanctx] Created fallback CLI context" in logs after a deploy.
 func Default() *ScanContext {
 	activeMu.RLock()
 	if defaultCtx != nil {
@@ -112,13 +122,29 @@ func Default() *ScanContext {
 	}
 	activeMu.RUnlock()
 
-	// Create a fallback for CLI mode
+	// Create a fallback for CLI mode. Capture a short caller stack so a bug
+	// where web code accidentally drops the contextID is easy to root-cause.
+	var callerInfo string
+	pcs := make([]uintptr, 8)
+	if n := runtime.Callers(2, pcs); n > 0 {
+		frames := runtime.CallersFrames(pcs[:n])
+		var b strings.Builder
+		for {
+			f, more := frames.Next()
+			fmt.Fprintf(&b, "\n  %s\n    %s:%d", f.Function, f.File, f.Line)
+			if !more {
+				break
+			}
+		}
+		callerInfo = b.String()
+	}
+
 	activeMu.Lock()
 	defer activeMu.Unlock()
 	if defaultCtx == nil {
 		defaultCtx = New("cli-default", "")
 		activeCtxs[defaultCtx.ID] = defaultCtx
-		log.Printf("[scanctx] Created fallback CLI context")
+		log.Printf("[scanctx] Created fallback CLI context (legitimate in CLI mode; in web mode this is a wiring bug):%s", callerInfo)
 	}
 	return defaultCtx
 }
