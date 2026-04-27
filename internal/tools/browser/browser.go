@@ -134,7 +134,17 @@ func CleanupContext(contextID string) {
 		s.mu.Lock()
 		if s.browser != nil {
 			func() {
-				defer func() { recover() }() // don't panic if browser already dead
+				// Rod's MustClose panics if the underlying CDP connection is
+				// already dead. That's the normal path during cleanup of a
+				// session whose browser process has already exited, so we
+				// suppress the panic without logging — only an unexpected
+				// panic type would be a real bug, and the surrounding
+				// state-clearing must complete regardless.
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[browser] CleanupContext: MustClose recovered (likely already dead): %v", r)
+					}
+				}()
 				s.browser.MustClose()
 			}()
 			s.browser = nil
@@ -1280,9 +1290,13 @@ func CleanupBrowser() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.browser != nil {
-		// Use recover to handle panics from already-dead browser processes
+		// Use recover to handle panics from already-dead browser processes.
 		func() {
-			defer func() { recover() }()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[browser] Close: MustClose recovered (likely already dead): %v", r)
+				}
+			}()
 			s.browser.MustClose()
 		}()
 		s.browser = nil

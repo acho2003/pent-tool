@@ -7,6 +7,7 @@ import (
 	"log"
 	"os/exec"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -335,7 +336,7 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[ERROR] [PANIC] Tool '%s' panicked: %v", toolName, r)
+				log.Printf("[ERROR] [PANIC] Tool '%s' panicked: %v\n%s", toolName, r, debug.Stack())
 				resultCh <- toolExecResult{
 					Result: tools.Result{Error: fmt.Sprintf("tool panicked: %v", r)},
 					Err:    fmt.Errorf("tool '%s' panicked: %v", toolName, r),
@@ -711,9 +712,29 @@ func (a *Agent) pruneMessages() {
 		keepRecent = len(a.messages) - 1
 	}
 
+	originalLen := len(a.messages)
+
 	// Build pruned list: system prompt + continuation marker + recent messages
 	cutoff := len(a.messages) - keepRecent
-	pruned := make([]llm.Message, 0, keepRecent+2)
+
+	// We're about to insert a synthetic "user" message right before
+	// messages[cutoff:]. To preserve user/assistant alternation (Anthropic
+	// rejects two consecutive same-role messages, and OpenAI happily
+	// processes a tool_result with no preceding tool_call into garbage),
+	// advance cutoff until the kept tail begins with an "assistant" message.
+	for cutoff < len(a.messages) && a.messages[cutoff].Role != "assistant" {
+		cutoff++
+	}
+	// Fallback: if no assistant message remains, keep at least the last
+	// message rather than pruning everything below the system prompt.
+	if cutoff >= len(a.messages) {
+		cutoff = len(a.messages) - 1
+		if cutoff < 1 {
+			cutoff = 1
+		}
+	}
+
+	pruned := make([]llm.Message, 0, len(a.messages)-cutoff+2)
 	pruned = append(pruned, a.messages[0]) // system prompt
 
 	// Build continuation message with notes injection
@@ -740,7 +761,7 @@ Review these notes and continue with the next testing phase.]`, cutoff-1, notesC
 	pruned = append(pruned, a.messages[cutoff:]...)
 	a.messages = pruned
 
-	log.Printf("[agent] Pruned message history: kept %d messages (was %d), notes injected: %v", len(a.messages), cutoff+keepRecent, notesContext != "")
+	log.Printf("[agent] Pruned message history: kept %d messages (was %d), notes injected: %v", len(a.messages), originalLen, notesContext != "")
 }
 
 

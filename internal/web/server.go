@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -157,6 +158,20 @@ func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 
 // ─── Authentication ─────────────────────────────────────────────────────────
 
+// logRecover is a deferred recovery helper used by best-effort cleanup
+// blocks. The previous pattern was `defer func() { recover() }()` which
+// silently swallowed panics — making cleanup bugs invisible in
+// production. logRecover preserves the original behaviour (don't crash
+// the server during shutdown) while emitting a stack trace so the bug
+// can be diagnosed.
+//
+// Usage: defer logRecover("scanSession.cleanup.scanctx")
+func logRecover(label string) {
+	if r := recover(); r != nil {
+		log.Printf("[recover] %s: %v\n%s", label, r, debug.Stack())
+	}
+}
+
 // authSessions stores valid session tokens (token → expiry)
 var (
 	authSessions      = make(map[string]time.Time)
@@ -217,10 +232,74 @@ func startSessionReaper() {
 	})
 }
 
+// isCSRFSafe returns true when a state-changing request is verifiably
+// originated from this site. We use Origin (and Referer as a fallback)
+// because every modern browser sends one of them on POST/PUT/PATCH/DELETE,
+// while non-browser API clients (curl, scripts, the LLM tooling) typically
+// send neither — those are allowed through. SameSite=Strict on the session
+// cookie already blocks the most common CSRF vectors; this is defense in
+// depth for the Sec-Fetch-Site and document-form-submit edge cases.
+func isCSRFSafe(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+
+	// Browser hint: only "same-origin" is safe. Empty header means the
+	// client probably isn't a browser, which we allow.
+	switch strings.ToLower(r.Header.Get("Sec-Fetch-Site")) {
+	case "":
+		// fall through to Origin/Referer checks
+	case "same-origin", "none":
+		return true
+	default:
+		// "same-site" or "cross-site" — refuse.
+		return false
+	}
+
+	// Compare Origin/Referer host with request Host.
+	check := func(raw string) (bool, bool) {
+		if raw == "" {
+			return false, false
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return false, true
+		}
+		return u.Host == r.Host, true
+	}
+
+	if ok, present := check(r.Header.Get("Origin")); present {
+		return ok
+	}
+	if ok, present := check(r.Header.Get("Referer")); present {
+		return ok
+	}
+	// Neither Origin nor Referer nor Sec-Fetch-Site present: not a browser.
+	return true
+}
+
 // authMiddleware protects routes when auth is configured
 func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+
+			// CSRF: validate state-changing requests on /api/* regardless of
+			// whether auth is configured. This blocks an attacker page from
+			// triggering a scan via the cookie even when no password is set
+			// for local-loopback deployments.
+			if strings.HasPrefix(path, "/api/") && path != "/api/auth/login" {
+				if !isCSRFSafe(r) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					json.NewEncoder(w).Encode(map[string]string{
+						"error": "CSRF check failed: request origin does not match server host",
+					})
+					return
+				}
+			}
+
 			// Skip auth if no credentials configured
 			if cfg.Username == "" || cfg.Password == "" {
 				next.ServeHTTP(w, r)
@@ -228,7 +307,6 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 
 			// Public routes that don't need auth
-			path := r.URL.Path
 			if path == "/api/auth/login" || path == "/api/auth/status" ||
 				strings.HasPrefix(path, "/static/") || strings.HasPrefix(path, "/assets/") {
 				next.ServeHTTP(w, r)
@@ -391,11 +469,18 @@ const (
 )
 
 // wsClient wraps a WebSocket connection with a buffered send channel.
+//
+// Concurrency: instanceID is mutated by readPump (subscribe/unsubscribe)
+// and read by broadcastToInstance / broadcastDashboard from other
+// goroutines. ALL reads and writes MUST hold server.mu (RLock for reads,
+// Lock for writes). The lock also guards iteration over server.clients,
+// so an atomic.Pointer would be redundant and would split the invariant
+// into two synchronization mechanisms.
 type wsClient struct {
 	conn       *websocket.Conn
 	send       chan []byte
 	server     *Server
-	instanceID string // which instance this client is watching (empty = dashboard)
+	instanceID string // GUARDED BY server.mu — see struct doc.
 }
 
 // writePump drains the send channel and writes to the WebSocket.
@@ -503,8 +588,12 @@ type ScanRequest struct {
 	APIBase        string   `json:"api_base"`         // provider API base URL
 	DiscordWebhook string   `json:"discord_webhook"` // Discord webhook URL
 	SeverityFilter []string `json:"severity_filter"` // e.g. ["critical", "high"]
-	InstanceID     string   `json:"-"`               // internal: parent instance ID
-	IsResume       bool     `json:"-"`               // internal: true when auto-resuming after restart
+	// Internal fields — `json:"-"` makes them un-settable from the wire.
+	// Critical: a client must not be able to set InstanceID to spoof
+	// broadcasts to another scan, or set IsResume to bypass the resume
+	// codepath's safety checks.
+	InstanceID string `json:"-"` // parent instance ID, threaded server-side
+	IsResume   bool   `json:"-"` // true when auto-resuming after restart
 }
 
 // WSEvent is a WebSocket message sent to clients.
@@ -850,9 +939,11 @@ func (s *Server) Start() error {
 
 		terminal.KillAllProcesses()
 
-		// Send Discord notification
+		// Send Discord notification. Use sig.String() explicitly so we get
+		// "terminated"/"interrupt" rather than a numeric fallback for any
+		// os.Signal implementation that doesn't satisfy fmt.Stringer.
 		if s.discordWebhook != "" {
-			s.sendDiscord(0xff6b6b, "🔄 Xalgorix Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig))
+			s.sendDiscord(0xff6b6b, "🔄 Xalgorix Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig.String()))
 		}
 
 		// Give scans a moment to save their queue state
@@ -1257,7 +1348,7 @@ func (sess *scanSession) cleanup() {
 	// so no redundant calls are needed below.
 	if sess.sctx != nil {
 		func() {
-			defer func() { recover() }()
+			defer logRecover("cleanup.scanctx.close")
 			scanctx.Deactivate(sess.sctx.ID)
 			sess.sctx.Close()
 		}()
@@ -1270,7 +1361,7 @@ func (sess *scanSession) cleanup() {
 		// reporting context BEFORE we delete this session's reporting store.
 		if sess.parentReportingCtxID != "" {
 			func() {
-				defer func() { recover() }()
+				defer logRecover("cleanup.reporting.merge")
 				merged := reporting.MergeVulnsToContext(sess.sctx.ID, sess.parentReportingCtxID)
 				if merged > 0 {
 					log.Printf("[wildcard] Merged %d vulns from session %s into parent context %s", merged, sess.sctx.ID, sess.parentReportingCtxID)
@@ -1279,23 +1370,23 @@ func (sess *scanSession) cleanup() {
 		}
 
 		func() {
-			defer func() { recover() }()
+			defer logRecover("cleanup.reporting.cleanup")
 			reporting.CleanupContext(sess.sctx.ID)
 		}()
 		if !sess.skipNotesCleanup {
 			func() {
-				defer func() { recover() }()
+				defer logRecover("cleanup.notes.cleanup")
 				notes.CleanupContext(sess.sctx.ID)
 			}()
 		} else {
 			log.Printf("[wildcard] Skipping notes cleanup for discovery session %s (notes preserved for subdomain collection)", sess.sctx.ID)
 		}
 		func() {
-			defer func() { recover() }()
+			defer logRecover("cleanup.terminal.cleanup")
 			terminal.CleanupContext(sess.sctx.ID)
 		}()
 		func() {
-			defer func() { recover() }()
+			defer logRecover("cleanup.browser.cleanup")
 			browser.CleanupContext(sess.sctx.ID)
 		}()
 	}
@@ -1303,7 +1394,7 @@ func (sess *scanSession) cleanup() {
 	// Fallback process kill if sctx was never initialized
 	if sess.sctx == nil {
 		func() {
-			defer func() { recover() }()
+			defer logRecover("cleanup.terminal.killAll")
 			terminal.KillAllProcesses()
 		}()
 	}
@@ -1311,7 +1402,7 @@ func (sess *scanSession) cleanup() {
 	// Stop agent if still running
 	if sess.agent != nil {
 		func() {
-			defer func() { recover() }()
+			defer logRecover("cleanup.agent.stop")
 			sess.agent.Stop()
 		}()
 	}
@@ -1329,14 +1420,14 @@ func (sess *scanSession) cleanup() {
 	sess.server.instancesMu.RUnlock()
 	if runningCount <= 1 {
 		func() {
-			defer func() { recover() }()
+			defer logRecover("cleanup.agentsgraph.reset")
 			agentsgraph.Reset()
 		}()
 	}
 
 	// Clear terminal working directory to prevent stale workdir leaking to next session
 	func() {
-		defer func() { recover() }()
+		defer logRecover("cleanup.terminal.setWorkDir")
 		if sess.sctx != nil && sess.sctx.Terminal != nil {
 			sess.sctx.Terminal.SetWorkDir("")
 		} else {
@@ -1356,7 +1447,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	// IRONCLAD: This function NEVER panics upward.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[CRITICAL] scanSession %s panicked: %v", sess.id, r)
+			log.Printf("[CRITICAL] scanSession %s panicked: %v\n%s", sess.id, r, debug.Stack())
 			if sess.instanceID != "" {
 				s.broadcastToInstance(sess.instanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⛔ Scan %s crashed: %v — continuing", sess.target, r)})
 			} else {
@@ -1388,7 +1479,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	// 1. Reset per-context state if requested (context-aware)
 	if sess.resetState {
 		func() {
-			defer func() { recover() }()
+			defer logRecover("session.resetContextState")
 			reporting.ResetVulnerabilitiesForContext(sctx.ID)
 			notes.ResetNotesForContext(sctx.ID)
 		}()
@@ -1453,7 +1544,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 		defer close(done)
 		defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[PANIC] Event processor panicked: %v — continuing", r)
+			log.Printf("[PANIC] Event processor panicked: %v — continuing\n%s", r, debug.Stack())
 		}
 	}() // never let panic escape event processor
 		for evt := range events {
@@ -1810,7 +1901,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Top-level panic recovery
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[CRITICAL] runMultiScan goroutine panicked: %v", r)
+			log.Printf("[CRITICAL] runMultiScan goroutine panicked: %v\n%s", r, debug.Stack())
 			s.broadcastToInstance(instanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⛔ Scan goroutine crashed: %v — cleaning up", r)})
 		}
 		// Mark instance as finished
@@ -1883,7 +1974,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		// terminal.KillAllProcesses) would destroy another queued instance's
 		// methodology workflow. Per-context resets happen in executeScanSession.
 		func() {
-			defer func() { recover() }()
+			defer logRecover("multiScan.cleanTmpSubdomainFiles")
 			cleanTmpSubdomainFiles()
 		}()
 	}
@@ -2175,10 +2266,10 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		// Each subdomain gets its own isolated session wrapped in a panic guard
 		func() {
 			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[PANIC] Subdomain %d/%d crashed (%s): %v — skipping to next", j+1, len(subdomains), subdomain, r)
-					s.broadcastToInstance(req.InstanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Subdomain %s crashed: %v — skipping", subdomain, r)})
-				}
+		if r := recover(); r != nil {
+			log.Printf("[PANIC] Subdomain %d/%d crashed (%s): %v — skipping to next\n%s", j+1, len(subdomains), subdomain, r, debug.Stack())
+			s.broadcastToInstance(req.InstanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Subdomain %s crashed: %v — skipping", subdomain, r)})
+		}
 			}()
 
 			subScanDir := s.makeScanDir(subdomain)
@@ -3098,8 +3189,15 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 			newLines = append(newLines, "AGENTMAIL_API_KEY="+req.APIKey)
 		}
 		
-		if err := os.WriteFile(envFile, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
+		if err := os.WriteFile(envFile, []byte(strings.Join(newLines, "\n")), 0o600); err != nil {
 			log.Printf("Failed to save AgentMail settings: %v", err)
+		} else {
+			// os.WriteFile only honours the mode arg when *creating*; if the
+			// file already existed with looser perms (e.g. user ran `nano`
+			// and saved at the umask default of 0644) we must chmod it.
+			if chmodErr := os.Chmod(envFile, 0o600); chmodErr != nil {
+				log.Printf("Warning: could not chmod %s to 0600: %v", envFile, chmodErr)
+			}
 		}
 		
 		log.Printf("AgentMail settings updated: pod=%s", req.Pod)
