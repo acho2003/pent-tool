@@ -169,21 +169,25 @@ func normalizeFormat(content string) string {
 	return content
 }
 
-// fixIncomplete adds missing closing tags for incomplete tool calls.
+// fixIncomplete adds a missing closing tag to the last unclosed tool-call
+// block in content. Earlier blocks are matched normally by the regex; only
+// the trailing one (the most common LLM truncation) is repaired here.
 func fixIncomplete(content string) string {
-	hasOpen := strings.Contains(content, "<function=") || strings.Contains(content, "<invoke ")
 	countOpen := strings.Count(content, "<function=") + strings.Count(content, "<invoke ")
-	hasClose := strings.Contains(content, "</function>") || strings.Contains(content, "</invoke>")
+	countClose := strings.Count(content, "</function>") + strings.Count(content, "</invoke>")
 
-	if hasOpen && countOpen == 1 && !hasClose {
-		content = strings.TrimRight(content, " \t\n\r")
-		if strings.HasSuffix(content, "</") {
-			content += "function>"
-		} else {
-			content += "\n</function>"
-		}
+	if countOpen <= countClose {
+		return content
 	}
-	return content
+
+	// At least one open tag has no matching close. Append a single closing
+	// tag — even if multiple tags are unclosed, the regex is non-greedy and
+	// will pick up the well-formed pairs first.
+	content = strings.TrimRight(content, " \t\n\r")
+	if strings.HasSuffix(content, "</") {
+		return content + "function>"
+	}
+	return content + "\n</function>"
 }
 
 // FormatToolCall formats a tool call back into XML for display.

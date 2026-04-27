@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
@@ -39,7 +40,10 @@ type Client struct {
 	mu         sync.Mutex
 	totalIn    int
 	totalOut   int
-	ctx        context.Context // agent context for cancellation
+	// ctx is read concurrently by chatWithRetry / ChatStream and written by
+	// SetContext. Use atomic.Value to avoid a race; loadCtx() is the only
+	// reader, storeCtx() is the only writer.
+	ctx atomic.Value // context.Context
 }
 
 // TokenUsage holds cumulative token counts.
@@ -63,27 +67,55 @@ func NewClient(cfg *config.Config) *Client {
 	if idx := strings.Index(apiModel, "/"); idx >= 0 {
 		provider = strings.ToLower(apiModel[:idx])
 	}
-	return &Client{
+	c := &Client{
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 10 * time.Minute},
 		apiModel:   apiModel,
 		provider:   provider,
-		ctx:        context.Background(), // default context, overridden by SetContext
 	}
+	c.ctx.Store(ctxHolder{ctx: context.Background()})
+	return c
 }
 
+// ctxHolder wraps context.Context so atomic.Value sees a concrete type even
+// when callers pass a nil context.Context interface.
+type ctxHolder struct{ ctx context.Context }
+
 // SetContext sets the context for HTTP requests, enabling cancellation.
+// Safe for concurrent use.
 func (c *Client) SetContext(ctx context.Context) {
-	c.ctx = ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.ctx.Store(ctxHolder{ctx: ctx})
+}
+
+// loadCtx returns the current request context, falling back to Background
+// if SetContext has never been called.
+func (c *Client) loadCtx() context.Context {
+	if v := c.ctx.Load(); v != nil {
+		if h, ok := v.(ctxHolder); ok && h.ctx != nil {
+			return h.ctx
+		}
+	}
+	return context.Background()
 }
 
 // chatRequest is the OpenAI-compatible chat completion request.
 type chatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Stream      bool      `json:"stream"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []Message      `json:"messages"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Temperature   float64        `json:"temperature,omitempty"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+}
+
+// streamOptions opts into usage stats for OpenAI-compatible streaming
+// responses (OpenAI, Groq, DeepSeek, MiniMax, etc.). Without this the
+// final `usage` field is omitted from the SSE stream.
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // chatChoice represents a response choice.
@@ -186,8 +218,10 @@ func (c *Client) resolveEndpoint() (string, string) {
 		"deepseek":  "https://api.deepseek.com/v1",
 		"groq":      "https://api.groq.com/openai/v1",
 		"ollama":    "http://localhost:11434/v1",
-		"google":    "https://generativelanguage.googleapis.com/v1",
-		"gemini":    "https://generativelanguage.googleapis.com/v1",
+		// Google's chat endpoint is /v1beta/models/MODEL:generateContent — we
+		// store the bare host here and append the version segment below.
+		"google":    "https://generativelanguage.googleapis.com",
+		"gemini":    "https://generativelanguage.googleapis.com",
 	}
 
 	if apiBase == "" {
@@ -211,8 +245,11 @@ func (c *Client) resolveEndpoint() (string, string) {
 		}
 		url += "/messages"
 	} else if strings.Contains(apiBase, "google") || strings.Contains(apiBase, "generativelanguage") {
-		// Google Gemini uses /v1beta/models/MODEL:generateContent
-		url += "beta/models/" + model + ":generateContent"
+		// Google Gemini uses /v1beta/models/MODEL:generateContent.
+		// Strip any trailing /v1 so we don't end up with /v1beta concatenated
+		// onto a version segment the user supplied.
+		url = strings.TrimSuffix(url, "/v1")
+		url += "/v1beta/models/" + model + ":generateContent"
 	} else {
 		if !strings.HasSuffix(apiBase, "/v1") && !strings.Contains(apiBase, "/v1/") {
 			url += "/v1"
@@ -257,8 +294,8 @@ func (c *Client) chatWithRetry(messages []Message) (string, error) {
 		}
 
 		// Check if context is cancelled before retrying
-		if c.ctx != nil && c.ctx.Err() != nil {
-			return "", fmt.Errorf("LLM request cancelled: %w", c.ctx.Err())
+		if ctx := c.loadCtx(); ctx.Err() != nil {
+			return "", fmt.Errorf("LLM request cancelled: %w", ctx.Err())
 		}
 
 		result, err := c.doChat(messages)
@@ -323,14 +360,16 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 			}
 			body, _ = json.Marshal(anReq)
 		} else {
-			reqBody := chatRequest{Model: model, Messages: messages, Stream: true}
+			reqBody := chatRequest{
+				Model:         model,
+				Messages:      messages,
+				Stream:        true,
+				StreamOptions: &streamOptions{IncludeUsage: true},
+			}
 			body, _ = json.Marshal(reqBody)
 		}
 
-		reqCtx := c.ctx
-		if reqCtx == nil {
-			reqCtx = context.Background()
-		}
+		reqCtx := c.loadCtx()
 		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			ch <- StreamChunk{Err: err}
@@ -530,10 +569,7 @@ func (c *Client) doChat(messages []Message) (string, error) {
 		}
 	}
 
-	reqCtx := c.ctx
-	if reqCtx == nil {
-		reqCtx = context.Background()
-	}
+	reqCtx := c.loadCtx()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err

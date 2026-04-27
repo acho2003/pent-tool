@@ -6,8 +6,9 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
-	mathrand "math/rand/v2"
 	"crypto/sha256"
+	"crypto/subtle"
+	mathrand "math/rand/v2"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -138,9 +139,13 @@ func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 			}
 			
 			// Use RemoteAddr only — do not trust X-Forwarded-For as it can be
-			// spoofed when running without a trusted reverse proxy.
+			// spoofed when running without a trusted reverse proxy. Strip the
+			// port so each TCP connection from the same client shares a bucket.
 			ip := r.RemoteAddr
-			
+			if host, _, err := net.SplitHostPort(ip); err == nil {
+				ip = host
+			}
+
 			if !rl.Allow(ip) {
 				http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
 				return
@@ -154,23 +159,25 @@ func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 
 // authSessions stores valid session tokens (token → expiry)
 var (
-	authSessions   = make(map[string]time.Time)
-	authSessionsMu sync.RWMutex
+	authSessions      = make(map[string]time.Time)
+	authSessionsMu    sync.RWMutex
+	sessionReaperOnce sync.Once
 )
 
 const sessionCookieName = "xalgorix_session"
 const sessionDuration = 24 * time.Hour
+const sessionReaperInterval = 15 * time.Minute
 
-// generateSessionToken creates a cryptographically random session token
-func generateSessionToken() string {
+// generateSessionToken creates a cryptographically random session token.
+// Returns an error if the system entropy source is unavailable instead of
+// terminating the whole process — callers should surface a 500 to the user.
+func generateSessionToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := cryptorand.Read(b); err != nil {
-		// cryptorand should almost never fail; if it does, we can't produce
-		// a secure token. Log fatal and return a best-effort token.
-		log.Fatalf("[FATAL] cryptorand.Read failed: %v — cannot generate secure session token", err)
+		return "", fmt.Errorf("crypto/rand unavailable: %w", err)
 	}
 	hash := sha256.Sum256(b)
-	return hex.EncodeToString(hash[:])
+	return hex.EncodeToString(hash[:]), nil
 }
 
 // isValidSession checks if a session token is valid and not expired
@@ -186,6 +193,28 @@ func isValidSession(token string) bool {
 		return false
 	}
 	return true
+}
+
+// startSessionReaper sweeps expired session tokens on a fixed interval so the
+// authSessions map cannot grow unbounded from abandoned cookies. Runs once
+// per process.
+func startSessionReaper() {
+	sessionReaperOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(sessionReaperInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				now := time.Now()
+				authSessionsMu.Lock()
+				for tok, expiry := range authSessions {
+					if now.After(expiry) {
+						delete(authSessions, tok)
+					}
+				}
+				authSessionsMu.Unlock()
+			}
+		}()
+	})
 }
 
 // authMiddleware protects routes when auth is configured
@@ -248,7 +277,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if creds.Username != s.cfg.Username || creds.Password != s.cfg.Password {
+	// Constant-time comparison to avoid leaking the username/password length
+	// or character-by-character match position via response time. We always
+	// compare both fields even on a username miss so the work performed is
+	// independent of which one is wrong.
+	userMatch := subtle.ConstantTimeCompare([]byte(creds.Username), []byte(s.cfg.Username)) == 1
+	passMatch := subtle.ConstantTimeCompare([]byte(creds.Password), []byte(s.cfg.Password)) == 1
+	if !userMatch || !passMatch {
 		// Rate-limit failed attempts
 		time.Sleep(1 * time.Second)
 		w.WriteHeader(http.StatusUnauthorized)
@@ -257,7 +292,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create session
-	token := generateSessionToken()
+	token, err := generateSessionToken()
+	if err != nil {
+		log.Printf("[auth] session token generation failed: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Internal error generating session"})
+		return
+	}
 	authSessionsMu.Lock()
 	authSessions[token] = time.Now().Add(sessionDuration)
 	authSessionsMu.Unlock()
@@ -654,6 +695,12 @@ func NewServer(cfg *config.Config, port int) *Server {
 func (s *Server) Start() error {
 	s.initDataDir()
 
+	// Reap expired session cookies in the background so the auth map cannot
+	// grow unbounded from abandoned logins.
+	if s.cfg.Username != "" && s.cfg.Password != "" {
+		startSessionReaper()
+	}
+
 	// Auto-start Caido proxy in background if available
 	startCaidoProxy()
 
@@ -666,6 +713,9 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	// SPA handler: serve static files if they exist, otherwise serve index.html
 	fileServer := http.FileServer(http.FS(staticFS))
+	// fs.Sub on embed.FS returns an fs.FS that does implement ReadFileFS today,
+	// but assert with comma-ok so a future runtime change can't crash the server.
+	rfs, hasRfs := staticFS.(fs.ReadFileFS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Try to serve the static file
 		path := r.URL.Path
@@ -675,12 +725,13 @@ func (s *Server) Start() error {
 		}
 		// Check if it's a real static file - strip /static prefix since staticFS already points to static folder
 		strippedPath := strings.TrimPrefix(path, "/static/")
-		f, err := staticFS.(fs.ReadFileFS).ReadFile(strippedPath)
-		if err == nil && f != nil {
-			// Rewrite URL to serve from staticFS root (which is already "static")
-			r.URL.Path = "/" + strippedPath
-			fileServer.ServeHTTP(w, r)
-			return
+		if hasRfs {
+			if f, err := rfs.ReadFile(strippedPath); err == nil && f != nil {
+				// Rewrite URL to serve from staticFS root (which is already "static")
+				r.URL.Path = "/" + strippedPath
+				fileServer.ServeHTTP(w, r)
+				return
+			}
 		}
 		// Not a static file — serve index.html (SPA catch-all)
 		r.URL.Path = "/"
@@ -731,6 +782,13 @@ func (s *Server) Start() error {
 		time.Sleep(5 * time.Second) // let HTTP server fully initialize
 		state := s.loadQueueState()
 		if state == nil || !state.Active {
+			return
+		}
+		// Defend against corrupted queue_state.json that has a CurrentIdx out
+		// of range — slicing would panic and crash the whole server on boot.
+		if state.CurrentIdx < 0 || state.CurrentIdx >= len(state.Targets) {
+			log.Printf("[AUTO-RESUME] Corrupt queue state (idx=%d, targets=%d), clearing.", state.CurrentIdx, len(state.Targets))
+			s.clearQueueState()
 			return
 		}
 		remaining := state.Targets[state.CurrentIdx:]

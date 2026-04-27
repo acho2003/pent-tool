@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +37,11 @@ func executePython(args map[string]string) (tools.Result, error) {
 
 	timeoutSec := 1800 // 30 minutes — exploit scripts can run long
 	if t := args["timeout"]; t != "" {
-		if n, err := fmt.Sscanf(t, "%d", &timeoutSec); n != 1 || err != nil {
+		parsed, err := strconv.Atoi(strings.TrimSpace(t))
+		if err != nil {
 			return tools.Result{Error: fmt.Sprintf("invalid timeout value '%s': must be a number in seconds", t)}, nil
 		}
+		timeoutSec = parsed
 		if timeoutSec <= 0 {
 			timeoutSec = 1800
 		}

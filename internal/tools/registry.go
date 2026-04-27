@@ -2,6 +2,8 @@
 package tools
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"strings"
 	"sync"
@@ -165,6 +167,7 @@ func (r *Registry) List() []string {
 }
 
 // Execute runs a tool by name with the given arguments.
+// Note: the caller's args map is never mutated — Execute works on a copy.
 func (r *Registry) Execute(name string, args map[string]string) (Result, error) {
 	// Check circuit breaker
 	if r.circuitBreaker.IsOpen(name) {
@@ -180,28 +183,36 @@ func (r *Registry) Execute(name string, args map[string]string) (Result, error) 
 		return Result{}, fmt.Errorf("unknown tool: %s", name)
 	}
 
+	// Defensive copy — agents/loggers may retain a reference to the original
+	// args map and we don't want to surface or hide _raw / required-param
+	// substitutions back to them.
+	localArgs := make(map[string]string, len(args)+1)
+	for k, v := range args {
+		localArgs[k] = v
+	}
+
 	// Map _raw fallback to first required parameter if needed
-	if raw, hasRaw := args["_raw"]; hasRaw {
+	if raw, hasRaw := localArgs["_raw"]; hasRaw {
 		for _, p := range tool.Parameters {
 			if p.Required {
-				if _, exists := args[p.Name]; !exists {
-					args[p.Name] = raw
+				if _, exists := localArgs[p.Name]; !exists {
+					localArgs[p.Name] = raw
 				}
 			}
 		}
-		delete(args, "_raw")
+		delete(localArgs, "_raw")
 	}
 
 	// Validate required parameters
 	for _, p := range tool.Parameters {
 		if p.Required {
-			if v, exists := args[p.Name]; !exists || strings.TrimSpace(v) == "" {
+			if v, exists := localArgs[p.Name]; !exists || strings.TrimSpace(v) == "" {
 				return Result{}, fmt.Errorf("missing required parameter '%s' for tool '%s'", p.Name, name)
 			}
 		}
 	}
 
-	result, err := tool.Execute(args)
+	result, err := tool.Execute(localArgs)
 	if err != nil {
 		// Record failure in circuit breaker
 		r.circuitBreaker.RecordFailure(name)
@@ -224,28 +235,46 @@ func (r *Registry) GetCircuitBreaker() *CircuitBreaker {
 }
 
 // SchemaXML generates XML schema for all tools (for the system prompt).
+// Tool/parameter names and descriptions are XML-escaped so user-supplied
+// content (e.g. skill names loaded from disk) cannot break the prompt.
 func (r *Registry) SchemaXML() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	xml := "<tools>\n"
+	out := "<tools>\n"
 	for _, t := range r.tools {
-		xml += fmt.Sprintf("  <tool name=\"%s\">\n", t.Name)
-		xml += fmt.Sprintf("    <description>%s</description>\n", t.Description)
+		out += fmt.Sprintf("  <tool name=\"%s\">\n", attrEscape(t.Name))
+		out += fmt.Sprintf("    <description>%s</description>\n", textEscape(t.Description))
 		if len(t.Parameters) > 0 {
-			xml += "    <parameters>\n"
+			out += "    <parameters>\n"
 			for _, p := range t.Parameters {
 				req := ""
 				if p.Required {
 					req = " required=\"true\""
 				}
-				xml += fmt.Sprintf("      <parameter name=\"%s\"%s>%s</parameter>\n",
-					p.Name, req, p.Description)
+				out += fmt.Sprintf("      <parameter name=\"%s\"%s>%s</parameter>\n",
+					attrEscape(p.Name), req, textEscape(p.Description))
 			}
-			xml += "    </parameters>\n"
+			out += "    </parameters>\n"
 		}
-		xml += "  </tool>\n"
+		out += "  </tool>\n"
 	}
-	xml += "</tools>\n"
-	return xml
+	out += "</tools>\n"
+	return out
+}
+
+// textEscape escapes characters that are unsafe in XML text nodes.
+func textEscape(s string) string {
+	var buf bytes.Buffer
+	if err := xml.EscapeText(&buf, []byte(s)); err != nil {
+		// EscapeText only fails on the io.Writer; we use bytes.Buffer.
+		return s
+	}
+	return buf.String()
+}
+
+// attrEscape escapes characters that are unsafe in XML attribute values.
+func attrEscape(s string) string {
+	// xml.EscapeText handles attribute-safe escaping for &, <, >, " and '.
+	return textEscape(s)
 }
