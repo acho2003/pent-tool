@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -79,5 +80,72 @@ func TestParseAllFormats(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestFixIncomplete_SingleUnclosed exercises the original (pre-fix) case:
+// one open <function=...> tag with no </function>. The repaired string
+// must parse cleanly.
+func TestFixIncomplete_SingleUnclosed(t *testing.T) {
+	in := "<function=terminal_execute>\n<parameter=command>id</parameter>"
+	fixed := fixIncomplete(in)
+	if !strings.Contains(fixed, "</function>") {
+		t.Fatalf("fixIncomplete did not append closing tag: %q", fixed)
+	}
+	calls := ParseToolCalls(fixed)
+	if len(calls) != 1 || calls[0].Name != "terminal_execute" {
+		t.Fatalf("expected 1 terminal_execute call, got %+v", calls)
+	}
+	if calls[0].Args["command"] != "id" {
+		t.Errorf("command = %q, want id", calls[0].Args["command"])
+	}
+}
+
+// TestFixIncomplete_MultiBlockTrailingUnclosed is the regression case the
+// review flagged: two open tags but only one close — the trailing one is
+// the truncated one. The fix should still produce a parseable string.
+func TestFixIncomplete_MultiBlockTrailingUnclosed(t *testing.T) {
+	in := "<function=list_files>\n<parameter=path>/etc</parameter>\n</function>\n" +
+		"<function=terminal_execute>\n<parameter=command>id</parameter>"
+	fixed := fixIncomplete(in)
+	calls := ParseToolCalls(fixed)
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 tool calls after repair, got %d (fixed=%q)", len(calls), fixed)
+	}
+	if calls[0].Name != "list_files" || calls[1].Name != "terminal_execute" {
+		t.Errorf("call order wrong: %v", calls)
+	}
+}
+
+// TestFixIncomplete_AlreadyBalanced must be a no-op when every open has a
+// matching close — otherwise we'd double-close and break the parser.
+func TestFixIncomplete_AlreadyBalanced(t *testing.T) {
+	in := "<function=list_files>\n<parameter=path>/etc</parameter>\n</function>"
+	if got := fixIncomplete(in); got != in {
+		t.Errorf("expected no-op for balanced input, got %q", got)
+	}
+}
+
+// TestFixIncomplete_NoOpenTag must also be a no-op so plain prose isn't
+// mangled into a fake tool call.
+func TestFixIncomplete_NoOpenTag(t *testing.T) {
+	in := "I will now run a command."
+	if got := fixIncomplete(in); got != in {
+		t.Errorf("expected no-op for non-tool prose, got %q", got)
+	}
+}
+
+// TestFixIncomplete_PartialEndTag handles the case where the model started
+// emitting "</" but was cut off mid-tag. The fix completes it as
+// "</function>".
+func TestFixIncomplete_PartialEndTag(t *testing.T) {
+	in := "<function=finish>\n<parameter=summary>done</parameter>\n</"
+	fixed := fixIncomplete(in)
+	if !strings.HasSuffix(fixed, "</function>") {
+		t.Errorf("expected fixed string to end with </function>, got %q", fixed)
+	}
+	calls := ParseToolCalls(fixed)
+	if len(calls) != 1 || calls[0].Name != "finish" {
+		t.Fatalf("expected 1 finish call, got %+v", calls)
 	}
 }
