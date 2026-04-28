@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,14 +139,20 @@ func load() *Config {
 		BrowserPath: envOr("XALGORIX_BROWSER_PATH", ""),
 	}
 
-	// Debug: show loaded config so users can verify correct env was picked up
-	maskedKey := ""
-	if len(cfg.APIKey) > 8 {
-		maskedKey = cfg.APIKey[:4] + "****" + cfg.APIKey[len(cfg.APIKey)-4:]
-	} else if cfg.APIKey != "" {
-		maskedKey = "****"
+	// Debug: show loaded config so users can verify correct env was picked up.
+	// Gated behind XALGORIX_DEBUG_CONFIG so it doesn't pollute every CLI
+	// invocation; the install/setup flows that benefit from this can opt in
+	// by exporting the var, and the dashboard logs an explicit "Loaded
+	// config" message at boot anyway.
+	if envOrBool("XALGORIX_DEBUG_CONFIG", false) {
+		maskedKey := ""
+		if len(cfg.APIKey) > 8 {
+			maskedKey = cfg.APIKey[:4] + "****" + cfg.APIKey[len(cfg.APIKey)-4:]
+		} else if cfg.APIKey != "" {
+			maskedKey = "****"
+		}
+		fmt.Printf("[config] Loaded: LLM=%q APIBase=%q APIKey=%s\n", cfg.LLM, cfg.APIBase, maskedKey)
 	}
-	fmt.Printf("[config] Loaded: LLM=%q APIBase=%q APIKey=%s\n", cfg.LLM, cfg.APIBase, maskedKey)
 
 	return cfg
 }
@@ -264,6 +271,22 @@ func loadEnvFile(path string) {
 		return // File doesn't exist, skip silently
 	}
 	defer f.Close()
+
+	// Warn (and tighten when we own the file) if perms are loose. The env
+	// file holds API keys and the dashboard password in plaintext, so any
+	// group/other read bit is a leak. Skipped on Windows where Unix mode
+	// bits are not meaningful.
+	if runtime.GOOS != "windows" {
+		if info, statErr := f.Stat(); statErr == nil {
+			mode := info.Mode().Perm()
+			if mode&0o077 != 0 {
+				log.Printf("[config] Warning: %s is mode %#o — contains plaintext secrets. Tightening to 0600.", path, mode)
+				if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
+					log.Printf("[config] Could not chmod %s to 0600: %v (please fix manually)", path, chmodErr)
+				}
+			}
+		}
+	}
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

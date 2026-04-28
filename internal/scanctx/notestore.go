@@ -16,6 +16,12 @@ type NoteStore struct {
 	mu          sync.RWMutex
 	store       map[string]string
 	persistPath string // path to notes.json (empty = no persistence)
+
+	// writeMu serializes writeFile calls so two concurrent Set() callers
+	// cannot interleave snapshots on disk. We hold this *only* across the
+	// disk write — the data lock (mu) is released first to avoid blocking
+	// readers behind I/O.
+	writeMu sync.Mutex
 }
 
 // NewNoteStore creates an empty note store.
@@ -151,11 +157,15 @@ func (ns *NoteStore) marshalSnapshot() ([]byte, string) {
 	return data, ns.persistPath
 }
 
-// writeFile persists serialized data to disk. Safe to call without holding mu.
+// writeFile persists serialized data to disk. Safe to call without holding
+// the data lock (mu); writeMu serializes concurrent writers so two Set()s
+// cannot race on the file.
 func (ns *NoteStore) writeFile(data []byte, path string) {
 	if data == nil || path == "" {
 		return
 	}
+	ns.writeMu.Lock()
+	defer ns.writeMu.Unlock()
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		log.Printf("[notestore] Warning: failed to save notes to %s: %v", path, err)
 	}

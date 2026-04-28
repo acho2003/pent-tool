@@ -119,9 +119,15 @@ func TestConfig_Validate(t *testing.T) {
 		t.Error("expected error for empty LLM")
 	}
 
+	// LLM alone is no longer enough — the validator also requires an API key.
 	cfg.LLM = "openai/gpt-5.4"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error when LLM is set but APIKey is empty")
+	}
+
+	cfg.APIKey = "test-key"
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error with LLM set, got: %v", err)
+		t.Errorf("expected no error with LLM and APIKey set, got: %v", err)
 	}
 }
 

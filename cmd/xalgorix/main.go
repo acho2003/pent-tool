@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,14 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/web"
 )
 
+// version is the build-time version string. CI/release flow should
+// override it with -ldflags so the released binary reports the actual tag:
+//
+//	go build -ldflags "-X main.version=$(git describe --tags --dirty)" ./cmd/xalgorix
+//
+// The hardcoded fallback is only used when developers `go run` the package
+// without ldflags. It is a `var` (not `const`) precisely so ldflags can
+// rewrite it.
 var version = "4.2.2"
 
 func main() {
@@ -128,17 +137,20 @@ func main() {
 		// Fallback: use go install with explicit version
 		fmt.Printf("Installing v%s via go install...\n", latestVer)
 		cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
+		// GOPRIVATE makes the toolchain skip the public proxy and checksum DB
+		// for our module path; GOSUMDB=off avoids hitting sum.golang.org for
+		// this private module. (GONOSUMCHECK / GONOSUMDB are not real env vars.)
 		cmd.Env = append(os.Environ(),
 			"GOPROXY=direct",
-			"GONOSUMCHECK=github.com/xalgord/*",
-			"GONOSUMDB=github.com/xalgord/*",
+			"GOPRIVATE=github.com/xalgord/*",
+			"GOSUMDB=off",
 		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Update failed: %v\n", err)
 			fmt.Fprintf(os.Stderr, "\nManual install:\n")
-			fmt.Fprintf(os.Stderr, "  GOPROXY=direct go install -v github.com/xalgord/xalgorix/v4/cmd/xalgorix@v%s\n", latestVer)
+			fmt.Fprintf(os.Stderr, "  GOPROXY=direct GOPRIVATE=github.com/xalgord/* GOSUMDB=off go install -v github.com/xalgord/xalgorix/v4/cmd/xalgorix@v%s\n", latestVer)
 			os.Exit(1)
 		}
 
@@ -255,7 +267,12 @@ func parseArgs() cliArgs {
 		case "--port", "-p":
 			if i+1 < len(osArgs) {
 				i++
-				fmt.Sscanf(osArgs[i], "%d", &args.port)
+				if p, err := strconv.Atoi(osArgs[i]); err == nil {
+					args.port = p
+				} else {
+					fmt.Fprintf(os.Stderr, "Invalid --port value %q: %v\n", osArgs[i], err)
+					os.Exit(1)
+				}
 			}
 		case "--web", "-w":
 			args.webUI = true
@@ -576,8 +593,8 @@ func autoUpdate() {
 		cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
 		cmd.Env = append(os.Environ(),
 			"GOPROXY=direct",
-			"GONOSUMCHECK=github.com/xalgord/*",
-			"GONOSUMDB=github.com/xalgord/*",
+			"GOPRIVATE=github.com/xalgord/*",
+			"GOSUMDB=off",
 		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -621,14 +638,15 @@ func autoUpdate() {
 }
 
 // isNewer returns true if a is newer than b (semver comparison).
+// Non-numeric segments compare as 0 to keep behaviour permissive for tags
+// like "4.2.2-rc1" — pre-release ordering is intentionally not implemented.
 func isNewer(a, b string) bool {
 	partsA := strings.Split(a, ".")
 	partsB := strings.Split(b, ".")
 
 	for i := 0; i < len(partsA) && i < len(partsB); i++ {
-		var numA, numB int
-		fmt.Sscanf(partsA[i], "%d", &numA)
-		fmt.Sscanf(partsB[i], "%d", &numB)
+		numA, _ := strconv.Atoi(partsA[i])
+		numB, _ := strconv.Atoi(partsB[i])
 		if numA > numB {
 			return true
 		}
@@ -640,13 +658,24 @@ func isNewer(a, b string) bool {
 }
 
 // execRestart re-executes the current process with the same arguments.
+// On Unix this uses syscall.Exec to replace the process image so PIDs and
+// service supervision (systemd, etc.) stay consistent. On Windows where
+// syscall.Exec is unavailable, it falls back to spawning a child and
+// exiting cleanly.
 func execRestart(path string, argv, env []string) error {
-	cmd := exec.Command(path, argv[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = env
-	return cmd.Run()
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command(path, argv[1:]...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Env = env
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		os.Exit(0)
+		return nil
+	}
+	return execSyscall(path, argv, env)
 }
 
 // fetchLatestRelease queries GitHub for the latest release version and binary download URL.

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os/exec"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -335,7 +336,7 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[ERROR] [PANIC] Tool '%s' panicked: %v", toolName, r)
+				log.Printf("[ERROR] [PANIC] Tool '%s' panicked: %v\n%s", toolName, r, debug.Stack())
 				resultCh <- toolExecResult{
 					Result: tools.Result{Error: fmt.Sprintf("tool panicked: %v", r)},
 					Err:    fmt.Errorf("tool '%s' panicked: %v", toolName, r),
@@ -695,6 +696,32 @@ func getToolSuggestion(toolName, errorMsg string) string {
 // pruneMessages trims the message history to prevent context window overflow.
 // Strategy: keep system prompt (msg[0]), keep last N messages, and re-inject
 // all saved notes so the agent retains accumulated knowledge.
+// alignPruneCutoff returns an index >= start such that messages[idx:]
+// begins with an "assistant" message (or, if no assistant message remains
+// after start, the last message). pruneMessages inserts a synthetic "user"
+// message right before the kept tail; advancing the cutoff to an assistant
+// boundary preserves user/assistant alternation, which Anthropic enforces
+// strictly. Pure function so it's straightforward to regression-test.
+func alignPruneCutoff(messages []llm.Message, start int) int {
+	if start < 1 {
+		start = 1
+	}
+	cutoff := start
+	for cutoff < len(messages) && messages[cutoff].Role != "assistant" {
+		cutoff++
+	}
+	if cutoff >= len(messages) {
+		// No assistant message remains after `start`. Keep at least the
+		// last message rather than pruning everything below the system
+		// prompt.
+		cutoff = len(messages) - 1
+		if cutoff < 1 {
+			cutoff = 1
+		}
+	}
+	return cutoff
+}
+
 func (a *Agent) pruneMessages() {
 	a.msgMu.Lock()
 	defer a.msgMu.Unlock()
@@ -711,9 +738,12 @@ func (a *Agent) pruneMessages() {
 		keepRecent = len(a.messages) - 1
 	}
 
+	originalLen := len(a.messages)
+
 	// Build pruned list: system prompt + continuation marker + recent messages
-	cutoff := len(a.messages) - keepRecent
-	pruned := make([]llm.Message, 0, keepRecent+2)
+	cutoff := alignPruneCutoff(a.messages, len(a.messages)-keepRecent)
+
+	pruned := make([]llm.Message, 0, len(a.messages)-cutoff+2)
 	pruned = append(pruned, a.messages[0]) // system prompt
 
 	// Build continuation message with notes injection
@@ -740,7 +770,7 @@ Review these notes and continue with the next testing phase.]`, cutoff-1, notesC
 	pruned = append(pruned, a.messages[cutoff:]...)
 	a.messages = pruned
 
-	log.Printf("[agent] Pruned message history: kept %d messages (was %d), notes injected: %v", len(a.messages), cutoff+keepRecent, notesContext != "")
+	log.Printf("[agent] Pruned message history: kept %d messages (was %d), notes injected: %v", len(a.messages), originalLen, notesContext != "")
 }
 
 

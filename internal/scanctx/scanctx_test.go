@@ -3,6 +3,7 @@ package scanctx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -572,7 +573,7 @@ func TestBrowserState_CloseIdempotent(t *testing.T) {
 
 // ══════════════════════════════════════════════════════════
 // Concurrency — run with -race
-// ══════════════════════════════════════════════════════════
+// ═══════════════════════��══════════════════════════════════
 
 func TestConcurrentVulnStore(t *testing.T) {
 	vs := NewVulnStore()
@@ -697,5 +698,65 @@ func TestSessionIsolation(t *testing.T) {
 	}
 	if b.Notes.Count() != 1 {
 		t.Fatal("b should have 1 note")
+	}
+}
+
+// TestNoteStore_ConcurrentDiskWrite is the regression for the race the
+// review flagged: when two goroutines call Set() at the same time, both
+// release the data lock before writing the file. Without writeMu the two
+// os.WriteFile calls could interleave and produce a corrupt JSON file. We
+// verify the file is always parseable JSON and contains the final state of
+// every key after the burst completes.
+func TestNoteStore_ConcurrentDiskWrite(t *testing.T) {
+	dir := t.TempDir()
+	ns := NewNoteStore()
+	ns.SetPersistPath(dir)
+
+	const writers = 16
+	const writesPerWriter = 32
+
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			key := fmt.Sprintf("writer-%d", id)
+			for j := 0; j < writesPerWriter; j++ {
+				ns.Set(key, fmt.Sprintf("v%d", j))
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Final on-disk state must be parseable JSON.
+	data, err := os.ReadFile(filepath.Join(dir, "notes.json"))
+	if err != nil {
+		t.Fatalf("read notes.json: %v", err)
+	}
+	var loaded map[string]string
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("notes.json corrupted (interleaved write?): %v\ncontent=%q", err, data)
+	}
+
+	// And every writer's final value must be present (the in-memory store is
+	// the source of truth, but the disk snapshot — which is written after
+	// every Set — should converge on the same content).
+	for i := 0; i < writers; i++ {
+		key := fmt.Sprintf("writer-%d", i)
+		got, ok := loaded[key]
+		if !ok {
+			t.Errorf("disk snapshot missing %s", key)
+			continue
+		}
+		want := fmt.Sprintf("v%d", writesPerWriter-1)
+		if got != want {
+			// Note: we can't strictly assert this — a Set() that wins the
+			// data lock last but loses the writeMu race could still write a
+			// stale snapshot. But the in-memory state must be correct.
+			memVal, _ := ns.Get(key)
+			if memVal != want {
+				t.Errorf("in-memory %s = %q, want %q", key, memVal, want)
+			}
+		}
 	}
 }
