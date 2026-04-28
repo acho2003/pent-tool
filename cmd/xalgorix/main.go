@@ -29,7 +29,7 @@ import (
 // The hardcoded fallback is only used when developers `go run` the package
 // without ldflags. It is a `var` (not `const`) precisely so ldflags can
 // rewrite it.
-var version = "4.2.2"
+var version = "4.2.3"
 
 func main() {
 	// Top-level crash recovery — catches panics that escape all other handlers.
@@ -136,7 +136,7 @@ func main() {
 	goInstallFallback:
 		// Fallback: use go install with explicit version
 		fmt.Printf("Installing v%s via go install...\n", latestVer)
-		cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
+		cmd := exec.Command("go", "install", "-v", "-ldflags", "-X main.version="+latestVer, "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
 		// GOPRIVATE makes the toolchain skip the public proxy and checksum DB
 		// for our module path; GOSUMDB=off avoids hitting sum.golang.org for
 		// this private module. (GONOSUMCHECK / GONOSUMDB are not real env vars.)
@@ -590,7 +590,7 @@ func autoUpdate() {
 	} else {
 		// Fallback to go install
 		fmt.Println("   Installing update via go install...")
-		cmd := exec.Command("go", "install", "-v", "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
+		cmd := exec.Command("go", "install", "-v", "-ldflags", "-X main.version="+latestVer, "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
 		cmd.Env = append(os.Environ(),
 			"GOPROXY=direct",
 			"GOPRIVATE=github.com/xalgord/*",
