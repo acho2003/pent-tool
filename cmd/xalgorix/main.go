@@ -29,7 +29,7 @@ import (
 // The hardcoded fallback is only used when developers `go run` the package
 // without ldflags. It is a `var` (not `const`) precisely so ldflags can
 // rewrite it.
-var version = "4.2.8"
+var version = "4.2.9"
 
 func main() {
 	// Top-level crash recovery — catches panics that escape all other handlers.
@@ -784,16 +784,16 @@ func fetchLatestTag(client *http.Client) (string, string) {
 }
 
 // resolveInstallPath determines where the xalgorix binary should be installed.
+// It returns the path of the currently running executable so the update replaces
+// whatever binary the user is actually invoking.
 func resolveInstallPath() string {
-	// First: check if we're running from a known path
 	if execPath, err := os.Executable(); err == nil {
-		execPath, _ = filepath.EvalSymlinks(execPath)
-		// If running from GOPATH/bin or /usr/local/bin, install there
-		if strings.Contains(execPath, "/go/bin/") || strings.HasPrefix(execPath, "/usr/local/bin/") {
-			return execPath
+		if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+			return resolved
 		}
+		return execPath
 	}
-	// Default: GOPATH/bin
+	// Fallback: GOPATH/bin
 	goPath := os.Getenv("GOPATH")
 	if goPath == "" {
 		goPath = filepath.Join(os.Getenv("HOME"), "go")
