@@ -20,6 +20,13 @@
         });
     };
 
+    // Logout handler — exposed globally for onclick
+    window.logout = function() {
+        fetch('/api/auth/logout', { method: 'POST' })
+            .then(() => window.location.reload())
+            .catch(() => window.location.reload());
+    };
+
     let ws = null;
     let scanRunning = false;
     let iterCount = 0;

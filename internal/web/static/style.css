@@ -358,6 +358,36 @@ a:hover { color: #00ffaa; text-shadow: 0 0 8px rgba(0, 255, 136, 0.5); }
   clip-path: polygon(0 3px, 3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px));
 }
 
+/* Logout Button */
+.btn-logout {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-4);
+  background: rgba(255, 51, 102, 0.08);
+  border: 1px solid rgba(255, 51, 102, 0.3);
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: all var(--transition);
+  clip-path: polygon(0 3px, 3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px));
+}
+
+.btn-logout:hover {
+  background: rgba(255, 51, 102, 0.18);
+  border-color: var(--danger);
+  box-shadow: 0 0 12px rgba(255, 51, 102, 0.3), inset 0 0 12px rgba(255, 51, 102, 0.05);
+  text-shadow: 0 0 6px rgba(255, 51, 102, 0.4);
+}
+
+.btn-logout svg {
+  flex-shrink: 0;
+}
+
 /* ── Main Layout ───────────────────────────────────────────────────── */
 .container {
   display: flex;
@@ -1705,6 +1735,7 @@ a:hover { color: #00ffaa; text-shadow: 0 0 8px rgba(0, 255, 136, 0.5); }
 @media (max-width: 480px) {
   .live-clock { display: none; }
   .dashboard-title { font-size: 13px; }
+  .btn-logout span { display: none; }
 }
 
 /* ── Reduced Motion ────────────────────────────────────────────────── */
