@@ -303,8 +303,32 @@ func (c *Client) chatWithRetry(messages []Message) (string, error) {
 			return result, nil
 		}
 		lastErr = err
+
+		// Non-retryable errors: context window overflow, malformed request, etc.
+		// These will never succeed on retry — return immediately so the caller
+		// can handle them (e.g. by pruning messages).
+		errStr := err.Error()
+		if strings.Contains(errStr, "400") &&
+			(strings.Contains(errStr, "context window") ||
+				strings.Contains(errStr, "maximum context length") ||
+				strings.Contains(errStr, "too many tokens") ||
+				strings.Contains(errStr, "token limit") ||
+				strings.Contains(errStr, "invalid params")) {
+			log.Printf("[llm] Non-retryable error (context overflow), returning immediately: %v", err)
+			return "", fmt.Errorf("context window overflow: %w", err)
+		}
+
+		// Track if last error was a rate limit for the post-loop wrapper
+		if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate") || strings.Contains(errStr, "Rate") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "Too Many Requests") {
+			lastErr = fmt.Errorf("rate limited: %w", err)
+			continue
+		}
 	}
 
+	// Preserve rate-limit marker if the final error was rate-limited
+	if lastErr != nil && strings.Contains(lastErr.Error(), "rate limited:") {
+		return "", fmt.Errorf("rate limited: LLM request failed after %d retries: %w", maxRetries, lastErr)
+	}
 	return "", fmt.Errorf("LLM request failed after %d retries: %w", maxRetries, lastErr)
 }
 
