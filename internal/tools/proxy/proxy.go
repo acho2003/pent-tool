@@ -84,10 +84,36 @@ func detectCaidoPort() int {
 	return 8080
 }
 
-
 func getCaidoGraphQLURL() string {
 	port := detectCaidoPort()
 	return fmt.Sprintf("http://127.0.0.1:%d/graphql", port)
+}
+
+func parseHeaders(headersJSON string) (map[string]string, error) {
+	if strings.TrimSpace(headersJSON) == "" {
+		return nil, nil
+	}
+	var headers map[string]string
+	if err := json.Unmarshal([]byte(headersJSON), &headers); err != nil {
+		return nil, fmt.Errorf("invalid headers JSON: %w", err)
+	}
+	return headers, nil
+}
+
+func clampRequestCount(raw string) int {
+	count := 20
+	if strings.TrimSpace(raw) != "" {
+		if _, err := fmt.Sscanf(raw, "%d", &count); err != nil {
+			count = 20
+		}
+	}
+	if count < 1 {
+		return 1
+	}
+	if count > 100 {
+		return 100
+	}
+	return count
 }
 
 func sendRequest(args map[string]string) (tools.Result, error) {
@@ -105,11 +131,12 @@ func sendRequest(args map[string]string) (tools.Result, error) {
 	}
 
 	if headersJSON := args["headers"]; headersJSON != "" {
-		var headers map[string]string
-		if err := json.Unmarshal([]byte(headersJSON), &headers); err == nil {
-			for k, v := range headers {
-				req.Header.Set(k, v)
-			}
+		headers, err := parseHeaders(headersJSON)
+		if err != nil {
+			return tools.Result{}, err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
 		}
 	}
 
@@ -132,14 +159,14 @@ func sendRequest(args map[string]string) (tools.Result, error) {
 			log.Printf("Warning: failed to parse proxy URL %s: %v", proxyURLStr, err)
 			// Fall through to direct connection
 		} else {
-		client = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				Proxy:           http.ProxyURL(proxyURL),
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
-		usedProxy = true
+			client = &http.Client{
+				Timeout: 30 * time.Second,
+				Transport: &http.Transport{
+					Proxy:           http.ProxyURL(proxyURL),
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				},
+			}
+			usedProxy = true
 		}
 	} else {
 		// Caido not available — use direct connection
@@ -209,10 +236,7 @@ func listRequests(args map[string]string) (tools.Result, error) {
 		return tools.Result{Output: "Caido API token not configured. Set CAIDO_API_TOKEN in ~/.xalgorix.env"}, nil
 	}
 
-	count := 20
-	if c := args["count"]; c != "" {
-		fmt.Sscanf(c, "%d", &count)
-	}
+	count := clampRequestCount(args["count"])
 
 	query := `query { requests(first: ` + strconv.Itoa(count) + `) { edges { node { id method url response { statusCode } } } } }`
 

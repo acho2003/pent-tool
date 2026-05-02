@@ -50,10 +50,7 @@ func webSearch(args map[string]string) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("query is required")
 	}
 
-	maxResults := 10
-	if m := args["max_results"]; m != "" {
-		fmt.Sscanf(m, "%d", &maxResults)
-	}
+	maxResults := clampMaxResults(args["max_results"])
 
 	// Try Gemini first if API key is configured
 	results, err := searchGemini(query, maxResults)
@@ -92,6 +89,26 @@ type searchResult struct {
 	Title   string
 	URL     string
 	Snippet string
+}
+
+var geminiSearchURL = func(apiKey string) string {
+	return fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=%s", netURL.QueryEscape(apiKey))
+}
+
+func clampMaxResults(raw string) int {
+	maxResults := 10
+	if strings.TrimSpace(raw) != "" {
+		if _, err := fmt.Sscanf(raw, "%d", &maxResults); err != nil {
+			maxResults = 10
+		}
+	}
+	if maxResults < 1 {
+		return 1
+	}
+	if maxResults > 25 {
+		return 25
+	}
+	return maxResults
 }
 
 func formatResults(query string, results []searchResult) tools.Result {
@@ -192,6 +209,9 @@ func searchGoogle(query string, max int) ([]searchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read Google response: %w", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("google search returned %d: %s", resp.StatusCode, truncateSearchBody(string(body)))
+	}
 	html := string(body)
 
 	var results []searchResult
@@ -241,6 +261,9 @@ func searchBing(query string, max int) ([]searchResult, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read Bing response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bing search returned %d: %s", resp.StatusCode, truncateSearchBody(string(body)))
 	}
 	html := string(body)
 
@@ -333,6 +356,9 @@ func searchDuckDuckGo(query string, max int) ([]searchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DuckDuckGo HTML response: %w", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("duckduckgo search returned %d: %s", resp.StatusCode, truncateSearchBody(string(body)))
+	}
 	html := string(body)
 
 	var results []searchResult
@@ -375,7 +401,7 @@ func searchGemini(query string, max int) ([]searchResult, error) {
 	}
 
 	// Use Gemini's generateContent with grounding (search)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=%s", apiKey)
+	url := geminiSearchURL(apiKey)
 
 	requestBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -412,6 +438,9 @@ func searchGemini(query string, max int) ([]searchResult, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read Gemini response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini search returned %d: %s", resp.StatusCode, truncateSearchBody(string(body)))
 	}
 
 	var geminiResp struct {
@@ -464,6 +493,22 @@ func searchGemini(query string, max int) ([]searchResult, error) {
 	return results, nil
 }
 
+func truncateSearchBody(body string) string {
+	body = strings.TrimSpace(body)
+	if len(body) > 500 {
+		return body[:500] + "... [truncated]"
+	}
+	return body
+}
+
+func normalizeCVEID(cveID string) string {
+	cveID = strings.ToUpper(strings.TrimSpace(cveID))
+	if cveID != "" && !strings.HasPrefix(cveID, "CVE-") {
+		cveID = "CVE-" + cveID
+	}
+	return cveID
+}
+
 // cveSearch queries the NIST NVD API for CVE details
 func cveSearch(args map[string]string) (tools.Result, error) {
 	cveID := args["cve_id"]
@@ -471,10 +516,7 @@ func cveSearch(args map[string]string) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("cve_id is required")
 	}
 
-	cveID = strings.ToUpper(cveID)
-	if !strings.HasPrefix(cveID, "CVE-") {
-		cveID = "CVE-" + cveID
-	}
+	cveID = normalizeCVEID(cveID)
 
 	url := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=%s", netURL.QueryEscape(cveID))
 

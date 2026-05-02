@@ -162,11 +162,11 @@ type geminiStreamResponse = geminiResponse
 // ── Anthropic types ──────────────────────────────────────────────────────────
 
 type anthropicRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	System  string    `json:"system,omitempty"`
-	MaxTokens int      `json:"max_tokens"`
-	Stream   bool     `json:"stream"`
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	System    string    `json:"system,omitempty"`
+	MaxTokens int       `json:"max_tokens"`
+	Stream    bool      `json:"stream"`
 }
 
 type anthropicContentBlock struct {
@@ -175,23 +175,25 @@ type anthropicContentBlock struct {
 }
 
 type anthropicMessage struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Role      string `json:"role"`
-	Content   []anthropicContentBlock `json:"content"`
-	Model     string `json:"model"`
-	StopReason string `json:"stop_reason,omitempty"`
-	Usage     struct {
+	ID         string                  `json:"id"`
+	Type       string                  `json:"type"`
+	Role       string                  `json:"role"`
+	Content    []anthropicContentBlock `json:"content"`
+	Model      string                  `json:"model"`
+	StopReason string                  `json:"stop_reason,omitempty"`
+	Usage      struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
 }
 
 type anthropicResponse struct {
-	Type     string `json:"type"`
-	Message  anthropicMessage `json:"message,omitempty"`
-	Delta    struct{ Text string `json:"text"` } `json:"delta,omitempty"`
-	Index    int    `json:"index,omitempty"`
+	Type    string           `json:"type"`
+	Message anthropicMessage `json:"message,omitempty"`
+	Delta   struct {
+		Text string `json:"text"`
+	} `json:"delta,omitempty"`
+	Index int `json:"index,omitempty"`
 }
 
 // resolveEndpoint returns the full chat completions URL and clean model name.
@@ -220,8 +222,8 @@ func (c *Client) resolveEndpoint() (string, string) {
 		"ollama":    "http://localhost:11434/v1",
 		// Google's chat endpoint is /v1beta/models/MODEL:generateContent — we
 		// store the bare host here and append the version segment below.
-		"google":    "https://generativelanguage.googleapis.com",
-		"gemini":    "https://generativelanguage.googleapis.com",
+		"google": "https://generativelanguage.googleapis.com",
+		"gemini": "https://generativelanguage.googleapis.com",
 	}
 
 	if apiBase == "" {
@@ -238,26 +240,101 @@ func (c *Client) resolveEndpoint() (string, string) {
 
 	// Build the URL based on provider
 	url := apiBase
-	if strings.Contains(apiBase, "anthropic") {
+	if provider == "anthropic" || strings.Contains(strings.ToLower(apiBase), "anthropic") {
 		// Anthropic uses /v1/messages
-		if !strings.HasSuffix(apiBase, "/v1") && !strings.Contains(apiBase, "/v1/") {
-			url += "/v1"
+		if !strings.HasSuffix(strings.ToLower(url), "/messages") {
+			if !strings.HasSuffix(apiBase, "/v1") && !strings.Contains(apiBase, "/v1/") {
+				url += "/v1"
+			}
+			url += "/messages"
 		}
-		url += "/messages"
-	} else if strings.Contains(apiBase, "google") || strings.Contains(apiBase, "generativelanguage") {
+	} else if isGeminiProvider(provider) || isGeminiAPIBase(apiBase) {
 		// Google Gemini uses /v1beta/models/MODEL:generateContent.
 		// Strip any trailing /v1 so we don't end up with /v1beta concatenated
 		// onto a version segment the user supplied.
 		url = strings.TrimSuffix(url, "/v1")
 		url += "/v1beta/models/" + model + ":generateContent"
 	} else {
-		if !strings.HasSuffix(apiBase, "/v1") && !strings.Contains(apiBase, "/v1/") {
-			url += "/v1"
+		if !strings.HasSuffix(strings.ToLower(url), "/chat/completions") {
+			if !strings.HasSuffix(apiBase, "/v1") && !strings.Contains(apiBase, "/v1/") {
+				url += "/v1"
+			}
+			url += "/chat/completions"
 		}
-		url += "/chat/completions"
 	}
 
 	return url, model
+}
+
+func isGeminiProvider(provider string) bool {
+	provider = strings.ToLower(provider)
+	return provider == "google" || provider == "gemini"
+}
+
+func isGeminiAPIBase(value string) bool {
+	value = strings.ToLower(value)
+	return strings.Contains(value, "generativelanguage.googleapis.com") ||
+		strings.Contains(value, "generativelanguage")
+}
+
+func (c *Client) usesGeminiAPI(endpoint string) bool {
+	return isGeminiProvider(c.provider) ||
+		isGeminiAPIBase(c.cfg.APIBase) ||
+		isGeminiAPIBase(endpoint)
+}
+
+func isAnthropicAPIBase(value string) bool {
+	return strings.Contains(strings.ToLower(value), "anthropic")
+}
+
+func (c *Client) usesAnthropicAPI(endpoint string) bool {
+	return c.provider == "anthropic" ||
+		isAnthropicAPIBase(c.cfg.APIBase) ||
+		isAnthropicAPIBase(endpoint)
+}
+
+func apiErrorHasStatus(errStr string, status int) bool {
+	errStr = strings.ToLower(errStr)
+	statusText := fmt.Sprintf("%d", status)
+	return strings.Contains(errStr, "api returned "+statusText) ||
+		strings.Contains(errStr, "http "+statusText)
+}
+
+func isContextWindowError(errStr string) bool {
+	errStr = strings.ToLower(errStr)
+	return strings.Contains(errStr, "400") &&
+		(strings.Contains(errStr, "context window") ||
+			strings.Contains(errStr, "maximum context length") ||
+			strings.Contains(errStr, "too many tokens") ||
+			strings.Contains(errStr, "token limit") ||
+			strings.Contains(errStr, "invalid params"))
+}
+
+func isRateLimitError(errStr string) bool {
+	errStr = strings.ToLower(errStr)
+	return apiErrorHasStatus(errStr, http.StatusTooManyRequests) ||
+		strings.Contains(errStr, "too many requests") ||
+		strings.Contains(errStr, "rate limited") ||
+		strings.Contains(errStr, "rate limit") ||
+		strings.Contains(errStr, "rate_limit") ||
+		strings.Contains(errStr, "ratelimit") ||
+		strings.Contains(errStr, "resource_exhausted")
+}
+
+func isNonRetryableLLMError(errStr string) bool {
+	errStr = strings.ToLower(errStr)
+	if apiErrorHasStatus(errStr, http.StatusBadRequest) ||
+		apiErrorHasStatus(errStr, http.StatusUnauthorized) ||
+		apiErrorHasStatus(errStr, http.StatusForbidden) ||
+		apiErrorHasStatus(errStr, http.StatusNotFound) {
+		return true
+	}
+	return strings.Contains(errStr, "unauthenticated") ||
+		strings.Contains(errStr, "access_token_type_unsupported") ||
+		strings.Contains(errStr, "invalid authentication credentials") ||
+		strings.Contains(errStr, "permission_denied") ||
+		strings.Contains(errStr, "model not found") ||
+		strings.Contains(errStr, "not found")
 }
 
 // Chat sends a non-streaming chat request and returns the full response.
@@ -278,7 +355,7 @@ func (c *Client) chatWithRetry(messages []Message) (string, error) {
 			backoff := time.Duration(attempt*3) * time.Second
 			if lastErr != nil {
 				errStr := lastErr.Error()
-				if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate") {
+				if isRateLimitError(errStr) {
 					backoff = 30 * time.Second // rate limit: wait longer
 				} else if strings.Contains(errStr, "connection") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "EOF") {
 					backoff = time.Duration(attempt*10) * time.Second // network: longer backoff
@@ -308,18 +385,18 @@ func (c *Client) chatWithRetry(messages []Message) (string, error) {
 		// These will never succeed on retry — return immediately so the caller
 		// can handle them (e.g. by pruning messages).
 		errStr := err.Error()
-		if strings.Contains(errStr, "400") &&
-			(strings.Contains(errStr, "context window") ||
-				strings.Contains(errStr, "maximum context length") ||
-				strings.Contains(errStr, "too many tokens") ||
-				strings.Contains(errStr, "token limit") ||
-				strings.Contains(errStr, "invalid params")) {
+		if isContextWindowError(errStr) {
 			log.Printf("[llm] Non-retryable error (context overflow), returning immediately: %v", err)
 			return "", fmt.Errorf("context window overflow: %w", err)
 		}
 
+		if isNonRetryableLLMError(errStr) {
+			log.Printf("[llm] Non-retryable LLM error, returning immediately: %v", err)
+			return "", fmt.Errorf("LLM request failed: %w", err)
+		}
+
 		// Track if last error was a rate limit for the post-loop wrapper
-		if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate") || strings.Contains(errStr, "Rate") || strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "Too Many Requests") {
+		if isRateLimitError(errStr) {
 			lastErr = fmt.Errorf("rate limited: %w", err)
 			continue
 		}
@@ -340,8 +417,8 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 		defer close(ch)
 
 		endpoint, model := c.resolveEndpoint()
-		isGoogle := c.provider == "google" || c.provider == "gemini"
-		isAnthropic := c.provider == "anthropic"
+		isGoogle := c.usesGeminiAPI(endpoint)
+		isAnthropic := c.usesAnthropicAPI(endpoint)
 
 		var body []byte
 		if isGoogle {
@@ -533,8 +610,8 @@ func (c *Client) doChat(messages []Message) (string, error) {
 	endpoint, model := c.resolveEndpoint()
 	log.Printf("[llm] Request → URL=%s model=%s apiModel=%s cfgLLM=%s cfgAPIBase=%s", endpoint, model, c.apiModel, c.cfg.LLM, c.cfg.APIBase)
 
-	isGoogle := c.provider == "google" || c.provider == "gemini"
-	isAnthropic := c.provider == "anthropic"
+	isGoogle := c.usesGeminiAPI(endpoint)
+	isAnthropic := c.usesAnthropicAPI(endpoint)
 
 	var body []byte
 	var err error

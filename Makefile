@@ -1,4 +1,4 @@
-.PHONY: build run clean test install
+.PHONY: build run clean test test-ci test-cover test-race install fmt vet lint tidy all
 
 BINARY=xalgorix
 BUILD_DIR=./build
@@ -20,6 +20,21 @@ clean:
 
 test:
 	go test ./... -v
+
+test-cover:
+	go test ./... -cover
+
+test-race:
+	go test ./... -race
+
+test-ci:
+	go test ./...
+	go test ./... -cover
+	go test ./... -race
+	go vet ./...
+	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed; skipping"; fi
+	node --check internal/web/static/app.js
+	go build ./cmd/xalgorix
 
 install: build
 	@echo "Installing $(BINARY) to /usr/local/bin..."

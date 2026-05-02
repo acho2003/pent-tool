@@ -471,7 +471,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 				if a.state.ConsecutiveErrors < 0 {
 					a.state.ConsecutiveErrors = 0
 				}
-				a.emit(Event{Type: "error", Content: fmt.Sprintf("⏳ Rate limited by LLM provider — waiting 30 minutes before retrying (will NOT skip this target)"), TotalTokens: tokenCount()})
+				a.emit(Event{Type: "error", Content: "⏳ Rate limited by LLM provider — waiting 30 minutes before retrying (will NOT skip this target)", TotalTokens: tokenCount()})
 				// Sleep in 1-minute chunks so we can bail out if the agent is stopped
 				for waited := 0; waited < 30; waited++ {
 					if a.stopped.Load() || (a.ctx != nil && a.ctx.Err() != nil) {
@@ -2300,7 +2300,7 @@ After addressing the custom instructions, if time permits, continue with the sta
 	}
 
 	// Generic custom instruction — still prioritize it but include standard methodology
-	return fmt.Sprintf(`## PRIORITY: CUSTOM INSTRUCTIONS DETECTED
+	return `## PRIORITY: CUSTOM INSTRUCTIONS DETECTED
 
 The user has given you SPECIFIC instructions. Follow them as your TOP PRIORITY.
 
@@ -2312,7 +2312,7 @@ The user has given you SPECIFIC instructions. Follow them as your TOP PRIORITY.
 
 After addressing the custom instructions, continue with standard methodology.
 
-START with a quick technology fingerprint (curl -sI, whatweb), then load relevant skills and start testing.`)
+START with a quick technology fingerprint (curl -sI, whatweb), then load relevant skills and start testing.`
 }
 
 func (a *Agent) buildInitialUserMessage(targets []string, instruction string) string {

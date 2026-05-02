@@ -170,6 +170,8 @@ func reportVulnForRegistry(reg *tools.Registry, args map[string]string) (tools.R
 }
 
 // reportVuln is the backward-compatible version using scanctx.Default().
+//
+//lint:ignore U1000 kept as a package-level compatibility wrapper for callers in this package.
 func reportVuln(args map[string]string) (tools.Result, error) {
 	return reportVulnWithContextID(scanctx.Default().ID, args)
 }
@@ -222,7 +224,7 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 	for _, existing := range store.vulns {
 		existingType := extractVulnType(existing.Title, existing.Description)
 		existingNormEndpoint := normalizeEndpoint(existing.Endpoint)
-		
+
 		// Check 1: Exact title + endpoint match
 		if strings.EqualFold(existing.Title, title) && existing.Endpoint == endpoint {
 			store.mu.RUnlock()
@@ -230,7 +232,7 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 				Output: fmt.Sprintf("⚠️ DUPLICATE: '%s' at endpoint '%s' already reported as %s. Skipping.", title, endpoint, existing.ID),
 			}, nil
 		}
-		
+
 		// Check 2: Same vulnerability TYPE on same normalized endpoint
 		if vulnType != "" && vulnType == existingType && normalizedEndpoint == existingNormEndpoint && normalizedEndpoint != "" {
 			store.mu.RUnlock()
@@ -770,8 +772,8 @@ func classifySeverity(title, description, severity, proof string) (string, strin
 		keywords []string
 		reason   string
 	}{
-		{[]string{"missing header", "security header", "x-frame-options missing", "csp missing", 
-			"hsts missing", "x-content-type missing", "referrer-policy missing", 
+		{[]string{"missing header", "security header", "x-frame-options missing", "csp missing",
+			"hsts missing", "x-content-type missing", "referrer-policy missing",
 			"permissions-policy missing", "x-xss-protection missing"},
 			"Missing security headers are informational — not directly exploitable"},
 		{[]string{"version disclosure", "server version", "software version", "banner grabbing",
