@@ -238,14 +238,15 @@ func spawnAgent(args map[string]string) (tools.Result, error) {
 
 		// Check stopped flag again after acquiring semaphore
 		if agentsStopped.Load() {
+			completedAt := time.Now()
+			agentsMu.Lock()
 			state.Status = "failed"
 			state.Error = "reset: parent scan session ended"
-			state.CompletedAt = time.Now()
-			agentsMu.Lock()
+			state.CompletedAt = completedAt
 			if s, ok := agents[agentID]; ok {
 				s.Status = "failed"
 				s.Error = "reset: parent scan session ended"
-				s.CompletedAt = state.CompletedAt
+				s.CompletedAt = completedAt
 			}
 			agentsMu.Unlock()
 			return
@@ -278,6 +279,42 @@ func spawnAgent(args map[string]string) (tools.Result, error) {
 	}, nil
 }
 
+type agentSnapshot struct {
+	ID             string
+	Name           string
+	Task           string
+	Status         string
+	StartedAt      time.Time
+	CompletedAt    time.Time
+	Result         string
+	Error          string
+	PartialResults []string
+}
+
+func snapshotAgent(agentID string) (agentSnapshot, bool) {
+	agentsMu.Lock()
+	defer agentsMu.Unlock()
+	state, exists := agents[agentID]
+	if !exists {
+		return agentSnapshot{}, false
+	}
+
+	snap := agentSnapshot{
+		ID:          state.ID,
+		Name:        state.Name,
+		Task:        state.Task,
+		Status:      state.Status,
+		StartedAt:   state.StartedAt,
+		CompletedAt: state.CompletedAt,
+		Result:      state.Result,
+		Error:       state.Error,
+	}
+	state.partialMu.Lock()
+	snap.PartialResults = append([]string(nil), state.partialResults...)
+	state.partialMu.Unlock()
+	return snap, true
+}
+
 // checkAgent returns status and partial results of a spawned sub-agent.
 func checkAgent(args map[string]string) (tools.Result, error) {
 	agentID := args["agent_id"]
@@ -285,10 +322,8 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("agent_id is required")
 	}
 
-	agentsMu.Lock()
-	state, exists := agents[agentID]
+	state, exists := snapshotAgent(agentID)
 	if !exists {
-		agentsMu.Unlock()
 		return tools.Result{
 			Output: fmt.Sprintf("❌ Agent '%s' not found.\n\nAvailable agents:\n%s", agentID, listAllAgents()),
 		}, nil
@@ -301,22 +336,18 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 	case "running":
 		b.WriteString(fmt.Sprintf("🔄 Agent '%s' (%s) — RUNNING for %s\n", state.Name, state.ID, elapsed))
 		b.WriteString(fmt.Sprintf("Task: %s\n", truncTask(state.Task, 150)))
-		// Hold agentsMu while acquiring partialMu to prevent CleanupCompleted from freeing state
-		state.partialMu.Lock()
-		if len(state.partialResults) > 0 {
+		if len(state.PartialResults) > 0 {
 			b.WriteString("\n--- Partial Results ---\n")
 			start := 0
-			if len(state.partialResults) > 5 {
-				start = len(state.partialResults) - 5
+			if len(state.PartialResults) > 5 {
+				start = len(state.PartialResults) - 5
 			}
-			for _, pr := range state.partialResults[start:] {
+			for _, pr := range state.PartialResults[start:] {
 				b.WriteString(pr + "\n")
 			}
 		} else {
 			b.WriteString("\n(No partial results yet — agent is still working)\n")
 		}
-		state.partialMu.Unlock()
-		agentsMu.Unlock()
 
 	case "completed":
 		completedElapsed := state.CompletedAt.Sub(state.StartedAt).Round(time.Second)
@@ -327,7 +358,6 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 			result = result[:5000] + "\n... [truncated]"
 		}
 		b.WriteString(result)
-		agentsMu.Unlock()
 
 	case "failed":
 		b.WriteString(fmt.Sprintf("❌ Agent '%s' (%s) — FAILED after %s\n", state.Name, state.ID, elapsed))
@@ -336,7 +366,6 @@ func checkAgent(args map[string]string) (tools.Result, error) {
 			b.WriteString("\n--- Partial Results ---\n")
 			b.WriteString(state.Result)
 		}
-		agentsMu.Unlock()
 	}
 
 	return tools.Result{
@@ -361,10 +390,7 @@ func waitAgent(args map[string]string) (tools.Result, error) {
 		fmt.Sscanf(t, "%d", &timeout)
 	}
 
-	agentsMu.Lock()
-	state, exists := agents[agentID]
-	agentsMu.Unlock()
-
+	state, exists := snapshotAgent(agentID)
 	if !exists {
 		return tools.Result{
 			Output: fmt.Sprintf("❌ Agent '%s' not found.\n\nAvailable agents:\n%s", agentID, listAllAgents()),
@@ -386,6 +412,12 @@ func waitAgent(args map[string]string) (tools.Result, error) {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		state, exists = snapshotAgent(agentID)
+		if !exists {
+			return tools.Result{
+				Output: fmt.Sprintf("❌ Agent '%s' not found.\n\nAvailable agents:\n%s", agentID, listAllAgents()),
+			}, nil
+		}
 		if state.Status != "running" {
 			return checkAgent(args)
 		}
@@ -414,13 +446,13 @@ func AddPartialResult(agentID string, result string) {
 		return
 	}
 	// Hold agentsMu while acquiring partialMu to prevent CleanupCompleted from freeing state
+	if state.Status != "running" {
+		agentsMu.Unlock()
+		return
+	}
 	state.partialMu.Lock()
 	agentsMu.Unlock()
 
-	if state.Status != "running" {
-		state.partialMu.Unlock()
-		return
-	}
 	state.partialResults = append(state.partialResults, result)
 	if len(state.partialResults) > 50 {
 		state.partialResults = state.partialResults[len(state.partialResults)-50:]

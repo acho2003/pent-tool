@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
@@ -25,11 +26,21 @@ func Register(r *tools.Registry) {
 			{Name: "code", Description: "Python code to execute", Required: true},
 			{Name: "timeout", Description: "Timeout in seconds (default: 1800 = 30 min)", Required: false},
 		},
-		Execute: executePython,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return executePythonForContext(r.GetScanContextID(), args)
+		},
 	})
 }
 
 func executePython(args map[string]string) (tools.Result, error) {
+	return executePythonForContext(scanctx.Default().ID, args)
+}
+
+func executePythonForContext(contextID string, args map[string]string) (tools.Result, error) {
+	if strings.TrimSpace(contextID) == "" {
+		contextID = scanctx.Default().ID
+	}
+
 	code := args["code"]
 	if code == "" {
 		return tools.Result{}, fmt.Errorf("code is required")
@@ -55,7 +66,7 @@ func executePython(args map[string]string) (tools.Result, error) {
 	if _, err := exec.LookPath(pythonBin); err != nil {
 		pythonBin = "python"
 		if _, err := exec.LookPath(pythonBin); err != nil {
-			return tools.Result{}, fmt.Errorf("Python not found. Install python3")
+			return tools.Result{}, fmt.Errorf("python not found. Install python3")
 		}
 	}
 
@@ -63,7 +74,11 @@ func executePython(args map[string]string) (tools.Result, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, pythonBin, "-c", code)
-	cmd.Dir = config.Get().Workspace
+	if wd := terminal.GetWorkDirForContext(contextID); wd != "" {
+		cmd.Dir = wd
+	} else {
+		cmd.Dir = config.Get().Workspace
+	}
 	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 
 	var stdout, stderr bytes.Buffer
@@ -79,8 +94,8 @@ func executePython(args map[string]string) (tools.Result, error) {
 	if len(cleanCode) > 100 {
 		cleanCode = cleanCode[:100] + "..."
 	}
-	terminal.TrackProcess(cmd, cancel, "python: "+strings.ReplaceAll(cleanCode, "\n", " "))
-	defer terminal.UntrackProcess(cmd)
+	terminal.TrackProcessForContext(contextID, cmd, cancel, "python: "+strings.ReplaceAll(cleanCode, "\n", " "))
+	defer terminal.UntrackProcessForContext(contextID, cmd)
 
 	err := cmd.Wait()
 

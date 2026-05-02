@@ -155,7 +155,9 @@ func Register(r *tools.Registry) {
 			{Name: "key", Description: "Unique key for the note (e.g., 'csrf_token', 'admin_endpoint', 'angular_version', 'exploit_chain_step1')", Required: true},
 			{Name: "value", Description: "Note content", Required: true},
 		},
-		Execute: addNote,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return addNoteForContext(r.GetScanContextID(), args)
+		},
 	})
 
 	r.Register(&tools.Tool{
@@ -164,15 +166,25 @@ func Register(r *tools.Registry) {
 		Parameters: []tools.Parameter{
 			{Name: "key", Description: "Key to read (omit for all notes)", Required: false},
 		},
-		Execute: readNotes,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return readNotesForContext(r.GetScanContextID(), args)
+		},
 	})
 }
 
+//lint:ignore U1000 kept as a package-level compatibility wrapper for callers in this package.
 func addNote(args map[string]string) (tools.Result, error) {
+	return addNoteForContext(scanctx.Default().ID, args)
+}
+
+func addNoteForContext(contextID string, args map[string]string) (tools.Result, error) {
 	key := args["key"]
 	value := args["value"]
 
-	s := getNoteStore()
+	if contextID == "" {
+		contextID = scanctx.Default().ID
+	}
+	s := getNoteStoreForContext(contextID)
 	s.mu.Lock()
 	s.store[key] = value
 	data, path := s.marshalSnapshot()
@@ -184,10 +196,18 @@ func addNote(args map[string]string) (tools.Result, error) {
 	return tools.Result{Output: fmt.Sprintf("Note saved: %s", key)}, nil
 }
 
+//lint:ignore U1000 kept as a package-level compatibility wrapper for callers in this package.
 func readNotes(args map[string]string) (tools.Result, error) {
+	return readNotesForContext(scanctx.Default().ID, args)
+}
+
+func readNotesForContext(contextID string, args map[string]string) (tools.Result, error) {
 	key := args["key"]
 
-	s := getNoteStore()
+	if contextID == "" {
+		contextID = scanctx.Default().ID
+	}
+	s := getNoteStoreForContext(contextID)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

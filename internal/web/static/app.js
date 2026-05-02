@@ -79,32 +79,59 @@
     const LLM_PROVIDERS = {
         openai: {
             prefix: 'openai',
-            models: ['gpt-5.4', 'gpt-4o', 'o3', 'o4-mini', 'gpt-4o-mini'],
+            models: [
+                'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano',
+                'gpt-5.2', 'gpt-5.2-pro', 'gpt-5.1',
+                'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
+                'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini',
+                'o3', 'o4-mini',
+            ],
             bases: [{ label: 'Global (Default)', value: 'https://api.openai.com/v1' }],
         },
         anthropic: {
             prefix: 'anthropic',
-            models: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+            models: [
+                'claude-opus-4-1-20250805', 'claude-opus-4-1',
+                'claude-opus-4-20250514',
+                'claude-sonnet-4-20250514', 'claude-sonnet-4-0',
+                'claude-3-7-sonnet-latest', 'claude-3-7-sonnet-20250219',
+                'claude-3-5-haiku-latest', 'claude-3-5-haiku-20241022',
+            ],
             bases: [{ label: 'Global (Default)', value: 'https://api.anthropic.com' }],
         },
         google: {
             prefix: 'google',
-            models: ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash'],
+            models: [
+                'gemini-3.1-pro-preview', 'gemini-3.1-pro-preview-customtools',
+                'gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview',
+                'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
+            ],
             bases: [{ label: 'Global (Default)', value: 'https://generativelanguage.googleapis.com/v1' }],
         },
         deepseek: {
             prefix: 'deepseek',
-            models: ['deepseek-chat-v3', 'deepseek-v3', 'deepseek-coder'],
+            models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'],
             bases: [{ label: 'Global (Default)', value: 'https://api.deepseek.com/v1' }],
         },
         groq: {
             prefix: 'groq',
-            models: ['llama-3.3-70b', 'qwen-3', 'mixtral-8x7b'],
+            models: [
+                'openai/gpt-oss-120b', 'openai/gpt-oss-20b',
+                'llama-3.3-70b-versatile', 'llama-3.1-8b-instant',
+                'meta-llama/llama-4-scout-17b-16e-instruct',
+                'qwen/qwen3-32b',
+                'groq/compound', 'groq/compound-mini',
+            ],
             bases: [{ label: 'Global (Default)', value: 'https://api.groq.com/openai/v1' }],
         },
         minimax: {
             prefix: 'minimax',
-            models: ['MiniMax-M2.7', 'Text-01'],
+            models: [
+                'MiniMax-M2.7', 'MiniMax-M2.7-highspeed',
+                'MiniMax-M2.5', 'MiniMax-M2.5-highspeed',
+                'MiniMax-M2.1', 'MiniMax-M2.1-highspeed',
+                'MiniMax-M2',
+            ],
             bases: [
                 { label: '🌏 Global', value: 'https://api.minimax.io/v1' },
                 { label: '🇨🇳 China', value: 'https://api.minimax.cn/v1' },
@@ -112,7 +139,7 @@
         },
         ollama: {
             prefix: 'ollama',
-            models: ['llama-3.3-70b', 'qwen-3', 'mistral-nemo'],
+            models: ['llama3.3', 'llama3.3:70b', 'qwen3', 'qwen3:30b', 'qwen3-coder', 'mistral-nemo'],
             bases: [{ label: 'Localhost (Default)', value: 'http://localhost:11434/v1' }],
         },
         custom: {
@@ -142,6 +169,38 @@
         select.className = inputEl.className;
         inputEl.replaceWith(select);
         return select;
+    }
+
+    function configureModelInput(id, models, placeholder) {
+        let modelEl = document.getElementById(id);
+        if (modelEl.tagName === 'SELECT') {
+            modelEl = switchToTextInput(modelEl, placeholder);
+        }
+        modelEl.type = 'text';
+        modelEl.placeholder = placeholder;
+        modelEl.disabled = false;
+
+        if (models && models.length > 0) {
+            modelEl.value = models[0];
+            const listId = `${id}-suggestions`;
+            let list = document.getElementById(listId);
+            if (!list) {
+                list = document.createElement('datalist');
+                list.id = listId;
+                document.body.appendChild(list);
+            }
+            list.innerHTML = '';
+            models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                list.appendChild(opt);
+            });
+            modelEl.setAttribute('list', listId);
+        } else {
+            modelEl.value = '';
+            modelEl.removeAttribute('list');
+        }
+        return modelEl;
     }
 
     // ── WebSocket with Improved Reconnection ────────────────
@@ -1208,11 +1267,7 @@
 
         if (p.isCustom) {
             // Custom provider: swap dropdowns to text inputs
-            let modelEl = document.getElementById('llm-model');
-            if (modelEl.tagName === 'SELECT') {
-                modelEl = switchToTextInput(modelEl, 'Model name (e.g. gpt-4o, claude-3.5-sonnet)');
-            }
-            modelEl.disabled = false;
+            configureModelInput('llm-model', [], 'Model name (e.g. gpt-5.4, claude-sonnet-4-20250514, gemini-3-pro-preview)');
 
             let baseEl = document.getElementById('llm-apibase');
             if (baseEl.tagName === 'SELECT') {
@@ -1220,27 +1275,8 @@
             }
             baseEl.disabled = false;
         } else {
-            // Known provider: ensure we have <select> elements
-            let modelEl = document.getElementById('llm-model');
-            if (modelEl.tagName === 'INPUT') {
-                modelEl = switchToSelect(modelEl);
-            }
-            modelEl.innerHTML = '';
-            if (p.models && p.models.length > 0) {
-                p.models.forEach(m => {
-                    const opt = document.createElement('option');
-                    opt.value = m;
-                    opt.textContent = m;
-                    modelEl.appendChild(opt);
-                });
-                modelEl.disabled = false;
-            } else {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'No models available';
-                modelEl.appendChild(opt);
-                modelEl.disabled = true;
-            }
+            // Known provider: keep suggestions but allow custom model IDs.
+            configureModelInput('llm-model', p.models || [], 'Model name (type custom ID or pick a suggestion)');
 
             let baseEl = document.getElementById('llm-apibase');
             if (baseEl.tagName === 'INPUT') {
@@ -1271,11 +1307,7 @@
         const p = LLM_PROVIDERS[provider] || {};
 
         if (p.isCustom) {
-            let modelEl = document.getElementById('dash-llm-model');
-            if (modelEl.tagName === 'SELECT') {
-                modelEl = switchToTextInput(modelEl, 'Model name (e.g. gpt-4o, claude-3.5-sonnet)');
-            }
-            modelEl.disabled = false;
+            configureModelInput('dash-llm-model', [], 'Model name (e.g. gpt-5.4, claude-sonnet-4-20250514, gemini-3-pro-preview)');
 
             let baseEl = document.getElementById('dash-llm-apibase');
             if (baseEl.tagName === 'SELECT') {
@@ -1283,26 +1315,7 @@
             }
             baseEl.disabled = false;
         } else {
-            let modelEl = document.getElementById('dash-llm-model');
-            if (modelEl.tagName === 'INPUT') {
-                modelEl = switchToSelect(modelEl);
-            }
-            modelEl.innerHTML = '';
-            if (p.models && p.models.length > 0) {
-                p.models.forEach(m => {
-                    const opt = document.createElement('option');
-                    opt.value = m;
-                    opt.textContent = m;
-                    modelEl.appendChild(opt);
-                });
-                modelEl.disabled = false;
-            } else {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'No models available';
-                modelEl.appendChild(opt);
-                modelEl.disabled = true;
-            }
+            configureModelInput('dash-llm-model', p.models || [], 'Model name (type custom ID or pick a suggestion)');
 
             let baseEl = document.getElementById('dash-llm-apibase');
             if (baseEl.tagName === 'INPUT') {

@@ -94,7 +94,6 @@ func main() {
 		autoUpdate()
 	}
 
-
 	if args.update {
 		fmt.Println("Updating xalgorix to latest version...")
 
@@ -186,7 +185,6 @@ func main() {
 		os.Exit(0)
 	}
 
-
 	cfg := config.Get()
 
 	// Set web package version from main — single source of truth
@@ -226,7 +224,7 @@ func main() {
 
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %s\n\n", err)
-		fmt.Fprintf(os.Stderr, "Set your model:     export XALGORIX_LLM='openai/gpt-5.4'\n")
+		fmt.Fprintf(os.Stderr, "Set your model:     export XALGORIX_LLM='minimax/MiniMax-M2.7'\n")
 		fmt.Fprintf(os.Stderr, "Set your API key:    export XALGORIX_API_KEY='sk-...'\n")
 		os.Exit(1)
 	}

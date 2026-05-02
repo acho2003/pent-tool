@@ -17,7 +17,7 @@ import (
 // Config holds all Xalgorix configuration.
 type Config struct {
 	// LLM settings
-	LLM             string // XALGORIX_LLM — model name (e.g. "openai/gpt-5.4", "anthropic/claude-sonnet-4-6")
+	LLM             string // XALGORIX_LLM — model name (e.g. "openai/gpt-5.4", "anthropic/claude-sonnet-4-20250514")
 	APIBase         string // XALGORIX_API_BASE — API endpoint
 	APIKey          string // XALGORIX_API_KEY — API key
 	ReasoningEffort string // XALGORIX_REASONING_EFFORT — "low", "medium", "high"
@@ -177,7 +177,7 @@ func (c *Config) WorkspacePath(rel string) string {
 // Validate checks that required configuration is present.
 func (c *Config) Validate() error {
 	if c.LLM == "" {
-		return fmt.Errorf("XALGORIX_LLM is required. Set it to a model like 'openai/gpt-5.4' or 'anthropic/claude-sonnet-4-6'")
+		return fmt.Errorf("XALGORIX_LLM is required. Set it to a model like 'openai/gpt-5.4' or 'anthropic/claude-sonnet-4-20250514'")
 	}
 	if c.APIKey == "" {
 		return fmt.Errorf("XALGORIX_API_KEY is required. Set it in ~/.xalgorix.env")

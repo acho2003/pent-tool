@@ -209,7 +209,7 @@ nano ~/.xalgorix.env
 
 ```bash
 # ⭐ Recommended — MiniMax (best performance-to-cost ratio for pentesting)
-XALGORIX_LLM=minimax/M2.7
+XALGORIX_LLM=minimax/MiniMax-M2.7
 XALGORIX_API_KEY=your_minimax_api_key
 
 # OR use OpenAI:
@@ -217,7 +217,7 @@ XALGORIX_API_KEY=your_minimax_api_key
 # XALGORIX_API_KEY=sk-...
 
 # OR use Anthropic:
-# XALGORIX_LLM=anthropic/claude-sonnet-4-6
+# XALGORIX_LLM=anthropic/claude-sonnet-4-20250514
 # XALGORIX_API_KEY=sk-ant-...
 
 # Optional
@@ -265,7 +265,7 @@ xalgorix --target https://example.com
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `XALGORIX_LLM` | Model name (with optional provider prefix) | `openai/gpt-5.4`, `anthropic/claude-opus-4-6`, `deepseek/deepseek-chat-v3`, `minimax/M2.7`, `custom/my-model` |
+| `XALGORIX_LLM` | Model name (with optional provider prefix) | `openai/gpt-5.4`, `anthropic/claude-opus-4-1-20250805`, `deepseek/deepseek-v4-pro`, `google/gemini-3.1-pro-preview`, `minimax/MiniMax-M2.7`, `custom/my-model` |
 | `XALGORIX_API_KEY` | API key | `sk-...` |
 
 #### Optional - API Base (for custom providers)
@@ -283,6 +283,10 @@ xalgorix --target https://example.com
 > **💡 Web Search:** If `GEMINI_API_KEY` is set, xalgorix will use Gemini for web search. Otherwise falls back to Brave/Google/Bing/DuckDuckGo scraping.
 
 > **💡 Custom Providers:** To use any custom LLM provider, just set `XALGORIX_LLM=custom/modelname` and `XALGORIX_API_BASE=https://your-api-endpoint.com/v1`
+>
+> **💡 Custom Model IDs:** The dashboard model fields provide suggestions but accept typed model IDs, so newly released models can be used without waiting for the dropdown list to be updated.
+>
+> **💡 Gemini API:** For Google Gemini keys, use the `google/` or `gemini/` prefix when possible. If you set an unprefixed/custom Gemini model with `XALGORIX_API_BASE=https://generativelanguage.googleapis.com/v1`, Xalgorix will still use Gemini's `generateContent` request format and `x-goog-api-key` authentication. Current text-model suggestions include `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3-flash-preview`, and `gemini-3.1-flash-lite-preview`.
 
 #### Supported Provider Prefixes (auto-detected)
 
@@ -329,15 +333,15 @@ xalgorix --target https://example.com
 
 ### Supported Models
 
-Xalgorix supports multiple LLM providers:
+Xalgorix supports multiple LLM providers. These are examples, not a hard allowlist:
 
-- ⭐ **MiniMax (Recommended)** — `minimax/M2.7`, `minimax/Text-01` — Best performance-to-cost for autonomous pentesting
-- **OpenAI** — `openai/gpt-5.4`, `openai/gpt-4o`, `openai/o3`
-- **Anthropic** — `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`
-- **DeepSeek** — `deepseek/deepseek-chat-v3`, `deepseek/deepseek-v3`, `deepseek/deepseek-coder`
-- **Google** — `google/gemini-3-flash-preview`, `google/gemini-3-pro-preview`
-- **Groq** — hosts Llama 4, Qwen 3, Mixtral (use model name directly)
-- **Ollama** — `ollama/llama-3.3-70b`, `ollama/qwen3` (local)
+- ⭐ **MiniMax (Recommended)** — `minimax/MiniMax-M2.7`, `minimax/MiniMax-M2.7-highspeed`, `minimax/MiniMax-M2.5` — Best performance-to-cost for autonomous pentesting
+- **OpenAI** — `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.2`, `openai/gpt-4.1`, `openai/o3`
+- **Anthropic** — `anthropic/claude-opus-4-1-20250805`, `anthropic/claude-sonnet-4-20250514`, `anthropic/claude-3-7-sonnet-latest`
+- **DeepSeek** — `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash` (`deepseek/deepseek-chat` and `deepseek/deepseek-reasoner` remain legacy compatibility aliases until DeepSeek retires them)
+- **Google** — `google/gemini-3.1-pro-preview`, `google/gemini-3.1-pro-preview-customtools`, `google/gemini-3-flash-preview`, `google/gemini-3.1-flash-lite-preview`, `google/gemini-2.5-pro`, `google/gemini-2.5-flash`
+- **Groq** — `groq/openai/gpt-oss-120b`, `groq/openai/gpt-oss-20b`, `groq/qwen/qwen3-32b`, `groq/meta-llama/llama-4-scout-17b-16e-instruct`
+- **Ollama** — `ollama/llama3.3`, `ollama/qwen3`, `ollama/qwen3-coder` (local)
 
 > 🎁 **Exclusive 10% OFF MiniMax:** [Get your discount here](https://platform.minimax.io/subscribe/coding-plan?code=4ujDUlOIz3&source=link)
 

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -111,6 +112,70 @@ XALGORIX_TEST_KEY5=with=equals=signs
 func TestLoadEnvFile_NonExistent(t *testing.T) {
 	// Should not panic on missing file
 	loadEnvFile("/nonexistent/path/.env")
+}
+
+func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("XALGORIX_DEBUG_CONFIG", "")
+
+	envFile := filepath.Join(home, ".xalgorix.env")
+	content := strings.Join([]string{
+		"XALGORIX_LLM=google/gemini-3.1-pro-preview",
+		"XALGORIX_API_BASE=https://generativelanguage.googleapis.com/v1",
+		"XALGORIX_API_KEY=gemini-key",
+		"XALGORIX_REASONING_EFFORT=medium",
+		"XALGORIX_LLM_MAX_RETRIES=2",
+		"XALGORIX_MEMORY_COMPRESSOR_TIMEOUT=45",
+		"XALGORIX_WORKSPACE=/tmp/xalgorix-workspace",
+		"XALGORIX_DISABLE_BROWSER=true",
+		"XALGORIX_MAX_ITERATIONS=12",
+		"XALGORIX_RATE_LIMIT_REQUESTS=7",
+		"XALGORIX_RATE_LIMIT_WINDOW=11",
+		"CAIDO_PORT=9090",
+		"CAIDO_API_TOKEN=caido-token",
+		"XALGORIX_TELEMETRY=false",
+		"XALGORIX_OTEL_ENDPOINT=http://otel.test",
+		"GEMINI_API_KEY=search-key",
+		"AGENTMAIL_API_KEY=agentmail-key",
+		"AGENTMAIL_POD=am_test_pod",
+		"XALGORIX_USERNAME=admin",
+		"XALGORIX_PASSWORD=password",
+		"XALGORIX_BROWSER_PATH=/opt/chrome",
+	}, "\n")
+	if err := os.WriteFile(envFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	cfg := load()
+	if cfg.LLM != "google/gemini-3.1-pro-preview" || cfg.APIBase != "https://generativelanguage.googleapis.com/v1" || cfg.APIKey != "gemini-key" {
+		t.Fatalf("LLM config not loaded: %#v", cfg)
+	}
+	if cfg.ReasoningEffort != "medium" || cfg.LLMMaxRetries != 2 || cfg.MemCompTimeout != 45 {
+		t.Fatalf("retry/memory settings not loaded: %#v", cfg)
+	}
+	if cfg.Workspace != "/tmp/xalgorix-workspace" || !cfg.DisableBrowser || cfg.MaxIterations != 12 {
+		t.Fatalf("runtime settings not loaded: %#v", cfg)
+	}
+	if cfg.RateLimitRequests != 7 || cfg.RateLimitWindow != 11 {
+		t.Fatalf("rate limit settings not loaded: %#v", cfg)
+	}
+	if cfg.CaidoPort != 9090 || cfg.CaidoAPIToken != "caido-token" {
+		t.Fatalf("Caido settings not loaded: %#v", cfg)
+	}
+	if cfg.Telemetry || cfg.OTelEndpoint != "http://otel.test" {
+		t.Fatalf("telemetry settings not loaded: %#v", cfg)
+	}
+	if cfg.GeminiAPIKey != "search-key" || cfg.AgentMailAPIKey != "agentmail-key" || cfg.AgentMailPod != "am_test_pod" {
+		t.Fatalf("integration settings not loaded: %#v", cfg)
+	}
+	if cfg.Username != "admin" || cfg.Password != "password" || cfg.BrowserPath != "/opt/chrome" {
+		t.Fatalf("dashboard/browser settings not loaded: %#v", cfg)
+	}
+	if cfg.HomeDir != filepath.Join(home, ".xalgorix") || cfg.SkillsDir != filepath.Join(home, ".xalgorix", "skills") {
+		t.Fatalf("home paths not derived from HOME: %#v", cfg)
+	}
 }
 
 func TestConfig_Validate(t *testing.T) {

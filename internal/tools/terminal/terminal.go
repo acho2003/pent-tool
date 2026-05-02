@@ -28,9 +28,9 @@ const maxOutputLen = 20000
 
 // Per-command timeout tiers
 const (
-	defaultCmdTimeout = 10 * time.Minute  // most commands
-	heavyCmdTimeout   = 60 * time.Minute  // nmap, nuclei, ffuf, gobuster, sqlmap, masscan
-	hardMaxTimeout    = 2 * time.Hour     // absolute ceiling — nothing runs longer
+	defaultCmdTimeout = 10 * time.Minute // most commands
+	heavyCmdTimeout   = 60 * time.Minute // nmap, nuclei, ffuf, gobuster, sqlmap, masscan
+	hardMaxTimeout    = 2 * time.Hour    // absolute ceiling — nothing runs longer
 )
 
 // ── Per-instance terminal stores ──
@@ -71,6 +71,13 @@ func getTermStoreByID(id string) *termStore {
 // getTermStore returns the terminal store for the default (CLI) scan context.
 func getTermStore() *termStore {
 	return getTermStoreByID(scanctx.Default().ID)
+}
+
+func normalizeContextID(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return scanctx.Default().ID
+	}
+	return id
 }
 
 // heavyToolPatterns are commands that get extended timeouts.
@@ -148,7 +155,16 @@ func setProcessLimits(cmd *exec.Cmd, heavy bool) {
 
 // ActiveProcessCount returns the number of currently running processes.
 func ActiveProcessCount() int {
-	s := getTermStore()
+	return ActiveProcessCountForContext(scanctx.Default().ID)
+}
+
+// ActiveProcessCountForContext returns the number of running processes for one context.
+func ActiveProcessCountForContext(contextID string) int {
+	contextID = normalizeContextID(contextID)
+	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
+		return sc.Terminal.ActiveProcessCount()
+	}
+	s := getTermStoreByID(contextID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.processGroup)
@@ -175,7 +191,13 @@ func GetActiveCommandStartTime() time.Time {
 
 // TrackProcess registers a command to be tracked by the watchdog and killed on Stop.
 func TrackProcess(cmd *exec.Cmd, cancel context.CancelFunc, commandStr string) {
-	s := getTermStore()
+	TrackProcessForContext(scanctx.Default().ID, cmd, cancel, commandStr)
+}
+
+// TrackProcessForContext registers a command against a specific scan context.
+func TrackProcessForContext(contextID string, cmd *exec.Cmd, cancel context.CancelFunc, commandStr string) {
+	contextID = normalizeContextID(contextID)
+	s := getTermStoreByID(contextID)
 	s.mu.Lock()
 	s.processGroup[cmd] = cancel
 	if len(commandStr) > 200 {
@@ -185,15 +207,31 @@ func TrackProcess(cmd *exec.Cmd, cancel context.CancelFunc, commandStr string) {
 	}
 	s.activeStartTime = time.Now()
 	s.mu.Unlock()
+
+	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
+		sc.Terminal.TrackProcess(cmd, cancel, commandStr)
+	}
 }
 
 // UntrackProcess removes a command from tracking once it completes.
 func UntrackProcess(cmd *exec.Cmd) {
-	s := getTermStore()
+	UntrackProcessForContext(scanctx.Default().ID, cmd)
+}
+
+// UntrackProcessForContext removes a command from a specific scan context.
+func UntrackProcessForContext(contextID string, cmd *exec.Cmd) {
+	contextID = normalizeContextID(contextID)
+	s := getTermStoreByID(contextID)
 	s.mu.Lock()
 	delete(s.processGroup, cmd)
-	s.activeCommand = ""
+	if len(s.processGroup) == 0 {
+		s.activeCommand = ""
+	}
 	s.mu.Unlock()
+
+	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
+		sc.Terminal.UntrackProcess(cmd)
+	}
 }
 
 // ReapDeadProcesses checks all tracked processes and removes any that have
@@ -237,11 +275,29 @@ func ClearStreamCallback() {
 	s.streamCallback = nil
 }
 
-// KillAllProcesses kills all running processes for the active scan context.
-func KillAllProcesses() {
-	s := getTermStore()
+func streamCallbackForContext(contextID string) func(string) {
+	contextID = normalizeContextID(contextID)
+	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
+		if cb := sc.Terminal.GetStreamCallback(); cb != nil {
+			return cb
+		}
+	}
+	s := getTermStoreByID(contextID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.streamCallback
+}
+
+// KillAllProcesses kills all running processes for the active scan context.
+func KillAllProcesses() {
+	KillAllProcessesForContext(scanctx.Default().ID)
+}
+
+// KillAllProcessesForContext kills all processes for one scan context.
+func KillAllProcessesForContext(contextID string) {
+	contextID = normalizeContextID(contextID)
+	s := getTermStoreByID(contextID)
+	s.mu.Lock()
 	for cmd, cancel := range s.processGroup {
 		if cmd != nil && cmd.Process != nil {
 			if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
@@ -255,19 +311,45 @@ func KillAllProcesses() {
 	}
 	s.processGroup = make(map[*exec.Cmd]context.CancelFunc)
 	s.activeCommand = ""
+	s.mu.Unlock()
+
+	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
+		sc.Terminal.KillAll()
+	}
 }
 
 // SetWorkDir sets the working directory for terminal commands.
 func SetWorkDir(dir string) {
-	s := getTermStore()
+	SetWorkDirForContext(scanctx.Default().ID, dir)
+}
+
+// SetWorkDirForContext sets the working directory for one scan context.
+func SetWorkDirForContext(contextID, dir string) {
+	contextID = normalizeContextID(contextID)
+	s := getTermStoreByID(contextID)
 	s.mu.Lock()
 	s.workDir = dir
 	s.mu.Unlock()
+
+	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
+		sc.Terminal.SetWorkDir(dir)
+	}
 }
 
 // GetWorkDir returns the current working directory.
 func GetWorkDir() string {
-	s := getTermStore()
+	return GetWorkDirForContext(scanctx.Default().ID)
+}
+
+// GetWorkDirForContext returns the current working directory for one scan context.
+func GetWorkDirForContext(contextID string) string {
+	contextID = normalizeContextID(contextID)
+	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
+		if wd := sc.Terminal.GetWorkDir(); wd != "" {
+			return wd
+		}
+	}
+	s := getTermStoreByID(contextID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.workDir
@@ -275,6 +357,7 @@ func GetWorkDir() string {
 
 // CleanupContext removes the terminal store for a deactivated context.
 func CleanupContext(contextID string) {
+	KillAllProcessesForContext(contextID)
 	termStoresMu.Lock()
 	defer termStoresMu.Unlock()
 	delete(termStores, contextID)
@@ -338,7 +421,7 @@ var packageMap = map[string]string{
 	"python3":     "python3",
 	"pip3":        "python3-pip",
 	"pip":         "python3-pip",
-	"scrapling":   "scrapling",   // Handled by pipx in installPackage
+	"scrapling":   "scrapling", // Handled by pipx in installPackage
 	"python-venv": "python3-venv",
 	// General
 	"tree":    "tree",
@@ -428,6 +511,8 @@ func executeCommandForRegistry(reg *tools.Registry, args map[string]string) (too
 }
 
 // executeCommand is the backward-compatible version using scanctx.Default().
+//
+//lint:ignore U1000 kept as a package-level compatibility wrapper for callers in this package.
 func executeCommand(args map[string]string) (tools.Result, error) {
 	return executeCommandWithContextID(scanctx.Default().ID, args)
 }
@@ -512,11 +597,13 @@ func runShellWithContext(contextID string, command string) (string, int) {
 	return runShellInternal(contextID, command)
 }
 
+//lint:ignore U1000 kept as a package-level compatibility wrapper for callers in this package.
 func runShell(command string) (string, int) {
 	return runShellInternal(scanctx.Default().ID, command)
 }
 
 func runShellInternal(contextID string, command string) (string, int) {
+	contextID = normalizeContextID(contextID)
 	// Ensure venv exists
 	ensureVenv()
 
@@ -559,7 +646,7 @@ func runShellInternal(contextID string, command string) (string, int) {
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	// Use goroutine-scoped workdir if set, otherwise default to config workspace
-	if wd := GetWorkDir(); wd != "" {
+	if wd := GetWorkDirForContext(contextID); wd != "" {
 		cmd.Dir = wd
 	} else {
 		cmd.Dir = cfg.Workspace
@@ -602,9 +689,9 @@ func runShellInternal(contextID string, command string) (string, int) {
 	// ── Layer 3: Post-start process limits ──
 	// Set OOM score and memory limits on the child process.
 	setProcessLimits(cmd, heavy)
-	
-	TrackProcess(cmd, cancel, cleanCmd)
-	defer UntrackProcess(cmd)
+
+	TrackProcessForContext(contextID, cmd, cancel, cleanCmd)
+	defer UntrackProcessForContext(contextID, cmd)
 
 	// Read output in goroutines with periodic streaming
 	// Buffers are capped at 5MB to prevent OOM on huge command output
@@ -634,10 +721,8 @@ func runShellInternal(contextID string, command string) (string, int) {
 				}
 				stdout.Write(chunk)
 
-				// Stream partial output every 10 seconds
-				s := getTermStoreByID(contextID)
-				s.mu.Lock()
-				cb := s.streamCallback
+				// Stream partial output every 10 seconds.
+				cb := streamCallbackForContext(contextID)
 				if cb != nil && time.Since(lastStream) > 10*time.Second {
 					out := stdout.String()
 					if len(out) > 2000 {
@@ -645,9 +730,6 @@ func runShellInternal(contextID string, command string) (string, int) {
 					}
 					cb(out)
 					lastStream = time.Now()
-					s.mu.Unlock()
-				} else {
-					s.mu.Unlock()
 				}
 			}
 			if err != nil {
@@ -798,12 +880,6 @@ func installPackage(pkg string) string {
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
 		homeDir = "/root"
-	}
-
-	// Use GOPATH if set, otherwise default
-	goPath := os.Getenv("GOPATH")
-	if goPath == "" {
-		goPath = homeDir + "/go"
 	}
 
 	// pipx-installed tools (Python)
@@ -1203,4 +1279,3 @@ func checkObfuscation(cmd string) string {
 
 	return ""
 }
-

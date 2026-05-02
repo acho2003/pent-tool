@@ -77,7 +77,6 @@ type Model struct {
 	showSplash   bool
 	splashPhase  int
 	chatLog      []string
-	inputBuffer  string
 	vulnCount    int
 	toolCount    int
 	iterCount    int

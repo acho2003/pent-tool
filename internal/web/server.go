@@ -8,7 +8,6 @@ import (
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	mathrand "math/rand/v2"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	mathrand "math/rand/v2"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -37,8 +37,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/xalgord/xalgorix/v4/internal/agent"
 	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
 	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
@@ -111,7 +111,7 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	defer rl.mu.Unlock()
 	now := time.Now()
 	windowStart := now.Add(-rl.window)
-	
+
 	// Get or create the slice
 	times := rl.requests[ip]
 	var valid []time.Time
@@ -120,12 +120,12 @@ func (rl *RateLimiter) Allow(ip string) bool {
 			valid = append(valid, t)
 		}
 	}
-	
+
 	if len(valid) >= rl.limit {
 		rl.requests[ip] = valid
 		return false
 	}
-	
+
 	rl.requests[ip] = append(valid, now)
 	return true
 }
@@ -138,7 +138,7 @@ func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			
+
 			// Use RemoteAddr only — do not trust X-Forwarded-For as it can be
 			// spoofed when running without a trusted reverse proxy. Strip the
 			// port so each TCP connection from the same client shares a bucket.
@@ -438,8 +438,6 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 
 // loginPageHTML is defined in login.go
 
-
-
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		// Reject cross-site WebSocket connections to prevent CSWSH attacks.
@@ -460,9 +458,9 @@ var upgrader = websocket.Upgrader{
 
 const (
 	// WebSocket keepalive settings
-	wsPingInterval  = 30 * time.Second
-	wsPongWait      = 60 * time.Second
-	wsWriteWait     = 10 * time.Second
+	wsPingInterval   = 30 * time.Second
+	wsPongWait       = 60 * time.Second
+	wsWriteWait      = 10 * time.Second
 	wsMaxMessageSize = 8192 // max incoming message from client
 	wsMaxClients     = 50
 	wsSendBufSize    = 512 // buffered channel size per client
@@ -583,9 +581,9 @@ type ScanRequest struct {
 	Targets        []string `json:"targets"`
 	Instruction    string   `json:"instruction"`
 	ScanMode       string   `json:"scan_mode"`       // "single" or "wildcard"
-	Model          string   `json:"model"`            // e.g. "minimax/MiniMax-M2.5"
-	APIKey         string   `json:"api_key"`          // provider API key
-	APIBase        string   `json:"api_base"`         // provider API base URL
+	Model          string   `json:"model"`           // e.g. "minimax/MiniMax-M2.5"
+	APIKey         string   `json:"api_key"`         // provider API key
+	APIBase        string   `json:"api_base"`        // provider API base URL
 	DiscordWebhook string   `json:"discord_webhook"` // Discord webhook URL
 	SeverityFilter []string `json:"severity_filter"` // e.g. ["critical", "high"]
 	// Internal fields — `json:"-"` makes them un-settable from the wire.
@@ -598,22 +596,22 @@ type ScanRequest struct {
 
 // WSEvent is a WebSocket message sent to clients.
 type WSEvent struct {
-	Type            string            `json:"type"`
-	Content         string            `json:"content,omitempty"`
-	ToolName        string            `json:"tool_name,omitempty"`
-	ToolArgs        map[string]string `json:"tool_args,omitempty"`
-	Output          string            `json:"output,omitempty"`
-	Error           string            `json:"error,omitempty"`
-	AgentID         string            `json:"agent_id,omitempty"`
-	Timestamp       string            `json:"timestamp,omitempty"`
-	Vulns           []VulnSummary     `json:"vulns,omitempty"`
-	TargetIndex     int               `json:"target_index,omitempty"`
-	TotalTargets    int               `json:"total_targets,omitempty"`
-	Target          string            `json:"target,omitempty"`
-	TotalTokens     int               `json:"total_tokens,omitempty"`
-	SubTargetIndex  int               `json:"sub_target_index,omitempty"`  // subdomain index within a wildcard target
-	SubTargetTotal  int               `json:"sub_target_total,omitempty"`  // total subdomains for current wildcard target
-	ParentTarget    string            `json:"parent_target,omitempty"`     // parent domain for subdomain scans
+	Type           string            `json:"type"`
+	Content        string            `json:"content,omitempty"`
+	ToolName       string            `json:"tool_name,omitempty"`
+	ToolArgs       map[string]string `json:"tool_args,omitempty"`
+	Output         string            `json:"output,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	AgentID        string            `json:"agent_id,omitempty"`
+	Timestamp      string            `json:"timestamp,omitempty"`
+	Vulns          []VulnSummary     `json:"vulns,omitempty"`
+	TargetIndex    int               `json:"target_index,omitempty"`
+	TotalTargets   int               `json:"total_targets,omitempty"`
+	Target         string            `json:"target,omitempty"`
+	TotalTokens    int               `json:"total_tokens,omitempty"`
+	SubTargetIndex int               `json:"sub_target_index,omitempty"` // subdomain index within a wildcard target
+	SubTargetTotal int               `json:"sub_target_total,omitempty"` // total subdomains for current wildcard target
+	ParentTarget   string            `json:"parent_target,omitempty"`    // parent domain for subdomain scans
 }
 
 // VulnSummary is a simplified vulnerability for the UI.
@@ -638,19 +636,19 @@ type VulnSummary struct {
 
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
-	ID           string      `json:"id"`
-	Target       string      `json:"target"`
-	ParentTarget string      `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
-	StartedAt    string      `json:"started_at"`
-	FinishedAt   string      `json:"finished_at,omitempty"`
-	Status      string      `json:"status"` // running, finished, stopped
-	StopReason  string      `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
-	ScanMode    string      `json:"scan_mode,omitempty"` // single, wildcard, dast
-	Events      []WSEvent   `json:"events"`
-	Vulns       []VulnSummary `json:"vulns"`
-	TotalTokens int         `json:"total_tokens"`
-	Iterations  int         `json:"iterations"`
-	ToolCalls   int         `json:"tool_calls"`
+	ID           string        `json:"id"`
+	Target       string        `json:"target"`
+	ParentTarget string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
+	StartedAt    string        `json:"started_at"`
+	FinishedAt   string        `json:"finished_at,omitempty"`
+	Status       string        `json:"status"`                // running, finished, stopped
+	StopReason   string        `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
+	ScanMode     string        `json:"scan_mode,omitempty"`   // single, wildcard, dast
+	Events       []WSEvent     `json:"events"`
+	Vulns        []VulnSummary `json:"vulns"`
+	TotalTokens  int           `json:"total_tokens"`
+	Iterations   int           `json:"iterations"`
+	ToolCalls    int           `json:"tool_calls"`
 }
 
 // QueueState persists scan queue state for recovery after restart
@@ -665,28 +663,28 @@ type QueueState struct {
 
 // ScanInstance represents a running or completed scan instance.
 type ScanInstance struct {
-	ID           string             `json:"id"`
-	Targets      string             `json:"targets"`
-	ParentTarget string             `json:"parent_target,omitempty"` // parent domain for subdomain scans
-	Status      string             `json:"status"` // running, finished, stopped
-	StartedAt   string             `json:"started_at"`
-	FinishedAt  string             `json:"finished_at,omitempty"`
-	StopReason  string             `json:"stop_reason,omitempty"` // why stopped (user, error, watchdog)
-	Iterations  int                `json:"iterations"`
-	ToolCalls   int                `json:"tool_calls"`
-	VulnCount   int                `json:"vuln_count"`
-	TotalTokens int                `json:"total_tokens"`
-	ScanMode    string             `json:"scan_mode"`
-	Instruction string             `json:"instruction,omitempty"` // custom scan instructions for restart
-	SeverityFilter []string        `json:"severity_filter,omitempty"` // severity filter for restart
-	DiscordWebhook string          `json:"-"` // discord webhook (not exposed to API)
-	Vulns       []VulnSummary      `json:"vulns,omitempty"`
-	agent       *agent.Agent
-	cancel      context.CancelFunc
-	scanDir     string
-	sctx        *scanctx.ScanContext // per-instance session state (vulns, notes, terminal, browser)
-	events      []WSEvent // buffered events for replay
-	mu          sync.RWMutex
+	ID                string        `json:"id"`
+	Targets           string        `json:"targets"`
+	ParentTarget      string        `json:"parent_target,omitempty"` // parent domain for subdomain scans
+	Status            string        `json:"status"`                  // running, finished, stopped
+	StartedAt         string        `json:"started_at"`
+	FinishedAt        string        `json:"finished_at,omitempty"`
+	StopReason        string        `json:"stop_reason,omitempty"` // why stopped (user, error, watchdog)
+	Iterations        int           `json:"iterations"`
+	ToolCalls         int           `json:"tool_calls"`
+	VulnCount         int           `json:"vuln_count"`
+	TotalTokens       int           `json:"total_tokens"`
+	ScanMode          string        `json:"scan_mode"`
+	Instruction       string        `json:"instruction,omitempty"`     // custom scan instructions for restart
+	SeverityFilter    []string      `json:"severity_filter,omitempty"` // severity filter for restart
+	DiscordWebhook    string        `json:"-"`                         // discord webhook (not exposed to API)
+	Vulns             []VulnSummary `json:"vulns,omitempty"`
+	agent             *agent.Agent
+	cancel            context.CancelFunc
+	scanDir           string
+	sctx              *scanctx.ScanContext // per-instance session state (vulns, notes, terminal, browser)
+	events            []WSEvent            // buffered events for replay
+	mu                sync.RWMutex
 	lastSessionTokens int // tracks token count from current session for delta calculation
 }
 
@@ -708,27 +706,74 @@ func (s *Server) saveQueueState(targets []string, idx int, instruction, scanMode
 		log.Printf("Error: failed to marshal queue state: %v", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(s.dataDir, "queue_state.json"), data, 0644); err != nil {
+	if err := os.WriteFile(s.queueStatePath(), data, 0644); err != nil {
 		log.Printf("Error: failed to save queue state: %v", err)
 	}
 }
 
-// loadQueueState loads queue state from disk if exists
-func (s *Server) loadQueueState() *QueueState {
-	data, err := os.ReadFile(filepath.Join(s.dataDir, "queue_state.json"))
+func (s *Server) queueStatePath() string {
+	return filepath.Join(s.dataDir, "queue_state.json")
+}
+
+func (s *Server) loadQueueStateWithError() (*QueueState, error) {
+	data, err := os.ReadFile(s.queueStatePath())
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var state QueueState
 	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// loadQueueState loads queue state from disk if exists
+func (s *Server) loadQueueState() *QueueState {
+	state, err := s.loadQueueStateWithError()
+	if err != nil {
 		return nil
 	}
-	return &state
+	return state
+}
+
+func (s *Server) validQueueState(clearInvalid bool) (*QueueState, string) {
+	state, err := s.loadQueueStateWithError()
+	if err != nil {
+		if clearInvalid && !os.IsNotExist(err) {
+			log.Printf("[queue] Invalid queue state, clearing: %v", err)
+			s.clearQueueState()
+		}
+		return nil, "missing_or_invalid"
+	}
+	if state == nil || !state.Active {
+		return nil, "inactive"
+	}
+	if len(state.Targets) == 0 {
+		if clearInvalid {
+			s.clearQueueState()
+		}
+		return nil, "empty"
+	}
+	if state.CurrentIdx < 0 {
+		if clearInvalid {
+			log.Printf("[queue] Corrupt queue state (idx=%d), clearing.", state.CurrentIdx)
+			s.clearQueueState()
+		}
+		return nil, "corrupt_index"
+	}
+	if state.CurrentIdx >= len(state.Targets) {
+		if clearInvalid {
+			log.Printf("[queue] Completed queue state (idx=%d, targets=%d), clearing.", state.CurrentIdx, len(state.Targets))
+			s.clearQueueState()
+		}
+		return nil, "completed"
+	}
+	return state, ""
 }
 
 // clearQueueState removes the queue state file
 func (s *Server) clearQueueState() {
-	if err := os.Remove(filepath.Join(s.dataDir, "queue_state.json")); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(s.queueStatePath()); err != nil && !os.IsNotExist(err) {
 		log.Printf("Warning: failed to remove queue state file: %v", err)
 	}
 }
@@ -740,7 +785,7 @@ type Server struct {
 	clients        map[*wsClient]bool
 	mu             sync.RWMutex
 	currentAgents  map[string]*agent.Agent // scanID → agent (replaces singleton currentAgent)
-	cancelScan     context.CancelFunc // cancels the current scan session context
+	cancelScan     context.CancelFunc      // cancels the current scan session context
 	running        atomic.Bool
 	stopReq        atomic.Bool
 	dataDir        string
@@ -762,7 +807,7 @@ func NewServer(cfg *config.Config, port int) *Server {
 	dataDir := filepath.Join(home, "xalgorix-data")
 	// Rate limit from config (defaults: 60 requests per minute)
 	rl := NewRateLimiter(cfg.RateLimitRequests, time.Duration(cfg.RateLimitWindow)*time.Second)
-	
+
 	srv := &Server{
 		cfg:            cfg,
 		port:           port,
@@ -797,7 +842,6 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to load static files: %w", err)
 	}
-
 
 	mux := http.NewServeMux()
 	// SPA handler: serve static files if they exist, otherwise serve index.html
@@ -855,7 +899,7 @@ func (s *Server) Start() error {
 	// Wrap with auth middleware (outermost) then rate limiting
 	authMw := authMiddleware(s.cfg)
 	rlMiddleware := rateLimitMiddleware(s.rateLimiter)
-	
+
 	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
 	log.Printf("Xalgorix Web UI → http://localhost:%d", s.port)
 	log.Printf("Scan data → %s", s.dataDir)
@@ -869,22 +913,11 @@ func (s *Server) Start() error {
 	// ── Auto-resume interrupted scan queue after short startup delay ──
 	go func() {
 		time.Sleep(5 * time.Second) // let HTTP server fully initialize
-		state := s.loadQueueState()
-		if state == nil || !state.Active {
-			return
-		}
-		// Defend against corrupted queue_state.json that has a CurrentIdx out
-		// of range — slicing would panic and crash the whole server on boot.
-		if state.CurrentIdx < 0 || state.CurrentIdx >= len(state.Targets) {
-			log.Printf("[AUTO-RESUME] Corrupt queue state (idx=%d, targets=%d), clearing.", state.CurrentIdx, len(state.Targets))
-			s.clearQueueState()
+		state, _ := s.validQueueState(true)
+		if state == nil {
 			return
 		}
 		remaining := state.Targets[state.CurrentIdx:]
-		if len(remaining) == 0 {
-			s.clearQueueState()
-			return
-		}
 		log.Printf("[AUTO-RESUME] Resuming interrupted scan queue: %d targets from index %d", len(remaining), state.CurrentIdx)
 		req := ScanRequest{
 			Targets:     remaining,
@@ -991,8 +1024,8 @@ func (s *Server) initDataDir() {
 	}
 
 	// Check for interrupted queue — will auto-resume after server starts
-	if state := s.loadQueueState(); state != nil && state.Active {
-		log.Printf("Found interrupted scan queue: %d targets remaining from index %d (will auto-resume in 5s)", 
+	if state, _ := s.validQueueState(true); state != nil {
+		log.Printf("Found interrupted scan queue: %d targets remaining from index %d (will auto-resume in 5s)",
 			len(state.Targets)-state.CurrentIdx, state.CurrentIdx)
 	}
 }
@@ -1078,7 +1111,6 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "started", "instance_id": instanceID})
 }
-
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.stopReq.Store(true)
@@ -1206,14 +1238,14 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	response := map[string]any{
 		"instances": instances,
 		"resources": map[string]any{
-			"cpu_cores":         stats.CPUCores,
-			"cpu_load_1m":       stats.LoadAvg1m,
-			"ram_total_mb":      stats.MemTotalMB,
-			"ram_available_mb":  stats.MemAvailableMB,
-			"disk_free_mb":      stats.DiskFreeMB,
-			"level":             level.String(),
-			"reason":            reason,
-			"max_instances":     resources.MaxInstances(),
+			"cpu_cores":        stats.CPUCores,
+			"cpu_load_1m":      stats.LoadAvg1m,
+			"ram_total_mb":     stats.MemTotalMB,
+			"ram_available_mb": stats.MemAvailableMB,
+			"disk_free_mb":     stats.DiskFreeMB,
+			"level":            level.String(),
+			"reason":           reason,
+			"max_instances":    resources.MaxInstances(),
 		},
 	}
 	json.NewEncoder(w).Encode(response)
@@ -1331,12 +1363,12 @@ type scanSession struct {
 	discoveryMode  bool
 	genReport      bool
 	resetState     bool
-	instanceID     string // parent instance ID for multi-instance tracking
-	scanMode       string // single, wildcard, dast — persisted so dashboard shows correct mode
+	instanceID     string               // parent instance ID for multi-instance tracking
+	scanMode       string               // single, wildcard, dast — persisted so dashboard shows correct mode
 	sctx           *scanctx.ScanContext // per-session isolated state
 
 	// Wildcard lifecycle flags
-	skipNotesCleanup    bool   // when true, don't delete notes store on cleanup (discovery phase)
+	skipNotesCleanup     bool   // when true, don't delete notes store on cleanup (discovery phase)
 	parentReportingCtxID string // stable context ID for accumulating vulns across wildcard subdomain scans
 }
 
@@ -1543,10 +1575,10 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	go func() {
 		defer close(done)
 		defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[PANIC] Event processor panicked: %v — continuing\n%s", r, debug.Stack())
-		}
-	}() // never let panic escape event processor
+			if r := recover(); r != nil {
+				log.Printf("[PANIC] Event processor panicked: %v — continuing\n%s", r, debug.Stack())
+			}
+		}() // never let panic escape event processor
 		for evt := range events {
 			s.processEvent(evt, sess)
 		}
@@ -1957,7 +1989,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// scan from destroying a running scan's processes and state.
 	s.clearQueueState()
 	s.running.Store(true)
-	s.stopReq.Store(false) // clear global stop so this scan isn't immediately aborted
+	s.stopReq.Store(false)      // clear global stop so this scan isn't immediately aborted
 	req.InstanceID = instanceID // thread instance ID to all target handlers
 	if req.DiscordWebhook != "" {
 		s.discordWebhook = req.DiscordWebhook
@@ -2266,10 +2298,10 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		// Each subdomain gets its own isolated session wrapped in a panic guard
 		func() {
 			defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[PANIC] Subdomain %d/%d crashed (%s): %v — skipping to next\n%s", j+1, len(subdomains), subdomain, r, debug.Stack())
-			s.broadcastToInstance(req.InstanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Subdomain %s crashed: %v — skipping", subdomain, r)})
-		}
+				if r := recover(); r != nil {
+					log.Printf("[PANIC] Subdomain %d/%d crashed (%s): %v — skipping to next\n%s", j+1, len(subdomains), subdomain, r, debug.Stack())
+					s.broadcastToInstance(req.InstanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Subdomain %s crashed: %v — skipping", subdomain, r)})
+				}
 			}()
 
 			subScanDir := s.makeScanDir(subdomain)
@@ -2443,10 +2475,7 @@ func (s *Server) collectSubdomains(scanDir, target, contextID string) []string {
 
 	// Normalize target to root domain — strip www. prefix so "www.zooptos.com" → "zooptos.com"
 	// This ensures api.zooptos.com matches when user entered www.zooptos.com
-	rootTarget := target
-	if strings.HasPrefix(rootTarget, "www.") {
-		rootTarget = rootTarget[4:]
-	}
+	rootTarget := strings.TrimPrefix(target, "www.")
 
 	// ansiRegex strips ANSI escape codes (color, cursor, etc.) from tool output.
 	// Tools like dnsx emit sequences like \x1b[35m that corrupt domain matching.
@@ -2485,10 +2514,10 @@ func (s *Server) collectSubdomains(scanDir, target, contextID string) []string {
 
 	// stripMarkdown removes common markdown formatting from a token
 	stripMarkdown := func(s string) string {
-		s = strings.ReplaceAll(s, "**", "")  // bold
-		s = strings.ReplaceAll(s, "__", "")  // bold alt
-		s = strings.ReplaceAll(s, "`", "")   // code
-		s = strings.ReplaceAll(s, "*", "")   // italic
+		s = strings.ReplaceAll(s, "**", "") // bold
+		s = strings.ReplaceAll(s, "__", "") // bold alt
+		s = strings.ReplaceAll(s, "`", "")  // code
+		s = strings.ReplaceAll(s, "*", "")  // italic
 		s = strings.TrimRight(s, "/.,;:()[]{}\"'")
 		s = strings.TrimLeft(s, "/.,;:()[]{}\"'")
 		return s
@@ -2589,7 +2618,6 @@ func (s *Server) collectSubdomains(scanDir, target, contextID string) []string {
 		"passive_assetfinder.txt", "passive_dnsbufferover.txt", "archive_subdomains.txt",
 		"resolved_subdomains.txt", "httpx_output.txt", "dnsx_output.txt",
 	}
-
 
 	// Layer 1: Check exact files in scan directory
 	for _, name := range subdomainFileNames {
@@ -2868,8 +2896,6 @@ func diskAvailable(path string) uint64 {
 	return stat.Bavail * uint64(stat.Bsize)
 }
 
-
-
 // vulnToSummary converts a reporting.Vulnerability to a VulnSummary with all fields.
 func vulnToSummary(v reporting.Vulnerability) VulnSummary {
 	return VulnSummary{
@@ -2892,8 +2918,6 @@ func vulnToSummary(v reporting.Vulnerability) VulnSummary {
 	}
 }
 
-
-
 // generateReportAt generates a PDF report, saving it to a specific directory.
 func (s *Server) generateReportAt(scan *ScanRecord, scanDir string) (string, error) {
 	// Temporarily set currentScanDir for the report generator,
@@ -2914,8 +2938,8 @@ func (s *Server) generateReportAt(scan *ScanRecord, scanDir string) (string, err
 
 // scanEntry holds a discovered scan.json path and its parsed record.
 type scanEntry struct {
-	dir  string     // directory containing scan.json
-	rec  ScanRecord // parsed record
+	dir string     // directory containing scan.json
+	rec ScanRecord // parsed record
 }
 
 // findAllScans recursively walks dataDir to find all scan.json files.
@@ -3067,7 +3091,7 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 // handleRateLimit handles GET and POST for rate limit settings.
 func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	switch r.Method {
 	case "GET":
 		// Return current rate limit settings
@@ -3075,7 +3099,7 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 			"requests": s.cfg.RateLimitRequests,
 			"window":   s.cfg.RateLimitWindow,
 		})
-		
+
 	case "POST":
 		// Update rate limit settings
 		var req struct {
@@ -3086,7 +3110,7 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		
+
 		// Validate values
 		if req.Requests < 1 {
 			req.Requests = 1
@@ -3100,48 +3124,57 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 		if req.Window > 3600 {
 			req.Window = 3600
 		}
-		
+
 		// Update config
 		s.cfg.RateLimitRequests = req.Requests
 		s.cfg.RateLimitWindow = req.Window
-		
+
 		// Recreate rate limiter with new settings
 		if s.rateLimiter != nil {
 			s.rateLimiter.Stop()
 		}
 		s.rateLimiter = NewRateLimiter(req.Requests, time.Duration(req.Window)*time.Second)
-		
+
 		log.Printf("Rate limiting updated: %d requests/%ds per IP", req.Requests, req.Window)
-		
+
 		json.NewEncoder(w).Encode(map[string]int{
 			"requests": req.Requests,
 			"window":   req.Window,
 		})
-		
+
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
+func maskAgentMailKey(apiKey string) string {
+	if len(apiKey) > 8 {
+		return "****" + apiKey[len(apiKey)-8:]
+	}
+	if apiKey != "" {
+		return "****"
+	}
+	return ""
+}
+
+func isMaskedAgentMailKey(apiKey string) bool {
+	apiKey = strings.TrimSpace(apiKey)
+	return strings.HasPrefix(apiKey, "****") || strings.Contains(apiKey, "••••")
+}
+
 // handleAgentMailSettings handles GET and POST for AgentMail settings.
 func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	switch r.Method {
 	case "GET":
 		// Return current AgentMail settings (without exposing the full API key)
-		apiKey := s.cfg.AgentMailAPIKey
-		masked := ""
-		if len(apiKey) > 8 {
-			masked = "****" + apiKey[len(apiKey)-8:]
-		} else if apiKey != "" {
-			masked = "****"
-		}
-		json.NewEncoder(w).Encode(map[string]string{
-			"pod":     s.cfg.AgentMailPod,
-			"apiKey":  masked,
+		json.NewEncoder(w).Encode(map[string]any{
+			"pod":       s.cfg.AgentMailPod,
+			"apiKey":    maskAgentMailKey(s.cfg.AgentMailAPIKey),
+			"hasApiKey": s.cfg.AgentMailAPIKey != "",
 		})
-		
+
 	case "POST":
 		// Update AgentMail settings
 		var req struct {
@@ -3152,11 +3185,17 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		
+
+		preserveKey := strings.TrimSpace(req.APIKey) == "" || isMaskedAgentMailKey(req.APIKey)
+		effectiveAPIKey := req.APIKey
+		if preserveKey {
+			effectiveAPIKey = s.cfg.AgentMailAPIKey
+		}
+
 		// Update config
 		s.cfg.AgentMailPod = req.Pod
-		s.cfg.AgentMailAPIKey = req.APIKey
-		
+		s.cfg.AgentMailAPIKey = effectiveAPIKey
+
 		// Save to env file — read existing content and update only relevant keys
 		home, homeErr := os.UserHomeDir()
 		if homeErr != nil {
@@ -3165,7 +3204,7 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		envFile := filepath.Join(home, ".xalgorix.env")
-		
+
 		existing, _ := os.ReadFile(envFile) // OK to ignore — file may not exist yet
 		lines := strings.Split(string(existing), "\n")
 		var newLines []string
@@ -3176,7 +3215,11 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 				newLines = append(newLines, "AGENTMAIL_POD="+req.Pod)
 				podSet = true
 			} else if strings.HasPrefix(trimmed, "AGENTMAIL_API_KEY=") {
-				newLines = append(newLines, "AGENTMAIL_API_KEY="+req.APIKey)
+				if preserveKey {
+					newLines = append(newLines, line)
+				} else {
+					newLines = append(newLines, "AGENTMAIL_API_KEY="+effectiveAPIKey)
+				}
 				keySet = true
 			} else {
 				newLines = append(newLines, line)
@@ -3185,10 +3228,10 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 		if !podSet {
 			newLines = append(newLines, "AGENTMAIL_POD="+req.Pod)
 		}
-		if !keySet {
-			newLines = append(newLines, "AGENTMAIL_API_KEY="+req.APIKey)
+		if !keySet && effectiveAPIKey != "" {
+			newLines = append(newLines, "AGENTMAIL_API_KEY="+effectiveAPIKey)
 		}
-		
+
 		if err := os.WriteFile(envFile, []byte(strings.Join(newLines, "\n")), 0o600); err != nil {
 			log.Printf("Failed to save AgentMail settings: %v", err)
 		} else {
@@ -3199,19 +3242,15 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 				log.Printf("Warning: could not chmod %s to 0600: %v", envFile, chmodErr)
 			}
 		}
-		
+
 		log.Printf("AgentMail settings updated: pod=%s", req.Pod)
-		
-		// Safe masking — handle short API keys
-		maskedKey := "****"
-		if len(req.APIKey) > 8 {
-			maskedKey = "****" + req.APIKey[len(req.APIKey)-8:]
-		}
-		json.NewEncoder(w).Encode(map[string]string{
-			"pod":    req.Pod,
-			"apiKey": maskedKey,
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"pod":       req.Pod,
+			"apiKey":    maskAgentMailKey(effectiveAPIKey),
+			"hasApiKey": effectiveAPIKey != "",
 		})
-		
+
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -3228,16 +3267,14 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 // handleStopNotify sends a stop notification to Discord if a scan was running
 func (s *Server) handleStopNotify(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	// Send Discord notification if webhook is configured
 	if s.discordWebhook != "" {
 		s.sendDiscord(0xff6b6b, "🛑 Xalgorix Stopped", "The Xalgorix service has been stopped by the user.")
 	}
-	
+
 	json.NewEncoder(w).Encode(map[string]string{"status": "notified"})
 }
-
-
 
 // handleChat allows users to send messages to the agent during a scan
 type ChatRequest struct {
@@ -3292,37 +3329,37 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 // handleQueueStatus returns the current queue state for recovery
 func (s *Server) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
-	if state := s.loadQueueState(); state != nil && state.Active {
+
+	if state, _ := s.validQueueState(true); state != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"available":      true,
-			"targets":        state.Targets,
-			"current_idx":    state.CurrentIdx,
-			"remaining":      len(state.Targets) - state.CurrentIdx,
-			"instruction":    state.Instruction,
-			"scan_mode":     state.ScanMode,
-			"started_at":    state.StartedAt,
+			"available":   true,
+			"targets":     state.Targets,
+			"current_idx": state.CurrentIdx,
+			"remaining":   len(state.Targets) - state.CurrentIdx,
+			"instruction": state.Instruction,
+			"scan_mode":   state.ScanMode,
+			"started_at":  state.StartedAt,
 		})
 	} else {
-		json.NewEncoder(w).Encode(map[string]bool{"available": false})
+		json.NewEncoder(w).Encode(map[string]any{"available": false})
 	}
 }
 
 // handleQueueResume resumes an interrupted scan queue
 func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if s.running.Load() {
 		json.NewEncoder(w).Encode(map[string]string{"error": "A scan is already running"})
 		return
 	}
-	
-	state := s.loadQueueState()
-	if state == nil || !state.Active {
+
+	state, _ := s.validQueueState(true)
+	if state == nil {
 		json.NewEncoder(w).Encode(map[string]string{"error": "No interrupted queue found"})
 		return
 	}
-	
+
 	// Resume from where we left off
 	remaining := state.Targets[state.CurrentIdx:]
 	req := ScanRequest{
@@ -3330,15 +3367,15 @@ func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 		Instruction: state.Instruction,
 		ScanMode:    state.ScanMode,
 	}
-	
+
 	// Start resume in background
 	scanCfg := *s.cfg
 	go s.runMultiScan(req, &scanCfg)
-	
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "resumed",
 		"from_index":   state.CurrentIdx,
-		"targets_left":  len(remaining),
+		"targets_left": len(remaining),
 	})
 }
 
@@ -3632,8 +3669,6 @@ func (s *Server) sendSimpleEmbed(color int, title, description string) {
 		resp.Body.Close()
 	}()
 }
-
-
 
 // startCaidoProxy launches Caido proxy in background if it's installed and not already running.
 func startCaidoProxy() {

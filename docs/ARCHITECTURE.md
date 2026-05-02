@@ -122,9 +122,9 @@ CONFIGURATION
 ═════════════
 
 ~/.xalgorix.env:
-├── XALGORIX_LLM          = "openai/gpt-5.4"
+├── XALGORIX_LLM          = "minimax/MiniMax-M2.7"
 ├── XALGORIX_API_KEY     = "sk-..."
-├── XALGORIX_API_BASE    = "https://api.openai.com/"
+├── XALGORIX_API_BASE    = "https://api.minimax.io/v1" (optional)
 ├── GEMINI_API_KEY        = "AIza..."    (optional)
 ├── XALGORIX_DISCORD_WEBHOOK = "https://discord.com/..." (optional)
 └── XALGORIX_RATE_LIMIT  = 60 req/60s
