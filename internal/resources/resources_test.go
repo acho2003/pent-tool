@@ -57,27 +57,56 @@ func TestEnvHelpers(t *testing.T) {
 func TestPerInstanceMemoryBudgetIncludesToolAndOverhead(t *testing.T) {
 	oldLimit := HeavyToolMemLimitBytes
 	oldOverhead := scanOverheadMB
+	oldBudget := scanMemoryBudgetMB
 	t.Cleanup(func() {
 		HeavyToolMemLimitBytes = oldLimit
 		scanOverheadMB = oldOverhead
+		scanMemoryBudgetMB = oldBudget
 	})
 
 	HeavyToolMemLimitBytes = 1500 * 1024 * 1024
 	scanOverheadMB = 700
+	scanMemoryBudgetMB = 2048
 	if got := perInstanceMemoryBudgetMB(); got != 2200 {
-		t.Fatalf("perInstanceMemoryBudgetMB = %d, want 2200", got)
+		t.Fatalf("perInstanceMemoryBudgetMB expands to fit explicit tool limit = %d, want 2200", got)
 	}
 
 	HeavyToolMemLimitBytes = 0
 	scanOverheadMB = 128
+	scanMemoryBudgetMB = 2048
+	if got := perInstanceMemoryBudgetMB(); got != 2048 {
+		t.Fatalf("perInstanceMemoryBudgetMB default budget = %d, want 2048", got)
+	}
+
+	scanMemoryBudgetMB = 512
 	if got := perInstanceMemoryBudgetMB(); got != 1024 {
-		t.Fatalf("perInstanceMemoryBudgetMB minimum = %d, want 1024", got)
+		t.Fatalf("perInstanceMemoryBudgetMB floor = %d, want 1024", got)
+	}
+}
+
+func TestAutoHeavyToolLimitFitsInsideScanBudget(t *testing.T) {
+	oldOverhead := scanOverheadMB
+	oldBudget := scanMemoryBudgetMB
+	t.Cleanup(func() {
+		scanOverheadMB = oldOverhead
+		scanMemoryBudgetMB = oldBudget
+	})
+
+	scanMemoryBudgetMB = 2048
+	scanOverheadMB = 384
+	if got := autoHeavyToolMemLimitMB(8192); got != 1664 {
+		t.Fatalf("autoHeavyToolMemLimitMB(8GB) = %d, want 1664", got)
+	}
+
+	if got := autoHeavyToolMemLimitMB(4096); got != 1024 {
+		t.Fatalf("autoHeavyToolMemLimitMB(4GB) = %d, want 1024", got)
 	}
 }
 
 func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 	oldLimit := HeavyToolMemLimitBytes
 	oldOverhead := scanOverheadMB
+	oldBudget := scanMemoryBudgetMB
 	oldCriticalRAM := ramCriticalMB
 	oldCPUCritical := cpuCriticalPct
 	oldCPUBudget := perScanCPULoad
@@ -85,6 +114,7 @@ func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 	t.Cleanup(func() {
 		HeavyToolMemLimitBytes = oldLimit
 		scanOverheadMB = oldOverhead
+		scanMemoryBudgetMB = oldBudget
 		ramCriticalMB = oldCriticalRAM
 		cpuCriticalPct = oldCPUCritical
 		perScanCPULoad = oldCPUBudget
@@ -93,6 +123,7 @@ func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 
 	HeavyToolMemLimitBytes = 1500 * 1024 * 1024
 	scanOverheadMB = 500
+	scanMemoryBudgetMB = 2048
 	ramCriticalMB = 1000
 	cpuCriticalPct = 90
 	perScanCPULoad = 1
@@ -104,8 +135,8 @@ func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 		MemAvailableMB: 11000,
 	}
 	got, _ := effectiveMaxInstancesForStats(stats, LevelOK, "OK")
-	if got != 5 {
-		t.Fatalf("dynamic instances = %d, want 5 from RAM capacity", got)
+	if got != 4 {
+		t.Fatalf("dynamic instances = %d, want 4 from RAM capacity", got)
 	}
 
 	manualMaxInstances = 3

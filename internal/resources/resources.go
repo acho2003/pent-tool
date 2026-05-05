@@ -84,9 +84,13 @@ var (
 	// Auto-scaled in init() based on total RAM. Set to 0 to disable.
 	HeavyToolMemLimitBytes int64
 
+	// Total RAM budget per running scan instance. This is the admission-control
+	// unit used to decide how many scans can run concurrently.
+	scanMemoryBudgetMB = envInt64("XALGORIX_SCAN_MEMORY_BUDGET_MB", 2048)
+
 	// Extra RAM budget per running scan for the Go process, browser state,
 	// LLM history, buffers, and small helper tools around one heavy command.
-	scanOverheadMB = envInt64("XALGORIX_SCAN_OVERHEAD_MB", 1024)
+	scanOverheadMB = envInt64("XALGORIX_SCAN_OVERHEAD_MB", 384)
 )
 
 func init() {
@@ -107,17 +111,19 @@ func init() {
 	ramCautionMB = envInt64("XALGORIX_RAM_CAUTION_MB", autoCaution)
 	ramCriticalMB = envInt64("XALGORIX_RAM_CRITICAL_MB", autoCritical)
 
+	if scanMemoryBudgetMB < 1024 {
+		log.Printf("[RESOURCES] XALGORIX_SCAN_MEMORY_BUDGET_MB=%d too low, using 1024", scanMemoryBudgetMB)
+		scanMemoryBudgetMB = 1024
+	}
+	if scanOverheadMB < 128 {
+		log.Printf("[RESOURCES] XALGORIX_SCAN_OVERHEAD_MB=%d too low, using 128", scanOverheadMB)
+		scanOverheadMB = 128
+	}
+
 	// ── Per-tool memory limit ──
-	// Formula: 25% of total RAM, capped at 4GB.
-	// 4GB VPS → 1024 MB per tool,  24GB → 4096 MB per tool (capped)
-	autoMemLimit := totalMB / 4
-	if autoMemLimit > 4096 {
-		autoMemLimit = 4096
-	}
-	if autoMemLimit < 256 {
-		autoMemLimit = 256
-	}
-	HeavyToolMemLimitBytes = envInt64("XALGORIX_HEAVY_TOOL_MEM_LIMIT_MB", autoMemLimit) * 1024 * 1024
+	// Default: fit one heavy tool inside the per-instance scan budget, leaving
+	// scanOverheadMB for the agent, browser, buffers, and helper processes.
+	HeavyToolMemLimitBytes = envInt64("XALGORIX_HEAVY_TOOL_MEM_LIMIT_MB", autoHeavyToolMemLimitMB(totalMB)) * 1024 * 1024
 
 	manualCap := "none"
 	if manualMaxInstances > 0 {
@@ -268,11 +274,33 @@ func cpuInstanceCapacity(stats SystemStats) int {
 
 func perInstanceMemoryBudgetMB() int64 {
 	toolLimitMB := HeavyToolMemLimitBytes / (1024 * 1024)
-	budget := toolLimitMB + scanOverheadMB
+	budget := scanMemoryBudgetMB
+	minBudget := toolLimitMB + scanOverheadMB
+	if minBudget > budget {
+		budget = minBudget
+	}
 	if budget < 1024 {
 		return 1024
 	}
 	return budget
+}
+
+func autoHeavyToolMemLimitMB(totalMB int64) int64 {
+	// Base limit scales with host memory but is capped. The scan-budget cap
+	// below is what keeps the default admission model around 2GB per instance.
+	limit := totalMB / 4
+	if limit > 4096 {
+		limit = 4096
+	}
+	if limit < 256 {
+		limit = 256
+	}
+
+	budgetedLimit := scanMemoryBudgetMB - scanOverheadMB
+	if budgetedLimit >= 256 && limit > budgetedLimit {
+		limit = budgetedLimit
+	}
+	return limit
 }
 
 // CanAdmitScan decides whether a new scan instance should be started.
