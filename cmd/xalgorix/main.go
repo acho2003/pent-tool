@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/tui"
 	"github.com/xalgord/xalgorix/v4/internal/web"
 )
@@ -186,6 +187,7 @@ func main() {
 	}
 
 	cfg := config.Get()
+	resources.ProtectCurrentProcess()
 
 	// Set web package version from main — single source of truth
 	web.Version = version
@@ -404,6 +406,7 @@ EnvironmentFile=%s/.xalgorix.env
 ExecStart=%s --web
 Restart=always
 RestartSec=10
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target

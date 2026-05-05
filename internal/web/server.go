@@ -1234,19 +1234,21 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 
 	// Include resource stats so the UI can explain why scans are pending
 	stats := resources.GetStats()
-	level, reason := resources.CurrentLevel()
+	level, _ := resources.CurrentLevel()
+	effectiveMax, reason := resources.EffectiveMaxInstances()
 	response := map[string]any{
 		"instances": instances,
 		"resources": map[string]any{
-			"cpu_cores":              stats.CPUCores,
-			"cpu_load_1m":            stats.LoadAvg1m,
-			"ram_total_mb":           stats.MemTotalMB,
-			"ram_available_mb":       stats.MemAvailableMB,
-			"disk_free_mb":           stats.DiskFreeMB,
-			"level":                  level.String(),
-			"reason":                 reason,
-			"max_instances":          resources.MaxInstances(),
-			"effective_max_instances": resources.LiveMaxInstances(),
+			"cpu_cores":               stats.CPUCores,
+			"cpu_load_1m":             stats.LoadAvg1m,
+			"ram_total_mb":            stats.MemTotalMB,
+			"ram_available_mb":        stats.MemAvailableMB,
+			"disk_free_mb":            stats.DiskFreeMB,
+			"level":                   level.String(),
+			"reason":                  reason,
+			"max_instances":           effectiveMax,
+			"manual_max_instances":    resources.MaxInstances(),
+			"effective_max_instances": effectiveMax,
 		},
 	}
 	json.NewEncoder(w).Encode(response)
@@ -2108,6 +2110,13 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 			s.runDASTTarget(ctx, scanCfg, req, target, i, totalTargets)
 		default:
 			s.runSingleTarget(ctx, scanCfg, req, target, i, totalTargets)
+		}
+
+		instance.mu.RLock()
+		instStoppedAfterTarget := instance.Status == "stopped"
+		instance.mu.RUnlock()
+		if !s.stopReq.Load() && !instStoppedAfterTarget {
+			s.saveQueueState(req.Targets, i+1, req.Instruction, req.ScanMode)
 		}
 
 		cancel() // always cancel context after target is done

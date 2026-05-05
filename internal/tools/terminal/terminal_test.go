@@ -56,6 +56,12 @@ func TestCommandHelpers_ClassifyHeavyToolsAndPackages(t *testing.T) {
 	if !isHeavyTool("nuclei -u https://example.test") {
 		t.Fatal("nuclei should be classified as heavy")
 	}
+	if !isHeavyTool("httpx -l hosts.txt -silent") {
+		t.Fatal("httpx should be classified as heavy")
+	}
+	if !isHeavyTool("naabu -host example.test") {
+		t.Fatal("naabu should be classified as heavy")
+	}
 	if isHeavyTool("curl -I https://example.test") {
 		t.Fatal("curl should not be classified as heavy")
 	}

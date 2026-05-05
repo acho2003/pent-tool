@@ -3,6 +3,7 @@ package scanctx
 import (
 	"context"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -86,12 +87,7 @@ func (ts *TerminalState) KillAll() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	for cmd, cancel := range ts.processGroup {
-		if cmd != nil && cmd.Process != nil {
-			if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
-				syscall.Kill(-pgid, syscall.SIGKILL)
-			}
-			cmd.Process.Kill()
-		}
+		killTrackedProcess(cmd)
 		if cancel != nil {
 			cancel()
 		}
@@ -119,6 +115,28 @@ func (ts *TerminalState) ReapDead() int {
 		ts.activeCommand = ""
 	}
 	return reaped
+}
+
+func killTrackedProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	pid := cmd.Process.Pid
+	if pgid, err := syscall.Getpgid(pid); err == nil && pgid > 0 {
+		selfPGID, selfErr := syscall.Getpgid(os.Getpid())
+		if selfErr != nil || pgid != selfPGID {
+			if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				log.Printf("[termstate] Failed to kill process group %d for pid %d: %v", pgid, pid, err)
+			}
+		} else {
+			log.Printf("[termstate] Refusing to kill process group %d for pid %d because it matches xalgorix", pgid, pid)
+		}
+	}
+
+	if err := cmd.Process.Kill(); err != nil && err != os.ErrProcessDone {
+		log.Printf("[termstate] Failed to kill process pid %d: %v", pid, err)
+	}
 }
 
 // SetStreamCallback sets a callback for partial output streaming.

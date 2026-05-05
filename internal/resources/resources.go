@@ -70,33 +70,28 @@ var (
 	ramCriticalMB int64
 
 	// Disk: minimum free disk in MB.
-	diskCautionMB  = envInt64("XALGORIX_DISK_CAUTION_MB", 2048) // 2 GB
+	diskCautionMB  = envInt64("XALGORIX_DISK_CAUTION_MB", 2048)  // 2 GB
 	diskCriticalMB = envInt64("XALGORIX_DISK_CRITICAL_MB", 1024) // 1 GB
 
-	// Hard ceiling on concurrent instances regardless of resources.
-	// Auto-scaled in init() based on CPU cores.
-	maxInstances int
+	// Optional manual ceiling on concurrent instances. By default there is no
+	// static instance limit; live CPU/RAM headroom computes the ceiling.
+	manualMaxInstances = envOptionalInt("XALGORIX_MAX_INSTANCES")
+
+	// Estimated load-average budget consumed by one active scan instance.
+	perScanCPULoad = envFloat("XALGORIX_SCAN_CPU_LOAD", 1.0)
 
 	// Per-process memory limit for heavy tools (bytes).
 	// Auto-scaled in init() based on total RAM. Set to 0 to disable.
 	HeavyToolMemLimitBytes int64
+
+	// Extra RAM budget per running scan for the Go process, browser state,
+	// LLM history, buffers, and small helper tools around one heavy command.
+	scanOverheadMB = envInt64("XALGORIX_SCAN_OVERHEAD_MB", 1024)
 )
 
 func init() {
 	cores := runtime.NumCPU()
 	totalMB, _ := readMemInfo()
-
-	// ── Max concurrent scan instances ──
-	// Formula: max(1, cores / 2), capped at 10.
-	// 1-core  → 1 instance,  2-core → 1,  4-core → 2,  12-core → 6
-	autoMax := cores / 2
-	if autoMax < 1 {
-		autoMax = 1
-	}
-	if autoMax > 10 {
-		autoMax = 10
-	}
-	maxInstances = envInt("XALGORIX_MAX_INSTANCES", autoMax)
 
 	// ── RAM thresholds ──
 	// Caution: 25% of total RAM (4GB VPS → 1024MB, 24GB → 6144MB)
@@ -124,10 +119,14 @@ func init() {
 	}
 	HeavyToolMemLimitBytes = envInt64("XALGORIX_HEAVY_TOOL_MEM_LIMIT_MB", autoMemLimit) * 1024 * 1024
 
-	log.Printf("[RESOURCES] Auto-scaled for %d cores, %d MB RAM: max_instances=%d, "+
-		"ram_caution=%dMB, ram_critical=%dMB, tool_mem_limit=%dMB",
-		cores, totalMB, maxInstances, ramCautionMB, ramCriticalMB,
-		HeavyToolMemLimitBytes/(1024*1024))
+	manualCap := "none"
+	if manualMaxInstances > 0 {
+		manualCap = strconv.Itoa(manualMaxInstances)
+	}
+	log.Printf("[RESOURCES] Auto-scaled for %d cores, %d MB RAM: manual_instance_cap=%s, "+
+		"ram_caution=%dMB, ram_critical=%dMB, tool_mem_limit=%dMB, scan_budget=%dMB, cpu_budget=%.1f",
+		cores, totalMB, manualCap, ramCautionMB, ramCriticalMB,
+		HeavyToolMemLimitBytes/(1024*1024), perInstanceMemoryBudgetMB(), perScanCPULoad)
 }
 
 // ── Public API ──
@@ -195,48 +194,85 @@ func CurrentLevel() (Level, string) {
 	return level, strings.Join(reasons, "; ")
 }
 
-// EffectiveMaxInstances computes the live concurrency ceiling based on
-// current system resources. This dynamically shrinks below maxInstances
-// when CPU or RAM is under pressure.
+// EffectiveMaxInstances computes the live concurrency ceiling from current CPU,
+// RAM, and disk pressure. There is no static default instance cap; if
+// XALGORIX_MAX_INSTANCES is set, it is treated as an optional manual override.
 //
 // Algorithm:
-//   - Start from the static maxInstances ceiling
-//   - At LevelCaution: halve the ceiling (min 1)
-//   - At LevelCritical: drop to 1
-//   - Also cap by available RAM: each instance gets ~500MB headroom
+//   - Compute CPU slots from remaining load-average headroom
+//   - Compute RAM slots from available RAM and per-instance memory budget
+//   - At LevelCaution: halve the dynamic ceiling
+//   - At LevelCritical: admit no new scans until pressure recovers
+//   - Apply XALGORIX_MAX_INSTANCES only when explicitly configured
 func EffectiveMaxInstances() (int, string) {
 	stats := GetStats()
 	level, reason := CurrentLevel()
+	return effectiveMaxInstancesForStats(stats, level, reason)
+}
 
-	effective := maxInstances
+func effectiveMaxInstancesForStats(stats SystemStats, level Level, reason string) (int, string) {
+	ramCap := memoryInstanceCapacity(stats)
+	cpuCap := cpuInstanceCapacity(stats)
+	effective := minInt(ramCap, cpuCap)
 
-	// ── RAM-based cap ──
-	// Each running scan + its tools needs ~500MB headroom.
-	// Reserve ramCriticalMB for the OS, divide the rest by 500.
-	spare := stats.MemAvailableMB - ramCriticalMB
-	if spare < 0 {
-		spare = 0
-	}
-	ramCap := int(spare / 500)
-	if ramCap < 1 {
-		ramCap = 1
-	}
-	if ramCap < effective {
-		effective = ramCap
-	}
-
-	// ── Pressure-based reduction ──
 	switch level {
 	case LevelCritical:
-		effective = 1
+		effective = 0
 	case LevelCaution:
 		effective = effective / 2
-		if effective < 1 {
+		if effective == 0 && ramCap > 0 && cpuCap > 0 {
 			effective = 1
 		}
 	}
 
-	return effective, reason
+	if manualMaxInstances > 0 && effective > manualMaxInstances {
+		effective = manualMaxInstances
+	}
+
+	detail := fmt.Sprintf("%s; dynamic slots: cpu=%d, ram=%d, scan_budget=%dMB",
+		reason, cpuCap, ramCap, perInstanceMemoryBudgetMB())
+	if manualMaxInstances > 0 {
+		detail += fmt.Sprintf(", manual_cap=%d", manualMaxInstances)
+	}
+	return effective, detail
+}
+
+func memoryInstanceCapacity(stats SystemStats) int {
+	spare := stats.MemAvailableMB - ramCriticalMB
+	if spare <= 0 {
+		return 0
+	}
+	ramCap := int(spare / perInstanceMemoryBudgetMB())
+	if ramCap < 1 {
+		return 1
+	}
+	return ramCap
+}
+
+func cpuInstanceCapacity(stats SystemStats) int {
+	budget := perScanCPULoad
+	if budget <= 0 {
+		budget = 1
+	}
+	criticalLoad := float64(stats.CPUCores) * cpuCriticalPct / 100
+	headroom := criticalLoad - stats.LoadAvg1m
+	if headroom <= 0 {
+		return 0
+	}
+	capacity := int(headroom / budget)
+	if capacity < 1 {
+		return 1
+	}
+	return capacity
+}
+
+func perInstanceMemoryBudgetMB() int64 {
+	toolLimitMB := HeavyToolMemLimitBytes / (1024 * 1024)
+	budget := toolLimitMB + scanOverheadMB
+	if budget < 1024 {
+		return 1024
+	}
+	return budget
 }
 
 // CanAdmitScan decides whether a new scan instance should be started.
@@ -245,9 +281,13 @@ func EffectiveMaxInstances() (int, string) {
 func CanAdmitScan(runningCount int) (bool, string) {
 	effMax, reason := EffectiveMaxInstances()
 
+	if effMax <= 0 {
+		return false, fmt.Sprintf("dynamic limit: resources unavailable (%s)", reason)
+	}
+
 	if runningCount >= effMax {
-		return false, fmt.Sprintf("dynamic limit: %d/%d instances (ceiling=%d, %s)",
-			runningCount, effMax, maxInstances, reason)
+		return false, fmt.Sprintf("dynamic limit: %d/%d instances (%s)",
+			runningCount, effMax, reason)
 	}
 
 	return true, fmt.Sprintf("%d/%d instances — %s", runningCount, effMax, reason)
@@ -296,15 +336,32 @@ func WaitForResources(isHeavy bool, maxWait time.Duration, toolName string) bool
 	return false
 }
 
-// MaxInstances returns the configured hard ceiling (static, set at init).
+// MaxInstances returns the optional manual cap. A zero value means no static
+// cap is configured and the live resource ceiling is used directly.
 func MaxInstances() int {
-	return maxInstances
+	return manualMaxInstances
 }
 
 // LiveMaxInstances returns the current effective ceiling (dynamic, based on live resources).
 func LiveMaxInstances() int {
 	n, _ := EffectiveMaxInstances()
 	return n
+}
+
+// ProtectCurrentProcess lowers the OOM-killer score for the xalgorix parent
+// process. Child scan tools are assigned a higher score when they launch, so
+// under memory pressure the kernel should kill a tool before the web service.
+func ProtectCurrentProcess() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte("-500"), 0644); err != nil {
+		if !os.IsPermission(err) {
+			log.Printf("[RESOURCES] Cannot protect xalgorix from OOM killer: %v", err)
+		}
+		return
+	}
+	log.Printf("[RESOURCES] xalgorix OOM score set to -500")
 }
 
 // ── Linux /proc readers ──
@@ -398,9 +455,29 @@ func envInt(key string, defaultVal int) int {
 	return int(envInt64(key, int64(defaultVal)))
 }
 
+func envOptionalInt(key string) int {
+	s, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(s) == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 1 {
+		log.Printf("[RESOURCES] Invalid %s=%q, ignoring manual cap", key, s)
+		return 0
+	}
+	return v
+}
+
 // max returns the larger of two Levels.
 func maxLevel(a, b Level) Level {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

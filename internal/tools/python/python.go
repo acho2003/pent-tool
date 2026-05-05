@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
@@ -80,14 +81,17 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 		cmd.Dir = config.Get().Workspace
 	}
 	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newLimitedBuffer(1024 * 1024)
+	stderr := newLimitedBuffer(512 * 1024)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		return tools.Result{Error: fmt.Sprintf("Failed to start python process: %v", err)}, nil
 	}
+	terminal.ApplyProcessLimits(cmd, true)
 
 	// Register with terminal so watchdog knows we are active
 	cleanCode := code
@@ -106,6 +110,9 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 			out = out[:15000] + "\n... [OUTPUT TRUNCATED]"
 		}
 		b.WriteString(out)
+		if stdout.Truncated() {
+			b.WriteString("\n... [OUTPUT TRUNCATED: exceeded 1MB]")
+		}
 	}
 
 	if stderr.Len() > 0 {
@@ -118,6 +125,9 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 			errOut = errOut[:5000] + "\n... [TRUNCATED]"
 		}
 		b.WriteString(errOut)
+		if stderr.Truncated() {
+			b.WriteString("\n... [STDERR TRUNCATED: exceeded 512KB]")
+		}
 	}
 
 	if err != nil {
@@ -133,4 +143,33 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 	}
 
 	return tools.Result{Output: b.String()}, nil
+}
+
+type limitedBuffer struct {
+	bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newLimitedBuffer(limit int) *limitedBuffer {
+	return &limitedBuffer{limit: limit}
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 || b.Len() >= b.limit {
+		b.truncated = true
+		return len(p), nil
+	}
+	remaining := b.limit - b.Len()
+	if len(p) > remaining {
+		b.truncated = true
+		_, _ = b.Buffer.Write(p[:remaining])
+		return len(p), nil
+	}
+	_, _ = b.Buffer.Write(p)
+	return len(p), nil
+}
+
+func (b *limitedBuffer) Truncated() bool {
+	return b.truncated
 }

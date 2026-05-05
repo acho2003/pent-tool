@@ -69,8 +69,8 @@ type Agent struct {
 	cancel        context.CancelFunc
 	lastActivity  time.Time
 	activityMu    sync.Mutex
-	scanStart     time.Time // when Run() was called
-	discoveryMode bool      // When true, allow finish at any iteration (for Phase 1 enumeration)
+	scanStart     time.Time     // when Run() was called
+	discoveryMode bool          // When true, allow finish at any iteration (for Phase 1 enumeration)
 	hooks         *HookRegistry // extensible lifecycle hooks
 	state         *ScanState    // shared mutable scan state for hooks
 }
@@ -201,8 +201,8 @@ func (a *Agent) startWatchdog() func() {
 
 	const (
 		processMaxDuration = 30 * time.Minute // kill single process after this
-		scanMaxDuration    = 0               // 0 = infinite (no scan-level timeout — needed for 300+ domain scans)
-		idleKillThreshold  = 0 * time.Minute // 0 = disabled (stuck-loop detection handles per-target stalls)
+		scanMaxDuration    = 0                // 0 = infinite (no scan-level timeout — needed for 300+ domain scans)
+		idleKillThreshold  = 0 * time.Minute  // 0 = disabled (stuck-loop detection handles per-target stalls)
 	)
 
 	go func() {
@@ -376,6 +376,12 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 		case <-hardTimeout:
 			// Tool exceeded its hard timeout — force return
 			a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Tool '%s' timed out after %s. Force-returning to prevent infinite hang.", toolName, hardTimeoutDuration)})
+			switch toolName {
+			case "terminal_execute", "python_action":
+				a.scanCtx.Terminal.KillAll()
+			case "browser_action":
+				browser.CleanupContext(a.scanCtx.ID)
+			}
 			return tools.Result{Error: fmt.Sprintf("tool '%s' timed out after %s", toolName, hardTimeoutDuration)}, nil
 
 		case <-a.ctx.Done():
@@ -884,10 +890,10 @@ func (a *Agent) forcePruneMessages() {
 // working memory without consuming excessive tokens.
 func compactMessages(msgs []llm.Message) string {
 	var sb strings.Builder
-	toolsRun := make(map[string]int)      // tool_name -> count
-	endpoints := make(map[string]bool)      // unique endpoints/URLs seen
-	var findings []string                   // key findings extracted
-	var errors []string                     // errors encountered
+	toolsRun := make(map[string]int)   // tool_name -> count
+	endpoints := make(map[string]bool) // unique endpoints/URLs seen
+	var findings []string              // key findings extracted
+	var errors []string                // errors encountered
 
 	for _, msg := range msgs {
 		content := msg.Content
@@ -998,7 +1004,6 @@ func compactMessages(msgs []llm.Message) string {
 
 	return sb.String()
 }
-
 
 func (a *Agent) emit(evt Event) {
 	evt.AgentID = a.ID

@@ -84,7 +84,10 @@ func normalizeContextID(id string) string {
 var heavyToolPatterns = []string{
 	"nmap", "nuclei", "ffuf", "gobuster", "dirsearch", "feroxbuster",
 	"sqlmap", "masscan", "wpscan", "joomscan", "dalfox", "katana",
-	"gospider", "subfinder", "amass", "rustscan",
+	"gospider", "subfinder", "amass", "rustscan", "httpx", "dnsx",
+	"naabu", "tlsx", "mapcidr", "alterx", "asnmap", "uncover", "gau",
+	"waybackurls", "hakrawler", "arjun", "paramspider", "dirb", "whatweb",
+	"wafw00f",
 }
 
 // isHeavyTool returns true if the command involves a resource-intensive tool.
@@ -118,7 +121,8 @@ func setProcessLimits(cmd *exec.Cmd, heavy bool) {
 
 	// ── OOM score adjustment ──
 	// Score 500 = "kill me before most things, but not before 1000"
-	// xalgorix itself stays at default (0), so kernel prefers killing children.
+	// xalgorix protects itself with a negative score, so the kernel prefers
+	// killing children under memory pressure.
 	oomPath := fmt.Sprintf("/proc/%d/oom_score_adj", pid)
 	if err := os.WriteFile(oomPath, []byte("500"), 0644); err != nil {
 		// Not fatal — best effort. Fails if not running as root.
@@ -151,6 +155,12 @@ func setProcessLimits(cmd *exec.Cmd, heavy bool) {
 	} else {
 		log.Printf("[RESOURCES] PID %d: OOM score set to 500", pid)
 	}
+}
+
+// ApplyProcessLimits applies the same child-process protections used by
+// terminal_execute to subprocess-based tools in other packages.
+func ApplyProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
+	setProcessLimits(cmd, memoryLimited)
 }
 
 // ActiveProcessCount returns the number of currently running processes.
@@ -299,12 +309,7 @@ func KillAllProcessesForContext(contextID string) {
 	s := getTermStoreByID(contextID)
 	s.mu.Lock()
 	for cmd, cancel := range s.processGroup {
-		if cmd != nil && cmd.Process != nil {
-			if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
-				syscall.Kill(-pgid, syscall.SIGKILL)
-			}
-			cmd.Process.Kill()
-		}
+		killTrackedProcess(cmd)
 		if cancel != nil {
 			cancel()
 		}
@@ -315,6 +320,28 @@ func KillAllProcessesForContext(contextID string) {
 
 	if sc := scanctx.Get(contextID); sc != nil && sc.Terminal != nil {
 		sc.Terminal.KillAll()
+	}
+}
+
+func killTrackedProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	pid := cmd.Process.Pid
+	if pgid, err := syscall.Getpgid(pid); err == nil && pgid > 0 {
+		selfPGID, selfErr := syscall.Getpgid(os.Getpid())
+		if selfErr != nil || pgid != selfPGID {
+			if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				log.Printf("[terminal] Failed to kill process group %d for pid %d: %v", pgid, pid, err)
+			}
+		} else {
+			log.Printf("[terminal] Refusing to kill process group %d for pid %d because it matches xalgorix", pgid, pid)
+		}
+	}
+
+	if err := cmd.Process.Kill(); err != nil && err != os.ErrProcessDone {
+		log.Printf("[terminal] Failed to kill process pid %d: %v", pid, err)
 	}
 }
 
