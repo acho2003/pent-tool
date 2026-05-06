@@ -53,6 +53,12 @@ type Config struct {
 	Username string // XALGORIX_USERNAME - dashboard login username
 	Password string // XALGORIX_PASSWORD - dashboard login password
 
+	// Proxy settings
+	UseProxy      bool   // XALGORIX_USE_PROXY — enable proxy support
+	ProxyFile     string // XALGORIX_PROXY_FILE — path to proxies.txt
+	ProxyRotation string // XALGORIX_PROXY_ROTATION — "roundrobin" (default) or "random"
+	ProxyURL      string // XALGORIX_PROXY_URL — single proxy URL (overrides file)
+
 	// Paths
 	HomeDir     string // ~/.xalgorix
 	SkillsDir   string // embedded or local skills directory
@@ -133,6 +139,12 @@ func load() *Config {
 		Username: envOr("XALGORIX_USERNAME", ""),
 		Password: envOr("XALGORIX_PASSWORD", ""),
 
+		// Proxy
+		UseProxy:      envOrBool("XALGORIX_USE_PROXY", false),
+		ProxyFile:     envOr("XALGORIX_PROXY_FILE", ""),
+		ProxyRotation: envOr("XALGORIX_PROXY_ROTATION", "roundrobin"),
+		ProxyURL:      envOr("XALGORIX_PROXY_URL", ""),
+
 		// Paths
 		HomeDir:     xalgorixHome,
 		SkillsDir:   filepath.Join(xalgorixHome, "skills"),
@@ -151,7 +163,7 @@ func load() *Config {
 		} else if cfg.APIKey != "" {
 			maskedKey = "****"
 		}
-		fmt.Printf("[config] Loaded: LLM=%q APIBase=%q APIKey=%s\n", cfg.LLM, cfg.APIBase, maskedKey)
+		fmt.Printf("[config] Loaded: LLM=%q APIBase=%q APIKey=%s UseProxy=%v\n", cfg.LLM, cfg.APIBase, maskedKey, cfg.UseProxy)
 	}
 
 	return cfg
@@ -182,7 +194,6 @@ func (c *Config) Validate() error {
 	if c.APIKey == "" {
 		return fmt.Errorf("XALGORIX_API_KEY is required. Set it in ~/.xalgorix.env")
 	}
-
 	return nil
 }
 
@@ -195,12 +206,10 @@ func CheckEnvFile() error {
 
 	envPath := filepath.Join(home, ".xalgorix.env")
 
-	// Check if file exists
 	if _, err := os.Stat(envPath); os.IsNotExist(err) {
 		return fmt.Errorf("configuration file not found: %s\n\nPlease create it with:\n  XALGORIX_LLM=minimax/MiniMax-M2.7\n  XALGORIX_API_KEY=your_api_key\n\nOr run: xalgorix --setup", envPath)
 	}
 
-	// Read file directly to check for required variables (not system env vars)
 	llm := ""
 	apiKey := ""
 
