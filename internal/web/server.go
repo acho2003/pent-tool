@@ -1819,13 +1819,20 @@ func (s *Server) executeScanSession(sess *scanSession) {
 
 	s.saveScanRecordTo(sess.record, sess.scanDir)
 
-	// 10. Generate report if requested
-	if sess.genReport && len(sess.record.Vulns) > 0 {
+	// 10. Generate report if requested (always generate, even for clean scans)
+	if sess.genReport {
 		if p, err := s.generateReportAt(sess.record, sess.scanDir); err == nil {
 			log.Printf("PDF report saved: %s", p)
-			desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found\n**Completed at:** %s",
-				sess.target, len(sess.record.Vulns), time.Now().Format("15:04:05 MST"))
-			s.sendDiscordWithFile(0x3b82f6, "✅ Scan Finished - Report Ready", desc, p)
+			vulnCount := len(sess.record.Vulns)
+			if vulnCount > 0 {
+				desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found\n**Completed at:** %s",
+					sess.target, vulnCount, time.Now().Format("15:04:05 MST"))
+				s.sendDiscordWithFile(0x3b82f6, "✅ Scan Finished - Report Ready", desc, p)
+			} else {
+				desc := fmt.Sprintf("**Target:** %s\n**Result:** No vulnerabilities found (clean scan)\n**Completed at:** %s",
+					sess.target, time.Now().Format("15:04:05 MST"))
+				s.sendDiscordWithFile(0x2dd4bf, "✅ Scan Finished - Clean Report", desc, p)
+			}
 			if sess.instanceID != "" {
 				s.broadcastToInstance(sess.instanceID, WSEvent{Type: "report_ready", Content: fmt.Sprintf("/api/report/%s", sess.id)})
 			} else {
