@@ -642,22 +642,26 @@ type VulnSummary struct {
 
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
-	ID           string        `json:"id"`
-	Target       string        `json:"target"`
-	ParentTarget string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
-	StartedAt    string        `json:"started_at"`
-	FinishedAt   string        `json:"finished_at,omitempty"`
-	Status       string        `json:"status"`                // running, finished, stopped
-	StopReason   string        `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
-	ScanMode     string        `json:"scan_mode,omitempty"`   // single, wildcard, dast
-	Events       []WSEvent     `json:"events"`
-	Vulns        []VulnSummary `json:"vulns"`
-	TotalTokens  int           `json:"total_tokens"`
-	Iterations   int           `json:"iterations"`
-	ToolCalls    int           `json:"tool_calls"`
-	CompanyName  string        `json:"company_name,omitempty"` // report branding: company name
-	LogoPath     string        `json:"logo_path,omitempty"`    // report branding: logo path
-	Phases       []int         `json:"phases,omitempty"`       // selected methodology phases
+	ID             string        `json:"id"`
+	Name           string        `json:"name,omitempty"`          // user-defined scan name
+	Target         string        `json:"target"`
+	ParentTarget   string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
+	StartedAt      string        `json:"started_at"`
+	FinishedAt     string        `json:"finished_at,omitempty"`
+	Status         string        `json:"status"`                // saved, running, finished, stopped
+	StopReason     string        `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
+	ScanMode       string        `json:"scan_mode,omitempty"`   // single, wildcard, dast
+	Instruction    string        `json:"instruction,omitempty"`     // custom scan instructions
+	SeverityFilter []string      `json:"severity_filter,omitempty"` // severity filter for scan
+	DiscordWebhook string        `json:"discord_webhook,omitempty"` // discord notification webhook
+	Events         []WSEvent     `json:"events"`
+	Vulns          []VulnSummary `json:"vulns"`
+	TotalTokens    int           `json:"total_tokens"`
+	Iterations     int           `json:"iterations"`
+	ToolCalls      int           `json:"tool_calls"`
+	CompanyName    string        `json:"company_name,omitempty"` // report branding: company name
+	LogoPath       string        `json:"logo_path,omitempty"`    // report branding: logo path
+	Phases         []int         `json:"phases,omitempty"`       // selected methodology phases
 }
 
 // QueueState persists scan queue state for recovery after restart
@@ -1124,12 +1128,13 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	// Save-only mode: create a persistent scan config without starting execution
 	if req.SaveOnly {
 		instanceID := randomSlug()
+		now := time.Now().Format(time.RFC3339Nano)
 		inst := &ScanInstance{
 			ID:             instanceID,
 			Name:           req.Name,
 			Targets:        strings.Join(req.Targets, ", "),
 			Status:         "saved",
-			StartedAt:      time.Now().Format(time.RFC3339Nano),
+			StartedAt:      now,
 			ScanMode:       req.ScanMode,
 			Instruction:    req.Instruction,
 			SeverityFilter: req.SeverityFilter,
@@ -1141,6 +1146,30 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		s.instancesMu.Lock()
 		s.instances[instanceID] = inst
 		s.instancesMu.Unlock()
+
+		// Persist to disk so saved targets survive server restarts
+		targetStr := strings.Join(req.Targets, ", ")
+		savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
+		if err := os.MkdirAll(savedDir, 0755); err != nil {
+			log.Printf("[ERROR] failed to create saved-target dir %s: %v", savedDir, err)
+		} else {
+			rec := &ScanRecord{
+				ID:             instanceID,
+				Name:           req.Name,
+				Target:         targetStr,
+				Status:         "saved",
+				StartedAt:      now,
+				ScanMode:       req.ScanMode,
+				Instruction:    req.Instruction,
+				SeverityFilter: req.SeverityFilter,
+				Phases:         req.Phases,
+				CompanyName:    req.CompanyName,
+				LogoPath:       req.LogoPath,
+				DiscordWebhook: req.DiscordWebhook,
+			}
+			s.saveScanRecordTo(rec, savedDir)
+		}
+
 		s.broadcastDashboard(WSEvent{
 			Type:    "instance_started",
 			Content: instanceID,
@@ -1447,6 +1476,10 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		s.instancesMu.Lock()
 		delete(s.instances, instanceID)
 		s.instancesMu.Unlock()
+
+		// Clean up on-disk saved-target directory
+		savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
+		os.RemoveAll(savedDir)
 
 		s.stopReq.Store(false)
 		scanCfg := *s.cfg
@@ -3357,18 +3390,25 @@ func (s *Server) rebuildInstancesFromDisk() {
 			continue
 		}
 		inst := &ScanInstance{
-			ID:           entry.rec.ID,
-			Targets:      entry.rec.Target,
-			ParentTarget: entry.rec.ParentTarget,
-			Status:       entry.rec.Status,
-			StartedAt:    entry.rec.StartedAt,
-			FinishedAt:   entry.rec.FinishedAt,
-			StopReason:   entry.rec.StopReason,
-			Iterations:   entry.rec.Iterations,
-			ToolCalls:    entry.rec.ToolCalls,
-			VulnCount:    len(entry.rec.Vulns),
-			TotalTokens:  entry.rec.TotalTokens,
-			ScanMode:     entry.rec.ScanMode,
+			ID:             entry.rec.ID,
+			Name:           entry.rec.Name,
+			Targets:        entry.rec.Target,
+			ParentTarget:   entry.rec.ParentTarget,
+			Status:         entry.rec.Status,
+			StartedAt:      entry.rec.StartedAt,
+			FinishedAt:     entry.rec.FinishedAt,
+			StopReason:     entry.rec.StopReason,
+			Iterations:     entry.rec.Iterations,
+			ToolCalls:      entry.rec.ToolCalls,
+			VulnCount:      len(entry.rec.Vulns),
+			TotalTokens:    entry.rec.TotalTokens,
+			ScanMode:       entry.rec.ScanMode,
+			Instruction:    entry.rec.Instruction,
+			SeverityFilter: entry.rec.SeverityFilter,
+			Phases:         entry.rec.Phases,
+			CompanyName:    entry.rec.CompanyName,
+			LogoPath:       entry.rec.LogoPath,
+			DiscordWebhook: entry.rec.DiscordWebhook,
 		}
 		// If scan was "running" from a previous server instance, it's no longer active
 		if inst.Status == "running" {
