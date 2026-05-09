@@ -33,6 +33,9 @@ type Config struct {
 	// Rate limiting & API settings
 	RateLimitRequests int // XALGORIX_RATE_LIMIT_REQUESTS — requests per window
 	RateLimitWindow   int // XALGORIX_RATE_LIMIT_WINDOW — window in seconds
+	RateLimitRPS      float64
+	RateLimitBurst    int
+	TLSSkipVerify     bool
 
 	// Caido proxy
 	CaidoPort     int    // CAIDO_PORT
@@ -121,6 +124,9 @@ func load() *Config {
 		// Rate limiting (defaults: 60 requests per 60 seconds)
 		RateLimitRequests: envOrInt("XALGORIX_RATE_LIMIT_REQUESTS", 60),
 		RateLimitWindow:   envOrInt("XALGORIX_RATE_LIMIT_WINDOW", 60),
+		RateLimitRPS:      envOrFloat("XALGORIX_RATE_RPS", 10),
+		RateLimitBurst:    envOrInt("XALGORIX_RATE_BURST", 20),
+		TLSSkipVerify:     envOrBool("XALGORIX_TLS_SKIP_VERIFY", envOrBool("XALGORIX_TLS_INSECURE_SKIP_VERIFY", false)),
 
 		// Caido
 		CaidoPort:     envOrInt("CAIDO_PORT", 0), // 0 = auto-detect
@@ -258,6 +264,15 @@ func envOr(key, fallback string) string {
 func envOrInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func envOrFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
 			return n
 		}
 	}

@@ -1104,12 +1104,12 @@ func (a *Agent) buildSystemPrompt(targets []string, instruction string) string {
 ### Execution Rules
 1. You MUST call tools using the XML format below. NEVER describe what you would do — DO IT.
 2. Every response MUST contain at least one tool call. NO EXCEPTIONS.
-3. **ALWAYS use maximum threads and comprehensive flags!** Examples:
-   - subfinder -d TARGET -all -recursive -t 100
-   - dnsx -silent -a -resp -threads 100
-   - nuclei -u TARGET -severity critical,high,medium -rl 100
-   - ffuf -u TARGET/FUZZ -w wordlist.txt -t 100 -mc 200,301,302,403
-   - NEVER run: subfinder -d TARGET (without -all -recursive -t !)
+3. **Use bounded, resource-safe concurrency with comprehensive flags.** Examples:
+   - subfinder -d TARGET -all -recursive -t 50
+   - dnsx -silent -a -resp -threads 50
+   - nuclei -u TARGET -severity critical,high,medium -rl 50
+   - ffuf -u TARGET/FUZZ -w wordlist.txt -t 40 -mc 200,301,302,403
+   - NEVER run unbounded/max-thread scans that can OOM the service.
 4. **LARGE TARGET LISTS**: If you are testing multiple targets at once (e.g., >10 URLs or domains), NEVER pass them as inline space/comma separated arguments to terminal tools (e.g. 'nmap a b c d e f g h...'). This causes OS "file name too long" argument crashes! ALWAYS save the targets to a text file first (e.g. 'echo -e "t1\nt2\n..." > targets.txt') and pass the file to the tool using input list flags (e.g. 'subfinder -dL targets.txt', 'httpx -l targets.txt', 'nmap -iL targets.txt', 'findomain -f targets.txt').
 5. If a tool or command fails, try alternatives. NEVER give up after one failure.
 6. Minimum 50 iterations for a thorough assessment. Don't rush to finish.
@@ -1549,7 +1549,7 @@ curl -sk "https://TARGET/endpoint?param={{7*7}}" | grep "49"
 **AFTER MANUAL TESTING**: You may optionally run nuclei as a SUPPLEMENT (not replacement):
 ` + "`" + `bash` + "`" + `
 # Nuclei — run ONLY after manual testing, treat results as leads to verify manually
-nuclei -u https://TARGET -severity critical,high,medium -rl 100 -o ./nuclei_results.txt -stats
+nuclei -u https://TARGET -severity critical,high,medium -rl 50 -o ./nuclei_results.txt -stats
 ` + "`" + `
 
 **CRITICAL: DO NOT trust scanner results blindly.**
@@ -2018,7 +2018,7 @@ cat ./all_subdomains.txt | while read sub; do
 done
 
 # Or use subjack/subzy
-subjack -w ./all_subdomains.txt -t 100 -timeout 30 -ssl -o ./takeovers.txt 2>/dev/null
+subjack -w ./all_subdomains.txt -t 50 -timeout 30 -ssl -o ./takeovers.txt 2>/dev/null
 ` + "`" + `
 
 ### PHASE 14: Open Redirect Testing

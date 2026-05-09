@@ -3,7 +3,9 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -164,5 +166,38 @@ func TestWorkDirPrefersScanContext(t *testing.T) {
 
 	if got := GetWorkDirForContext(sc.ID); got != "/tmp/from-scanctx" {
 		t.Fatalf("GetWorkDirForContext = %q", got)
+	}
+}
+
+func TestRunShellScopesHomeAndBlocksCdOutsideWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sc := scanctx.New("term-scope", t.TempDir())
+	sc.Terminal.SetWorkDir(sc.ScanDir)
+	scanctx.Activate(sc)
+	defer func() {
+		CleanupContext(sc.ID)
+		scanctx.Deactivate(sc.ID)
+	}()
+
+	out, code := runShellInternal(sc.ID, `printf 'home=%s\npwd=%s\n' "$HOME" "$PWD"; cd /root; printf 'after=%s\n' "$PWD"`)
+	if code != 0 {
+		t.Fatalf("runShellInternal exit=%d output=%q", code, out)
+	}
+	if !strings.Contains(out, "home="+sc.ScanDir) {
+		t.Fatalf("HOME was not scoped to scan dir: %q", out)
+	}
+	if !strings.Contains(out, "pwd="+sc.ScanDir) || !strings.Contains(out, "after="+sc.ScanDir) {
+		t.Fatalf("command escaped scan dir: %q", out)
+	}
+	if !strings.Contains(out, "[WORKSPACE GUARD] cd outside scan workspace blocked") {
+		t.Fatalf("workspace guard did not report blocked cd: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(sc.ScanDir, ".tmp")); err != nil {
+		t.Fatalf("workspace temp dir missing: %v", err)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 )
 
 func TestStrReplaceEditor_CreateViewReplaceAndInsert(t *testing.T) {
@@ -116,5 +118,33 @@ func TestListFiles_EmptyAndPopulatedDirectory(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "a.txt") || !strings.Contains(res.Output, "subdir/") {
 		t.Fatalf("populated list output = %q", res.Output)
+	}
+}
+
+func TestContextFileEditorStaysInsideScanWorkspace(t *testing.T) {
+	sc := scanctx.New("fileedit-scope", t.TempDir())
+	sc.Terminal.SetWorkDir(sc.ScanDir)
+	scanctx.Activate(sc)
+	defer scanctx.Deactivate(sc.ID)
+
+	if _, err := strReplaceEditorForContext(sc.ID, map[string]string{
+		"command":   "create",
+		"path":      "notes.txt",
+		"file_text": "scoped",
+	}); err != nil {
+		t.Fatalf("create in scan workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sc.ScanDir, "notes.txt")); err != nil {
+		t.Fatalf("expected file in scan workspace: %v", err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	_, err := strReplaceEditorForContext(sc.ID, map[string]string{
+		"command":   "create",
+		"path":      outside,
+		"file_text": "outside",
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside the active scan workspace") {
+		t.Fatalf("outside path error = %v", err)
 	}
 }

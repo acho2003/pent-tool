@@ -112,8 +112,8 @@ func computeTimeout(command string) time.Duration {
 
 // setProcessLimits applies resource constraints to a child process:
 // - Adjusts OOM score so the kernel kills scan tools before xalgorix
-// - Sets RLIMIT_AS (virtual memory limit) for heavy tools
-func setProcessLimits(cmd *exec.Cmd, heavy bool) {
+// - Sets RLIMIT_AS (virtual memory limit) when memoryLimited is true
+func setProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
 	if cmd.Process == nil {
 		return
 	}
@@ -129,10 +129,10 @@ func setProcessLimits(cmd *exec.Cmd, heavy bool) {
 		log.Printf("[RESOURCES] Cannot set OOM score for PID %d: %v", pid, err)
 	}
 
-	// ── Memory limit for heavy tools ──
+	// ── Memory limit for scanner subprocesses ──
 	// Uses prlimit64 syscall to set RLIMIT_AS on the child process.
 	// If the tool exceeds this, it gets ENOMEM / SIGSEGV — xalgorix survives.
-	if heavy && resources.HeavyToolMemLimitBytes > 0 {
+	if memoryLimited && resources.HeavyToolMemLimitBytes > 0 {
 		newLimit := syscall.Rlimit{
 			Cur: uint64(resources.HeavyToolMemLimitBytes),
 			Max: uint64(resources.HeavyToolMemLimitBytes),
@@ -149,7 +149,7 @@ func setProcessLimits(cmd *exec.Cmd, heavy bool) {
 		if errno != 0 {
 			log.Printf("[RESOURCES] Cannot set RLIMIT_AS for PID %d: %v", pid, errno)
 		} else {
-			log.Printf("[RESOURCES] Heavy tool PID %d: OOM score=500, mem limit=%d MB",
+			log.Printf("[RESOURCES] Tool PID %d: OOM score=500, mem limit=%d MB",
 				pid, resources.HeavyToolMemLimitBytes/(1024*1024))
 		}
 	} else {
@@ -629,6 +629,139 @@ func runShell(command string) (string, int) {
 	return runShellInternal(scanctx.Default().ID, command)
 }
 
+func effectiveWorkDirForContext(contextID string, cfg *config.Config) string {
+	workDir := strings.TrimSpace(GetWorkDirForContext(contextID))
+	if workDir == "" {
+		if sc := scanctx.Get(contextID); sc != nil {
+			workDir = strings.TrimSpace(sc.ScanDir)
+		}
+	}
+	if workDir == "" && cfg != nil {
+		workDir = strings.TrimSpace(cfg.Workspace)
+	}
+	if workDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workDir = cwd
+		}
+	}
+	if workDir == "" {
+		workDir = "/tmp/xalgorix-workspace"
+	}
+	if !filepath.IsAbs(workDir) {
+		if abs, err := filepath.Abs(workDir); err == nil {
+			workDir = abs
+		}
+	}
+	return filepath.Clean(workDir)
+}
+
+func prepareCommandWorkspace(workDir string) error {
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return err
+	}
+	for _, dir := range []string{
+		filepath.Join(workDir, ".tmp"),
+		filepath.Join(workDir, ".cache"),
+		filepath.Join(workDir, ".config"),
+		filepath.Join(workDir, ".local", "share"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func commandEnv(homeDir, goPath, workDir string) []string {
+	dynamicPath := goPath + "/bin:" + homeDir + "/go/bin:" + homeDir + "/.local/bin"
+	dynamicPath += ":" + homeDir + "/.cargo/bin"
+	dynamicPath += ":/usr/local/bin:/snap/bin"
+
+	replace := map[string]bool{
+		"PATH":               true,
+		"GOPATH":             true,
+		"HOME":               true,
+		"TMPDIR":             true,
+		"XDG_CACHE_HOME":     true,
+		"XDG_CONFIG_HOME":    true,
+		"XDG_DATA_HOME":      true,
+		"XALGORIX_WORKSPACE": true,
+	}
+	env := make([]string, 0, len(os.Environ())+8)
+	for _, kv := range os.Environ() {
+		key, _, ok := strings.Cut(kv, "=")
+		if ok && replace[key] {
+			continue
+		}
+		env = append(env, kv)
+	}
+
+	return append(env,
+		"PATH="+dynamicPath+":"+os.Getenv("PATH"),
+		"GOPATH="+goPath,
+		"HOME="+workDir,
+		"TMPDIR="+filepath.Join(workDir, ".tmp"),
+		"XDG_CACHE_HOME="+filepath.Join(workDir, ".cache"),
+		"XDG_CONFIG_HOME="+filepath.Join(workDir, ".config"),
+		"XDG_DATA_HOME="+filepath.Join(workDir, ".local", "share"),
+		"XALGORIX_WORKSPACE="+workDir,
+	)
+}
+
+func shellPrelude(homeDir, workDir string) string {
+	var b strings.Builder
+	if resources.HeavyToolMemLimitBytes > 0 {
+		limitKB := resources.HeavyToolMemLimitBytes / 1024
+		fmt.Fprintf(&b, "ulimit -Sv %d 2>/dev/null || true\n", limitKB)
+		fmt.Fprintf(&b, "ulimit -Hv %d 2>/dev/null || true\n", limitKB)
+	}
+	fmt.Fprintf(&b, "export HOME=%s\n", shellQuote(workDir))
+	fmt.Fprintf(&b, "export TMPDIR=%s\n", shellQuote(filepath.Join(workDir, ".tmp")))
+	fmt.Fprintf(&b, "export XDG_CACHE_HOME=%s\n", shellQuote(filepath.Join(workDir, ".cache")))
+	fmt.Fprintf(&b, "export XDG_CONFIG_HOME=%s\n", shellQuote(filepath.Join(workDir, ".config")))
+	fmt.Fprintf(&b, "export XDG_DATA_HOME=%s\n", shellQuote(filepath.Join(workDir, ".local", "share")))
+	fmt.Fprintf(&b, "export XALGORIX_WORKSPACE=%s\n", shellQuote(workDir))
+	b.WriteString(`__xalgorix_workspace="$(pwd -P)"
+__xalgorix_resolve_path() {
+  realpath -m "$1" 2>/dev/null || readlink -m "$1" 2>/dev/null || printf '%s\n' "$1"
+}
+cd() {
+  local dest target resolved before after
+  if [ "$#" -eq 0 ]; then
+    dest="$__xalgorix_workspace"
+  else
+    dest="$1"
+  fi
+  if [ "$dest" = "-" ]; then
+    before="$PWD"
+    builtin cd - >/dev/null || return
+    after="$(pwd -P)"
+    case "$after" in
+      "$__xalgorix_workspace"|"$__xalgorix_workspace"/*) pwd; return ;;
+      *) builtin cd "$before"; printf '[WORKSPACE GUARD] cd outside scan workspace blocked: %s\n' "$dest" >&2; return 1 ;;
+    esac
+  fi
+  case "$dest" in
+    "~") target="$__xalgorix_workspace" ;;
+    "~/"*) target="$__xalgorix_workspace/${dest#~/}" ;;
+    /*) target="$dest" ;;
+    *) target="$PWD/$dest" ;;
+  esac
+  resolved="$(__xalgorix_resolve_path "$target")"
+  case "$resolved" in
+    "$__xalgorix_workspace"|"$__xalgorix_workspace"/*) builtin cd "$resolved" ;;
+    *) printf '[WORKSPACE GUARD] cd outside scan workspace blocked: %s\n' "$dest" >&2; return 1 ;;
+  esac
+}
+`)
+	fmt.Fprintf(&b, "source %s 2>/dev/null || true\n", shellQuote(filepath.Join(homeDir, "venv", "bin", "activate")))
+	return b.String()
+}
+
 func runShellInternal(contextID string, command string) (string, int) {
 	contextID = normalizeContextID(contextID)
 	// Ensure venv exists
@@ -638,14 +771,10 @@ func runShellInternal(contextID string, command string) (string, int) {
 	if homeDir == "" {
 		homeDir = "/root"
 	}
-	// Activate venv if it exists — use semicolon so failure doesn't block the command
-	venvActivate := "source " + filepath.Join(homeDir, "venv", "bin", "activate") + " 2>/dev/null; "
-
-	// Wrap command with venv activation
-	command = venvActivate + command
 
 	// Compute timeout based on command type
-	timeout := computeTimeout(command)
+	cleanCmd := command
+	timeout := computeTimeout(cleanCmd)
 	if timeout > hardMaxTimeout {
 		timeout = hardMaxTimeout
 	}
@@ -654,46 +783,33 @@ func runShellInternal(contextID string, command string) (string, int) {
 	defer cancel()
 
 	cfg := config.Get()
+	workDir := effectiveWorkDirForContext(contextID, cfg)
+	if err := prepareCommandWorkspace(workDir); err != nil {
+		return fmt.Sprintf("Failed to prepare command workspace %s: %v", workDir, err), -1
+	}
 
 	// Set PATH to include common tool locations (dynamic - works for any user)
 	goPath := os.Getenv("GOPATH")
 	if goPath == "" {
 		goPath = homeDir + "/go"
 	}
-
-	// Build dynamic PATH including all possible tool locations
-	dynamicPath := goPath + "/bin:" + homeDir + "/go/bin:" + homeDir + "/.local/bin"
-	dynamicPath += ":" + homeDir + "/.cargo/bin" // Rust tools (findomain, rustscan, feroxbuster)
-	dynamicPath += ":/usr/local/bin:/snap/bin"   // Common install locations
-
-	cmdEnv := append(os.Environ(),
-		"PATH="+dynamicPath+":"+os.Getenv("PATH"),
-		"GOPATH="+goPath,
-	)
+	command = shellPrelude(homeDir, workDir) + cleanCmd
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	// Use goroutine-scoped workdir if set, otherwise default to config workspace
-	if wd := GetWorkDirForContext(contextID); wd != "" {
-		cmd.Dir = wd
-	} else {
-		cmd.Dir = cfg.Workspace
-	}
-	cmd.Env = cmdEnv
+	cmd.Dir = workDir
+	cmd.Env = commandEnv(homeDir, goPath, workDir)
 
 	// Create new process group for this command
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
 
-	// Store a clean version of the command (strip venv activation prefix)
-	cleanCmd := strings.TrimPrefix(command, venvActivate)
-
 	// ── Layer 2: Pre-exec resource throttle ──
 	// Before launching, check if the system has enough resources.
 	// Heavy tools (nuclei, masscan, etc.) are gated more strictly.
 	// If a heavy tool can't get resources within the timeout, abort it
 	// to prevent the kernel OOM killer from nuking the whole server.
-	heavy := isHeavyTool(command)
+	heavy := isHeavyTool(cleanCmd)
 	if heavy {
 		if !resources.WaitForResources(true, 2*time.Minute, cleanCmd) {
 			return fmt.Sprintf("[THROTTLE] Refused to launch heavy tool %q — system resources exhausted after 2m wait", cleanCmd), -1
@@ -718,8 +834,8 @@ func runShellInternal(contextID string, command string) (string, int) {
 	}
 
 	// ── Layer 3: Post-start process limits ──
-	// Set OOM score and memory limits on the child process.
-	setProcessLimits(cmd, heavy)
+	// Set OOM score and a per-process memory limit on the shell and children.
+	setProcessLimits(cmd, true)
 
 	TrackProcessForContext(contextID, cmd, cancel, cleanCmd)
 	defer UntrackProcessForContext(contextID, cmd)

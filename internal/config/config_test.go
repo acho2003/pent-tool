@@ -133,6 +133,9 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 		"XALGORIX_MAX_ITERATIONS=12",
 		"XALGORIX_RATE_LIMIT_REQUESTS=7",
 		"XALGORIX_RATE_LIMIT_WINDOW=11",
+		"XALGORIX_RATE_RPS=2.5",
+		"XALGORIX_RATE_BURST=9",
+		"XALGORIX_TLS_SKIP_VERIFY=true",
 		"CAIDO_PORT=9090",
 		"CAIDO_API_TOKEN=caido-token",
 		"XALGORIX_TELEMETRY=false",
@@ -160,6 +163,9 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 	}
 	if cfg.RateLimitRequests != 7 || cfg.RateLimitWindow != 11 {
 		t.Fatalf("rate limit settings not loaded: %#v", cfg)
+	}
+	if cfg.RateLimitRPS != 2.5 || cfg.RateLimitBurst != 9 || !cfg.TLSSkipVerify {
+		t.Fatalf("request throttle/TLS settings not loaded: %#v", cfg)
 	}
 	if cfg.CaidoPort != 9090 || cfg.CaidoAPIToken != "caido-token" {
 		t.Fatalf("Caido settings not loaded: %#v", cfg)
