@@ -643,14 +643,14 @@ type VulnSummary struct {
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
 	ID             string        `json:"id"`
-	Name           string        `json:"name,omitempty"`          // user-defined scan name
+	Name           string        `json:"name,omitempty"` // user-defined scan name
 	Target         string        `json:"target"`
 	ParentTarget   string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
 	StartedAt      string        `json:"started_at"`
 	FinishedAt     string        `json:"finished_at,omitempty"`
-	Status         string        `json:"status"`                // saved, running, finished, stopped
-	StopReason     string        `json:"stop_reason,omitempty"` // why scan stopped (error, user, watchdog, etc.)
-	ScanMode       string        `json:"scan_mode,omitempty"`   // single, wildcard, dast
+	Status         string        `json:"status"`                    // saved, running, finished, stopped
+	StopReason     string        `json:"stop_reason,omitempty"`     // why scan stopped (error, user, watchdog, etc.)
+	ScanMode       string        `json:"scan_mode,omitempty"`       // single, wildcard, dast
 	Instruction    string        `json:"instruction,omitempty"`     // custom scan instructions
 	SeverityFilter []string      `json:"severity_filter,omitempty"` // severity filter for scan
 	DiscordWebhook string        `json:"discord_webhook,omitempty"` // discord notification webhook
@@ -677,7 +677,7 @@ type QueueState struct {
 // ScanInstance represents a running or completed scan instance.
 type ScanInstance struct {
 	ID                string        `json:"id"`
-	Name              string        `json:"name,omitempty"`          // user-defined scan name
+	Name              string        `json:"name,omitempty"` // user-defined scan name
 	Targets           string        `json:"targets"`
 	ParentTarget      string        `json:"parent_target,omitempty"` // parent domain for subdomain scans
 	Status            string        `json:"status"`                  // saved, running, paused, finished, stopped
@@ -2611,6 +2611,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 
 		// Force GC between subdomain scans to free accumulated memory
 		runtime.GC()
+		debug.FreeOSMemory()
 
 		log.Printf("[INFO] Starting subdomain %d/%d: %s (parent: %s)", j+1, len(subdomains), subdomain, target)
 
@@ -2711,6 +2712,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 
 	log.Printf("[INFO] Wildcard scan complete for %s: scanned %d subdomains", target, len(subdomains))
 	logMemStats(fmt.Sprintf("Wildcard scan complete for %s", target))
+	debug.FreeOSMemory()
 	// Clean up processes before next target — use instance's terminal if available
 	s.instancesMu.RLock()
 	if inst, ok := s.instances[req.InstanceID]; ok {
@@ -2766,7 +2768,7 @@ curl -s "https://dns.bufferover.run/dns?q=.TARGET" | jq -r '.RDNS[]' 2>/dev/null
 curl -s "https://web.archive.org/cdx/search/cdx?url=*.TARGET/*&output=json&fl=original&filter=statuscode:200" | jq -r '.[].original' 2>/dev/null | cut -d'/' -f3 | sort -u > ./archive_subdomains.txt
 
 # 7. Active enumeration
-subfinder -d TARGET -all -recursive -t 100 -o ./active_subfinder.txt
+subfinder -d TARGET -all -recursive -t 50 -o ./active_subfinder.txt
 
 # 8. MERGE ALL RESULTS
 cat ./passive_*.txt ./active_*.txt ./archive_subdomains.txt 2>/dev/null | grep -v '*' | grep -v '@' | sort -u > ./all_subdomains.txt
@@ -2774,7 +2776,7 @@ echo "Total unique subdomains found:"
 wc -l ./all_subdomains.txt
 
 # 9. RESOLVE TO FIND LIVE HOSTS
-cat ./all_subdomains.txt | dnsx -silent -a -resp -threads 100 -o ./live_resolved.txt 2>/dev/null || true
+cat ./all_subdomains.txt | dnsx -silent -a -resp -threads 50 -o ./live_resolved.txt 2>/dev/null || true
 cat ./live_resolved.txt | cut -d' ' -f1 | grep -v '^$' | sort -u > ./live_subdomains.txt
 echo "Live subdomains:"
 wc -l ./live_subdomains.txt
@@ -4123,7 +4125,7 @@ func isBlockedTarget(target string) bool {
 		"127.0.0.0/8",
 		"169.254.0.0/16", // link-local
 		"::1/128",
-		"fc00::/7", // IPv6 unique local
+		"fc00::/7",  // IPv6 unique local
 		"fe80::/10", // IPv6 link-local
 	}
 	for _, cidr := range privateCIDRs {

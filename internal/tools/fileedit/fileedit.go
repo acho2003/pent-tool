@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
@@ -26,7 +27,9 @@ func Register(r *tools.Registry) {
 			{Name: "view_range", Description: "Line range to view, e.g. '1-50' (for view)", Required: false},
 			{Name: "file_text", Description: "Full file content (for create)", Required: false},
 		},
-		Execute: strReplaceEditor,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return strReplaceEditorForContext(r.GetScanContextID(), args)
+		},
 	})
 
 	r.Register(&tools.Tool{
@@ -35,7 +38,9 @@ func Register(r *tools.Registry) {
 		Parameters: []tools.Parameter{
 			{Name: "path", Description: "Directory path to list (relative to workspace or absolute)", Required: true},
 		},
-		Execute: listFiles,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return listFilesForContext(r.GetScanContextID(), args)
+		},
 	})
 
 	r.Register(&tools.Tool{
@@ -46,7 +51,9 @@ func Register(r *tools.Registry) {
 			{Name: "path", Description: "Directory to search in", Required: false},
 			{Name: "include", Description: "File glob to include (e.g. *.go)", Required: false},
 		},
-		Execute: searchFiles,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return searchFilesForContext(r.GetScanContextID(), args)
+		},
 	})
 }
 
@@ -57,10 +64,84 @@ func resolvePath(path string) string {
 	return config.Get().WorkspacePath(path)
 }
 
+func workspaceRootForContext(contextID string) string {
+	if sc := scanctx.Get(strings.TrimSpace(contextID)); sc != nil {
+		if sc.Terminal != nil {
+			if wd := strings.TrimSpace(sc.Terminal.GetWorkDir()); wd != "" {
+				return filepath.Clean(wd)
+			}
+		}
+		if sc.ScanDir != "" {
+			return filepath.Clean(sc.ScanDir)
+		}
+	}
+	if cfg := config.Get(); cfg != nil && cfg.Workspace != "" {
+		return filepath.Clean(cfg.Workspace)
+	}
+	return "."
+}
+
+func resolvePathForContext(contextID, rawPath string) (string, error) {
+	root := workspaceRootForContext(contextID)
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if path == "~" {
+		path = root
+	} else if strings.HasPrefix(path, "~/") {
+		path = filepath.Join(root, strings.TrimPrefix(path, "~/"))
+	} else if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+
+	resolved := filepath.Clean(path)
+	if envAllowsAbsoluteFileEdit() {
+		return resolved, nil
+	}
+	if !isWithinPath(root, resolved) {
+		return "", fmt.Errorf("path %s is outside the active scan workspace %s", resolved, root)
+	}
+	return resolved, nil
+}
+
+func envAllowsAbsoluteFileEdit() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("XALGORIX_ALLOW_ABSOLUTE_FILEEDIT")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+func isWithinPath(root, path string) bool {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		absRoot = filepath.Clean(root)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = filepath.Clean(path)
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 func strReplaceEditor(args map[string]string) (tools.Result, error) {
 	command := args["command"]
 	path := resolvePath(args["path"])
+	return runEditor(command, path, args)
+}
 
+func strReplaceEditorForContext(contextID string, args map[string]string) (tools.Result, error) {
+	command := args["command"]
+	path, err := resolvePathForContext(contextID, args["path"])
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return runEditor(command, path, args)
+}
+
+func runEditor(command, path string, args map[string]string) (tools.Result, error) {
 	switch command {
 	case "view":
 		return viewFile(path, args["view_range"])
@@ -183,7 +264,18 @@ func insertInFile(path, newStr, insertLineStr string) (tools.Result, error) {
 
 func listFiles(args map[string]string) (tools.Result, error) {
 	path := resolvePath(args["path"])
+	return listFilesAtPath(path)
+}
 
+func listFilesForContext(contextID string, args map[string]string) (tools.Result, error) {
+	path, err := resolvePathForContext(contextID, args["path"])
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return listFilesAtPath(path)
+}
+
+func listFilesAtPath(path string) (tools.Result, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("cannot read directory: %w", err)
@@ -214,9 +306,23 @@ func searchFiles(args map[string]string) (tools.Result, error) {
 		path = "."
 	}
 	path = resolvePath(path)
+	return searchFilesAtPath(pattern, path, args["include"])
+}
 
-	include := args["include"]
+func searchFilesForContext(contextID string, args map[string]string) (tools.Result, error) {
+	pattern := args["pattern"]
+	path := args["path"]
+	if path == "" {
+		path = "."
+	}
+	resolved, err := resolvePathForContext(contextID, path)
+	if err != nil {
+		return tools.Result{}, err
+	}
+	return searchFilesAtPath(pattern, resolved, args["include"])
+}
 
+func searchFilesAtPath(pattern, path, include string) (tools.Result, error) {
 	// Use ripgrep if available, fallback to grep
 	cmdArgs := []string{"-n", "--color=never", "-r"}
 	binary := "rg"

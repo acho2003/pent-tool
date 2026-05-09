@@ -416,25 +416,11 @@ func handleStart() {
 	if home == "" {
 		home = "/root"
 	}
-	serviceContent := fmt.Sprintf(`[Unit]
-Description=Xalgorix - Autonomous AI Pentesting Engine
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=%s
-Environment="PATH=%s/go/bin:%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="GOPATH=%s/go"
-EnvironmentFile=%s/.xalgorix.env
-ExecStart=%s --web
-Restart=always
-RestartSec=10
-OOMScoreAdjust=-500
-
-[Install]
-WantedBy=multi-user.target
-`, home, home, home, home, home, installPath)
+	workspaceDir := filepath.Join(home, "xalgorix-workspace")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		log.Printf("Warning: failed to create workspace directory %s: %v", workspaceDir, err)
+	}
+	serviceContent := serviceUnitContent(home, workspaceDir, installPath)
 	// Try to write service file (requires sudo)
 	servicePath := "/etc/systemd/system/xalgorix.service"
 	err := os.WriteFile(servicePath, []byte(serviceContent), 0644)
@@ -478,6 +464,30 @@ WantedBy=multi-user.target
 	fmt.Println("   Status: systemctl status xalgorix")
 }
 
+func serviceUnitContent(home, workspaceDir, installPath string) string {
+	return fmt.Sprintf(`[Unit]
+Description=Xalgorix - Autonomous AI Pentesting Engine
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=%s
+Environment="PATH=%s/go/bin:%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="GOPATH=%s/go"
+Environment="XALGORIX_WORKSPACE=%s"
+EnvironmentFile=%s/.xalgorix.env
+ExecStart=%s --web
+Restart=always
+RestartSec=10
+OOMScoreAdjust=-500
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target
+`, workspaceDir, home, home, home, workspaceDir, home, installPath)
+}
+
 func startBackground() {
 	logFile, err := os.OpenFile("/tmp/xalgorix.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -493,10 +503,16 @@ func startBackground() {
 	if homeDir == "" {
 		homeDir = "/root"
 	}
+	workspaceDir := filepath.Join(homeDir, "xalgorix-workspace")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to create workspace directory: %v\n", err)
+		os.Exit(1)
+	}
 	startCmd := exec.Command("/bin/bash", "-c", "source "+homeDir+"/.xalgorix.env && "+installPath+" --web")
 	startCmd.Stdout = logFile
 	startCmd.Stderr = logFile
-	startCmd.Env = os.Environ()
+	startCmd.Dir = workspaceDir
+	startCmd.Env = append(os.Environ(), "XALGORIX_WORKSPACE="+workspaceDir)
 
 	if err := startCmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to start xalgorix: %v\n", err)

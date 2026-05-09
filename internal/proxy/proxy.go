@@ -8,6 +8,7 @@ package proxy
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -199,6 +200,24 @@ func NewClient(p *Proxy, timeout time.Duration) (*http.Client, error) {
 		Transport: tr,
 		Timeout:   timeout,
 	}, nil
+}
+
+// NewDirectClient returns a direct HTTP client using Go's tuned default
+// transport, optionally disabling TLS verification for explicit testing cases.
+func NewDirectClient(tlsSkipVerify bool) *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if tlsSkipVerify {
+		if tr.TLSClientConfig == nil {
+			tr.TLSClientConfig = &tls.Config{} //nolint:gosec // caller explicitly requested insecure TLS
+		} else {
+			tr.TLSClientConfig = tr.TLSClientConfig.Clone()
+		}
+		tr.TLSClientConfig.InsecureSkipVerify = true //nolint:gosec // controlled by XALGORIX_TLS_SKIP_VERIFY
+	}
+	return &http.Client{
+		Transport: tr,
+		Timeout:   30 * time.Second,
+	}
 }
 
 // ---------------------------------------------------------------------------

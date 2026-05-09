@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -80,7 +81,9 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 	} else {
 		cmd.Dir = config.Get().Workspace
 	}
-	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	cmd.Dir = filepath.Clean(cmd.Dir)
+	preparePythonWorkspace(cmd.Dir)
+	cmd.Env = pythonWorkspaceEnv(cmd.Dir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout := newLimitedBuffer(1024 * 1024)
@@ -143,6 +146,42 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 	}
 
 	return tools.Result{Output: b.String()}, nil
+}
+
+func preparePythonWorkspace(workDir string) {
+	_ = os.MkdirAll(filepath.Join(workDir, ".tmp"), 0o755)
+	_ = os.MkdirAll(filepath.Join(workDir, ".cache"), 0o755)
+	_ = os.MkdirAll(filepath.Join(workDir, ".config"), 0o755)
+	_ = os.MkdirAll(filepath.Join(workDir, ".local", "share"), 0o755)
+}
+
+func pythonWorkspaceEnv(workDir string) []string {
+	replace := map[string]bool{
+		"HOME":                    true,
+		"TMPDIR":                  true,
+		"XDG_CACHE_HOME":          true,
+		"XDG_CONFIG_HOME":         true,
+		"XDG_DATA_HOME":           true,
+		"XALGORIX_WORKSPACE":      true,
+		"PYTHONDONTWRITEBYTECODE": true,
+	}
+	env := make([]string, 0, len(os.Environ())+7)
+	for _, kv := range os.Environ() {
+		key, _, ok := strings.Cut(kv, "=")
+		if ok && replace[key] {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env,
+		"HOME="+workDir,
+		"TMPDIR="+filepath.Join(workDir, ".tmp"),
+		"XDG_CACHE_HOME="+filepath.Join(workDir, ".cache"),
+		"XDG_CONFIG_HOME="+filepath.Join(workDir, ".config"),
+		"XDG_DATA_HOME="+filepath.Join(workDir, ".local", "share"),
+		"XALGORIX_WORKSPACE="+workDir,
+		"PYTHONDONTWRITEBYTECODE=1",
+	)
 }
 
 type limitedBuffer struct {

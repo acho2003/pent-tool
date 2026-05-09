@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestIsNewer covers the semver comparison used by the auto-update path.
 // Pre-release ordering is intentionally not modeled (the comment in main.go
@@ -43,6 +46,21 @@ func TestIsNewer(t *testing.T) {
 		got := isNewer(tc.a, tc.b)
 		if got != tc.want {
 			t.Errorf("isNewer(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestServiceUnitUsesDedicatedWorkspaceAndContinuesAfterChildOOM(t *testing.T) {
+	unit := serviceUnitContent("/root", "/root/xalgorix-workspace", "/usr/local/bin/xalgorix")
+
+	for _, want := range []string{
+		"WorkingDirectory=/root/xalgorix-workspace",
+		`Environment="XALGORIX_WORKSPACE=/root/xalgorix-workspace"`,
+		"OOMScoreAdjust=-500",
+		"OOMPolicy=continue",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("service unit missing %q:\n%s", want, unit)
 		}
 	}
 }

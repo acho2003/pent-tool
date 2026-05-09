@@ -10,6 +10,7 @@
 package ratelimit
 
 import (
+	"context"
 	"net/url"
 	"sync"
 
@@ -69,7 +70,7 @@ func (l *Limiter) Wait(targetURL string) {
 	}
 	host := domain(targetURL)
 	rl := l.limiterFor(host)
-	_ = rl.Wait(nil) //nolint:errcheck // context is nil — never returns an error
+	_ = rl.Wait(context.Background()) //nolint:errcheck // background context cannot be canceled
 }
 
 // Allow reports whether a token is immediately available for targetURL

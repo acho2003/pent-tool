@@ -34,7 +34,7 @@ If a tool discovers a local/internal IP, SKIP IT and move to the next target. Do
 
 ### Phase 1: RECONNAISSANCE (automated)
 - Port scanning, technology fingerprinting, URL crawling, parameter discovery
-- Save all results in organized folders: mkdir -p ./TARGET
+- Save all results directly inside the current scan workspace with clear filenames. Do not cd out of the workspace and do not write to /root, /tmp, or another home directory.
 
 ### Phase 2: MANUAL VULNERABILITY TESTING (understand the target first)
 - For EACH endpoint with parameters: send baseline request, test special characters, check reflections
@@ -204,15 +204,15 @@ func buildPhaseFilterInstruction(phases []int) string {
 
 	// Map phase numbers to human-readable names for clarity
 	phaseNames := map[int]string{
-		1: "Deep Reconnaissance & Attack Surface Mapping",
-		2: "Manual Vulnerability Discovery",
-		3: "Directory & File Discovery",
-		4: "CORS & Cookie Analysis",
-		5: "Authentication & Session Testing",
-		6: "Injection Testing",
-		7: "SSRF Testing",
-		8: "IDOR & Broken Access Control",
-		9: "API & GraphQL Testing",
+		1:  "Deep Reconnaissance & Attack Surface Mapping",
+		2:  "Manual Vulnerability Discovery",
+		3:  "Directory & File Discovery",
+		4:  "CORS & Cookie Analysis",
+		5:  "Authentication & Session Testing",
+		6:  "Injection Testing",
+		7:  "SSRF Testing",
+		8:  "IDOR & Broken Access Control",
+		9:  "API & GraphQL Testing",
 		10: "File Upload Testing",
 		11: "Deserialization & RCE",
 		12: "Race Conditions & Business Logic",
@@ -255,7 +255,7 @@ YOUR TARGET: ` + target + `
 **⛔ NEVER scan:** 127.0.0.1, localhost, 0.0.0.0, ::1, 10.x.x.x, 172.16-31.x.x, 192.168.x.x, 169.254.x.x — these are local/internal and NOT the target.
 
 ## ORGANIZE YOUR WORK
-Create folder: mkdir -p ./TARGET && cd ./TARGET
+You are already inside the target's scan workspace. Save evidence and tool output in the current directory with clear filenames. Do not use cd to leave this workspace and do not write to /root, /tmp, or another home directory.
 
 ## CORE RULE: DETECT → EXPLOIT → REPORT
 ⚠️ The report_vulnerability tool REJECTS reports without exploitation proof.
