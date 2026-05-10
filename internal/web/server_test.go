@@ -173,6 +173,32 @@ func TestPhaseRestriction_ReconReportOnlyIsStrict(t *testing.T) {
 	}
 }
 
+func TestInferCurrentPhase_DoesNotTreatSessionFinishedAsFinalReport(t *testing.T) {
+	allowed := []int{1, 8, 22}
+
+	if got := inferCurrentPhase(WSEvent{Type: "finished", Content: "Agent session complete"}, allowed); got != 0 {
+		t.Fatalf("session finished inferred phase %d, want 0", got)
+	}
+	if got := inferCurrentPhase(WSEvent{Type: "tool_call", ToolName: "finish"}, allowed); got != 0 {
+		t.Fatalf("finish tool inferred phase %d, want 0", got)
+	}
+	if got := inferCurrentPhase(WSEvent{Type: "tool_call", ToolName: "report_vulnerability"}, allowed); got != 0 {
+		t.Fatalf("report_vulnerability inferred phase %d, want 0", got)
+	}
+	if got := inferCurrentPhase(WSEvent{Type: "queue_finished", Content: "Scan queue ended"}, allowed); got != 22 {
+		t.Fatalf("queue_finished inferred phase %d, want 22", got)
+	}
+	if got := inferCurrentPhase(WSEvent{
+		Type:     "tool_call",
+		ToolName: "terminal_execute",
+		ToolArgs: map[string]string{
+			"cmd": "test IDOR authorization bypass on account endpoint",
+		},
+	}, allowed); got != 8 {
+		t.Fatalf("IDOR tool call inferred phase %d, want 8", got)
+	}
+}
+
 func TestHandleGetScan_ReturnsLiveInstanceMetadata(t *testing.T) {
 	s := newTestServer(t, nil)
 	inst := &ScanInstance{
