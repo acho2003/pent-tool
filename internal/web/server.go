@@ -2186,7 +2186,7 @@ func inferCurrentPhase(evt WSEvent, allowed []int) int {
 	switch evt.Type {
 	case "queue_started", "target_started", "scan_started":
 		return firstSelectedPhase(allowed)
-	case "finished", "queue_finished", "report_ready":
+	case "queue_finished", "report_ready":
 		if phaseAllowed(allowed, 22) {
 			return 22
 		}
@@ -2195,14 +2195,9 @@ func inferCurrentPhase(evt WSEvent, allowed []int) int {
 	if evt.Type != "tool_call" {
 		return 0
 	}
-	tool := strings.ToLower(evt.ToolName)
 	args := strings.ToLower(strings.Join(mapValues(evt.ToolArgs), " "))
 
 	switch {
-	case tool == "finish" || tool == "report_vulnerability":
-		if phaseAllowed(allowed, 22) {
-			return 22
-		}
 	case strings.Contains(args, "sqlmap") || strings.Contains(args, "dalfox") ||
 		strings.Contains(args, "union select") || strings.Contains(args, "<script") ||
 		strings.Contains(args, "sleep("):

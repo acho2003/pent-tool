@@ -361,8 +361,9 @@
 
     // ── Event Handler ──────────────────────────────────────
     function handleEvent(evt, replay) {
+        const isReplay = replay === true;
         // During replay, skip dashboard-level filtering
-        if (!replay) {
+        if (!isReplay) {
             // Dashboard-level events
             if (evt.type === 'instance_started' || evt.type === 'instance_updated') {
                 if (currentView === 'dashboard') refreshInstances();
@@ -396,40 +397,44 @@
 
         hideEmptyState();
 
-        if (evt.current_phase) {
+        if (evt.current_phase && !isReplay) {
             setCurrentPhase(evt.current_phase);
         }
 
         switch (evt.type) {
             case 'queue_started':
-                currentScanStatus = 'running';
-                renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
-                setStatus('running', 'SCANNING');
-                totalTargets = evt.total_targets || 1;
-                if (totalTargets > 1) showQueueBar();
+                if (!isReplay) {
+                    currentScanStatus = 'running';
+                    renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
+                    setStatus('running', 'SCANNING');
+                    totalTargets = evt.total_targets || 1;
+                    if (totalTargets > 1) showQueueBar();
+                }
                 addFeedItem(renderBanner('🚀', evt.content));
-                showToast('🚀 Scan started', 'info');
+                if (!isReplay) showToast('🚀 Scan started', 'info');
                 break;
 
             case 'target_started':
-                currentTargetIdx = evt.target_index || 1;
-                // Only update totalTargets from real top-level events (not subdomain events)
-                if (evt.total_targets && evt.total_targets > 0) {
-                    totalTargets = evt.total_targets;
+                if (!isReplay) {
+                    currentTargetIdx = evt.target_index || 1;
+                    // Only update totalTargets from real top-level events (not subdomain events)
+                    if (evt.total_targets && evt.total_targets > 0) {
+                        totalTargets = evt.total_targets;
+                    }
+                    // Track sub-target progress for wildcard scanning
+                    if (evt.sub_target_index && evt.sub_target_total) {
+                        currentSubIdx = evt.sub_target_index;
+                        totalSubTargets = evt.sub_target_total;
+                        updateQueueBar(currentTargetIdx, totalTargets, evt.target, currentSubIdx, totalSubTargets);
+                    } else {
+                        currentSubIdx = 0;
+                        totalSubTargets = 0;
+                        updateQueueBar(currentTargetIdx, totalTargets, evt.target);
+                    }
+                    if (totalTargets > 1 || totalSubTargets > 0) showQueueBar();
                 }
-                // Track sub-target progress for wildcard scanning
-                if (evt.sub_target_index && evt.sub_target_total) {
-                    currentSubIdx = evt.sub_target_index;
-                    totalSubTargets = evt.sub_target_total;
-                    updateQueueBar(currentTargetIdx, totalTargets, evt.target, currentSubIdx, totalSubTargets);
-                } else {
-                    currentSubIdx = 0;
-                    totalSubTargets = 0;
-                    updateQueueBar(currentTargetIdx, totalTargets, evt.target);
-                }
-                if (totalTargets > 1 || totalSubTargets > 0) showQueueBar();
                 addFeedItem(renderTargetBanner(evt.target));
-                if (evt.agent_id && !currentInstanceID) {
+                if (!isReplay && evt.agent_id && !currentInstanceID) {
                     history.pushState(null, '', '/' + evt.agent_id);
                 }
                 break;
@@ -439,15 +444,17 @@
                 break;
 
             case 'queue_finished':
-                scanRunning = false;
-                currentScanStatus = 'finished';
-                renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
-                setStatus('finished', 'COMPLETED');
-                toggleButtons(false);
-                hideQueueBar();
-                showChatInput('Ask follow-up questions about this completed scan');
+                if (!isReplay) {
+                    scanRunning = false;
+                    currentScanStatus = 'finished';
+                    renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
+                    setStatus('finished', 'COMPLETED');
+                    toggleButtons(false);
+                    hideQueueBar();
+                    showChatInput('Ask follow-up questions about this completed scan');
+                }
                 addFeedItem(renderBanner('🏁', evt.content || 'All targets completed', 'success'));
-                showToast('🏁 All targets completed', 'success');
+                if (!isReplay) showToast('🏁 All targets completed', 'success');
                 break;
 
             case 'report_ready':
@@ -456,25 +463,31 @@
                 break;
 
             case 'scan_started':
-                currentScanStatus = 'running';
-                renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
-                setStatus('running', 'SCANNING');
+                if (!isReplay) {
+                    currentScanStatus = 'running';
+                    renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
+                    setStatus('running', 'SCANNING');
+                }
                 addFeedItem(renderBanner('🚀', evt.content));
                 break;
 
             case 'thinking':
-                iterCount++;
-                const iterEl = document.getElementById('stat-iter');
-                if (iterEl) iterEl.textContent = iterCount;
-                popStat('stat-iter');
+                if (!isReplay) {
+                    iterCount++;
+                    const iterEl = document.getElementById('stat-iter');
+                    if (iterEl) iterEl.textContent = iterCount;
+                    popStat('stat-iter');
+                }
                 addFeedItem(renderThinking(evt.content), true);
                 break;
 
             case 'tool_call':
-                toolCount++;
-                const toolEl = document.getElementById('stat-tools');
-                if (toolEl) toolEl.textContent = toolCount;
-                popStat('stat-tools');
+                if (!isReplay) {
+                    toolCount++;
+                    const toolEl = document.getElementById('stat-tools');
+                    if (toolEl) toolEl.textContent = toolCount;
+                    popStat('stat-tools');
+                }
                 toolUsage[evt.tool_name] = (toolUsage[evt.tool_name] || 0) + 1;
                 updateToolStats();
                 addFeedItem(renderToolCall(evt));
@@ -510,7 +523,7 @@
                     }
                 }
                 // Real-time vuln rendering
-                if (evt.vulns && evt.vulns.length > 0) {
+                if (!isReplay && evt.vulns && evt.vulns.length > 0) {
                     vulnCount += evt.vulns.length;
                     const vulnEl = document.getElementById('stat-vulns');
                     if (vulnEl) vulnEl.textContent = vulnCount;
@@ -528,40 +541,43 @@
 
             case 'error':
                 addFeedItem(renderError(evt.content));
-                showToast('⚠️ ' + (evt.content || 'Error').slice(0, 80), 'error');
+                if (!isReplay) showToast('⚠️ ' + (evt.content || 'Error').slice(0, 80), 'error');
                 break;
 
             case 'finished':
                 if (evt.vulns && evt.vulns.length > 0) {
-                    vulnCount += evt.vulns.length;
-                    popStat('stat-vulns');
-                    renderVulns(evt.vulns);
+                    if (!isReplay) {
+                        vulnCount += evt.vulns.length;
+                        popStat('stat-vulns');
+                        renderVulns(evt.vulns);
+                    }
                 }
-                // Only mark scan as complete if this is a single-target scan
-                // with no queue. For multi-target/wildcard scans, queue_finished
-                // handles the final state transition.
-                if (totalTargets <= 1 && totalSubTargets <= 0) {
+                addFeedItem(renderFinished(evt.content));
+                // Agent "finished" events are session-level. Instance scans finish
+                // only when the queue emits queue_finished.
+                if (!isReplay && !currentInstanceID) {
                     scanRunning = false;
                     currentScanStatus = 'finished';
                     renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
                     setStatus('finished', 'COMPLETED');
                     toggleButtons(false);
                     showChatInput('Ask follow-up questions about this completed scan');
-                    addFeedItem(renderFinished(evt.content));
                     showToast('✅ Scan completed', 'success');
                 }
                 break;
 
             case 'stopped':
-                scanRunning = false;
-                currentScanStatus = 'stopped';
-                renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
-                setStatus('idle', 'STOPPED');
-                toggleButtons(false);
-                hideQueueBar();
-                showChatInput('Ask follow-up questions about this stopped scan');
+                if (!isReplay) {
+                    scanRunning = false;
+                    currentScanStatus = 'stopped';
+                    renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
+                    setStatus('idle', 'STOPPED');
+                    toggleButtons(false);
+                    hideQueueBar();
+                    showChatInput('Ask follow-up questions about this stopped scan');
+                }
                 addFeedItem(renderError(evt.content || 'Scan stopped by user'));
-                showToast('■ Scan stopped', 'warning');
+                if (!isReplay) showToast('■ Scan stopped', 'warning');
                 break;
         }
     }
@@ -1671,6 +1687,69 @@
     // Polling fallback - check status every 5 seconds in case WebSocket fails
     setInterval(async () => {
         try {
+            if (currentView === 'scan' && currentInstanceID) {
+                const resp = await fetch('/api/instances/' + encodeURIComponent(currentInstanceID));
+                if (!resp.ok) return;
+                const inst = await resp.json();
+                const wasRunning = scanRunning;
+                const status = inst.status || 'idle';
+
+                renderScanDetails(inst);
+                configureStartButtonForInstance(inst);
+
+                if (status === 'running' || status === 'pending') {
+                    scanRunning = true;
+                    toggleButtons(true);
+                    setStatus('running', status === 'pending' ? 'PENDING' : 'SCANNING');
+                    if (!scanStart) startTimer(inst.started_at ? new Date(inst.started_at) : null);
+                    return;
+                }
+
+                scanRunning = false;
+                toggleButtons(false);
+                hideQueueBar();
+
+                if (status === 'saved') {
+                    setStatus('idle', 'SAVED');
+                    hideChatInput();
+                    return;
+                }
+
+                if (status === 'paused') {
+                    setStatus('idle', 'PAUSED');
+                    showChatInput('Ask follow-up questions about this paused scan');
+                    return;
+                }
+
+                if (status === 'stopped') {
+                    setStatus('idle', 'STOPPED');
+                    showChatInput('Ask follow-up questions about this stopped scan');
+                    if (wasRunning) showToast('■ Scan stopped', 'warning');
+                    return;
+                }
+
+                if (status === 'finished') {
+                    setStatus('finished', 'COMPLETED');
+                    showChatInput('Ask follow-up questions about this completed scan');
+                    showReportButton(`/api/report/${encodeURIComponent(currentInstanceID)}`);
+                    if (wasRunning) {
+                        const feed = document.getElementById('feed-body');
+                        const hasFinished = feed && feed.querySelector('.event-finished');
+                        if (!hasFinished) {
+                            addFeedItem(renderBanner('🏁', 'Scan completed (recovered from connection loss)', 'success'));
+                        }
+                        showToast('🏁 Scan completed', 'success');
+                    }
+                    return;
+                }
+                return;
+            }
+
+            if (currentView === 'dashboard') {
+                refreshInstances();
+                return;
+            }
+
             const resp = await fetch('/api/status');
             const status = await resp.json();
             if (status.running && !scanRunning) {
