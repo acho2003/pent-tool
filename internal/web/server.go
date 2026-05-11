@@ -627,6 +627,7 @@ type VulnSummary struct {
 	ID                 string  `json:"id"`
 	Title              string  `json:"title"`
 	Severity           string  `json:"severity"`
+	Target             string  `json:"target,omitempty"`
 	Endpoint           string  `json:"endpoint"`
 	CVSS               float64 `json:"cvss"`
 	CVSSVector         string  `json:"cvss_vector,omitempty"`
@@ -1935,81 +1936,91 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 
 		// Push vuln to UI in real-time when report_vulnerability succeeds
 		if evt.ToolName == "report_vulnerability" && evt.ToolResult.Error == "" {
-			vulns := reporting.GetVulnerabilitiesForContext(sess.sctx.ID)
-			log.Printf("[VULN] report_vulnerability tool succeeded, vulns in list: %d", len(vulns))
-			if len(vulns) > 0 {
-				latest := vulns[len(vulns)-1]
-				vs := vulnToSummary(latest)
-				log.Printf("[VULN] Latest vuln: %s %s (CVSS %.1f)", vs.Severity, vs.Title, vs.CVSS)
-
-				// Severity filter enforcement strictly at the UI layer
-				allowed := true
-				if len(sess.severityFilter) > 0 {
-					allowed = false
-					for _, sev := range sess.severityFilter {
-						if strings.EqualFold(sev, vs.Severity) {
-							allowed = true
-							break
-						}
-					}
-					log.Printf("[VULN] Severity filter active: filter=%v, allowed=%v", sess.severityFilter, allowed)
-				}
-
-				if allowed {
-					wsEvt.Vulns = []VulnSummary{vs}
-					sess.record.Vulns = append(sess.record.Vulns, vs)
-					log.Printf("[VULN] Vuln broadcast real-time: %s %s", vs.Severity, vs.Title)
-
-					// Discord: vulnerability found (respects XALGORIX_DISCORD_MIN_SEVERITY)
-					sevColor := 0xef4444 // red for critical/high
-					switch vs.Severity {
-					case "medium":
-						sevColor = 0xd97706
-					case "low", "info":
-						sevColor = 0x3b82f6
-					}
-					var details strings.Builder
-					details.WriteString(fmt.Sprintf("**%s**\n\n", vs.Title))
-					if vs.Description != "" {
-						details.WriteString(fmt.Sprintf("📝 **Description:**\n%s\n\n", vs.Description))
-					}
-					if vs.Endpoint != "" {
-						details.WriteString(fmt.Sprintf("🔗 **Endpoint:** `%s`\n", vs.Endpoint))
-					}
-					if vs.Method != "" {
-						details.WriteString(fmt.Sprintf("📡 **Method:** `%s`\n", vs.Method))
-					}
-					if vs.CVE != "" {
-						details.WriteString(fmt.Sprintf("🏷️ **CVE:** `%s`\n", vs.CVE))
-					}
-					details.WriteString(fmt.Sprintf("📊 **CVSS:** `%.1f` | **Severity:** `%s`\n\n", vs.CVSS, strings.ToUpper(vs.Severity)))
-					if vs.Impact != "" {
-						details.WriteString(fmt.Sprintf("💥 **Impact:**\n%s\n\n", vs.Impact))
-					}
-					if vs.TechnicalAnalysis != "" {
-						details.WriteString(fmt.Sprintf("🔬 **Technical Analysis:**\n%s\n\n", vs.TechnicalAnalysis))
-					}
-					if vs.PoCDescription != "" {
-						details.WriteString(fmt.Sprintf("🧪 **PoC:**\n%s\n", vs.PoCDescription))
-					}
-					if vs.PoCScript != "" {
-						poc := vs.PoCScript
-						if len(poc) > 800 {
-							poc = poc[:800] + "\n... (truncated)"
-						}
-						details.WriteString(fmt.Sprintf("```\n%s\n```\n\n", poc))
-					}
-					if vs.Remediation != "" {
-						details.WriteString(fmt.Sprintf("🛡️ **Remediation:**\n%s", vs.Remediation))
-					}
-					// Apply Discord minimum severity filter
-					if severityMeetsThreshold(vs.Severity, s.discordMinSeverity) {
-						s.sendDiscord(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
-					} else {
-						log.Printf("[DISCORD] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.discordMinSeverity)
-					}
+			vulnID, reported := metadataString(evt.ToolResult.Metadata, "vuln_id")
+			if !reported {
+				log.Printf("[VULN] report_vulnerability returned without a new vuln_id; not broadcasting stored vuln again")
+			} else {
+				vulns := reporting.GetVulnerabilitiesForContext(sess.sctx.ID)
+				log.Printf("[VULN] report_vulnerability tool created %s, vulns in list: %d", vulnID, len(vulns))
+				latest, found := findReportedVulnerabilityByID(vulns, vulnID)
+				if !found {
+					log.Printf("[VULN] report_vulnerability metadata referenced %s, but it was not found in context %s", vulnID, sess.sctx.ID)
 				} else {
-					log.Printf("[VULN] Vuln filtered out by severity: %s (filter: %v)", vs.Severity, sess.severityFilter)
+					vs := vulnToSummary(latest)
+					log.Printf("[VULN] Latest vuln: %s %s (CVSS %.1f)", vs.Severity, vs.Title, vs.CVSS)
+
+					// Severity filter enforcement strictly at the UI layer
+					allowed := true
+					if len(sess.severityFilter) > 0 {
+						allowed = false
+						for _, sev := range sess.severityFilter {
+							if strings.EqualFold(sev, vs.Severity) {
+								allowed = true
+								break
+							}
+						}
+						log.Printf("[VULN] Severity filter active: filter=%v, allowed=%v", sess.severityFilter, allowed)
+					}
+
+					if allowed {
+						if appendVulnSummaryUnique(&sess.record.Vulns, vs) {
+							wsEvt.Vulns = []VulnSummary{vs}
+							log.Printf("[VULN] Vuln broadcast real-time: %s %s", vs.Severity, vs.Title)
+
+							// Discord: vulnerability found (respects XALGORIX_DISCORD_MIN_SEVERITY)
+							sevColor := 0xef4444 // red for critical/high
+							switch vs.Severity {
+							case "medium":
+								sevColor = 0xd97706
+							case "low", "info":
+								sevColor = 0x3b82f6
+							}
+							var details strings.Builder
+							details.WriteString(fmt.Sprintf("**%s**\n\n", vs.Title))
+							if vs.Description != "" {
+								details.WriteString(fmt.Sprintf("📝 **Description:**\n%s\n\n", vs.Description))
+							}
+							if vs.Endpoint != "" {
+								details.WriteString(fmt.Sprintf("🔗 **Endpoint:** `%s`\n", vs.Endpoint))
+							}
+							if vs.Method != "" {
+								details.WriteString(fmt.Sprintf("📡 **Method:** `%s`\n", vs.Method))
+							}
+							if vs.CVE != "" {
+								details.WriteString(fmt.Sprintf("🏷️ **CVE:** `%s`\n", vs.CVE))
+							}
+							details.WriteString(fmt.Sprintf("📊 **CVSS:** `%.1f` | **Severity:** `%s`\n\n", vs.CVSS, strings.ToUpper(vs.Severity)))
+							if vs.Impact != "" {
+								details.WriteString(fmt.Sprintf("💥 **Impact:**\n%s\n\n", vs.Impact))
+							}
+							if vs.TechnicalAnalysis != "" {
+								details.WriteString(fmt.Sprintf("🔬 **Technical Analysis:**\n%s\n\n", vs.TechnicalAnalysis))
+							}
+							if vs.PoCDescription != "" {
+								details.WriteString(fmt.Sprintf("🧪 **PoC:**\n%s\n", vs.PoCDescription))
+							}
+							if vs.PoCScript != "" {
+								poc := vs.PoCScript
+								if len(poc) > 800 {
+									poc = poc[:800] + "\n... (truncated)"
+								}
+								details.WriteString(fmt.Sprintf("```\n%s\n```\n\n", poc))
+							}
+							if vs.Remediation != "" {
+								details.WriteString(fmt.Sprintf("🛡️ **Remediation:**\n%s", vs.Remediation))
+							}
+							// Apply Discord minimum severity filter
+							if severityMeetsThreshold(vs.Severity, s.discordMinSeverity) {
+								s.sendDiscord(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
+							} else {
+								log.Printf("[DISCORD] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.discordMinSeverity)
+							}
+						} else {
+							log.Printf("[VULN] Skipping duplicate vuln already present in session record: %s %s", vs.ID, vs.Title)
+						}
+					} else {
+						log.Printf("[VULN] Vuln filtered out by severity: %s (filter: %v)", vs.Severity, sess.severityFilter)
+					}
 				}
 			}
 		}
@@ -2026,16 +2037,16 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 		// Build set of vulns already broadcast in real-time to avoid duplicates
 		seen := make(map[string]bool)
 		for _, v := range sess.record.Vulns {
-			seen[v.ID] = true
+			seen[vulnSummaryKey(v)] = true
 		}
 		vulns := reporting.GetVulnerabilitiesForContext(sess.sctx.ID)
 		log.Printf("[VULN] Finished event: total vulns in system: %d, already broadcast: %d", len(vulns), len(seen))
 		for _, v := range vulns {
-			if seen[v.ID] {
+			vs := vulnToSummary(v)
+			if seen[vulnSummaryKey(vs)] {
 				log.Printf("[VULN] Finished: skipping already-broadcast vuln: %s %s", v.ID, v.Title)
 				continue
 			}
-			vs := vulnToSummary(v)
 			allowed := true
 			if len(sess.severityFilter) > 0 {
 				allowed = false
@@ -2048,6 +2059,7 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 			}
 			if allowed {
 				wsEvt.Vulns = append(wsEvt.Vulns, vs)
+				seen[vulnSummaryKey(vs)] = true
 				log.Printf("[VULN] Finished: adding new vuln to final broadcast: %s %s", vs.Severity, vs.Title)
 			} else {
 				log.Printf("[VULN] Finished: filtered vuln (not added to broadcast): %s (filter: %v)", vs.Severity, sess.severityFilter)
@@ -3512,6 +3524,7 @@ func vulnToSummary(v reporting.Vulnerability) VulnSummary {
 		ID:                 v.ID,
 		Title:              v.Title,
 		Severity:           v.Severity,
+		Target:             v.Target,
 		Endpoint:           v.Endpoint,
 		CVSS:               v.CVSS,
 		CVSSVector:         v.CVSSVector,
@@ -3526,6 +3539,56 @@ func vulnToSummary(v reporting.Vulnerability) VulnSummary {
 		ExploitationProof:  v.ExploitationProof,
 		VerificationMethod: v.VerificationMethod,
 	}
+}
+
+func metadataString(metadata map[string]any, key string) (string, bool) {
+	if metadata == nil {
+		return "", false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	return text, text != ""
+}
+
+func findReportedVulnerabilityByID(vulns []reporting.Vulnerability, id string) (reporting.Vulnerability, bool) {
+	for _, vuln := range vulns {
+		if vuln.ID == id {
+			return vuln, true
+		}
+	}
+	return reporting.Vulnerability{}, false
+}
+
+func appendVulnSummaryUnique(vulns *[]VulnSummary, vuln VulnSummary) bool {
+	key := vulnSummaryKey(vuln)
+	for _, existing := range *vulns {
+		if vulnSummaryKey(existing) == key {
+			return false
+		}
+	}
+	*vulns = append(*vulns, vuln)
+	return true
+}
+
+func vulnSummaryKey(v VulnSummary) string {
+	return strings.Join([]string{
+		normalizeSummaryPart(v.Title),
+		normalizeSummaryPart(v.Target),
+		normalizeSummaryPart(v.Endpoint),
+		normalizeSummaryPart(v.Method),
+		normalizeSummaryPart(v.CVE),
+	}, "|")
+}
+
+func normalizeSummaryPart(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
 // generateReportAt generates a PDF report, saving it to a specific directory.
@@ -4362,7 +4425,9 @@ func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
 		}
 		// Also buffer vulns
 		if len(evt.Vulns) > 0 {
-			inst.Vulns = append(inst.Vulns, evt.Vulns...)
+			for _, vuln := range evt.Vulns {
+				appendVulnSummaryUnique(&inst.Vulns, vuln)
+			}
 		}
 		if evt.CurrentPhase > 0 {
 			inst.CurrentPhase = evt.CurrentPhase

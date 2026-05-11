@@ -1,15 +1,17 @@
 package reporting
 
 import (
+	"strings"
+	"sync"
 	"testing"
 )
 
 func TestCheckFalsePositive_MissingHeaders(t *testing.T) {
 	tests := []struct {
-		title    string
-		desc     string
-		severity string
-		proof    string
+		title      string
+		desc       string
+		severity   string
+		proof      string
 		wantReject bool
 	}{
 		{"Missing X-Frame-Options Header", "The X-Frame-Options header is not set", "medium", "", true},
@@ -200,6 +202,74 @@ func TestCheckFalsePositive_RealVulns(t *testing.T) {
 		if result != "" {
 			t.Errorf("real vuln %q should NOT be rejected, got: %s", tt.title, result)
 		}
+	}
+}
+
+func TestReportVulnChecksDuplicateBeforeAppending(t *testing.T) {
+	contextID := "test-report-duplicate"
+	CleanupContext(contextID)
+	defer CleanupContext(contextID)
+
+	args := validReportArgs()
+	first, err := reportVulnWithContextID(contextID, args)
+	if err != nil {
+		t.Fatalf("first report error = %v", err)
+	}
+	if _, ok := first.Metadata["vuln_id"].(string); !ok {
+		t.Fatalf("first report metadata = %#v, want vuln_id", first.Metadata)
+	}
+
+	duplicateArgs := validReportArgs()
+	duplicateArgs["endpoint"] = "https://example.com/login?id=2"
+	second, err := reportVulnWithContextID(contextID, duplicateArgs)
+	if err != nil {
+		t.Fatalf("second report error = %v", err)
+	}
+	if !strings.Contains(second.Output, "DUPLICATE") {
+		t.Fatalf("second report output = %q, want duplicate", second.Output)
+	}
+	if got, ok := second.Metadata["duplicate"].(bool); !ok || !got {
+		t.Fatalf("second report metadata = %#v, want duplicate=true", second.Metadata)
+	}
+	if got := len(GetVulnerabilitiesForContext(contextID)); got != 1 {
+		t.Fatalf("stored vulnerabilities = %d, want 1", got)
+	}
+}
+
+func TestReportVulnConcurrentDuplicatesOnlyAppendOnce(t *testing.T) {
+	contextID := "test-report-concurrent-duplicate"
+	CleanupContext(contextID)
+	defer CleanupContext(contextID)
+
+	const attempts = 20
+	var wg sync.WaitGroup
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = reportVulnWithContextID(contextID, validReportArgs())
+		}()
+	}
+	wg.Wait()
+
+	if got := len(GetVulnerabilitiesForContext(contextID)); got != 1 {
+		t.Fatalf("stored vulnerabilities after concurrent duplicates = %d, want 1", got)
+	}
+}
+
+func validReportArgs() map[string]string {
+	return map[string]string{
+		"title":               "SQL Injection in Login Endpoint",
+		"severity":            "high",
+		"description":         "Union-based SQL injection allows extraction of user records from the login endpoint.",
+		"exploitation_proof":  "sql injection data extraction confirmed; dumped user data including email address records from database",
+		"verification_method": "data_extracted",
+		"impact":              "Unauthorized attackers can extract sensitive user data.",
+		"target":              "https://example.com",
+		"endpoint":            "https://example.com/login?id=1",
+		"method":              "GET",
+		"cvss":                "7.5",
+		"cvss_vector":         "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
 	}
 }
 
