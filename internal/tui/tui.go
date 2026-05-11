@@ -229,15 +229,16 @@ func (m *Model) handleEvent(evt agent.Event) {
 		}
 		// Real-time vuln display when report_vulnerability succeeds
 		if evt.ToolName == "report_vulnerability" && evt.ToolResult.Error == "" {
-			vulns := reporting.GetVulnerabilities()
-			if len(vulns) > 0 {
-				m.vulnCount = len(vulns)
-				v := vulns[len(vulns)-1]
-				icon := severityIcon(v.Severity)
-				sev := severityStyle(v.Severity).Render(strings.ToUpper(v.Severity))
-				m.chatLog = append(m.chatLog, "")
-				m.chatLog = append(m.chatLog, titleStyle.Render(fmt.Sprintf("  🐛 VULNERABILITY FOUND — %s", icon)))
-				m.chatLog = append(m.chatLog, fmt.Sprintf("     %s [%s] %s — %s", icon, v.ID, v.Title, sev))
+			if vulnID, ok := metadataString(evt.ToolResult.Metadata, "vuln_id"); ok {
+				vulns := reporting.GetVulnerabilities()
+				if v, found := findReportedVulnerabilityByID(vulns, vulnID); found {
+					m.vulnCount = len(vulns)
+					icon := severityIcon(v.Severity)
+					sev := severityStyle(v.Severity).Render(strings.ToUpper(v.Severity))
+					m.chatLog = append(m.chatLog, "")
+					m.chatLog = append(m.chatLog, titleStyle.Render(fmt.Sprintf("  🐛 VULNERABILITY FOUND — %s", icon)))
+					m.chatLog = append(m.chatLog, fmt.Sprintf("     %s [%s] %s — %s", icon, v.ID, v.Title, sev))
+				}
 			}
 		}
 		m.chatLog = append(m.chatLog, "")
@@ -522,6 +523,31 @@ func FormatVulnSummary() string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func metadataString(metadata map[string]any, key string) (string, bool) {
+	if metadata == nil {
+		return "", false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	return text, text != ""
+}
+
+func findReportedVulnerabilityByID(vulns []reporting.Vulnerability, id string) (reporting.Vulnerability, bool) {
+	for _, vuln := range vulns {
+		if vuln.ID == id {
+			return vuln, true
+		}
+	}
+	return reporting.Vulnerability{}, false
 }
 
 // RunInteractive starts the interactive Bubbletea TUI.

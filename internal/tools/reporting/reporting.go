@@ -181,6 +181,18 @@ func reportVulnWithContextID(contextID string, args map[string]string) (tools.Re
 	proof := strings.TrimSpace(args["exploitation_proof"])
 	method := strings.ToLower(strings.TrimSpace(args["verification_method"]))
 	title := strings.TrimSpace(args["title"])
+	target := strings.TrimSpace(args["target"])
+	endpoint := strings.TrimSpace(args["endpoint"])
+
+	// ── Gate 0: Fast duplicate check before spending effort on report validation ──
+	// This is repeated under the write lock just before append to close races.
+	store := getStoreByID(contextID)
+	store.mu.RLock()
+	if existing, msg, ok := findDuplicateVulnerability(store.vulns, title, args["description"], target, endpoint); ok {
+		store.mu.RUnlock()
+		return duplicateResult(existing, msg), nil
+	}
+	store.mu.RUnlock()
 
 	// ── Gate 1: Validate verification method ──
 	if method == "" || !validVerificationMethods[method] {
@@ -215,32 +227,11 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 	}
 
 	// ── Gate 4: Smart Deduplication — same vuln type on same endpoint = duplicate ──
-	endpoint := strings.TrimSpace(args["endpoint"])
-	vulnType := extractVulnType(title, args["description"])
-	normalizedEndpoint := normalizeEndpoint(endpoint)
-
-	store := getStoreByID(contextID)
+	store = getStoreByID(contextID)
 	store.mu.RLock()
-	for _, existing := range store.vulns {
-		existingType := extractVulnType(existing.Title, existing.Description)
-		existingNormEndpoint := normalizeEndpoint(existing.Endpoint)
-
-		// Check 1: Exact title + endpoint match
-		if strings.EqualFold(existing.Title, title) && existing.Endpoint == endpoint {
-			store.mu.RUnlock()
-			return tools.Result{
-				Output: fmt.Sprintf("⚠️ DUPLICATE: '%s' at endpoint '%s' already reported as %s. Skipping.", title, endpoint, existing.ID),
-			}, nil
-		}
-
-		// Check 2: Same vulnerability TYPE on same normalized endpoint
-		if vulnType != "" && vulnType == existingType && normalizedEndpoint == existingNormEndpoint && normalizedEndpoint != "" {
-			store.mu.RUnlock()
-			return tools.Result{
-				Output: fmt.Sprintf("⚠️ DUPLICATE: Same vulnerability type '%s' already reported on endpoint '%s' as %s ('%s'). Skipping.\nIf this is genuinely different, use a distinct endpoint or describe how it differs.",
-					vulnType, endpoint, existing.ID, existing.Title),
-			}, nil
-		}
+	if existing, msg, ok := findDuplicateVulnerability(store.vulns, title, args["description"], target, endpoint); ok {
+		store.mu.RUnlock()
+		return duplicateResult(existing, msg), nil
 	}
 	store.mu.RUnlock()
 
@@ -300,6 +291,11 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 
 	store = getStoreByID(contextID) // re-resolve in case of race
 	store.mu.Lock()
+	if existing, msg, ok := findDuplicateVulnerability(store.vulns, title, args["description"], target, endpoint); ok {
+		store.mu.Unlock()
+		return duplicateResult(existing, msg), nil
+	}
+
 	vuln := Vulnerability{
 		ID:                 fmt.Sprintf("XALG-%d", len(store.vulns)+1),
 		Title:              title,
@@ -307,7 +303,7 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		OriginalSeverity:   originalSeverity,
 		Description:        args["description"],
 		Impact:             args["impact"],
-		Target:             args["target"],
+		Target:             target,
 		Endpoint:           endpoint,
 		Method:             args["method"],
 		CVE:                args["cve"],
@@ -335,6 +331,44 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		Output:   msg,
 		Metadata: map[string]any{"vuln_id": vuln.ID, "verified": vuln.Verified},
 	}, nil
+}
+
+func duplicateResult(existing Vulnerability, msg string) tools.Result {
+	return tools.Result{
+		Output: msg,
+		Metadata: map[string]any{
+			"duplicate":        true,
+			"existing_vuln_id": existing.ID,
+		},
+	}
+}
+
+func findDuplicateVulnerability(existing []Vulnerability, title, description, target, endpoint string) (Vulnerability, string, bool) {
+	normalizedTitle := normalizeFindingText(title)
+	normalizedTarget := normalizeEndpoint(target)
+	normalizedEndpoint := normalizeEndpoint(endpoint)
+	vulnType := extractVulnType(title, description)
+
+	for _, vuln := range existing {
+		existingTitle := normalizeFindingText(vuln.Title)
+		existingTarget := normalizeEndpoint(vuln.Target)
+		existingEndpoint := normalizeEndpoint(vuln.Endpoint)
+		existingType := extractVulnType(vuln.Title, vuln.Description)
+		sameTarget := normalizedTarget == existingTarget
+
+		// Exact finding match after trimming/case normalization.
+		if sameTarget && normalizedTitle != "" && normalizedTitle == existingTitle && normalizedEndpoint == existingEndpoint {
+			return vuln, fmt.Sprintf("⚠️ DUPLICATE: '%s' at endpoint '%s' already reported as %s. Skipping.", title, endpoint, vuln.ID), true
+		}
+
+		// Same vulnerability class on the same normalized endpoint.
+		if sameTarget && vulnType != "" && vulnType == existingType && normalizedEndpoint != "" && normalizedEndpoint == existingEndpoint {
+			return vuln, fmt.Sprintf("⚠️ DUPLICATE: Same vulnerability type '%s' already reported on endpoint '%s' as %s ('%s'). Skipping.\nIf this is genuinely different, use a distinct endpoint or describe how it differs.",
+				vulnType, endpoint, vuln.ID, vuln.Title), true
+		}
+	}
+
+	return Vulnerability{}, "", false
 }
 
 // checkFalsePositive detects common false positive patterns and rejects them.
@@ -683,8 +717,8 @@ func CleanupContext(contextID string) {
 }
 
 // MergeVulnsToContext copies all vulnerabilities from srcContextID into dstContextID.
-// Duplicates (by vuln ID) are skipped. Used by wildcard scans to accumulate subdomain
-// vulns into a persistent parent context before the subdomain's context is cleaned up.
+// Semantic duplicates are skipped. ID collisions are renumbered because each
+// child context starts its own XALG-1 sequence.
 func MergeVulnsToContext(srcContextID, dstContextID string) int {
 	if srcContextID == "" || dstContextID == "" || srcContextID == dstContextID {
 		return 0
@@ -706,18 +740,29 @@ func MergeVulnsToContext(srcContextID, dstContextID string) int {
 	dstStore.mu.Lock()
 	defer dstStore.mu.Unlock()
 
-	seen := make(map[string]bool, len(dstStore.vulns))
+	seenIDs := make(map[string]bool, len(dstStore.vulns))
 	for _, v := range dstStore.vulns {
-		seen[v.ID] = true
+		seenIDs[v.ID] = true
 	}
 
 	added := 0
 	for _, v := range srcVulns {
-		if !seen[v.ID] {
-			dstStore.vulns = append(dstStore.vulns, v)
-			seen[v.ID] = true
-			added++
+		if _, _, duplicate := findDuplicateVulnerability(dstStore.vulns, v.Title, v.Description, v.Target, v.Endpoint); duplicate {
+			continue
 		}
+		if seenIDs[v.ID] {
+			nextID := len(dstStore.vulns) + 1
+			for {
+				v.ID = fmt.Sprintf("XALG-%d", nextID)
+				if !seenIDs[v.ID] {
+					break
+				}
+				nextID++
+			}
+		}
+		dstStore.vulns = append(dstStore.vulns, v)
+		seenIDs[v.ID] = true
+		added++
 	}
 	return added
 }
@@ -1094,4 +1139,8 @@ func normalizeEndpoint(endpoint string) string {
 	endpoint = strings.TrimRight(endpoint, "/")
 	// Lowercase for consistent comparison
 	return strings.ToLower(endpoint)
+}
+
+func normalizeFindingText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }

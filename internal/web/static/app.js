@@ -32,6 +32,7 @@
     let iterCount = 0;
     let toolCount = 0;
     let vulnCount = 0;
+    const vulnKeys = new Set();
     let scanStart = null;
     let autoScroll = true;
     const toolUsage = {};
@@ -524,11 +525,8 @@
                 }
                 // Real-time vuln rendering
                 if (!isReplay && evt.vulns && evt.vulns.length > 0) {
-                    vulnCount += evt.vulns.length;
-                    const vulnEl = document.getElementById('stat-vulns');
-                    if (vulnEl) vulnEl.textContent = vulnCount;
-                    popStat('stat-vulns');
-                    renderVulns(evt.vulns);
+                    const added = renderVulns(evt.vulns);
+                    if (added > 0) popStat('stat-vulns');
                 }
                 break;
             }
@@ -547,9 +545,8 @@
             case 'finished':
                 if (evt.vulns && evt.vulns.length > 0) {
                     if (!isReplay) {
-                        vulnCount += evt.vulns.length;
-                        popStat('stat-vulns');
-                        renderVulns(evt.vulns);
+                        const added = renderVulns(evt.vulns);
+                        if (added > 0) popStat('stat-vulns');
                     }
                 }
                 addFeedItem(renderFinished(evt.content));
@@ -673,22 +670,28 @@
 
     function renderVulns(vulns) {
         const list = document.getElementById('vuln-list');
+        if (!list || !Array.isArray(vulns)) return 0;
+
         const empty = list.querySelector('.empty-state');
         if (empty) list.innerHTML = '';
-        
-        const countEl = document.getElementById('vuln-count');
-        if (countEl) countEl.textContent = vulnCount;
-        
+
+        let added = 0;
         vulns.forEach((v) => {
+            const key = vulnKey(v);
+            if (vulnKeys.has(key)) return;
+            vulnKeys.add(key);
+            added += 1;
+            const severity = normalizeVulnPart(v.severity) || 'info';
+
             const li = document.createElement('li');
-            li.className = `vuln-item ${v.severity.toLowerCase()}`;
+            li.className = `vuln-item ${severity}`;
             li._vulnData = v;
             li.innerHTML = `
                 <div class="vuln-header" style="cursor:pointer">
-                    <span class="vuln-severity-dot ${v.severity.toLowerCase()}"></span>
+                    <span class="vuln-severity-dot ${severity}"></span>
                     <span class="vuln-title-text">${esc(v.title)}</span>
                     <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);margin-left:auto;margin-right:8px">${v.cvss ? v.cvss.toFixed(1) : ''}</span>
-                    <span class="vuln-badge ${v.severity.toLowerCase()}">${v.severity.toUpperCase()}</span>
+                    <span class="vuln-badge ${severity}">${severity.toUpperCase()}</span>
                 </div>
             `;
             // Store vuln data for delegated event handler
@@ -697,6 +700,32 @@
             });
             list.appendChild(li);
         });
+
+        vulnCount = vulnKeys.size;
+        updateVulnCount();
+        return added;
+    }
+
+    function vulnKey(v) {
+        const parts = [
+            normalizeVulnPart(v && v.title),
+            normalizeVulnPart(v && v.target),
+            normalizeVulnPart(v && v.endpoint),
+            normalizeVulnPart(v && v.method),
+            normalizeVulnPart(v && v.cve),
+        ];
+        return parts.join('|');
+    }
+
+    function normalizeVulnPart(value) {
+        return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    }
+
+    function updateVulnCount() {
+        const statEl = document.getElementById('stat-vulns');
+        const countEl = document.getElementById('vuln-count');
+        if (statEl) statEl.textContent = String(vulnCount);
+        if (countEl) countEl.textContent = String(vulnCount);
     }
 
     // Toggle vuln expand - now opens modal
@@ -1173,12 +1202,14 @@
 
         // Reset state
         iterCount = 0; toolCount = 0; vulnCount = 0;
+        vulnKeys.clear();
         currentTargetIdx = 0; totalTargets = targets.length;
         Object.keys(toolUsage).forEach(k => delete toolUsage[k]);
         
         ['stat-iter', 'stat-tools', 'stat-vulns'].forEach(id => {
             document.getElementById(id).textContent = '0';
         });
+        updateVulnCount();
         
         document.getElementById('feed-body').innerHTML = '';
         document.getElementById('vuln-list').innerHTML = '<li class="empty-state" style="padding:20px 0"><div class="empty-title">Scanning...</div></li>';
@@ -1339,7 +1370,8 @@
             // Reset UI
             iterCount = scan.iterations || 0;
             toolCount = scan.tool_calls || 0;
-            vulnCount = (scan.vulns || []).length;
+            vulnCount = 0;
+            vulnKeys.clear();
             currentPhase = Number(scan.current_phase || firstSelectedPhase(scan.phases || []));
             currentScanStatus = scan.status || 'idle';
             renderScanDetails(scan);
@@ -1351,7 +1383,7 @@
             
             if (iterEl) iterEl.textContent = String(iterCount);
             if (toolsEl) toolsEl.textContent = String(toolCount);
-            if (vulnsEl) vulnsEl.textContent = String(vulnCount);
+            if (vulnsEl) vulnsEl.textContent = '0';
 
             // Tokens
             if (scan.total_tokens > 0 && tokensEl) {
@@ -1366,6 +1398,8 @@
             // Vulns
             if (scan.vulns && scan.vulns.length > 0) {
                 renderVulns(scan.vulns);
+            } else {
+                updateVulnCount();
             }
 
             // Events
@@ -1840,6 +1874,7 @@
         
         // Reset local scan counters so they don't leak into dashboard
         iterCount = 0; toolCount = 0; vulnCount = 0;
+        vulnKeys.clear();
         Object.keys(toolUsage).forEach(k => delete toolUsage[k]);
         
         // Unsubscribe from instance events
@@ -1871,11 +1906,13 @@
         
         // Reset scan view state
         iterCount = 0; toolCount = 0; vulnCount = 0;
+        vulnKeys.clear();
         Object.keys(toolUsage).forEach(k => delete toolUsage[k]);
         ['stat-iter', 'stat-tools', 'stat-vulns'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.textContent = '0';
         });
+        updateVulnCount();
         document.getElementById('feed-body').innerHTML = '';
         document.getElementById('vuln-list').innerHTML = '<li class="empty-state" style="padding:20px 0"><div class="empty-title">Loading...</div></li>';
         document.getElementById('tools-list').innerHTML = '<li class="empty-state" style="padding:20px 0"><div class="empty-title">Loading...</div></li>';
@@ -1944,10 +1981,9 @@
                 const el = document.getElementById('stat-tools');
                 if (el) el.textContent = toolCount;
             }
-            if (inst.vuln_count) {
+            if (inst.vuln_count && (!inst.vulns || inst.vulns.length === 0)) {
                 vulnCount = Math.max(vulnCount, inst.vuln_count);
-                const el = document.getElementById('stat-vulns');
-                if (el) el.textContent = vulnCount;
+                updateVulnCount();
             }
             if (inst.total_tokens) {
                 const el = document.getElementById('stat-tokens');
@@ -1958,16 +1994,9 @@
             if (inst.vulns && inst.vulns.length > 0) {
                 const vulnList = document.getElementById('vuln-list');
                 vulnList.innerHTML = '';
-                inst.vulns.forEach(v => {
-                    const li = document.createElement('li');
-                    li.className = 'vuln-item';
-                    li.innerHTML = `
-                        <span class="vuln-severity-dot ${(v.severity||'info').toLowerCase()}"></span>
-                        <span class="vuln-title">${esc(v.title)}</span>
-                        <span class="vuln-cvss">${v.cvss || ''}</span>
-                    `;
-                    vulnList.appendChild(li);
-                });
+                vulnKeys.clear();
+                vulnCount = 0;
+                renderVulns(inst.vulns);
             }
             
             // Load buffered events (replay feed)
