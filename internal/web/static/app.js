@@ -1175,7 +1175,19 @@
     };
 
     // ── Actions ────────────────────────────────────────────
-    window.startScan = function () {
+    function attachToInstance(instanceID) {
+        if (!instanceID) return;
+        currentInstanceID = instanceID;
+        showScanView();
+        history.pushState(null, '', '/' + instanceID);
+        const label = document.getElementById('scan-view-instance-id');
+        if (label) label.textContent = 'Instance: ' + instanceID;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ subscribe: instanceID }));
+        }
+    }
+
+    window.startScan = async function () {
         const targetVal = document.getElementById('target-input').value.trim();
         if (!targetVal) {
             const targetEl = document.getElementById('target-input');
@@ -1259,14 +1271,27 @@
         const discordWebhook = document.getElementById('discord-webhook')?.value?.trim();
         if (discordWebhook) payload.discord_webhook = discordWebhook;
 
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(payload));
-        } else {
-            fetch('/api/scan', {
+        try {
+            const resp = await fetch('/api/scan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
+            const data = await resp.json();
+            if (!resp.ok) {
+                throw new Error(data.error || 'Failed to start scan');
+            }
+            if (data.instance_id) {
+                attachToInstance(data.instance_id);
+                await loadInstanceState(data.instance_id);
+            }
+        } catch (e) {
+            scanRunning = false;
+            currentScanStatus = 'idle';
+            renderPhaseTimeline(currentScanPhases, currentPhase, currentScanStatus);
+            toggleButtons(false);
+            setStatus('idle', 'IDLE');
+            showToast('Failed to start scan: ' + e.message, 'error');
         }
     };
 

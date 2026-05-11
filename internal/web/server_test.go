@@ -321,6 +321,84 @@ func TestHandleChat_AllowsFinishedInstancePostScanChat(t *testing.T) {
 	}
 }
 
+func TestHandleChat_WithoutInstanceIDUsesLatestCompletedInstance(t *testing.T) {
+	s := newTestServer(t, &config.Config{RateLimitRequests: 60, RateLimitWindow: 60})
+	s.postScanChatFn = func(_ *config.Config, messages []llm.Message) (string, error) {
+		if got := messages[len(messages)-1].Content; got != "test for any api endpoint" {
+			t.Fatalf("chat message = %q", got)
+		}
+		return "The scan is complete; here are the API-related findings from the completed scan.", nil
+	}
+	inst := &ScanInstance{
+		ID:         "inst-latest-finished",
+		Targets:    "https://done.test",
+		Status:     "finished",
+		StartedAt:  "2026-05-10T10:00:00Z",
+		FinishedAt: "2026-05-10T10:30:00Z",
+		ScanMode:   "single",
+		events: []WSEvent{
+			{Type: "queue_finished", Content: "Scan queue ended"},
+		},
+	}
+	s.instancesMu.Lock()
+	s.instances[inst.ID] = inst
+	s.instancesMu.Unlock()
+
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"message":"test for any api endpoint"}`)
+	s.handleChat(rr, httptest.NewRequest(http.MethodPost, "/api/chat", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "API-related findings") {
+		t.Fatalf("unexpected no-instance post-scan chat response: %s", rr.Body.String())
+	}
+}
+
+func TestHandleChat_WithoutInstanceIDIgnoresStaleFinishedAgent(t *testing.T) {
+	s := newTestServer(t, &config.Config{RateLimitRequests: 60, RateLimitWindow: 60})
+	events := make(chan agent.Event, 4)
+	sctx := scanctx.New("stale-agent", t.TempDir())
+	agnt := agent.NewAgent(s.cfg, "stale-agent", events, sctx)
+	t.Cleanup(func() {
+		agnt.Stop()
+		sctx.Close()
+	})
+
+	s.mu.Lock()
+	s.currentScanID = "stale-scan"
+	s.currentAgents["stale-scan"] = agnt
+	s.mu.Unlock()
+	s.running.Store(false)
+
+	s.postScanChatFn = func(_ *config.Config, _ []llm.Message) (string, error) {
+		return "Post-scan context answer.", nil
+	}
+	inst := &ScanInstance{
+		ID:         "inst-finished-after-stale-agent",
+		Targets:    "https://done.test",
+		Status:     "finished",
+		StartedAt:  "2026-05-10T10:00:00Z",
+		FinishedAt: "2026-05-10T10:30:00Z",
+	}
+	s.instancesMu.Lock()
+	s.instances[inst.ID] = inst
+	s.instancesMu.Unlock()
+
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"message":"what did we find?"}`)
+	s.handleChat(rr, httptest.NewRequest(http.MethodPost, "/api/chat", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "next iteration") {
+		t.Fatalf("stale agent handled post-scan chat: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Post-scan context answer") {
+		t.Fatalf("unexpected post-scan response: %s", rr.Body.String())
+	}
+}
+
 func TestUploadHandlers_ParseTargetsAndInstructions(t *testing.T) {
 	s := newTestServer(t, nil)
 

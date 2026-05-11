@@ -4083,10 +4083,58 @@ func (s *Server) routeChatMessage(instanceID, message string) (string, error) {
 	targetID := s.currentScanID
 	agnt := s.currentAgents[targetID]
 	s.mu.RUnlock()
-	if agnt == nil {
-		return "", fmt.Errorf("no active scan")
+	if agnt != nil && s.running.Load() {
+		return agnt.SendMessage(message)
 	}
-	return agnt.SendMessage(message)
+
+	if inst := s.latestChatInstance(); inst != nil {
+		return s.postScanChat(inst, message)
+	}
+
+	return "", fmt.Errorf("no active or completed scan to chat with")
+}
+
+func (s *Server) latestChatInstance() *ScanInstance {
+	s.instancesMu.RLock()
+	defer s.instancesMu.RUnlock()
+
+	var best *ScanInstance
+	var bestTime time.Time
+	for _, inst := range s.instances {
+		inst.mu.RLock()
+		status := inst.Status
+		finishedAt := inst.FinishedAt
+		startedAt := inst.StartedAt
+		inst.mu.RUnlock()
+
+		switch status {
+		case "finished", "stopped", "paused":
+		default:
+			continue
+		}
+
+		t := parseInstanceTime(finishedAt)
+		if t.IsZero() {
+			t = parseInstanceTime(startedAt)
+		}
+		if best == nil || t.After(bestTime) {
+			best = inst
+			bestTime = t
+		}
+	}
+	return best
+}
+
+func parseInstanceTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 func (s *Server) postScanChat(inst *ScanInstance, message string) (string, error) {
@@ -4128,7 +4176,7 @@ func buildPostScanChatPrompt(inst *ScanInstance) string {
 	if inst.Status == "paused" {
 		b.WriteString("You are Xalgorix in paused-scan chat mode. The scan is paused, so answer follow-up questions using only the scan context captured so far. Do not claim that you are still scanning or that you can run tools in this chat. If the user asks for new testing, explain what the current results show and suggest resuming the scan.\n\n")
 	} else {
-		b.WriteString("You are Xalgorix in post-scan chat mode. The scan has already finished, so answer follow-up questions using only the completed scan context below. Do not claim that you are still scanning or that you can run tools in this chat. If the user asks for new testing, explain what the existing results show and suggest restarting or starting a new scan.\n\n")
+		b.WriteString("You are Xalgorix in post-scan chat mode. The scan has already finished, so answer follow-up questions using only the completed scan context below. Do not claim that you are still scanning or that you can run tools in this chat. If the user asks for new testing, first summarize what the completed scan already found for that topic, then explain that additional live testing requires resuming, restarting, or starting a new scan.\n\n")
 	}
 
 	b.WriteString("## Scan\n")
