@@ -74,29 +74,6 @@ async function http<T>(
   }
   return (await res.text()) as unknown as T
 }
-  const res = await fetch(path, {
-    credentials: "same-origin",
-    ...init,
-    headers,
-    body,
-  });
-  if (!res.ok) {
-    let detail = "";
-    try {
-      detail = await res.text();
-    } catch {
-      /* ignore */
-    }
-    throw new Error(
-      `HTTP ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
-    );
-  }
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    return (await res.json()) as T;
-  }
-  return (await res.text()) as unknown as T;
-}
 
 export const api = {
   authStatus: () => http<AuthStatus>("/api/auth/status"),
