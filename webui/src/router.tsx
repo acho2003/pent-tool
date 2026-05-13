@@ -1,33 +1,47 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
-import { AppShell } from "./layout/app-shell";
-import { OverviewPage } from "./pages/overview";
-import { NewScanPage } from "./pages/new-scan";
-import { ScansPage } from "./pages/scans";
-import { ScanDetailPage } from "./pages/scan-detail";
-import { FindingsPage } from "./pages/findings";
-import { FindingDetailPage } from "./pages/finding-detail";
-import { LiveFeedPage } from "./pages/live";
-import { ReportsPage } from "./pages/reports";
-import { IntegrationsPage } from "./pages/integrations";
-import { SettingsPage } from "./pages/settings";
+import { createBrowserRouter, Navigate } from "react-router-dom"
+import { AuthBootstrap, RequireAuth, RedirectIfAuthed } from "@/app"
+import OverviewPage from "@/pages/overview"
+import ScansPage from "@/pages/scans"
+import ScanDetailPage from "@/pages/scan-detail"
+import LivePage from "@/pages/live"
+import InstancesPage from "@/pages/instances"
+import EmailTriagePage from "@/pages/email-triage"
+import SettingsPage from "@/pages/settings"
+import LoginPage from "@/pages/login"
+import NotFoundPage from "@/pages/not-found"
+
+function Root({ children }: { children: React.ReactNode }) {
+  return <AuthBootstrap>{children}</AuthBootstrap>
+}
 
 export const router = createBrowserRouter([
   {
+    path: "/login",
+    element: (
+      <Root>
+        <RedirectIfAuthed>
+          <LoginPage />
+        </RedirectIfAuthed>
+      </Root>
+    ),
+  },
+  {
     path: "/",
-    element: <AppShell />,
+    element: (
+      <Root>
+        <RequireAuth />
+      </Root>
+    ),
     children: [
       { index: true, element: <OverviewPage /> },
-      { path: "scans/new", element: <NewScanPage /> },
       { path: "scans", element: <ScansPage /> },
-      { path: "scans/:id", element: <ScanDetailPage /> },
-      { path: "scans/:id/findings/:fid", element: <FindingDetailPage /> },
-      { path: "findings", element: <FindingsPage /> },
-      { path: "findings/:scanId/:fid", element: <FindingDetailPage /> },
-      { path: "live", element: <LiveFeedPage /> },
-      { path: "reports", element: <ReportsPage /> },
-      { path: "integrations", element: <IntegrationsPage /> },
+      { path: "scans/:scanId", element: <ScanDetailPage /> },
+      { path: "live", element: <LivePage /> },
+      { path: "instances", element: <InstancesPage /> },
+      { path: "email", element: <EmailTriagePage /> },
       { path: "settings", element: <SettingsPage /> },
-      { path: "*", element: <Navigate to="/" replace /> },
+      { path: "404", element: <NotFoundPage /> },
+      { path: "*", element: <Navigate to="/404" replace /> },
     ],
   },
-]);
+])
