@@ -91,7 +91,7 @@ const handlers = {
     json(res, { running: true, current_target: "acme.com" }),
   "GET /api/version": (req, res) => json(res, { version: "4.2.9", commit: "dev" }),
   "GET /api/instances": (req, res) => json(res, { instances }),
-  "GET /api/scans": (req, res) => json(res, { scans }),
+  "GET /api/scans": (req, res) => json(res, scans),
   "GET /api/queue/status": (req, res) =>
     json(res, {
       active: true,
@@ -123,7 +123,7 @@ const server = http.createServer((req, res) => {
   json(res, { ok: true });
 });
 
-server.listen(8080, () => console.log("mock backend on 8080"));
+server.listen(9090, () => console.log("mock backend on 9090"));
 
 const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (ws) => {

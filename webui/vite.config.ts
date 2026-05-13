@@ -32,10 +32,14 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: {
-      "/api": "http://localhost:8080",
-      "/ws": { target: "ws://localhost:8080", ws: true },
-      "/uploads": "http://localhost:8080",
-    },
+    proxy: (() => {
+      const target = process.env.VITE_API_TARGET || "http://localhost:8080";
+      const wsTarget = target.replace(/^http/, "ws");
+      return {
+        "/api": target,
+        "/ws": { target: wsTarget, ws: true },
+        "/uploads": target,
+      };
+    })(),
   },
 });
