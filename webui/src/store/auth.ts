@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import { api } from "@/api/client"
+import { api, AUTH_EXPIRED } from "@/api/client"
 
 type Status = "loading" | "anon" | "authed" | "disabled"
 
@@ -45,3 +45,18 @@ export const useAuth = create<AuthState>((set) => ({
     set({ status: "anon", authEnabled: true })
   },
 }))
+
+// Listen for global auth-expired events emitted by the API client whenever
+// any request returns 401. Without this, an expired session would just
+// surface as a generic toast on whichever screen the user happened to be
+// on — they'd have to refresh manually to get the login form back.
+if (typeof window !== "undefined") {
+  window.addEventListener(AUTH_EXPIRED, () => {
+    const { status, authEnabled } = useAuth.getState()
+    // Only react if we currently think we're logged in. Avoids fighting
+    // with the initial /api/auth/status probe when the app first loads.
+    if (status === "authed" || authEnabled) {
+      useAuth.setState({ status: "anon", authEnabled: true })
+    }
+  })
+}

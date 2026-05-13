@@ -217,6 +217,9 @@ func main() {
 	if args.model != "" {
 		cfg.LLM = args.model
 	}
+	if args.bind != "" {
+		cfg.BindAddr = args.bind
+	}
 
 	// Web UI mode — no target or API config required at launch
 	if args.webUI {
@@ -261,6 +264,7 @@ type cliArgs struct {
 	targets     []string
 	instruction string
 	model       string
+	bind        string
 	version     bool
 	update      bool
 	webUI       bool
@@ -304,6 +308,11 @@ func parseArgs() cliArgs {
 			}
 		case "--web", "-w":
 			args.webUI = true
+		case "--bind":
+			if i+1 < len(osArgs) {
+				i++
+				args.bind = osArgs[i]
+			}
 		case "--update", "-up":
 			args.update = true
 		case "--version", "-v":
@@ -328,6 +337,8 @@ func parseArgs() cliArgs {
 				args.model = strings.TrimPrefix(osArgs[i], "--model=")
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
+			} else if strings.HasPrefix(osArgs[i], "--bind=") {
+				args.bind = strings.TrimPrefix(osArgs[i], "--bind=")
 			}
 		}
 	}
@@ -348,6 +359,8 @@ func printUsage() {
 	fmt.Println("Modes:")
 	fmt.Println("  -w, --web                 Launch the Web UI dashboard")
 	fmt.Println("  -p, --port <port>         Web UI port (default: 1337)")
+	fmt.Println("      --bind <addr>         Bind address (default: 127.0.0.1).")
+	fmt.Println("                            Use 0.0.0.0 to expose externally (REQUIRES auth).")
 	fmt.Println()
 	fmt.Println("Service Commands:")
 	fmt.Println("  --start                   Install and start as systemd service")
@@ -604,9 +617,53 @@ func handleUninstall() {
 	fmt.Println("✅ Uninstall complete!")
 }
 
+// autoUpdateInterval is how often a CLI invocation may hit the GitHub API.
+// Without a TTL every `xalgorix --target ...` invocation blocks for up to
+// 15s waiting on GitHub — annoying for users and rate-limit-prone.
+const autoUpdateInterval = 6 * time.Hour
+
+// autoUpdateCheckPath returns the timestamp marker for the last successful
+// update check. Using ~/.xalgorix/last_update_check so it survives across
+// invocations and lives next to the rest of our local state.
+func autoUpdateCheckPath() string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/root"
+	}
+	dir := filepath.Join(home, ".xalgorix")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "last_update_check")
+}
+
+// autoUpdateThrottled returns true when the last update check happened
+// within autoUpdateInterval. Failures to read/write the marker are
+// non-fatal — the worst case is one extra GitHub fetch.
+func autoUpdateThrottled() bool {
+	info, err := os.Stat(autoUpdateCheckPath())
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) < autoUpdateInterval
+}
+
+func touchAutoUpdateMarker() {
+	now := time.Now()
+	path := autoUpdateCheckPath()
+	if f, err := os.Create(path); err == nil {
+		f.Close()
+	}
+	_ = os.Chtimes(path, now, now)
+}
+
 // autoUpdate checks GitHub for a newer release and self-updates if found.
 func autoUpdate() {
+	if autoUpdateThrottled() {
+		return
+	}
 	latestVer, downloadURL := fetchLatestRelease()
+	// Mark the check as performed even on failure so a flaky GitHub doesn't
+	// produce a blocking call on every invocation.
+	touchAutoUpdateMarker()
 	if latestVer == "" || latestVer == version {
 		return
 	}

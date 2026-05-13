@@ -72,7 +72,14 @@ ok "Version bumped: $CURRENT → $NEW_VERSION"
 
 # ─── Step 2: Build & verify ───
 info "Building and verifying..."
-go build ./cmd/xalgorix/ || { die "Build failed! Reverting version bump."; git checkout "$MAIN_GO"; }
+# The previous version had `die` before `git checkout`, but `die` calls
+# `exit 1` so the checkout never ran and the version bump was left on disk.
+# Reorder: revert the bump first, then exit.
+if ! go build ./cmd/xalgorix/; then
+    warn "Build failed — reverting version bump in $MAIN_GO"
+    git checkout -- "$MAIN_GO"
+    die "Build failed (version bump reverted)"
+fi
 ok "Build successful"
 
 # ─── Step 3: Build release binary ───

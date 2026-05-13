@@ -11,6 +11,27 @@ import type {
   StatusResponse,
 } from "@/types/api";
 
+// Auth session expiry handling. When any API call returns 401 we dispatch a
+// global event so the auth store (in store/auth.ts) can flip the user back
+// to the login screen without each component having to handle it.
+// We avoid importing the store directly to keep this module free of
+// circular deps with the rest of the app.
+const AUTH_EXPIRED_EVENT = "xalgorix:auth-expired"
+let lastAuthExpiredDispatch = 0
+
+function dispatchAuthExpired() {
+  // Debounce: when multiple SWR keys fail at once we'd otherwise fire
+  // dozens of events in a single tick.
+  const now = Date.now()
+  if (now - lastAuthExpiredDispatch < 1000) return
+  lastAuthExpiredDispatch = now
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT))
+  }
+}
+
+export const AUTH_EXPIRED = AUTH_EXPIRED_EVENT
+
 async function http<T>(
   path: string,
   init?: RequestInit & { json?: unknown },
@@ -18,12 +39,41 @@ async function http<T>(
   const headers: HeadersInit = {
     Accept: "application/json",
     ...(init?.headers || {}),
-  };
-  let body = init?.body;
-  if (init?.json !== undefined) {
-    body = JSON.stringify(init.json);
-    (headers as Record<string, string>)["Content-Type"] = "application/json";
   }
+  let body = init?.body
+  if (init?.json !== undefined) {
+    body = JSON.stringify(init.json)
+    ;(headers as Record<string, string>)["Content-Type"] = "application/json"
+  }
+  const res = await fetch(path, {
+    credentials: "same-origin",
+    ...init,
+    headers,
+    body,
+  })
+  if (!res.ok) {
+    // Surface session expiry / auth failure to the rest of the app, but
+    // never on the login endpoint itself (that 401 is just "bad password"
+    // and the form already shows the error inline).
+    if (res.status === 401 && path !== "/api/auth/login") {
+      dispatchAuthExpired()
+    }
+    let detail = ""
+    try {
+      detail = await res.text()
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `HTTP ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
+    )
+  }
+  const ct = res.headers.get("content-type") || ""
+  if (ct.includes("application/json")) {
+    return (await res.json()) as T
+  }
+  return (await res.text()) as unknown as T
+}
   const res = await fetch(path, {
     credentials: "same-origin",
     ...init,
