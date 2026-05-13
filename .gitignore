@@ -44,3 +44,9 @@ tmp/
 *.log
 nohup.out
 gospider/
+
+# Webui
+webui/node_modules/
+webui/dist/
+webui/.vite/
+webui/.turbo/
