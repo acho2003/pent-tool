@@ -143,7 +143,8 @@ const server = http.createServer((req, res) => {
   json(res, { ok: true });
 });
 
-server.listen(9090, () => console.log("mock backend on 9090"));
+const port = Number(process.env.PORT || 8080);
+server.listen(port, () => console.log(`mock backend on ${port}`));
 
 const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (ws) => {

@@ -67,9 +67,9 @@ export default function FindingsPage() {
       if (!query) return true;
       const q = query.toLowerCase();
       return (
-        f.title.toLowerCase().includes(q) ||
-        f.endpoint?.toLowerCase().includes(q) ||
-        f.scan_target.toLowerCase().includes(q) ||
+        (f.title || "").toLowerCase().includes(q) ||
+        (f.endpoint || "").toLowerCase().includes(q) ||
+        (f.scan_target || "").toLowerCase().includes(q) ||
         (f.cve || "").toLowerCase().includes(q)
       );
     });
@@ -152,7 +152,7 @@ export default function FindingsPage() {
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState
-            icon={ShieldAlert}
+            icon={<ShieldAlert className="h-6 w-6" />}
             title="No matching findings"
             description="Try widening your filters or run a new scan."
           />
@@ -177,7 +177,7 @@ export default function FindingsPage() {
                         {f.cve}
                       </Badge>
                     )}
-                    {f.cvss > 0 && (
+                    {typeof f.cvss === "number" && f.cvss > 0 && (
                       <span className="mono">CVSS {f.cvss.toFixed(1)}</span>
                     )}
                     <span className="ml-auto truncate">→ {f.scan_target}</span>

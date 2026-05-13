@@ -57,7 +57,7 @@ export default function ReportsPage() {
           </div>
         ) : list.length === 0 ? (
           <EmptyState
-            icon={FileText}
+            icon={<FileText className="h-6 w-6" />}
             title="No reports yet"
             description="Run a scan and a PDF report will be available here."
           />
