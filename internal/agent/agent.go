@@ -2232,7 +2232,7 @@ Go beyond known CVEs. Use behavioral fuzzing and anomaly detection to find vulne
   - CVSS score
   - Reproducible PoC (exact curl command or script)
   - Remediation steps
-- DEDUPLICATION: Same endpoint + same vuln = skip. Same vuln across endpoints = report best one.
+- DEDUPLICATION: Only deduplicate findings inside this current scan run. Previous scans and old reports do not count. Same endpoint + same vuln in this scan = skip. Same vuln across endpoints = report best one.
 - Call finish with a complete summary: targets, vulns by severity, and remediation priorities.
 `
 

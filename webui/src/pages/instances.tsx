@@ -111,13 +111,20 @@ function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof 
         <div className={`rounded-md border px-3 py-2 text-xs ${levelColor}`}>
           <div className="uppercase tracking-wide opacity-70">Resource level</div>
           <div className="mt-0.5 font-medium capitalize">{resources.level || "ok"}</div>
-          {resources.reason && (
+          {shouldShowResourceReason(resources) && (
             <div className="mt-0.5 opacity-70 line-clamp-2">{resources.reason}</div>
           )}
         </div>
       </CardContent>
     </Card>
   )
+}
+
+function shouldShowResourceReason(resources?: { level?: string; reason?: string }): boolean {
+  const reason = resources?.reason?.trim()
+  if (!reason) return false
+  const level = (resources?.level || "").trim().toLowerCase()
+  return level !== "ok" && !reason.toLowerCase().startsWith("ok")
 }
 
 function ResourceStat({

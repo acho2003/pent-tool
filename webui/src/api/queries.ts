@@ -10,9 +10,12 @@ export const qk = {
   scan: (id: string) => ["scan", id] as const,
   instances: ["instances"] as const,
   instance: (id: string) => ["instance", id] as const,
+  instanceEvents: (id: string) => ["instance", id, "events"] as const,
   queue: ["queue"] as const,
   rateLimit: ["settings", "rate-limit"] as const,
   agentMail: ["settings", "agentmail"] as const,
+  llmSettings: ["settings", "llm"] as const,
+  environmentSettings: ["settings", "environment"] as const,
 };
 
 export function useAuthStatus() {
@@ -52,6 +55,14 @@ export function useScan(id?: string) {
     queryKey: id ? qk.scan(id) : ["scan", "none"],
     queryFn: () => api.getScan(id!),
     enabled: !!id,
+    refetchInterval: (query) => {
+      const scan = query.state.data;
+      if (!scan) return 2000;
+      const status = (scan.status || "").toLowerCase();
+      return status === "running" || status === "pending" || status === "paused"
+        ? 2000
+        : false;
+    },
   });
 }
 
@@ -60,6 +71,16 @@ export function useInstances() {
     queryKey: qk.instances,
     queryFn: api.instances,
     refetchInterval: 8000,
+  });
+}
+
+export function useInstanceEvents(id?: string) {
+  return useQuery({
+    queryKey: id ? qk.instanceEvents(id) : ["instance", "none", "events"],
+    queryFn: () => api.instanceEvents(id!),
+    enabled: !!id,
+    staleTime: 1000,
+    refetchInterval: 5000,
   });
 }
 
@@ -82,6 +103,20 @@ export function useAgentMail() {
   return useQuery({
     queryKey: qk.agentMail,
     queryFn: api.agentMail,
+  });
+}
+
+export function useLLMSettings() {
+  return useQuery({
+    queryKey: qk.llmSettings,
+    queryFn: api.llmSettings,
+  });
+}
+
+export function useEnvironmentSettings() {
+  return useQuery({
+    queryKey: qk.environmentSettings,
+    queryFn: api.environmentSettings,
   });
 }
 
@@ -146,7 +181,10 @@ export function useUpdateRateLimit() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.updateRateLimit,
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.rateLimit }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.rateLimit });
+      qc.invalidateQueries({ queryKey: qk.environmentSettings });
+    },
   });
 }
 
@@ -154,7 +192,37 @@ export function useUpdateAgentMail() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.updateAgentMail,
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.agentMail }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.agentMail });
+      qc.invalidateQueries({ queryKey: qk.environmentSettings });
+    },
+  });
+}
+
+export function useUpdateLLMSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.updateLLMSettings,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.llmSettings });
+      qc.invalidateQueries({ queryKey: qk.environmentSettings });
+      qc.invalidateQueries({ queryKey: qk.version });
+    },
+  });
+}
+
+export function useUpdateEnvironmentSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.updateEnvironmentSettings,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.environmentSettings });
+      qc.invalidateQueries({ queryKey: qk.llmSettings });
+      qc.invalidateQueries({ queryKey: qk.agentMail });
+      qc.invalidateQueries({ queryKey: qk.rateLimit });
+      qc.invalidateQueries({ queryKey: qk.version });
+      qc.invalidateQueries({ queryKey: qk.instances });
+    },
   });
 }
 

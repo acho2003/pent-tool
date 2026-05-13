@@ -11,7 +11,12 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useAgentMail, useRateLimit, useVersion } from "@/api/queries";
+import {
+  useAgentMail,
+  useEnvironmentSettings,
+  useRateLimit,
+  useVersion,
+} from "@/api/queries";
 import { cn } from "@/lib/utils";
 
 type Integration = {
@@ -31,22 +36,29 @@ export default function IntegrationsPage() {
   const mail = useAgentMail();
   const rate = useRateLimit();
   const version = useVersion();
+  const environment = useEnvironmentSettings();
+  const ai = version.data?.ai;
+  const usesVercelGateway = ai?.gateway === "vercel";
+  const discordWebhook = environment.data?.variables.find(
+    (variable) => variable.key === "XALGORIX_DISCORD_WEBHOOK",
+  );
 
   const integrations: Integration[] = [
     {
-      key: "ai-gateway",
-      name: "Vercel AI Gateway",
-      description:
-        "Multi-provider LLM access for the security agent — OpenAI, Anthropic, Google, and more behind one key.",
+      key: "llm-provider",
+      name: usesVercelGateway ? "Vercel AI Gateway" : "LLM Provider",
+      description: usesVercelGateway
+        ? "Multi-provider LLM access for the security agent through Vercel AI Gateway."
+        : "Direct model provider used by the security agent for planning, testing, and reporting.",
       category: "AI",
       icon: Sparkles,
-      configurePath: "/settings",
+      configurePath: "/settings?tab=llm",
       configureLabel: "Open settings",
-      external: "https://vercel.com/docs/ai-gateway",
-      isConfigured: Boolean(version.data),
-      detail: version.data
-        ? `Server build ${(version.data as { version?: string }).version ?? "ok"}`
-        : "Built into the agent runtime.",
+      external: usesVercelGateway ? "https://vercel.com/docs/ai-gateway" : undefined,
+      isConfigured: Boolean(ai?.configured),
+      detail: ai
+        ? `${ai.provider}${ai.model ? ` · ${ai.model}` : ""}`
+        : "Loading provider status...",
     },
     {
       key: "agentmail",
@@ -55,7 +67,7 @@ export default function IntegrationsPage() {
         "Inbound email triage: forward security inboxes and let the agent classify, prioritize, and respond.",
       category: "Email",
       icon: Mail,
-      configurePath: "/settings",
+      configurePath: "/settings?tab=email",
       configureLabel: "Configure",
       external: "https://agentmail.to",
       isConfigured: Boolean(mail.data?.hasApiKey && mail.data?.pod),
@@ -68,11 +80,13 @@ export default function IntegrationsPage() {
         "Stream critical findings and scan summaries to a Discord channel as they happen.",
       category: "Notifications",
       icon: MessageSquare,
-      configurePath: "/scans/new",
-      configureLabel: "Set per scan",
+      configurePath: "/settings?tab=notifications",
+      configureLabel: "Configure",
       external: "https://discord.com/developers/docs/resources/webhook",
-      isConfigured: false,
-      detail: "Provided per-scan via the New Scan form.",
+      isConfigured: Boolean(discordWebhook?.hasValue),
+      detail: discordWebhook?.hasValue
+        ? "Global webhook configured"
+        : "Global default, with per-scan overrides available.",
     },
     {
       key: "rate-limit",
@@ -81,7 +95,7 @@ export default function IntegrationsPage() {
         "Throttle the agent so it stays within target SLAs and bug bounty engagement rules.",
       category: "Engagement",
       icon: ShieldCheck,
-      configurePath: "/settings",
+      configurePath: "/settings?tab=engagement",
       configureLabel: "Adjust",
       isConfigured: Boolean(rate.data?.requests),
       detail: rate.data

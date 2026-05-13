@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useMemo, useState, type FormEvent } from "react";
-import { ChevronLeft, Loader2, Play } from "lucide-react";
+import { ChevronLeft, ImageIcon, Loader2, Play, Upload, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { PHASES } from "@/components/phase-progress";
+import { api } from "@/api/client";
 import { useStartScan } from "@/api/queries";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +51,10 @@ export default function NewScanPage() {
   const [selectedPhases, setSelectedPhases] = useState<number[]>([]);
   const [severityFilter, setSeverityFilter] = useState<string[]>([]);
   const [model, setModel] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [logoPath, setLogoPath] = useState("");
+  const [logoFileName, setLogoFileName] = useState("");
+  const [logoUploading, setLogoUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const targets = useMemo(
@@ -63,13 +68,34 @@ export default function NewScanPage() {
 
   function togglePhase(id: number) {
     setSelectedPhases((cur) =>
-      cur.includes(id) ? cur.filter((p) => p !== id) : [...cur, id].sort((a, b) => a - b),
+      cur.includes(id)
+        ? cur.filter((p) => p !== id)
+        : [...cur, id].sort((a, b) => a - b),
     );
   }
   function toggleSeverity(s: string) {
     setSeverityFilter((cur) =>
       cur.includes(s) ? cur.filter((p) => p !== s) : [...cur, s],
     );
+  }
+
+  async function uploadReportLogo(file?: File) {
+    if (!file) return;
+    setError(null);
+    if (!/\.(png|jpe?g)$/i.test(file.name)) {
+      setError("Report logos must be PNG or JPEG.");
+      return;
+    }
+    setLogoUploading(true);
+    try {
+      const res = await api.uploadLogo(file);
+      setLogoPath(res.path);
+      setLogoFileName(res.filename || file.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload logo");
+    } finally {
+      setLogoUploading(false);
+    }
   }
 
   async function onSubmit(e: FormEvent) {
@@ -88,6 +114,8 @@ export default function NewScanPage() {
         phases: selectedPhases.length ? selectedPhases : undefined,
         severity_filter: severityFilter.length ? severityFilter : undefined,
         model: model.trim() || undefined,
+        company_name: companyName.trim() || undefined,
+        logo_path: logoPath || undefined,
       });
       const id =
         (res as { id?: string; instance_id?: string })?.instance_id ||
@@ -142,7 +170,11 @@ export default function NewScanPage() {
               {targets.length > 1 && (
                 <div className="flex flex-wrap gap-1">
                   {targets.map((t) => (
-                    <Badge key={t} variant="outline" className="mono text-[10px]">
+                    <Badge
+                      key={t}
+                      variant="outline"
+                      className="mono text-[10px]"
+                    >
                       {t}
                     </Badge>
                   ))}
@@ -157,6 +189,87 @@ export default function NewScanPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Report branding</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-[1fr_220px]">
+            <div className="space-y-2">
+              <Label htmlFor="companyName">Target brand name</Label>
+              <Input
+                id="companyName"
+                placeholder="Shown on the PDF cover"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Target brand logo</Label>
+              <div className="flex items-center gap-3">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted">
+                  {logoPath ? (
+                    <img
+                      src={logoPath}
+                      alt=""
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="reportLogo"
+                      className={cn(
+                        "inline-flex h-8 cursor-pointer items-center justify-center gap-2 rounded-md border border-border bg-transparent px-3 text-xs font-medium transition-colors hover:bg-accent",
+                        logoUploading && "pointer-events-none opacity-60",
+                      )}
+                    >
+                      {logoUploading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Upload className="h-3.5 w-3.5" />
+                      )}
+                      Upload
+                    </label>
+                    <Input
+                      id="reportLogo"
+                      type="file"
+                      accept="image/png,image/jpeg"
+                      disabled={logoUploading}
+                      className="hidden"
+                      onChange={(e) => {
+                        void uploadReportLogo(e.currentTarget.files?.[0]);
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                    {logoPath && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => {
+                          setLogoPath("");
+                          setLogoFileName("");
+                        }}
+                        aria-label="Remove report logo"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                  {logoFileName && (
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {logoFileName}
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -212,7 +325,8 @@ export default function NewScanPage() {
                     className={cn(
                       "flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-left text-xs transition-colors",
                       "hover:border-foreground/30",
-                      active && "border-primary/70 bg-primary/5 text-foreground",
+                      active &&
+                        "border-primary/70 bg-primary/5 text-foreground",
                       !active && "text-muted-foreground",
                     )}
                   >
@@ -280,8 +394,8 @@ export default function NewScanPage() {
                 })}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Report only findings at or above selected severities. Leave blank
-                for all.
+                Report only findings at or above selected severities. Leave
+                blank for all.
               </p>
             </div>
             <Separator />
@@ -297,16 +411,25 @@ export default function NewScanPage() {
             </div>
             <div className="space-y-2">
               <Label>Model override</Label>
-              <Select value={model || "default"} onValueChange={(v) => setModel(v === "default" ? "" : v)}>
+              <Select
+                value={model || "default"}
+                onValueChange={(v) => setModel(v === "default" ? "" : v)}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">Server default</SelectItem>
                   <SelectItem value="openai/gpt-5">openai/gpt-5</SelectItem>
-                  <SelectItem value="openai/gpt-5-mini">openai/gpt-5-mini</SelectItem>
-                  <SelectItem value="anthropic/claude-opus-4.6">anthropic/claude-opus-4.6</SelectItem>
-                  <SelectItem value="google/gemini-3-flash">google/gemini-3-flash</SelectItem>
+                  <SelectItem value="openai/gpt-5-mini">
+                    openai/gpt-5-mini
+                  </SelectItem>
+                  <SelectItem value="anthropic/claude-opus-4.6">
+                    anthropic/claude-opus-4.6
+                  </SelectItem>
+                  <SelectItem value="google/gemini-3-flash">
+                    google/gemini-3-flash
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -323,7 +446,10 @@ export default function NewScanPage() {
           <Button type="button" variant="outline" onClick={() => nav(-1)}>
             Cancel
           </Button>
-          <Button type="submit" disabled={!targets.length || startScan.isPending}>
+          <Button
+            type="submit"
+            disabled={!targets.length || startScan.isPending}
+          >
             {startScan.isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (

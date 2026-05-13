@@ -134,7 +134,8 @@ func Register(r *tools.Registry) {
 2. You MUST provide exploitation_proof showing concrete evidence (extracted data, reflected payload, command output, callback, timing proof).
 3. Reports without exploitation proof for severity >= medium will be REJECTED — exploit first, then report.
 4. Do NOT report missing headers, version disclosure, or scanner-only findings as vulnerabilities — those are INFO at best.
-5. SEVERITY MUST MATCH CVSS SCORE per HackerOne standards:
+5. Duplicate checks are scoped to the current scan run only. If the same issue was found in a previous scan and is still exploitable now, report it again for this scan.
+6. SEVERITY MUST MATCH CVSS SCORE per HackerOne standards:
    - Critical (9.0-10.0): RCE, full DB dump, mass account takeover, admin access
    - High (7.0-8.9): SQLi with data extraction, stored XSS with session hijack, SSRF to internal services, auth bypass, IDOR exposing PII
    - Medium (4.0-6.9): Reflected XSS, CSRF on non-critical actions, open redirect, info disclosure of internal data

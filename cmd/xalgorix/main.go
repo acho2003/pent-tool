@@ -33,6 +33,8 @@ import (
 // rewrite it.
 var version = "4.3.17"
 
+const defaultWebPort = 9137
+
 func main() {
 	// Top-level crash recovery — catches panics that escape all other handlers.
 	// Critical for service mode where stderr may not be visible.
@@ -226,7 +228,7 @@ func main() {
 
 		port := args.port
 		if port == 0 {
-			port = 1337
+			port = defaultWebPort
 		}
 
 		fmt.Print(tui.Banner)
@@ -353,12 +355,12 @@ func printUsage() {
 	fmt.Println("  Autonomous AI Pentesting Engine")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  xalgorix --web                  Start the Web UI (default port 1337)")
+	fmt.Printf("  xalgorix --web                  Start the Web UI (default port %d)\n", defaultWebPort)
 	fmt.Println("  xalgorix --target <url> [flags]  Run a scan in CLI mode")
 	fmt.Println()
 	fmt.Println("Modes:")
 	fmt.Println("  -w, --web                 Launch the Web UI dashboard")
-	fmt.Println("  -p, --port <port>         Web UI port (default: 1337)")
+	fmt.Printf("  -p, --port <port>         Web UI port (default: %d)\n", defaultWebPort)
 	fmt.Println("      --bind <addr>         Bind address (default: 127.0.0.1).")
 	fmt.Println("                            Use 0.0.0.0 to expose externally (REQUIRES auth).")
 	fmt.Println()
@@ -420,8 +422,8 @@ func handleStart() {
 	exec.Command("pkill", "-f", "xalgorix.*--web").Run()
 	time.Sleep(1 * time.Second)
 
-	// Also kill anything using port 1337 (ignore if port is free)
-	exec.Command("fuser", "-k", "1337/tcp").Run()
+	// Also kill anything using the default web port (ignore if port is free)
+	exec.Command("fuser", "-k", fmt.Sprintf("%d/tcp", defaultWebPort)).Run()
 	time.Sleep(1 * time.Second)
 
 	// Create systemd service file
@@ -472,7 +474,7 @@ func handleStart() {
 	}
 
 	fmt.Println("✅ Xalgorix installed and started as systemd service!")
-	fmt.Println("   Web UI: http://localhost:1337")
+	fmt.Printf("   Web UI: http://localhost:%d\n", defaultWebPort)
 	fmt.Println("   Logs:   journalctl -u xalgorix -f")
 	fmt.Println("   Status: systemctl status xalgorix")
 }
@@ -533,7 +535,7 @@ func startBackground() {
 	}
 
 	fmt.Println("✅ Xalgorix started in background!")
-	fmt.Println("   Web UI: http://localhost:1337")
+	fmt.Printf("   Web UI: http://localhost:%d\n", defaultWebPort)
 	fmt.Println("   Logs:   tail -f /tmp/xalgorix.log")
 	fmt.Printf("   PID:    %d\n", startCmd.Process.Pid)
 }
@@ -542,7 +544,7 @@ func startBackground() {
 func handleStop() {
 	// Try to send stop notification to Discord first
 	go func() {
-		resp, err := http.Get("http://localhost:1337/api/stop-notify")
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/stop-notify", defaultWebPort))
 		if err == nil {
 			resp.Body.Close()
 		}
@@ -578,7 +580,7 @@ func handleRestart() {
 	}
 
 	fmt.Println("✅ Xalgorix restarted!")
-	fmt.Println("   Web UI: http://localhost:1337")
+	fmt.Printf("   Web UI: http://localhost:%d\n", defaultWebPort)
 }
 
 // handleUninstall removes xalgorix from the system

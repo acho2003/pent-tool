@@ -15,22 +15,47 @@ import { useAgentMail } from "@/api/queries";
 import { useWSStore, type FeedEvent } from "@/store/ws";
 import { timeAgo } from "@/lib/utils";
 
-const EMAIL_PATTERN = /(email|inbox|mail|agentmail|smtp|imap|phish|spoof)/i;
+const AGENTMAIL_EVENT_TYPES = new Set([
+  "agentmail",
+  "agentmail_event",
+  "agentmail_message",
+  "agentmail_received",
+  "email_received",
+]);
+
+const AGENTMAIL_ACTIONS = new Set([
+  "create_inbox",
+  "list_inboxes",
+  "get_inbox",
+  "list_messages",
+  "get_message",
+  "wait_for_email",
+]);
+
+function isAgentMailEvent(event: FeedEvent): boolean {
+  const type = (event.type || "").trim().toLowerCase();
+  const toolName = (event.tool_name || "").trim().toLowerCase();
+  const action = (event.tool_args?.action || "").trim().toLowerCase();
+
+  if (toolName === "agentmail") return true;
+  if (AGENTMAIL_EVENT_TYPES.has(type)) return true;
+  return type.startsWith("agentmail_") || AGENTMAIL_ACTIONS.has(action);
+}
+
+function eventTitle(event: FeedEvent): string {
+  const action = event.tool_args?.action;
+  if (event.tool_name === "agentmail" && action) {
+    return action.replaceAll("_", " ");
+  }
+  return event.type || "event";
+}
 
 export default function EmailTriagePage() {
   const { data: mail } = useAgentMail();
   const events = useWSStore((s) => s.events);
 
   const emailEvents = useMemo<FeedEvent[]>(
-    () =>
-      events.filter((e: FeedEvent) => {
-        const text =
-          (e.content || "") + " " + (e.output || "") + " " + (e.tool_name || "");
-        return (
-          (typeof e.type === "string" && EMAIL_PATTERN.test(e.type)) ||
-          EMAIL_PATTERN.test(text)
-        );
-      }),
+    () => events.filter((e: FeedEvent) => isAgentMailEvent(e)),
     [events],
   );
 
@@ -101,8 +126,8 @@ export default function EmailTriagePage() {
               <Mail className="h-4 w-4" /> Live events
             </CardTitle>
             <CardDescription>
-              Filtered from the global agent stream. Triage decisions appear
-              here as they happen.
+              AgentMail-only events from the global agent stream. Triage
+              decisions appear here as they happen.
             </CardDescription>
           </div>
           <Button asChild size="sm" variant="outline">
@@ -142,7 +167,7 @@ export default function EmailTriagePage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline" className="font-mono text-[10px]">
-                          {evt.type || "event"}
+                          {eventTitle(evt)}
                         </Badge>
                         <span className="text-xs text-muted-foreground">
                           {timeAgo(evt.timestamp)}

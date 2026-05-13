@@ -1,16 +1,17 @@
 import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
-import { Download, ExternalLink, FileText, Search } from "lucide-react";
+import { Download, ExternalLink, FileText, Search, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/states";
-import { useScansList } from "@/api/queries";
+import { useDeleteScan, useScansList } from "@/api/queries";
 import { timeAgo } from "@/lib/utils";
 
 export default function ReportsPage() {
   const { data: scans, isLoading } = useScansList();
+  const del = useDeleteScan();
   const [query, setQuery] = useState("");
 
   const list = useMemo(() => {
@@ -98,6 +99,19 @@ export default function ReportsPage() {
                     >
                       <Download className="h-3.5 w-3.5" /> PDF
                     </a>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-red-400 hover:text-red-300"
+                    disabled={del.isPending}
+                    onClick={() => {
+                      if (window.confirm("Permanently delete this report and scan record?")) {
+                        del.mutate(s.id);
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
                   </Button>
                 </div>
               </li>

@@ -1,56 +1,129 @@
-import { useMemo, useState, type ReactNode } from "react"
-import { Link } from "react-router-dom"
-import { Card, CardContent } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import { ScanStatusPill } from "@/components/scan-status-pill"
-import { EmptyState, ErrorState } from "@/components/states"
-import { Skeleton } from "@/components/ui/skeleton"
-import { useScansList } from "@/api/queries"
-import { timeAgo, shortId } from "@/lib/utils"
-import type { ScanListItem } from "@/types/api"
-import { Search, Plus, ArrowUpDown, ShieldAlert } from "lucide-react"
-import NewScanDialog from "@/components/new-scan-dialog"
+} from "@/components/ui/select";
+import { ScanStatusPill } from "@/components/scan-status-pill";
+import { EmptyState, ErrorState } from "@/components/states";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useDeleteScan, useScansList } from "@/api/queries";
+import { cn, timeAgo, shortId } from "@/lib/utils";
+import type { ScanListItem } from "@/types/api";
+import {
+  ArrowUpDown,
+  Download,
+  ExternalLink,
+  MoreHorizontal,
+  Plus,
+  Search,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
+import NewScanDialog from "@/components/new-scan-dialog";
 
 export default function ScansPage() {
-  const { data, isLoading, error, refetch } = useScansList()
-  const [q, setQ] = useState("")
-  const [status, setStatus] = useState<string>("all")
-  const [newOpen, setNewOpen] = useState(false)
+  const { data, isLoading, error, refetch } = useScansList();
+  const del = useDeleteScan();
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<string>("all");
+  const [newOpen, setNewOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
 
   const scans = useMemo<ScanListItem[]>(() => {
-    let list: ScanListItem[] = data ?? []
-    if (status !== "all") list = list.filter((s) => s.status === status)
+    let list: ScanListItem[] = data ?? [];
+    if (status !== "all") list = list.filter((s) => s.status === status);
     if (q.trim()) {
-      const needle = q.toLowerCase()
+      const needle = q.toLowerCase();
       list = list.filter(
         (s) =>
           s.target.toLowerCase().includes(needle) ||
           s.id.toLowerCase().includes(needle),
-      )
+      );
     }
     // newest first
     return [...list].sort(
       (a, b) =>
         new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
-    )
-  }, [data, q, status])
+    );
+  }, [data, q, status]);
+
+  const visibleIds = useMemo(() => scans.map((s) => s.id), [scans]);
+  const selectedVisibleCount = visibleIds.filter((id) =>
+    selectedIds.has(id),
+  ).length;
+  const allVisibleSelected =
+    visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+
+  useEffect(() => {
+    const allIds = new Set((data ?? []).map((s) => s.id));
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => allIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [data]);
+
+  function setSelected(id: string, checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const id of visibleIds) next.add(id);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function deleteScans(ids: string[]) {
+    const uniqueIds = [...new Set(ids)].filter(Boolean);
+    if (!uniqueIds.length) return;
+    const label =
+      uniqueIds.length === 1
+        ? "Permanently delete this scan?"
+        : `Permanently delete ${uniqueIds.length} selected scans?`;
+    if (!window.confirm(label)) return;
+    for (const id of uniqueIds) {
+      await del.mutateAsync(id);
+    }
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const id of uniqueIds) next.delete(id);
+      return next;
+    });
+  }
 
   return (
     <>
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="font-sans text-2xl font-semibold tracking-tight">Scans</h1>
-          <p className="text-sm text-muted-foreground">All historical and in-flight scans.</p>
+          <h1 className="font-sans text-2xl font-semibold tracking-tight">
+            Scans
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            All historical and in-flight scans.
+          </p>
         </div>
-        <Button onClick={() => setNewOpen(true)} className="self-start sm:self-auto">
+        <Button
+          onClick={() => setNewOpen(true)}
+          className="self-start sm:self-auto"
+        >
           <Plus className="mr-1 h-4 w-4" />
           New scan
         </Button>
@@ -83,6 +156,26 @@ export default function ScansPage() {
               </SelectContent>
             </Select>
           </div>
+          {scans.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={allVisibleSelected ? clearSelection : selectAllVisible}
+              >
+                {allVisibleSelected ? "Clear selection" : "Select all"}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {selectedIds.size} selected
+              </span>
+              <BulkActionMenu
+                disabled={selectedIds.size === 0 || del.isPending}
+                selectedCount={selectedIds.size}
+                onDelete={() => void deleteScans([...selectedIds])}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -90,7 +183,11 @@ export default function ScansPage() {
         <ErrorState
           title="Could not load scans"
           description={error instanceof Error ? error.message : "Unknown error"}
-          action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
+          action={
+            <Button size="sm" variant="outline" onClick={() => refetch()}>
+              Retry
+            </Button>
+          }
         />
       ) : isLoading ? (
         <ScanListSkeleton />
@@ -106,15 +203,45 @@ export default function ScansPage() {
           }
         />
       ) : (
-        <ScanTable scans={scans} />
+        <ScanTable
+          scans={scans}
+          selectedIds={selectedIds}
+          allSelected={allVisibleSelected}
+          partiallySelected={selectedVisibleCount > 0 && !allVisibleSelected}
+          deleting={del.isPending}
+          onSelect={setSelected}
+          onSelectAll={(checked) => {
+            if (checked) selectAllVisible();
+            else clearSelection();
+          }}
+          onDelete={(id) => void deleteScans([id])}
+        />
       )}
 
       <NewScanDialog open={newOpen} onOpenChange={setNewOpen} />
     </>
-  )
+  );
 }
 
-function ScanTable({ scans }: { scans: ScanListItem[] }) {
+function ScanTable({
+  scans,
+  selectedIds,
+  allSelected,
+  partiallySelected,
+  deleting,
+  onSelect,
+  onSelectAll,
+  onDelete,
+}: {
+  scans: ScanListItem[];
+  selectedIds: Set<string>;
+  allSelected: boolean;
+  partiallySelected: boolean;
+  deleting: boolean;
+  onSelect: (id: string, checked: boolean) => void;
+  onSelectAll: (checked: boolean) => void;
+  onDelete: (id: string) => void;
+}) {
   return (
     <Card>
       <CardContent className="p-0">
@@ -122,27 +249,49 @@ function ScanTable({ scans }: { scans: ScanListItem[] }) {
           <table className="w-full text-sm">
             <thead className="border-b border-border bg-muted/30 text-xs uppercase tracking-wider text-muted-foreground">
               <tr>
+                <Th className="w-10 pl-4">
+                  <SelectCheckbox
+                    checked={allSelected}
+                    indeterminate={partiallySelected}
+                    onCheckedChange={onSelectAll}
+                    label="Select all visible scans"
+                  />
+                </Th>
                 <Th className="pl-4">
-                  Target <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-60" />
+                  Target{" "}
+                  <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-60" />
                 </Th>
                 <Th>Status</Th>
                 <Th>Findings</Th>
                 <Th>Tokens</Th>
-                <Th className="pr-4">Started</Th>
+                <Th>Started</Th>
+                <Th className="w-12 pr-4 text-right">Actions</Th>
               </tr>
             </thead>
             <tbody>
               {scans.map((s) => (
                 <tr
                   key={s.id}
-                  className="group border-b border-border/60 last:border-0 transition-colors hover:bg-muted/30"
+                  className={cn(
+                    "group border-b border-border/60 last:border-0 transition-colors hover:bg-muted/30",
+                    selectedIds.has(s.id) && "bg-muted/20",
+                  )}
                 >
+                  <Td className="pl-4">
+                    <SelectCheckbox
+                      checked={selectedIds.has(s.id)}
+                      onCheckedChange={(checked) => onSelect(s.id, checked)}
+                      label={`Select scan ${s.target}`}
+                    />
+                  </Td>
                   <Td className="pl-4">
                     <Link to={`/scans/${s.id}`} className="block">
                       <div className="mono text-sm font-medium text-foreground group-hover:text-primary">
                         {s.target}
                       </div>
-                      <div className="text-xs text-muted-foreground mono">{shortId(s.id, 12)}</div>
+                      <div className="text-xs text-muted-foreground mono">
+                        {shortId(s.id, 12)}
+                      </div>
                     </Link>
                   </Td>
                   <Td>
@@ -164,7 +313,16 @@ function ScanTable({ scans }: { scans: ScanListItem[] }) {
                     {s.total_tokens ? s.total_tokens.toLocaleString() : "—"}
                   </Td>
                   <Td className="pr-4">
-                    <span className="text-muted-foreground">{timeAgo(s.started_at)}</span>
+                    <span className="text-muted-foreground">
+                      {timeAgo(s.started_at)}
+                    </span>
+                  </Td>
+                  <Td className="pr-4 text-right">
+                    <RowActionMenu
+                      scan={s}
+                      deleting={deleting}
+                      onDelete={() => onDelete(s.id)}
+                    />
                   </Td>
                 </tr>
               ))}
@@ -173,14 +331,156 @@ function ScanTable({ scans }: { scans: ScanListItem[] }) {
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }
 
-function Th({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <th className={`px-3 py-2 text-left font-medium ${className}`}>{children}</th>
+function Th({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <th className={`px-3 py-2 text-left font-medium ${className}`}>
+      {children}
+    </th>
+  );
 }
-function Td({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <td className={`px-3 py-3 align-middle ${className}`}>{children}</td>
+function Td({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <td className={`px-3 py-3 align-middle ${className}`}>{children}</td>;
+}
+
+function SelectCheckbox({
+  checked,
+  indeterminate = false,
+  onCheckedChange,
+  label,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  label: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      aria-label={label}
+      onChange={(event) => onCheckedChange(event.currentTarget.checked)}
+      className="h-4 w-4 rounded border-border bg-input accent-primary focus:outline-none focus:ring-1 focus:ring-ring"
+    />
+  );
+}
+
+const menuContentClass =
+  "z-50 min-w-44 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md";
+const menuItemClass =
+  "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus:bg-accent";
+
+function BulkActionMenu({
+  disabled,
+  selectedCount,
+  onDelete,
+}: {
+  disabled: boolean;
+  selectedCount: number;
+  onDelete: () => void;
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button size="sm" variant="secondary" disabled={disabled}>
+          Actions
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="start" className={menuContentClass}>
+          <DropdownMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">
+            {selectedCount} selected
+          </DropdownMenu.Label>
+          <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+          <DropdownMenu.Item
+            className={cn(menuItemClass, "text-red-400 focus:text-red-300")}
+            onSelect={(event) => {
+              event.preventDefault();
+              onDelete();
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete selected
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function RowActionMenu({
+  scan,
+  deleting,
+  onDelete,
+}: {
+  scan: ScanListItem;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label={`Actions for ${scan.target}`}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="end" className={menuContentClass}>
+          <DropdownMenu.Item asChild className={menuItemClass}>
+            <Link to={`/scans/${scan.id}`}>
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open details
+            </Link>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item asChild className={menuItemClass}>
+            <a href={`/api/report/${scan.id}`} target="_blank" rel="noreferrer">
+              <Download className="h-3.5 w-3.5" />
+              Download PDF
+            </a>
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+          <DropdownMenu.Item
+            disabled={deleting}
+            className={cn(
+              menuItemClass,
+              "text-red-400 focus:text-red-300 data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+            )}
+            onSelect={(event) => {
+              event.preventDefault();
+              onDelete();
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete scan
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
 }
 
 function ScanListSkeleton() {
@@ -192,5 +492,5 @@ function ScanListSkeleton() {
         ))}
       </CardContent>
     </Card>
-  )
+  );
 }

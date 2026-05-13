@@ -52,6 +52,10 @@ type Config struct {
 	AgentMailAPIKey string // AGENTMAIL_API_KEY - AgentMail API key
 	AgentMailPod    string // AGENTMAIL_POD - AgentMail pod (e.g., "am_us_pod_47")
 
+	// Discord notifications
+	DiscordWebhook     string // XALGORIX_DISCORD_WEBHOOK - notification webhook URL
+	DiscordMinSeverity string // XALGORIX_DISCORD_MIN_SEVERITY - minimum severity to notify
+
 	// Dashboard auth
 	Username     string // XALGORIX_USERNAME - dashboard login username
 	Password     string // XALGORIX_PASSWORD - dashboard login password (DEPRECATED: prefer PasswordHash)
@@ -155,6 +159,10 @@ func load() *Config {
 		GeminiAPIKey:    envOr("GEMINI_API_KEY", ""),
 		AgentMailAPIKey: envOr("AGENTMAIL_API_KEY", ""),
 		AgentMailPod:    envOr("AGENTMAIL_POD", ""),
+
+		// Discord notifications
+		DiscordWebhook:     envOr("XALGORIX_DISCORD_WEBHOOK", ""),
+		DiscordMinSeverity: envOr("XALGORIX_DISCORD_MIN_SEVERITY", ""),
 
 		// Dashboard auth
 		Username:     envOr("XALGORIX_USERNAME", ""),

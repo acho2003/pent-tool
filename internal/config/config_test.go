@@ -143,6 +143,8 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 		"GEMINI_API_KEY=search-key",
 		"AGENTMAIL_API_KEY=agentmail-key",
 		"AGENTMAIL_POD=am_test_pod",
+		"XALGORIX_DISCORD_WEBHOOK=https://discord.example/webhook",
+		"XALGORIX_DISCORD_MIN_SEVERITY=high",
 		"XALGORIX_USERNAME=admin",
 		"XALGORIX_PASSWORD=password",
 		"XALGORIX_BROWSER_PATH=/opt/chrome",
@@ -175,6 +177,9 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 	}
 	if cfg.GeminiAPIKey != "search-key" || cfg.AgentMailAPIKey != "agentmail-key" || cfg.AgentMailPod != "am_test_pod" {
 		t.Fatalf("integration settings not loaded: %#v", cfg)
+	}
+	if cfg.DiscordWebhook != "https://discord.example/webhook" || cfg.DiscordMinSeverity != "high" {
+		t.Fatalf("discord settings not loaded: %#v", cfg)
 	}
 	if cfg.Username != "admin" || cfg.Password != "password" || cfg.BrowserPath != "/opt/chrome" {
 		t.Fatalf("dashboard/browser settings not loaded: %#v", cfg)

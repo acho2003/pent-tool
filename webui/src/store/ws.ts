@@ -38,12 +38,57 @@ interface WSState {
   disconnect: () => void;
 }
 
-function buildKey(e: WSEvent): string {
-  const ts = e.timestamp || String(Date.now());
+export function parsedEventTimestampMs(timestamp?: string): number | undefined {
+  if (!timestamp) return undefined;
+  const ms = Date.parse(timestamp);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+export function eventOrderMs(event: FeedEvent): number {
+  return parsedEventTimestampMs(event.timestamp) ?? event._receivedAt ?? 0;
+}
+
+export function eventDedupeKey(e: WSEvent, fallbackTs = 0): string {
+  const ts = e.timestamp || String(fallbackTs || "");
   const tool = e.tool_name || "";
   const msg = e.content || e.output || e.error || "";
+  const instance = e.instance_id || "";
   // Truncate message so the dedupe key stays small
-  return `${ts}|${e.type}|${tool}|${msg.slice(0, 80)}`;
+  return `${ts}|${instance}|${e.type}|${tool}|${msg.slice(0, 80)}`;
+}
+
+export function toFeedEvent(
+  e: WSEvent,
+  source = "event",
+  index = 0,
+): FeedEvent {
+  const receivedAt = parsedEventTimestampMs(e.timestamp) ?? Date.now();
+  const dedupeKey = eventDedupeKey(e, receivedAt);
+  return {
+    ...e,
+    _key: `${source}:${index}:${dedupeKey}`,
+    _receivedAt: receivedAt,
+  };
+}
+
+export function mergeFeedEvents(...streams: FeedEvent[][]): FeedEvent[] {
+  const seen = new Set<string>();
+  const out: FeedEvent[] = [];
+  for (const events of streams) {
+    for (const event of events) {
+      const key = eventDedupeKey(event, event._receivedAt);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(event);
+    }
+  }
+  return out.sort((a, b) => {
+    const byTime = eventOrderMs(a) - eventOrderMs(b);
+    if (byTime !== 0) return byTime;
+    const byReceived = (a._receivedAt || 0) - (b._receivedAt || 0);
+    if (byReceived !== 0) return byReceived;
+    return a._key.localeCompare(b._key);
+  });
 }
 
 const WS_URL = () => {
@@ -63,12 +108,13 @@ export const useWSStore = create<WSState>((set, get) => ({
 
   pushEvent: (e) => {
     if (get().paused) return;
-    const key = buildKey(e);
+    const receivedAt = Date.now();
+    const key = eventDedupeKey(e, receivedAt);
     set((state) => {
       // dedupe by key (last 200 keys are enough)
       const recent = state.events.slice(-200);
       if (recent.some((x) => x._key === key)) return state;
-      const next: FeedEvent = { ...e, _key: key, _receivedAt: Date.now() };
+      const next: FeedEvent = { ...e, _key: key, _receivedAt: receivedAt };
       const events = [...state.events, next];
       // cap size
       if (events.length > state.maxEvents) {
@@ -199,7 +245,16 @@ export function filterEventsForInstance(
   instanceId?: string,
 ): FeedEvent[] {
   if (!instanceId) return events;
-  return events.filter(
-    (e) => !e.agent_id || e.agent_id === instanceId,
-  );
+  return events.filter((e) => {
+    if (e.type === "instance_started" || e.type === "instance_updated") {
+      return false;
+    }
+    if (e.instance_id) {
+      return e.instance_id === instanceId;
+    }
+    if (e.agent_id) {
+      return e.agent_id === instanceId;
+    }
+    return false;
+  });
 }

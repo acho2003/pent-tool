@@ -299,16 +299,6 @@ func listFilesAtPath(path string) (tools.Result, error) {
 	return tools.Result{Output: b.String()}, nil
 }
 
-func searchFiles(args map[string]string) (tools.Result, error) {
-	pattern := args["pattern"]
-	path := args["path"]
-	if path == "" {
-		path = "."
-	}
-	path = resolvePath(path)
-	return searchFilesAtPath(pattern, path, args["include"])
-}
-
 func searchFilesForContext(contextID string, args map[string]string) (tools.Result, error) {
 	pattern := args["pattern"]
 	path := args["path"]

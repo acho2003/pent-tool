@@ -131,7 +131,9 @@ If the answer to #5 is "yes, it's designed to work this way" → DO NOT REPORT I
 
 ## DEDUPLICATION
 
-- Same endpoint + same vulnerability type = DUPLICATE, skip it
+- Deduplication scope is ONLY this current scan run. Previous scans, old UI records, and old PDF reports do NOT count as duplicates.
+- If a vulnerability was found in an older scan and is still exploitable now, report it again for this scan.
+- Same endpoint + same vulnerability type within this scan = DUPLICATE, skip it
 - Same vulnerability across many endpoints = Report the BEST ONE, mention "also affects N other endpoints"
 - Different parameters on same endpoint = Report once with all affected parameters listed
 
@@ -288,7 +290,9 @@ You MUST provide CVSS score + vector string with every report. Severity MUST mat
 - If data is obtainable via dig/whois/nslookup, it is NOT a vulnerability
 
 ## DEDUPLICATION:
-Same endpoint + same vulnerability = skip (already reported)
+- Deduplicate only inside this current scan run.
+- Previous scans and historical reports do not count as already reported.
+- Same endpoint + same vulnerability in this scan = skip.
 
 ## BEFORE REPORTING, ASK YOURSELF:
 1. Did I ACTUALLY exploit this?

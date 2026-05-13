@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +50,126 @@ func resetAuthSessionsForTest() {
 	authSessions = make(map[string]time.Time)
 }
 
+func TestGenerateReportResolvesUploadedLogoPath(t *testing.T) {
+	s := newTestServer(t, nil)
+	logosDir := filepath.Join(s.dataDir, "logos")
+	if err := os.MkdirAll(logosDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	logoPath := filepath.Join(logosDir, "acme.png")
+	writeTestPNG(t, logoPath)
+
+	scanDir := filepath.Join(s.dataDir, "acme.example", "2026-05-14", "scan-logo")
+	if err := os.MkdirAll(scanDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	rec := &ScanRecord{
+		ID:          "scan-logo",
+		Name:        "Acme Security Review",
+		Target:      "https://acme.example",
+		StartedAt:   time.Now().Add(-15 * time.Minute).Format(time.RFC3339),
+		FinishedAt:  time.Now().Format(time.RFC3339),
+		Status:      "finished",
+		CompanyName: "Acme",
+		LogoPath:    "/uploads/logos/acme.png",
+		Vulns: []VulnSummary{{
+			Title:       "SQL Injection in Search",
+			Severity:    "critical",
+			Endpoint:    "/search",
+			CVSS:        9.1,
+			Description: "Search input is injectable.",
+			PoCScript:   strings.Repeat("curl -X POST https://acme.example/search -d 'q=test'\n", 80),
+			Remediation: "Use parameterized queries.",
+		}},
+		Events: []WSEvent{{Type: "message", Content: "Tech stack detected: nginx"}},
+	}
+
+	resolved, ok := s.resolveReportLogoPath(rec.LogoPath)
+	if !ok || resolved != logoPath {
+		t.Fatalf("resolveReportLogoPath() = %q, %v; want %q, true", resolved, ok, logoPath)
+	}
+	reportPath, err := s.generateReportAt(rec, scanDir)
+	if err != nil {
+		t.Fatalf("generateReportAt() error = %v", err)
+	}
+	info, err := os.Stat(reportPath)
+	if err != nil {
+		t.Fatalf("generated report missing: %v", err)
+	}
+	if info.Size() < 1000 {
+		t.Fatalf("generated report is unexpectedly small: %d bytes", info.Size())
+	}
+}
+
+func writeTestPNG(t *testing.T, path string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.RGBA{R: 16, G: 185, B: 129, A: 255})
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := png.Encode(file, img); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBroadcastToInstanceReachesDashboardAndSubscribedClients(t *testing.T) {
+	s := newTestServer(t, nil)
+	inst := &ScanInstance{ID: "inst-1", Targets: "https://example.com", Status: "running"}
+	s.instancesMu.Lock()
+	s.instances[inst.ID] = inst
+	s.instancesMu.Unlock()
+
+	dashboard := &wsClient{send: make(chan []byte, 1)}
+	subscribed := &wsClient{send: make(chan []byte, 1), instanceID: inst.ID}
+	other := &wsClient{send: make(chan []byte, 1), instanceID: "other"}
+	s.mu.Lock()
+	s.clients[dashboard] = true
+	s.clients[subscribed] = true
+	s.clients[other] = true
+	s.mu.Unlock()
+
+	s.broadcastToInstance(inst.ID, WSEvent{Type: "message", Content: "hello"})
+
+	for name, ch := range map[string]<-chan []byte{
+		"dashboard":  dashboard.send,
+		"subscribed": subscribed.send,
+	} {
+		select {
+		case raw := <-ch:
+			var evt WSEvent
+			if err := json.Unmarshal(raw, &evt); err != nil {
+				t.Fatalf("%s received invalid event: %v", name, err)
+			}
+			if evt.InstanceID != inst.ID {
+				t.Fatalf("%s event instance_id = %q, want %q", name, evt.InstanceID, inst.ID)
+			}
+			if evt.Content != "hello" {
+				t.Fatalf("%s event content = %q, want hello", name, evt.Content)
+			}
+		default:
+			t.Fatalf("%s client did not receive instance event", name)
+		}
+	}
+	select {
+	case <-other.send:
+		t.Fatal("unrelated instance client received event")
+	default:
+	}
+
+	inst.mu.RLock()
+	defer inst.mu.RUnlock()
+	if len(inst.events) != 1 {
+		t.Fatalf("buffered events = %d, want 1", len(inst.events))
+	}
+}
+
 func TestRateLimitMiddleware_EnforcesLimitAndBypassesStaticAndWS(t *testing.T) {
 	rl := NewRateLimiter(1, time.Minute)
 	defer rl.Stop()
@@ -57,7 +180,7 @@ func TestRateLimitMiddleware_EnforcesLimitAndBypassesStaticAndWS(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", nil)
 	req.RemoteAddr = "127.0.0.1:1111"
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -65,7 +188,7 @@ func TestRateLimitMiddleware_EnforcesLimitAndBypassesStaticAndWS(t *testing.T) {
 		t.Fatalf("first request status = %d", rr.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req = httptest.NewRequest(http.MethodPost, "/api/chat", nil)
 	req.RemoteAddr = "127.0.0.1:2222"
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -73,7 +196,25 @@ func TestRateLimitMiddleware_EnforcesLimitAndBypassesStaticAndWS(t *testing.T) {
 		t.Fatalf("second request status = %d, want 429", rr.Code)
 	}
 
-	for _, path := range []string{"/ws", "/static/app.js", "/assets/logo.png"} {
+	staticBypassPaths := []string{
+		"/ws",
+		"/static/app.js",
+		"/assets/logo.png",
+		"/app.js",
+		"/style.css",
+		"/logo.png",
+		"/chunks/app-123.js",
+		"/api/auth/status",
+		"/api/status",
+		"/api/version",
+		"/api/scans",
+		"/api/scans/scan-1",
+		"/api/instances",
+		"/api/instances/scan-1",
+		"/api/instances/scan-1/events",
+		"/api/queue/status",
+	}
+	for _, path := range staticBypassPaths {
 		req = httptest.NewRequest(http.MethodGet, path, nil)
 		req.RemoteAddr = "127.0.0.1:3333"
 		rr = httptest.NewRecorder()
@@ -82,8 +223,103 @@ func TestRateLimitMiddleware_EnforcesLimitAndBypassesStaticAndWS(t *testing.T) {
 			t.Fatalf("%s bypass status = %d, want 200", path, rr.Code)
 		}
 	}
-	if calls != 4 {
-		t.Fatalf("inner handler calls = %d, want 4", calls)
+	if want := 1 + len(staticBypassPaths); calls != want {
+		t.Fatalf("inner handler calls = %d, want %d", calls, want)
+	}
+}
+
+func TestAuthMiddleware_AllowsReactShellAndAssetsBeforeSession(t *testing.T) {
+	resetAuthSessionsForTest()
+	mw := authMiddleware(&config.Config{Username: "admin", Password: "secret"})
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	publicPaths := []string{
+		"/",
+		"/login",
+		"/scans",
+		"/app.js",
+		"/style.css",
+		"/logo.png",
+		"/chunks/app-123.js",
+		"/api/auth/status",
+	}
+	for _, path := range publicPaths {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("%s status = %d, want %d", path, rr.Code, http.StatusNoContent)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("protected API status = %d, want %d", rr.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestIsStaticWebAssetPath_DoesNotClassifyDottedScanRoutes(t *testing.T) {
+	staticPaths := []string{"/app.js", "/style.css", "/chunks/app-123.js", "/assets/logo.png", "/static/app.js"}
+	for _, path := range staticPaths {
+		if !isStaticWebAssetPath(path) {
+			t.Fatalf("%s was not classified as a static asset", path)
+		}
+	}
+
+	appRoutes := []string{"/scans/pentest-ground.com_4280_9286f18f", "/api/scans/pentest-ground.com_4280_9286f18f", "/ws"}
+	for _, path := range appRoutes {
+		if isStaticWebAssetPath(path) {
+			t.Fatalf("%s was incorrectly classified as a static asset", path)
+		}
+	}
+}
+
+func TestIsDashboardReadPath_OnlyBypassesSafePollingReads(t *testing.T) {
+	readPaths := []string{
+		"/api/auth/status",
+		"/api/status",
+		"/api/version",
+		"/api/scans",
+		"/api/scans/scan-1",
+		"/api/instances",
+		"/api/instances/scan-1",
+		"/api/instances/scan-1/events",
+		"/api/queue/status",
+	}
+	for _, path := range readPaths {
+		if !isDashboardReadPath(http.MethodGet, path) {
+			t.Fatalf("%s was not classified as a dashboard read", path)
+		}
+	}
+
+	writePaths := []string{
+		"/api/scan",
+		"/api/stop",
+		"/api/chat",
+		"/api/auth/login",
+		"/api/instances/scan-1/stop",
+	}
+	for _, path := range writePaths {
+		if isDashboardReadPath(http.MethodPost, path) {
+			t.Fatalf("POST %s was incorrectly classified as a dashboard read", path)
+		}
+	}
+}
+
+func TestCanStartInstanceStatus(t *testing.T) {
+	for _, status := range []string{"saved", "stopped", "failed", "finished", " Finished "} {
+		if !canStartInstanceStatus(status) {
+			t.Fatalf("%q should be startable", status)
+		}
+	}
+	for _, status := range []string{"running", "pending", "paused", "", "unknown"} {
+		if canStartInstanceStatus(status) {
+			t.Fatalf("%q should not be startable", status)
+		}
 	}
 }
 
@@ -559,7 +795,7 @@ func TestScanPersistence_ListLatestDeleteAndRebuild(t *testing.T) {
 		Target:       "https://sub.b.test",
 		ParentTarget: "https://b.test",
 		StartedAt:    "2026-05-02T11:00:00Z",
-		Status:       "finished",
+		Status:       "running",
 	})
 
 	rr := httptest.NewRecorder()
@@ -582,6 +818,30 @@ func TestScanPersistence_ListLatestDeleteAndRebuild(t *testing.T) {
 	if inst == nil || inst.Status != "stopped" || inst.StopReason != "server_restart" {
 		t.Fatalf("running scan was not marked stopped on rebuild: %#v", inst)
 	}
+	_, rebuilt := s.findScanByID("scan-b")
+	if rebuilt == nil || rebuilt.Status != "stopped" || rebuilt.StopReason != "server_restart" || rebuilt.FinishedAt == "" {
+		t.Fatalf("rebuilt scan was not persisted as stopped: %#v", rebuilt)
+	}
+	_, rebuiltSub := s.findScanByID("subdomain")
+	if rebuiltSub == nil || rebuiltSub.Status != "stopped" || rebuiltSub.StopReason != "server_restart" {
+		t.Fatalf("subdomain running scan was not persisted as stopped: %#v", rebuiltSub)
+	}
+
+	rr = httptest.NewRecorder()
+	s.handleListScans(rr, httptest.NewRequest(http.MethodGet, "/api/scans", nil))
+	var listed []struct {
+		ID         string `json:"id"`
+		Status     string `json:"status"`
+		FinishedAt string `json:"finished_at"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list scans after rebuild: %v body=%s", err, rr.Body.String())
+	}
+	for _, got := range listed {
+		if (got.ID == "scan-b" || got.ID == "subdomain") && got.Status != "stopped" {
+			t.Fatalf("list scans still returned stale status for %s: %#v", got.ID, got)
+		}
+	}
 
 	rr = httptest.NewRecorder()
 	s.handleGetScan(rr, httptest.NewRequest(http.MethodDelete, "/api/scans/scan-a", nil))
@@ -590,6 +850,64 @@ func TestScanPersistence_ListLatestDeleteAndRebuild(t *testing.T) {
 	}
 	if _, rec := s.findScanByID("scan-a"); rec != nil {
 		t.Fatal("scan-a still found after delete")
+	}
+}
+
+func TestFindScanByID_ResolvesParentInstanceAlias(t *testing.T) {
+	s := newTestServer(t, nil)
+	writeScanRecord(t, s.dataDir, "target-a/2026-05-01/scan-a", ScanRecord{
+		ID:         "scan-a",
+		InstanceID: "queue-1234",
+		Target:     "https://a.test",
+		StartedAt:  "2026-05-01T10:00:00Z",
+		Status:     "finished",
+	})
+
+	dir, rec := s.findScanByID("queue-1234")
+	if dir == "" || rec == nil || rec.ID != "scan-a" {
+		t.Fatalf("alias did not resolve to persisted scan: dir=%q rec=%#v", dir, rec)
+	}
+}
+
+func TestHandleGetScan_FallsBackFromRecentShortInstanceRoute(t *testing.T) {
+	s := newTestServer(t, nil)
+	writeScanRecord(t, s.dataDir, "target-a/2026-05-01/scan-a", ScanRecord{
+		ID:        "scan-a",
+		Target:    "https://a.test",
+		StartedAt: time.Now().Add(-5 * time.Minute).Format(time.RFC3339Nano),
+		Status:    "finished",
+	})
+
+	rr := httptest.NewRecorder()
+	s.handleGetScan(rr, httptest.NewRequest(http.MethodGet, "/api/scans/deadbeef", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"id":"scan-a"`) {
+		t.Fatalf("recent short route did not resolve to latest scan: code=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleGetScan_MarksGlobalDiscordWebhookConfigured(t *testing.T) {
+	s := newTestServer(t, &config.Config{
+		DiscordWebhook:    "https://discord.example/webhook",
+		RateLimitRequests: 60,
+		RateLimitWindow:   60,
+	})
+	writeScanRecord(t, s.dataDir, "target-a/2026-05-01/scan-a", ScanRecord{
+		ID:        "scan-a",
+		Target:    "https://a.test",
+		StartedAt: "2026-05-01T10:00:00Z",
+		Status:    "finished",
+	})
+
+	rr := httptest.NewRecorder()
+	s.handleGetScan(rr, httptest.NewRequest(http.MethodGet, "/api/scans/scan-a", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get scan code = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"discord_webhook_configured":true`) {
+		t.Fatalf("global webhook was not marked configured: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "discord.example") {
+		t.Fatalf("webhook URL leaked in response: %s", rr.Body.String())
 	}
 }
 
@@ -687,6 +1005,125 @@ func TestAgentMailSettings_MasksAndPreservesExistingKey(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "AGENTMAIL_API_KEY=new-secret-abcdef12") {
 		t.Fatalf("env file did not contain new key:\n%s", string(data))
+	}
+}
+
+func TestLLMSettings_MasksPreservesAndPersists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	envFile := filepath.Join(home, ".xalgorix.env")
+	oldAPIKey := "old-llm-secret-12345678"
+	oldGeminiKey := "old-gemini-secret-87654321"
+	if err := os.WriteFile(envFile, []byte("XALGORIX_LLM=old/model\nXALGORIX_API_KEY="+oldAPIKey+"\nGEMINI_API_KEY="+oldGeminiKey+"\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	s := newTestServer(t, &config.Config{
+		LLM:               "old/model",
+		APIBase:           "https://old.example/v1",
+		APIKey:            oldAPIKey,
+		ReasoningEffort:   "high",
+		LLMMaxRetries:     5,
+		MemCompTimeout:    30,
+		MaxIterations:     0,
+		GeminiAPIKey:      oldGeminiKey,
+		RateLimitRequests: 60,
+		RateLimitWindow:   60,
+	})
+
+	rr := httptest.NewRecorder()
+	s.handleLLMSettings(rr, httptest.NewRequest(http.MethodGet, "/api/settings/llm", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET code = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var getResp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if getResp["apiKey"] != "****12345678" || getResp["geminiApiKey"] != "****87654321" {
+		t.Fatalf("unexpected masked GET response: %#v", getResp)
+	}
+
+	rr = httptest.NewRecorder()
+	body := strings.NewReader(`{"model":"openai/gpt-5.4","apiBase":"https://api.openai.com/v1","apiKey":"****12345678","reasoningEffort":"medium","llmMaxRetries":7,"memoryCompressorTimeout":45,"maxIterations":9,"geminiApiKey":"****87654321"}`)
+	s.handleLLMSettings(rr, httptest.NewRequest(http.MethodPost, "/api/settings/llm", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST code = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if s.cfg.LLM != "openai/gpt-5.4" || s.cfg.APIBase != "https://api.openai.com/v1" {
+		t.Fatalf("LLM settings not applied: llm=%q apiBase=%q", s.cfg.LLM, s.cfg.APIBase)
+	}
+	if s.cfg.APIKey != oldAPIKey || s.cfg.GeminiAPIKey != oldGeminiKey {
+		t.Fatalf("masked POST did not preserve secrets: api=%q gemini=%q", s.cfg.APIKey, s.cfg.GeminiAPIKey)
+	}
+	if s.cfg.ReasoningEffort != "medium" || s.cfg.LLMMaxRetries != 7 || s.cfg.MemCompTimeout != 45 || s.cfg.MaxIterations != 9 {
+		t.Fatalf("numeric settings not applied: %#v", s.cfg)
+	}
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	env := string(data)
+	for _, want := range []string{
+		"XALGORIX_LLM=openai/gpt-5.4",
+		"XALGORIX_API_BASE=https://api.openai.com/v1",
+		"XALGORIX_API_KEY=" + oldAPIKey,
+		"GEMINI_API_KEY=" + oldGeminiKey,
+		"XALGORIX_REASONING_EFFORT=medium",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("env file missing %q:\n%s", want, env)
+		}
+	}
+}
+
+func TestEnvironmentSettings_RejectsUnknownAndUpdatesRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	s := newTestServer(t, &config.Config{RateLimitRequests: 60, RateLimitWindow: 60})
+
+	rr := httptest.NewRecorder()
+	s.handleEnvironmentSettings(rr, httptest.NewRequest(http.MethodPost, "/api/settings/environment", strings.NewReader(`{"values":{"UNSUPPORTED_ENV":"x"}}`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported env code = %d, want 400", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	body := strings.NewReader(`{"values":{"XALGORIX_RATE_LIMIT_REQUESTS":"2000","XALGORIX_RATE_LIMIT_WINDOW":"1","XALGORIX_DISCORD_WEBHOOK":"https://discord.example/webhook","XALGORIX_BIND":"0.0.0.0"}}`)
+	s.handleEnvironmentSettings(rr, httptest.NewRequest(http.MethodPost, "/api/settings/environment", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("environment POST code = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if s.cfg.RateLimitRequests != 1000 || s.cfg.RateLimitWindow != 10 {
+		t.Fatalf("rate limits not clamped/applied: %d/%d", s.cfg.RateLimitRequests, s.cfg.RateLimitWindow)
+	}
+	if s.cfg.DiscordWebhook != "https://discord.example/webhook" || s.discordWebhook != "https://discord.example/webhook" {
+		t.Fatalf("discord webhook not applied: cfg=%q runtime=%q", s.cfg.DiscordWebhook, s.discordWebhook)
+	}
+	if s.cfg.BindAddr != "0.0.0.0" {
+		t.Fatalf("bind address not applied: %q", s.cfg.BindAddr)
+	}
+	var resp environmentSettingsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.RestartRequired {
+		t.Fatal("expected restartRequired for bind change")
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".xalgorix.env"))
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	env := string(data)
+	for _, want := range []string{
+		"XALGORIX_RATE_LIMIT_REQUESTS=1000",
+		"XALGORIX_RATE_LIMIT_WINDOW=10",
+		"XALGORIX_DISCORD_WEBHOOK=https://discord.example/webhook",
+		"XALGORIX_BIND=0.0.0.0",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("env file missing %q:\n%s", want, env)
+		}
 	}
 }
 

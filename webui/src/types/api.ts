@@ -29,6 +29,7 @@ export interface WSEvent {
   output?: string;
   error?: string;
   agent_id?: string;
+  instance_id?: string;
   timestamp?: string;
   vulns?: VulnSummary[];
   target_index?: number;
@@ -66,6 +67,7 @@ export interface ScanInstance {
 
 export interface ScanRecord {
   id: string;
+  instance_id?: string;
   name?: string;
   target: string;
   parent_target?: string;
@@ -77,6 +79,7 @@ export interface ScanRecord {
   instruction?: string;
   severity_filter?: string[];
   discord_webhook?: string;
+  discord_webhook_configured?: boolean;
   events: WSEvent[];
   vulns: VulnSummary[];
   total_tokens: number;
@@ -122,6 +125,16 @@ export interface StatusResponse {
   running_instances: number;
 }
 
+export interface VersionInfo {
+  version: string;
+  ai?: {
+    configured: boolean;
+    provider: string;
+    model?: string;
+    gateway?: string;
+  };
+}
+
 export interface AuthStatus {
   auth_enabled: boolean;
   authenticated: boolean;
@@ -162,4 +175,39 @@ export interface AgentMailSettings {
   pod: string;
   apiKey: string;
   hasApiKey: boolean;
+}
+
+export interface LLMSettings {
+  model: string;
+  apiBase: string;
+  apiKey: string;
+  hasApiKey: boolean;
+  reasoningEffort: string;
+  llmMaxRetries: number;
+  memoryCompressorTimeout: number;
+  maxIterations: number;
+  geminiApiKey: string;
+  hasGeminiApiKey: boolean;
+  envFile: string;
+}
+
+export interface EnvironmentVariableSetting {
+  key: string;
+  label: string;
+  category: string;
+  description: string;
+  defaultValue?: string;
+  placeholder?: string;
+  inputType: "text" | "url" | "path" | "secret" | "number" | "boolean" | "select";
+  options?: string[];
+  sensitive: boolean;
+  requiresRestart: boolean;
+  value: string;
+  hasValue: boolean;
+}
+
+export interface EnvironmentSettings {
+  envFile: string;
+  variables: EnvironmentVariableSetting[];
+  restartRequired?: boolean;
 }

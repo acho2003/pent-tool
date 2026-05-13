@@ -177,6 +177,7 @@ export function LiveFeed({
   autoScroll = true,
   showControls = true,
   className,
+  onClearEvents,
 }: {
   events: FeedEvent[];
   filter: FeedFilter;
@@ -186,6 +187,7 @@ export function LiveFeed({
   autoScroll?: boolean;
   showControls?: boolean;
   className?: string;
+  onClearEvents?: () => void;
 }) {
   const paused = useWSStore((s) => s.paused);
   const setPaused = useWSStore((s) => s.setPaused);
@@ -242,7 +244,7 @@ export function LiveFeed({
             <Button
               size="sm"
               variant="ghost"
-              onClick={clearEvents}
+              onClick={onClearEvents ?? clearEvents}
               className="h-7 px-2"
             >
               <Trash2 className="h-3.5 w-3.5" /> Clear

@@ -5,6 +5,14 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
 import { ScanStatusPill } from "@/components/scan-status-pill"
 import { SeverityBadge } from "@/components/severity-badge"
 import { PhaseProgress, PHASES } from "@/components/phase-progress"
@@ -12,7 +20,13 @@ import { CopyButton } from "@/components/copy-button"
 import { ErrorState, EmptyState } from "@/components/states"
 import { useScan, useStopInstance, useStartSavedInstance, useDeleteScan } from "@/api/queries"
 import { api } from "@/api/client"
-import { useWSStore, filterEventsForInstance, type FeedEvent } from "@/store/ws"
+import {
+  filterEventsForInstance,
+  mergeFeedEvents,
+  toFeedEvent,
+  useWSStore,
+  type FeedEvent,
+} from "@/store/ws"
 import { timeAgo, formatTime, formatDuration, severityRank, normalizeSeverity, cn } from "@/lib/utils"
 import {
   ChevronLeft,
@@ -24,6 +38,7 @@ import {
   Terminal,
   Sparkles,
   ListChecks,
+  ArrowRight,
 } from "lucide-react"
 import { LiveFeed, type FeedFilter } from "@/components/live-feed"
 import type { VulnSummary } from "@/types/api"
@@ -32,19 +47,20 @@ export default function ScanDetailPage() {
   const navigate = useNavigate()
   const { scanId } = useParams<{ scanId: string }>()
   const id = scanId ?? ""
-  const { data: scan, isLoading, error, refetch } = useScan(id)
+  const { data: scan, isLoading, isFetching, error, refetch } = useScan(id)
   const stop = useStopInstance()
   const start = useStartSavedInstance()
   const del = useDeleteScan()
   const subscribe = useWSStore((s) => s.subscribe)
   const unsubscribe = useWSStore((s) => s.unsubscribe)
   const liveEvents = useWSStore((s) => s.events)
+  const subscriptionId = scan?.instance_id || scan?.id || id
 
   useEffect(() => {
-    if (!id) return
-    subscribe(id)
+    if (!subscriptionId) return
+    subscribe(subscriptionId)
     return () => unsubscribe()
-  }, [id, subscribe, unsubscribe])
+  }, [subscriptionId, subscribe, unsubscribe])
 
   if (error)
     return (
@@ -54,7 +70,19 @@ export default function ScanDetailPage() {
         action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
       />
     )
-  if (isLoading || !scan) return <ScanDetailSkeleton />
+  if (isLoading) return <ScanDetailSkeleton />
+  if (!scan)
+    return (
+      <ErrorState
+        title="Scan details are starting"
+        description={
+          isFetching
+            ? "Waiting for the running scan record to become available."
+            : "The scan route is open, but the backend has not returned the scan record yet."
+        }
+        action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
+      />
+    )
 
   const status = (scan.status || "").toLowerCase()
   const canStop = status === "running" || status === "paused"
@@ -62,13 +90,12 @@ export default function ScanDetailPage() {
 
   // Combine persisted events from the scan record with the live websocket
   // feed for this instance, deduped by content.
-  const wsForScan = filterEventsForInstance(liveEvents, id)
-  const persistedAsFeed: FeedEvent[] = (scan.events ?? []).map((e, i) => ({
-    ...e,
-    _key: `persisted:${i}`,
-    _receivedAt: e.timestamp ? new Date(e.timestamp).getTime() : Date.now(),
-  }))
-  const mergedEvents = mergeEventStreams(persistedAsFeed, wsForScan)
+  const eventInstanceId = scan.instance_id || scan.id || id
+  const wsForScan = filterEventsForInstance(liveEvents, eventInstanceId)
+  const persistedAsFeed: FeedEvent[] = (scan.events ?? []).map((e, i) =>
+    toFeedEvent(e, `scan:${eventInstanceId}`, i),
+  )
+  const mergedEvents = mergeFeedEvents(persistedAsFeed, wsForScan)
 
   return (
     <>
@@ -113,7 +140,17 @@ export default function ScanDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => start.mutate(scan.id)}
+              onClick={() =>
+                start.mutate(scan.id, {
+                  onSuccess: (res) => {
+                    if (res.instance_id) {
+                      navigate(`/scans/${res.instance_id}`)
+                    } else {
+                      void refetch()
+                    }
+                  },
+                })
+              }
               disabled={start.isPending}
             >
               <Play className="mr-1 h-4 w-4" /> Start
@@ -229,24 +266,6 @@ function currentPhaseLabel(p?: number): string {
   return found ? `${p}. ${found.name}` : `Phase ${p}`
 }
 
-function mergeEventStreams(persisted: FeedEvent[], live: FeedEvent[]): FeedEvent[] {
-  const seen = new Set<string>()
-  const out: FeedEvent[] = []
-  for (const e of persisted) {
-    const k = `${e.type}|${e.timestamp || ""}|${(e.content || e.output || "").slice(0, 80)}`
-    if (seen.has(k)) continue
-    seen.add(k)
-    out.push(e)
-  }
-  for (const e of live) {
-    const k = `${e.type}|${e.timestamp || ""}|${(e.content || e.output || "").slice(0, 80)}`
-    if (seen.has(k)) continue
-    seen.add(k)
-    out.push(e)
-  }
-  return out
-}
-
 function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
   const counts = useMemo(() => {
     const c: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
@@ -297,6 +316,7 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
 }
 
 function FindingsTab({ vulns }: { vulns: VulnSummary[] }) {
+  const [selected, setSelected] = useState<VulnSummary | null>(null)
   const sorted = useMemo(
     () => [...vulns].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)),
     [vulns],
@@ -310,38 +330,154 @@ function FindingsTab({ vulns }: { vulns: VulnSummary[] }) {
     )
 
   return (
-    <div className="space-y-2">
-      {sorted.map((f) => (
-        <Card key={f.id}>
-          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0 space-y-1 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <SeverityBadge severity={f.severity} />
-                <h3 className="font-medium text-foreground">{f.title}</h3>
-                {f.cve && (
-                  <Badge variant="outline" className="mono">{f.cve}</Badge>
+    <>
+      <div className="space-y-2">
+        {sorted.map((f) => (
+          <Card key={f.id} id={`finding-${f.id}`} className="overflow-hidden">
+            <button
+              type="button"
+              className="group block w-full text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              onClick={() => setSelected(f)}
+              aria-label={`Open finding details for ${f.title}`}
+            >
+              <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 space-y-1 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SeverityBadge severity={f.severity} />
+                    <h3 className="font-medium text-foreground">{f.title}</h3>
+                    {f.cve && (
+                      <Badge variant="outline" className="mono">{f.cve}</Badge>
+                    )}
+                  </div>
+                  {f.description && (
+                    <p className="text-sm leading-relaxed text-muted-foreground line-clamp-3">
+                      {f.description}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    {f.target && <span className="mono">{f.target}</span>}
+                    {f.endpoint && <span className="mono">{f.endpoint}</span>}
+                    {f.method && <span className="mono">{f.method}</span>}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {f.cvss != null && f.cvss > 0 && (
+                    <Badge variant="outline" className="mono">CVSS {f.cvss.toFixed(1)}</Badge>
+                  )}
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
+                    Details <ArrowRight className="h-3.5 w-3.5" />
+                  </span>
+                </div>
+              </CardContent>
+            </button>
+          </Card>
+        ))}
+      </div>
+      <FindingDetailsDialog finding={selected} onOpenChange={(open) => !open && setSelected(null)} />
+    </>
+  )
+}
+
+function FindingDetailsDialog({
+  finding,
+  onOpenChange,
+}: {
+  finding: VulnSummary | null
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Dialog open={!!finding} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        {finding && (
+          <>
+            <DialogHeader>
+              <div className="flex flex-wrap items-center gap-2 pr-8">
+                <SeverityBadge severity={finding.severity} />
+                {finding.cve && <Badge variant="outline" className="mono">{finding.cve}</Badge>}
+                {finding.cvss != null && finding.cvss > 0 && (
+                  <Badge variant="outline" className="mono">CVSS {finding.cvss.toFixed(1)}</Badge>
                 )}
               </div>
-              {f.description && (
-                <p className="text-sm leading-relaxed text-muted-foreground line-clamp-3">
-                  {f.description}
-                </p>
-              )}
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                {f.target && <span className="mono">{f.target}</span>}
-                {f.endpoint && <span className="mono">{f.endpoint}</span>}
-                {f.method && <span className="mono">{f.method}</span>}
-              </div>
+              <DialogTitle className="pr-8 text-lg">{finding.title}</DialogTitle>
+              <DialogDescription>
+                {finding.description || "Detailed vulnerability record from this scan."}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 text-sm sm:grid-cols-2">
+              <DetailRow label="Target" value={finding.target} mono />
+              <DetailRow label="Endpoint" value={finding.endpoint} mono />
+              <DetailRow label="Method" value={finding.method} mono />
+              <DetailRow label="CVSS vector" value={finding.cvss_vector} mono />
+              <DetailRow label="Finding ID" value={finding.id} mono />
+              <DetailRow label="Verification" value={finding.verification_method} />
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {f.cvss != null && f.cvss > 0 && (
-                <Badge variant="outline" className="mono">CVSS {f.cvss.toFixed(1)}</Badge>
+
+            <Separator />
+
+            <div className="space-y-4">
+              <DetailSection title="Impact" value={finding.impact} />
+              <DetailSection title="Technical analysis" value={finding.technical_analysis} />
+              <DetailSection title="Proof of concept" value={finding.poc_description} />
+              {finding.poc_script && (
+                <DetailSection title="PoC script" value={finding.poc_script} code />
               )}
+              {finding.exploitation_proof && (
+                <DetailSection title="Exploitation proof" value={finding.exploitation_proof} code />
+              )}
+              <DetailSection title="Remediation" value={finding.remediation} />
             </div>
-          </CardContent>
-        </Card>
-      ))}
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DetailRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string
+  value?: string
+  mono?: boolean
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={cn("mt-1 break-words text-foreground", mono && "mono text-xs")}>
+        {value || "—"}
+      </div>
     </div>
+  )
+}
+
+function DetailSection({
+  title,
+  value,
+  code,
+}: {
+  title: string
+  value?: string
+  code?: boolean
+}) {
+  if (!value) return null
+  return (
+    <section className="space-y-2">
+      <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {title}
+      </h4>
+      {code ? (
+        <pre className="max-h-64 overflow-auto rounded-md border border-border bg-black/40 p-3 text-xs leading-relaxed text-foreground">
+          <code>{value}</code>
+        </pre>
+      ) : (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
+          {value}
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -369,7 +505,7 @@ function ConfigTab({ scan }: { scan: NonNullable<ReturnType<typeof useScan>["dat
     { k: "Stop reason", v: scan.stop_reason || "—" },
     { k: "Started", v: formatTime(scan.started_at) },
     { k: "Finished", v: scan.finished_at ? formatTime(scan.finished_at) : "—" },
-    { k: "Discord webhook", v: scan.discord_webhook ? "configured" : "none" },
+    { k: "Discord webhook", v: scan.discord_webhook_configured || scan.discord_webhook ? "configured" : "none" },
   ]
   return (
     <Card>

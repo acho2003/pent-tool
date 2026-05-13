@@ -27,6 +27,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +35,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/bcrypt"
 	"github.com/xalgord/xalgorix/v4/internal/agent"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
@@ -45,6 +45,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Version is set by main.go at startup — single source of truth.
@@ -168,8 +169,11 @@ func (rl *RateLimiter) Allow(ip string) bool {
 func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip rate limiting for WebSocket and static files
-			if r.URL.Path == "/ws" || strings.HasPrefix(r.URL.Path, "/static") || strings.HasPrefix(r.URL.Path, "/assets") {
+			// Skip rate limiting for WebSocket, static files, and dashboard
+			// polling reads. Auth still wraps this middleware, so protected
+			// reads require a valid session before they reach this point.
+			if r.URL.Path == "/ws" || isStaticWebAssetPath(r.URL.Path) ||
+				isDashboardReadPath(r.Method, r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -188,6 +192,58 @@ func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+func isStaticWebAssetPath(path string) bool {
+	if path == "" || strings.HasPrefix(path, "/api/") || path == "/ws" {
+		return false
+	}
+	if strings.HasPrefix(path, "/static/") ||
+		strings.HasPrefix(path, "/assets/") ||
+		strings.HasPrefix(path, "/chunks/") {
+		return true
+	}
+	switch filepath.Ext(path) {
+	case ".css", ".js", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDashboardReadPath(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	switch path {
+	case "/api/auth/status",
+		"/api/status",
+		"/api/version",
+		"/api/scans",
+		"/api/instances",
+		"/api/queue/status":
+		return true
+	default:
+		return strings.HasPrefix(path, "/api/scans/") ||
+			strings.HasPrefix(path, "/api/instances/")
+	}
+}
+
+func setWebUICacheHeaders(w http.ResponseWriter) {
+	// The embedded SPA uses stable asset names (/app.js, /style.css). Disable
+	// browser caching so replacing the local binary takes effect on refresh.
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
+func canStartInstanceStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "saved", "stopped", "failed", "finished":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -447,10 +503,11 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Public routes that don't need auth
+			// Public routes that don't need auth. The React SPA owns the
+			// operator login screen, so its static assets must be reachable
+			// before a session exists.
 			if path == "/api/auth/login" || path == "/api/auth/status" ||
-				strings.HasPrefix(path, "/static/") || strings.HasPrefix(path, "/assets/") ||
-				strings.HasPrefix(path, "/uploads/") {
+				isStaticWebAssetPath(path) || strings.HasPrefix(path, "/uploads/") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -472,10 +529,10 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			// For page requests, serve login page
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(loginPageHTML))
+			// For page requests, serve the SPA shell. The client-side router
+			// will show the React login page after /api/auth/status reports
+			// that there is no active session.
+			next.ServeHTTP(w, r)
 		})
 	}
 }
@@ -633,8 +690,6 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		"authenticated": authenticated,
 	})
 }
-
-// loginPageHTML is defined in login.go
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -827,6 +882,7 @@ type WSEvent struct {
 	Output         string            `json:"output,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	AgentID        string            `json:"agent_id,omitempty"`
+	InstanceID     string            `json:"instance_id,omitempty"`
 	Timestamp      string            `json:"timestamp,omitempty"`
 	Vulns          []VulnSummary     `json:"vulns,omitempty"`
 	TargetIndex    int               `json:"target_index,omitempty"`
@@ -862,27 +918,29 @@ type VulnSummary struct {
 
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
-	ID             string        `json:"id"`
-	Name           string        `json:"name,omitempty"` // user-defined scan name
-	Target         string        `json:"target"`
-	ParentTarget   string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
-	StartedAt      string        `json:"started_at"`
-	FinishedAt     string        `json:"finished_at,omitempty"`
-	Status         string        `json:"status"`                    // saved, running, finished, stopped
-	StopReason     string        `json:"stop_reason,omitempty"`     // why scan stopped (error, user, watchdog, etc.)
-	ScanMode       string        `json:"scan_mode,omitempty"`       // single, wildcard, dast
-	Instruction    string        `json:"instruction,omitempty"`     // custom scan instructions
-	SeverityFilter []string      `json:"severity_filter,omitempty"` // severity filter for scan
-	DiscordWebhook string        `json:"discord_webhook,omitempty"` // discord notification webhook
-	Events         []WSEvent     `json:"events"`
-	Vulns          []VulnSummary `json:"vulns"`
-	TotalTokens    int           `json:"total_tokens"`
-	Iterations     int           `json:"iterations"`
-	ToolCalls      int           `json:"tool_calls"`
-	CompanyName    string        `json:"company_name,omitempty"` // report branding: company name
-	LogoPath       string        `json:"logo_path,omitempty"`    // report branding: logo path
-	Phases         []int         `json:"phases,omitempty"`       // selected methodology phases
-	CurrentPhase   int           `json:"current_phase,omitempty"`
+	ID                       string        `json:"id"`
+	InstanceID               string        `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
+	Name                     string        `json:"name,omitempty"`        // user-defined scan name
+	Target                   string        `json:"target"`
+	ParentTarget             string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
+	StartedAt                string        `json:"started_at"`
+	FinishedAt               string        `json:"finished_at,omitempty"`
+	Status                   string        `json:"status"`                               // saved, running, finished, stopped
+	StopReason               string        `json:"stop_reason,omitempty"`                // why scan stopped (error, user, watchdog, etc.)
+	ScanMode                 string        `json:"scan_mode,omitempty"`                  // single, wildcard, dast
+	Instruction              string        `json:"instruction,omitempty"`                // custom scan instructions
+	SeverityFilter           []string      `json:"severity_filter,omitempty"`            // severity filter for scan
+	DiscordWebhook           string        `json:"discord_webhook,omitempty"`            // discord notification webhook
+	DiscordWebhookConfigured bool          `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
+	Events                   []WSEvent     `json:"events"`
+	Vulns                    []VulnSummary `json:"vulns"`
+	TotalTokens              int           `json:"total_tokens"`
+	Iterations               int           `json:"iterations"`
+	ToolCalls                int           `json:"tool_calls"`
+	CompanyName              string        `json:"company_name,omitempty"` // report branding: company name
+	LogoPath                 string        `json:"logo_path,omitempty"`    // report branding: logo path
+	Phases                   []int         `json:"phases,omitempty"`       // selected methodology phases
+	CurrentPhase             int           `json:"current_phase,omitempty"`
 }
 
 // QueueState persists scan queue state for recovery after restart
@@ -1035,6 +1093,7 @@ type Server struct {
 	discordWebhook     string
 	discordMinSeverity string // minimum severity to send to Discord ("info", "low", "medium", "high", "critical")
 	rateLimiter        *RateLimiter
+	settingsMu         sync.Mutex
 	instances          map[string]*ScanInstance // concurrent scan instances
 	instancesMu        sync.RWMutex
 	postScanChatFn     func(*config.Config, []llm.Message) (string, error)
@@ -1057,8 +1116,8 @@ func NewServer(cfg *config.Config, port int) *Server {
 		clients:            make(map[*wsClient]bool),
 		currentAgents:      make(map[string]*agent.Agent),
 		dataDir:            dataDir,
-		discordWebhook:     os.Getenv("XALGORIX_DISCORD_WEBHOOK"),
-		discordMinSeverity: strings.ToLower(strings.TrimSpace(os.Getenv("XALGORIX_DISCORD_MIN_SEVERITY"))),
+		discordWebhook:     cfg.DiscordWebhook,
+		discordMinSeverity: strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
 		rateLimiter:        rl,
 		instances:          make(map[string]*ScanInstance),
 		postScanChatFn: func(cfg *config.Config, messages []llm.Message) (string, error) {
@@ -1099,14 +1158,18 @@ func (s *Server) Start() error {
 	// but assert with comma-ok so a future runtime change can't crash the server.
 	rfs, hasRfs := staticFS.(fs.ReadFileFS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		setWebUICacheHeaders(w)
 		// Try to serve the static file
 		path := r.URL.Path
 		if path == "/" {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-		// Check if it's a real static file - strip /static prefix since staticFS already points to static folder
-		strippedPath := strings.TrimPrefix(path, "/static/")
+		// Check if it's a real static file. Vite serves assets from the
+		// static root (/app.js, /style.css, /chunks/...), while older builds
+		// may request /static/app.js. staticFS already points at that root.
+		strippedPath := strings.TrimPrefix(path, "/")
+		strippedPath = strings.TrimPrefix(strippedPath, "static/")
 		if hasRfs {
 			if f, err := rfs.ReadFile(strippedPath); err == nil && f != nil {
 				// Rewrite URL to serve from staticFS root (which is already "static")
@@ -1115,11 +1178,11 @@ func (s *Server) Start() error {
 				return
 			}
 		}
-		// Asset-style paths (have an extension and look like a file) that
-		// didn't resolve to a real static file are genuine 404s — returning
-		// index.html for them would give the browser an HTML payload with
-		// the wrong Content-Type, breaking module script imports.
-		if ext := filepath.Ext(path); ext != "" && ext != ".html" {
+		// Known static asset paths that didn't resolve to a real file are
+		// genuine 404s. App routes may contain dots in path params (for
+		// example scan ids derived from hostnames), so don't treat every
+		// dotted path as a file.
+		if isStaticWebAssetPath(path) {
 			http.NotFound(w, r)
 			return
 		}
@@ -1143,6 +1206,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/report/", s.handleDownloadReport)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
 	mux.HandleFunc("/api/settings/agentmail", s.handleAgentMailSettings)
+	mux.HandleFunc("/api/settings/llm", s.handleLLMSettings)
+	mux.HandleFunc("/api/settings/environment", s.handleEnvironmentSettings)
 	mux.HandleFunc("/api/queue/status", s.handleQueueStatus)
 	mux.HandleFunc("/api/queue/resume", s.handleQueueResume)
 	mux.HandleFunc("/api/queue/clear", s.handleQueueClear)
@@ -1458,19 +1523,20 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[ERROR] failed to create saved-target dir %s: %v", savedDir, err)
 		} else {
 			rec := &ScanRecord{
-				ID:             instanceID,
-				Name:           req.Name,
-				Target:         targetStr,
-				Status:         "saved",
-				StartedAt:      now,
-				ScanMode:       req.ScanMode,
-				Instruction:    req.Instruction,
-				SeverityFilter: req.SeverityFilter,
-				Phases:         req.Phases,
-				CurrentPhase:   firstSelectedPhase(req.Phases),
-				CompanyName:    req.CompanyName,
-				LogoPath:       req.LogoPath,
-				DiscordWebhook: req.DiscordWebhook,
+				ID:                       instanceID,
+				Name:                     req.Name,
+				Target:                   targetStr,
+				Status:                   "saved",
+				StartedAt:                now,
+				ScanMode:                 req.ScanMode,
+				Instruction:              req.Instruction,
+				SeverityFilter:           req.SeverityFilter,
+				Phases:                   req.Phases,
+				CurrentPhase:             firstSelectedPhase(req.Phases),
+				CompanyName:              req.CompanyName,
+				LogoPath:                 req.LogoPath,
+				DiscordWebhook:           req.DiscordWebhook,
+				DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
 			}
 			s.saveScanRecordTo(rec, savedDir)
 		}
@@ -1760,15 +1826,16 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST /api/instances/{id}/start — start a saved scan
+	// POST /api/instances/{id}/start — start a saved scan, or start a new
+	// run from an existing finished/stopped/failed scan's saved config.
 	if len(parts) >= 2 && parts[1] == "start" && r.Method == http.MethodPost {
 		inst.mu.RLock()
-		currentStatus := inst.Status
+		currentStatus := strings.ToLower(strings.TrimSpace(inst.Status))
 		inst.mu.RUnlock()
-		if currentStatus != "saved" {
+		if !canStartInstanceStatus(currentStatus) {
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]string{
-				"error": "cannot start: instance is " + currentStatus + ", expected saved",
+				"error": "cannot start: instance is " + currentStatus,
 			})
 			return
 		}
@@ -1788,20 +1855,24 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		}
 		inst.mu.RUnlock()
 
-		// Remove the saved instance — runMultiScan creates a new pending one
-		s.instancesMu.Lock()
-		delete(s.instances, instanceID)
-		s.instancesMu.Unlock()
+		if currentStatus == "saved" {
+			// Remove the saved placeholder — runMultiScan creates a new
+			// pending/running instance. Finished scans are kept so their
+			// reports remain available while the new run starts separately.
+			s.instancesMu.Lock()
+			delete(s.instances, instanceID)
+			s.instancesMu.Unlock()
 
-		// Clean up on-disk saved-target directory
-		savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
-		os.RemoveAll(savedDir)
+			savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
+			os.RemoveAll(savedDir)
+		}
 
 		s.stopReq.Store(false)
 		scanCfg := *s.cfg
 		newID := randomSlug()
 		go s.runMultiScan(req, &scanCfg, newID)
 
+		s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
 		json.NewEncoder(w).Encode(map[string]string{"status": "started", "instance_id": newID})
 		return
 	}
@@ -2119,22 +2190,24 @@ func (s *Server) executeScanSession(sess *scanSession) {
 
 	// 4. Initialize scan record
 	sess.record = &ScanRecord{
-		ID:             sess.id,
-		Name:           sess.name,
-		Target:         sess.target,
-		ParentTarget:   sess.parentTarget,
-		ScanMode:       sess.scanMode,
-		Instruction:    sess.userInstruction,
-		SeverityFilter: append([]string(nil), sess.severityFilter...),
-		DiscordWebhook: sess.discordWebhook,
-		StartedAt:      time.Now().Format(time.RFC3339),
-		Status:         "running",
-		Events:         []WSEvent{},
-		Vulns:          []VulnSummary{},
-		CompanyName:    sess.companyName,
-		LogoPath:       sess.logoPath,
-		Phases:         append([]int(nil), sess.phases...),
-		CurrentPhase:   firstSelectedPhase(sess.phases),
+		ID:                       sess.id,
+		InstanceID:               sess.instanceID,
+		Name:                     sess.name,
+		Target:                   sess.target,
+		ParentTarget:             sess.parentTarget,
+		ScanMode:                 sess.scanMode,
+		Instruction:              sess.userInstruction,
+		SeverityFilter:           append([]string(nil), sess.severityFilter...),
+		DiscordWebhook:           sess.discordWebhook,
+		DiscordWebhookConfigured: sess.discordWebhook != "" || s.discordWebhook != "",
+		StartedAt:                time.Now().Format(time.RFC3339),
+		Status:                   "running",
+		Events:                   []WSEvent{},
+		Vulns:                    []VulnSummary{},
+		CompanyName:              sess.companyName,
+		LogoPath:                 sess.logoPath,
+		Phases:                   append([]int(nil), sess.phases...),
+		CurrentPhase:             firstSelectedPhase(sess.phases),
 	}
 	s.saveScanRecordTo(sess.record, sess.scanDir)
 
@@ -3183,22 +3256,24 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				newVulns := allVulns[vulnCountBefore:]
 				if len(newVulns) > 0 {
 					subScanRecord := ScanRecord{
-						ID:             filepath.Base(subScanDir),
-						Name:           req.Name,
-						Target:         subdomain,
-						ParentTarget:   target,
-						ScanMode:       "wildcard",
-						Instruction:    req.Instruction,
-						SeverityFilter: append([]string(nil), req.SeverityFilter...),
-						DiscordWebhook: req.DiscordWebhook,
-						StartedAt:      time.Now().Format(time.RFC3339),
-						Status:         "finished",
-						FinishedAt:     time.Now().Format(time.RFC3339),
-						Vulns:          []VulnSummary{},
-						CompanyName:    req.CompanyName,
-						LogoPath:       req.LogoPath,
-						Phases:         append([]int(nil), req.Phases...),
-						CurrentPhase:   22,
+						ID:                       filepath.Base(subScanDir),
+						InstanceID:               req.InstanceID,
+						Name:                     req.Name,
+						Target:                   subdomain,
+						ParentTarget:             target,
+						ScanMode:                 "wildcard",
+						Instruction:              req.Instruction,
+						SeverityFilter:           append([]string(nil), req.SeverityFilter...),
+						DiscordWebhook:           req.DiscordWebhook,
+						DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
+						StartedAt:                time.Now().Format(time.RFC3339),
+						Status:                   "finished",
+						FinishedAt:               time.Now().Format(time.RFC3339),
+						Vulns:                    []VulnSummary{},
+						CompanyName:              req.CompanyName,
+						LogoPath:                 req.LogoPath,
+						Phases:                   append([]int(nil), req.Phases...),
+						CurrentPhase:             22,
 					}
 					for _, v := range newVulns {
 						subScanRecord.Vulns = append(subScanRecord.Vulns, vulnToSummary(v))
@@ -3705,11 +3780,13 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Validate file extension
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	allowedExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".svg": true, ".gif": true, ".webp": true}
+	// Validate file extension. PDF reports can embed PNG/JPEG reliably; keep
+	// uploads constrained to formats the report renderer can use.
+	originalName := filepath.Base(header.Filename)
+	ext := strings.ToLower(filepath.Ext(originalName))
+	allowedExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true}
 	if !allowedExts[ext] {
-		http.Error(w, "unsupported image format: "+ext+" (allowed: png, jpg, jpeg, svg, gif, webp)", http.StatusBadRequest)
+		http.Error(w, "unsupported image format: "+ext+" (allowed: png, jpg, jpeg)", http.StatusBadRequest)
 		return
 	}
 
@@ -3721,9 +3798,14 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate unique filename: timestamp_originalname
-	sanitized := strings.ReplaceAll(header.Filename, " ", "_")
-	fileName := fmt.Sprintf("%d_%s", time.Now().UnixMilli(), sanitized)
+	// Generate unique filename: timestamp_sanitizedname.ext
+	nameOnly := strings.TrimSuffix(originalName, filepath.Ext(originalName))
+	safeName := regexp.MustCompile(`[^a-zA-Z0-9._-]+`).ReplaceAllString(nameOnly, "_")
+	safeName = strings.Trim(safeName, "._-")
+	if safeName == "" {
+		safeName = "logo"
+	}
+	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixMilli(), safeName, ext)
 	dstPath := filepath.Join(logosDir, fileName)
 
 	dst, err := os.Create(dstPath)
@@ -3747,7 +3829,7 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"path":     servingPath,
-		"filename": header.Filename,
+		"filename": originalName,
 	})
 }
 
@@ -3938,7 +4020,7 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 
 	// First: walk the nested tree to find the scan by ID (dataDir/target/date/slug/scan.json)
 	for _, entry := range s.findAllScans() {
-		if entry.rec.ID == scanID || filepath.Base(entry.dir) == scanID {
+		if entry.rec.ID == scanID || entry.rec.InstanceID == scanID || filepath.Base(entry.dir) == scanID {
 			return entry.dir, &entry.rec
 		}
 	}
@@ -3951,6 +4033,44 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 		}
 	}
 	return "", nil
+}
+
+var shortHexIDPattern = regexp.MustCompile(`^[a-f0-9]{8}$`)
+
+func (s *Server) findRecentScanForShortAlias(scanID string) (string, *ScanRecord) {
+	if !shortHexIDPattern.MatchString(scanID) {
+		return "", nil
+	}
+
+	entries := s.findAllScans()
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].rec.StartedAt > entries[j].rec.StartedAt
+	})
+
+	for _, entry := range entries {
+		if entry.rec.ParentTarget != "" {
+			continue
+		}
+		startedAt, err := time.Parse(time.RFC3339Nano, entry.rec.StartedAt)
+		if err != nil {
+			continue
+		}
+		if time.Since(startedAt) > 24*time.Hour {
+			continue
+		}
+		log.Printf("[web] Resolving short scan route %s to recent scan %s", scanID, entry.rec.ID)
+		return entry.dir, &entry.rec
+	}
+	return "", nil
+}
+
+func (s *Server) markDiscordWebhookConfigured(rec *ScanRecord) {
+	if rec == nil {
+		return
+	}
+	rec.DiscordWebhookConfigured = rec.DiscordWebhookConfigured ||
+		rec.DiscordWebhook != "" ||
+		s.discordWebhook != ""
 }
 
 func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
@@ -3968,27 +4088,29 @@ func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 	severityFilter := append([]string(nil), inst.SeverityFilter...)
 
 	return &ScanRecord{
-		ID:             inst.ID,
-		Name:           inst.Name,
-		Target:         inst.Targets,
-		ParentTarget:   inst.ParentTarget,
-		StartedAt:      inst.StartedAt,
-		FinishedAt:     inst.FinishedAt,
-		Status:         inst.Status,
-		StopReason:     inst.StopReason,
-		ScanMode:       inst.ScanMode,
-		Instruction:    inst.Instruction,
-		SeverityFilter: severityFilter,
-		DiscordWebhook: inst.DiscordWebhook,
-		Events:         events,
-		Vulns:          vulns,
-		TotalTokens:    inst.TotalTokens,
-		Iterations:     inst.Iterations,
-		ToolCalls:      inst.ToolCalls,
-		CompanyName:    inst.CompanyName,
-		LogoPath:       inst.LogoPath,
-		Phases:         phases,
-		CurrentPhase:   inst.CurrentPhase,
+		ID:                       inst.ID,
+		InstanceID:               inst.ID,
+		Name:                     inst.Name,
+		Target:                   inst.Targets,
+		ParentTarget:             inst.ParentTarget,
+		StartedAt:                inst.StartedAt,
+		FinishedAt:               inst.FinishedAt,
+		Status:                   inst.Status,
+		StopReason:               inst.StopReason,
+		ScanMode:                 inst.ScanMode,
+		Instruction:              inst.Instruction,
+		SeverityFilter:           severityFilter,
+		DiscordWebhook:           inst.DiscordWebhook,
+		DiscordWebhookConfigured: inst.DiscordWebhook != "",
+		Events:                   events,
+		Vulns:                    vulns,
+		TotalTokens:              inst.TotalTokens,
+		Iterations:               inst.Iterations,
+		ToolCalls:                inst.ToolCalls,
+		CompanyName:              inst.CompanyName,
+		LogoPath:                 inst.LogoPath,
+		Phases:                   phases,
+		CurrentPhase:             inst.CurrentPhase,
 	}
 }
 
@@ -3998,6 +4120,16 @@ func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 // Running scans from a previous server instance are marked as "stopped" since the agent process is gone.
 func (s *Server) rebuildInstancesFromDisk() {
 	for _, entry := range s.findAllScans() {
+		// If scan was "running" from a previous server instance, it's no longer active.
+		// Persist the correction so /api/scans and /api/instances agree after restart.
+		if entry.rec.Status == "running" {
+			stoppedAt := time.Now().Format(time.RFC3339)
+			entry.rec.Status = "stopped"
+			entry.rec.StopReason = "server_restart"
+			entry.rec.FinishedAt = stoppedAt
+			s.saveScanRecordTo(&entry.rec, entry.dir)
+		}
+
 		// Skip subdomain scans — they belong to their parent wildcard scan
 		if entry.rec.ParentTarget != "" {
 			continue
@@ -4031,12 +4163,6 @@ func (s *Server) rebuildInstancesFromDisk() {
 		}
 		chatCfg := *s.cfg
 		inst.chatCfg = &chatCfg
-		// If scan was "running" from a previous server instance, it's no longer active
-		if inst.Status == "running" {
-			inst.Status = "stopped"
-			inst.StopReason = "server_restart"
-			inst.FinishedAt = time.Now().Format(time.RFC3339)
-		}
 		s.instances[entry.rec.ID] = inst
 	}
 }
@@ -4101,12 +4227,13 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	reportPath := filepath.Join(scanDir, fmt.Sprintf("xalgorix_report_%s.pdf", scanID))
-
-	// If report doesn't exist, try to generate it
-	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
-		if _, err := s.generateReportAt(rec, scanDir); err != nil {
-			log.Printf("Report generation error: %v", err)
+	reportPath, err := s.generateReportAt(rec, scanDir)
+	if err != nil {
+		log.Printf("Report generation error: %v", err)
+		fallbackPath := filepath.Join(scanDir, fmt.Sprintf("xalgorix_report_%s.pdf", scanID))
+		if info, statErr := os.Stat(fallbackPath); statErr == nil && info.Mode().IsRegular() {
+			reportPath = fallbackPath
+		} else {
 			http.Error(w, "failed to generate report: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -4169,21 +4296,18 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 			req.Window = 3600
 		}
 
-		// Update config
-		s.cfg.RateLimitRequests = req.Requests
-		s.cfg.RateLimitWindow = req.Window
-
-		// Recreate rate limiter with new settings
-		if s.rateLimiter != nil {
-			s.rateLimiter.Stop()
+		if _, err := s.applyEnvironmentUpdates(map[string]string{
+			"XALGORIX_RATE_LIMIT_REQUESTS": strconv.Itoa(req.Requests),
+			"XALGORIX_RATE_LIMIT_WINDOW":   strconv.Itoa(req.Window),
+		}); err != nil {
+			log.Printf("Failed to save rate limit settings: %v", err)
+			http.Error(w, "failed to save rate limit settings", http.StatusInternalServerError)
+			return
 		}
-		s.rateLimiter = NewRateLimiter(req.Requests, time.Duration(req.Window)*time.Second)
-
-		log.Printf("Rate limiting updated: %d requests/%ds per IP", req.Requests, req.Window)
 
 		json.NewEncoder(w).Encode(map[string]int{
-			"requests": req.Requests,
-			"window":   req.Window,
+			"requests": s.cfg.RateLimitRequests,
+			"window":   s.cfg.RateLimitWindow,
 		})
 
 	default:
@@ -4236,55 +4360,14 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 			effectiveAPIKey = s.cfg.AgentMailAPIKey
 		}
 
-		// Update config
-		s.cfg.AgentMailPod = req.Pod
-		s.cfg.AgentMailAPIKey = effectiveAPIKey
-
-		// Save to env file — read existing content and update only relevant keys
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			log.Printf("Error: failed to get home directory for env file: %v", homeErr)
-			http.Error(w, "failed to determine home directory", http.StatusInternalServerError)
-			return
+		updates := map[string]string{"AGENTMAIL_POD": req.Pod}
+		if !preserveKey {
+			updates["AGENTMAIL_API_KEY"] = effectiveAPIKey
 		}
-		envFile := filepath.Join(home, ".xalgorix.env")
-
-		existing, _ := os.ReadFile(envFile) // OK to ignore — file may not exist yet
-		lines := strings.Split(string(existing), "\n")
-		var newLines []string
-		podSet, keySet := false, false
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "AGENTMAIL_POD=") {
-				newLines = append(newLines, "AGENTMAIL_POD="+req.Pod)
-				podSet = true
-			} else if strings.HasPrefix(trimmed, "AGENTMAIL_API_KEY=") {
-				if preserveKey {
-					newLines = append(newLines, line)
-				} else {
-					newLines = append(newLines, "AGENTMAIL_API_KEY="+effectiveAPIKey)
-				}
-				keySet = true
-			} else {
-				newLines = append(newLines, line)
-			}
-		}
-		if !podSet {
-			newLines = append(newLines, "AGENTMAIL_POD="+req.Pod)
-		}
-		if !keySet && effectiveAPIKey != "" {
-			newLines = append(newLines, "AGENTMAIL_API_KEY="+effectiveAPIKey)
-		}
-
-		if err := os.WriteFile(envFile, []byte(strings.Join(newLines, "\n")), 0o600); err != nil {
+		if _, err := s.applyEnvironmentUpdates(updates); err != nil {
 			log.Printf("Failed to save AgentMail settings: %v", err)
-		} else {
-			// os.WriteFile only honours the mode arg when *creating*; if the
-			// file already existed with looser perms (e.g. user ran `nano`
-			// and saved at the umask default of 0644) we must chmod it.
-			if chmodErr := os.Chmod(envFile, 0o600); chmodErr != nil {
-				log.Printf("Warning: could not chmod %s to 0600: %v", envFile, chmodErr)
-			}
+			http.Error(w, "failed to save AgentMail settings", http.StatusInternalServerError)
+			return
 		}
 
 		log.Printf("AgentMail settings updated: pod=%s", req.Pod)
@@ -4303,8 +4386,14 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 // handleVersion returns the current Xalgorix version
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]any{
 		"version": Version,
+		"ai": map[string]any{
+			"configured": s.cfg.APIKey != "" && s.cfg.LLM != "",
+			"provider":   llmProviderLabel(s.cfg.LLM, s.cfg.APIBase),
+			"model":      s.cfg.LLM,
+			"gateway":    llmGatewayName(s.cfg.LLM, s.cfg.APIBase),
+		},
 	})
 }
 
@@ -4670,7 +4759,9 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(allScans, func(i, j int) bool {
 			return allScans[i].rec.StartedAt > allScans[j].rec.StartedAt
 		})
-		data, _ := json.Marshal(allScans[0].rec)
+		rec := allScans[0].rec
+		s.markDiscordWebhookConfigured(&rec)
+		data, _ := json.Marshal(rec)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 		return
@@ -4681,13 +4772,26 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	// may differ from scan record IDs (directory slugs). We need to clean up both.
 	if r.Method == http.MethodDelete {
 		// Try to find and delete from disk
-		dir, _ := s.findScanByID(scanID)
+		dir, rec := s.findScanByID(scanID)
 		if dir != "" {
 			os.RemoveAll(dir)
 		}
-		// Always remove from in-memory instances map
+		instanceIDs := []string{scanID}
+		if rec != nil {
+			instanceIDs = append(instanceIDs, rec.ID, rec.InstanceID)
+		}
+		seenInstanceIDs := make(map[string]bool, len(instanceIDs))
 		s.instancesMu.Lock()
-		delete(s.instances, scanID)
+		for _, id := range instanceIDs {
+			if id == "" || seenInstanceIDs[id] {
+				continue
+			}
+			seenInstanceIDs[id] = true
+			if inst := s.instances[id]; inst != nil && inst.cancel != nil {
+				inst.cancel()
+			}
+			delete(s.instances, id)
+		}
 		s.instancesMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"deleted"}`))
@@ -4699,6 +4803,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		inst := s.instances[scanID]
 		s.instancesMu.RUnlock()
 		if rec := scanRecordFromInstance(inst); rec != nil {
+			s.markDiscordWebhookConfigured(rec)
 			data, _ := json.Marshal(rec)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(data)
@@ -4709,11 +4814,16 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	dir, rec := s.findScanByID(scanID)
 	_ = dir
 	if rec == nil {
+		dir, rec = s.findRecentScanForShortAlias(scanID)
+		_ = dir
+	}
+	if rec == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`null`))
 		return
 	}
 
+	s.markDiscordWebhookConfigured(rec)
 	data, _ := json.Marshal(rec)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -4735,6 +4845,7 @@ func logMemStats(label string) {
 }
 
 func (s *Server) broadcast(evt WSEvent) {
+	evt = withEventTimestamp(evt)
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return
@@ -4758,10 +4869,14 @@ func (s *Server) broadcast(evt WSEvent) {
 	}
 }
 
-// broadcastToInstance sends an event only to clients subscribed to a specific instance.
-// Also sends to unsubscribed clients (backward compatibility for single-scan workflow).
+// broadcastToInstance sends an event to clients subscribed to a specific instance
+// and to dashboard clients without an instance subscription.
 // Buffers events into the instance for replay.
 func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
+	evt = withEventTimestamp(evt)
+	if evt.InstanceID == "" {
+		evt.InstanceID = instanceID
+	}
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return
@@ -4794,9 +4909,7 @@ func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
 	defer s.mu.RUnlock()
 
 	for client := range s.clients {
-		// Send ONLY to clients explicitly subscribed to this instance.
-		// Dashboard clients (instanceID=="") receive updates via broadcastDashboard.
-		if client.instanceID == instanceID {
+		if client.instanceID == "" || client.instanceID == instanceID {
 			select {
 			case client.send <- data:
 			default:
@@ -4811,6 +4924,7 @@ func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
 
 // broadcastDashboard sends an event only to dashboard clients (no instance subscription).
 func (s *Server) broadcastDashboard(evt WSEvent) {
+	evt = withEventTimestamp(evt)
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return
@@ -4830,6 +4944,77 @@ func (s *Server) broadcastDashboard(evt WSEvent) {
 				}(client)
 			}
 		}
+	}
+}
+
+func withEventTimestamp(evt WSEvent) WSEvent {
+	if strings.TrimSpace(evt.Timestamp) == "" {
+		evt.Timestamp = time.Now().Format(time.RFC3339)
+	}
+	return evt
+}
+
+func llmProviderLabel(model, apiBase string) string {
+	provider := llmProviderKey(model, apiBase)
+	switch provider {
+	case "vercel":
+		return "Vercel AI Gateway"
+	case "minimax":
+		return "MiniMax"
+	case "openai":
+		return "OpenAI"
+	case "anthropic":
+		return "Anthropic"
+	case "google", "gemini":
+		return "Google Gemini"
+	case "deepseek":
+		return "DeepSeek"
+	case "groq":
+		return "Groq"
+	case "ollama":
+		return "Ollama"
+	case "":
+		return "Not configured"
+	default:
+		return strings.ToUpper(provider[:1]) + provider[1:]
+	}
+}
+
+func llmGatewayName(model, apiBase string) string {
+	if llmProviderKey(model, apiBase) == "vercel" {
+		return "vercel"
+	}
+	return ""
+}
+
+func llmProviderKey(model, apiBase string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	apiBase = strings.ToLower(strings.TrimSpace(apiBase))
+	if strings.Contains(apiBase, "vercel") || strings.HasPrefix(model, "vercel/") {
+		return "vercel"
+	}
+	if idx := strings.Index(model, "/"); idx > 0 {
+		return model[:idx]
+	}
+	switch {
+	case strings.Contains(apiBase, "minimax"):
+		return "minimax"
+	case strings.Contains(apiBase, "anthropic"):
+		return "anthropic"
+	case strings.Contains(apiBase, "generativelanguage") || strings.Contains(apiBase, "googleapis"):
+		return "google"
+	case strings.Contains(apiBase, "deepseek"):
+		return "deepseek"
+	case strings.Contains(apiBase, "groq"):
+		return "groq"
+	case strings.Contains(apiBase, "openai"):
+		return "openai"
+	case strings.Contains(apiBase, "ollama") || strings.Contains(apiBase, "localhost:11434"):
+		return "ollama"
+	case model != "":
+		return model
+	default:
+		return ""
 	}
 }
 
