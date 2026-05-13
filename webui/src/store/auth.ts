@@ -1,13 +1,20 @@
 import { create } from "zustand"
-import { api, AUTH_EXPIRED } from "@/api/client"
+import { api, AUTH_EXPIRED, HttpError } from "@/api/client"
 
-type Status = "loading" | "anon" | "authed" | "disabled"
+// "no-backend" is distinct from "anon": it means the SPA could not even
+// reach `/api/auth/status` (network error or 404). Without this state the
+// app would silently render a login screen against an absent backend,
+// which is exactly the bug behind the "HTTP 404 page not found" report.
+type Status = "loading" | "anon" | "authed" | "disabled" | "no-backend"
 
 export interface AuthState {
   status: Status
   // Whether the backend has auth configured. When `false`, requests still
   // succeed but we don't show login UI.
   authEnabled: boolean
+  // Last error from the auth status probe, surfaced on the no-backend
+  // page so operators can see "ECONNREFUSED" / "HTTP 404" verbatim.
+  probeError: string | null
   refresh: () => Promise<void>
   login: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
@@ -16,25 +23,43 @@ export interface AuthState {
 export const useAuth = create<AuthState>((set) => ({
   status: "loading",
   authEnabled: false,
+  probeError: null,
   refresh: async () => {
     try {
       const res = await api.authStatus()
       if (!res.auth_enabled) {
-        set({ status: "disabled", authEnabled: false })
+        set({ status: "disabled", authEnabled: false, probeError: null })
         return
       }
       set({
         status: res.authenticated ? "authed" : "anon",
         authEnabled: true,
+        probeError: null,
       })
-    } catch {
-      // If we can't reach the API, treat as anon so the login screen renders.
-      set({ status: "anon", authEnabled: true })
+    } catch (err) {
+      // Network failure (status 0) or "endpoint missing" (404) means there
+      // is no backend listening — showing the login form is misleading.
+      // Anything else (500, 502, etc.) is a real backend that's misbehaving;
+      // we still surface the login screen so the user can retry once the
+      // server recovers.
+      if (err instanceof HttpError && (err.status === 0 || err.status === 404)) {
+        set({
+          status: "no-backend",
+          authEnabled: false,
+          probeError: err.message,
+        })
+        return
+      }
+      set({
+        status: "anon",
+        authEnabled: true,
+        probeError: err instanceof Error ? err.message : null,
+      })
     }
   },
   login: async (username, password) => {
     await api.login(username, password)
-    set({ status: "authed", authEnabled: true })
+    set({ status: "authed", authEnabled: true, probeError: null })
   },
   logout: async () => {
     try {
