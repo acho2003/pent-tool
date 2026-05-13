@@ -3,6 +3,10 @@ import { AuthBootstrap, RequireAuth, RedirectIfAuthed } from "@/app"
 import OverviewPage from "@/pages/overview"
 import ScansPage from "@/pages/scans"
 import ScanDetailPage from "@/pages/scan-detail"
+import NewScanPage from "@/pages/new-scan"
+import FindingsPage from "@/pages/findings"
+import ReportsPage from "@/pages/reports"
+import IntegrationsPage from "@/pages/integrations"
 import LivePage from "@/pages/live"
 import InstancesPage from "@/pages/instances"
 import EmailTriagePage from "@/pages/email-triage"
@@ -35,7 +39,11 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <OverviewPage /> },
       { path: "scans", element: <ScansPage /> },
+      { path: "scans/new", element: <NewScanPage /> },
       { path: "scans/:scanId", element: <ScanDetailPage /> },
+      { path: "findings", element: <FindingsPage /> },
+      { path: "reports", element: <ReportsPage /> },
+      { path: "integrations", element: <IntegrationsPage /> },
       { path: "live", element: <LivePage /> },
       { path: "instances", element: <InstancesPage /> },
       { path: "email", element: <EmailTriagePage /> },

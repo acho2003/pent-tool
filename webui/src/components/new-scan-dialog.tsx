@@ -29,7 +29,7 @@ export default function NewScanDialog({
 }) {
   const navigate = useNavigate();
   const [targets, setTargets] = useState("");
-  const [scanMode, setScanMode] = useState("balanced");
+  const [scanMode, setScanMode] = useState("single");
   const [instruction, setInstruction] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -96,10 +96,9 @@ export default function NewScanDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="passive">Passive</SelectItem>
-                  <SelectItem value="balanced">Balanced</SelectItem>
-                  <SelectItem value="aggressive">Aggressive</SelectItem>
-                  <SelectItem value="exploit">Exploitation</SelectItem>
+                  <SelectItem value="single">Single target</SelectItem>
+                  <SelectItem value="wildcard">Wildcard / multi</SelectItem>
+                  <SelectItem value="dast">DAST</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -118,7 +118,27 @@ const server = http.createServer((req, res) => {
   const scanMatch = req.url.match(/^\/api\/scans\/([^/?]+)$/);
   if (scanMatch) {
     const sc = scans.find((s) => s.id === scanMatch[1]);
-    return sc ? json(res, { ...sc, events: [] }) : json(res, { error: "not found" }, 404);
+    if (!sc) return json(res, { error: "not found" }, 404);
+    const vulns =
+      sc.id === "scan_01"
+        ? [
+            { id: "v1", title: "SQL Injection in /search", severity: "critical", endpoint: "https://acme.com/search?q=", cvss: 9.8, cve: "CVE-2024-1234" },
+            { id: "v2", title: "Reflected XSS in /login", severity: "high", endpoint: "https://acme.com/login", cvss: 7.5 },
+            { id: "v3", title: "Open Redirect on /go", severity: "medium", endpoint: "https://acme.com/go", cvss: 4.3 },
+            { id: "v4", title: "Verbose error in /api/v1/users", severity: "low", endpoint: "https://acme.com/api/v1/users", cvss: 2.0 },
+            { id: "v5", title: "Missing security headers", severity: "info", endpoint: "https://acme.com/", cvss: 0 },
+          ]
+        : [
+            { id: "v6", title: "S3 bucket misconfiguration", severity: "high", endpoint: "https://cdn.globex.io", cvss: 7.1 },
+            { id: "v7", title: "Outdated jQuery 1.4.2", severity: "low", endpoint: "https://globex.io/static/jquery.js", cvss: 3.1 },
+          ];
+    return json(res, { ...sc, events: [], vulns });
+  }
+  if (req.method === "POST" && req.url === "/api/start") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => json(res, { instance_id: "inst_01", id: "scan_01", ok: true }));
+    return;
   }
   json(res, { ok: true });
 });

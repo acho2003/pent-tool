@@ -69,7 +69,7 @@ export function CommandPalette() {
         label: i.name || i.targets || i.id,
       }),
     );
-    scans?.scans?.forEach((s) => {
+    scans?.forEach((s) => {
       if (!map.has(s.id)) {
         map.set(s.id, { id: s.id, label: s.target || s.id });
       }
