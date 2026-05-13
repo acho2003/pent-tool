@@ -236,6 +236,49 @@ func TestReportVulnChecksDuplicateBeforeAppending(t *testing.T) {
 	}
 }
 
+func TestReportVulnSameFindingAllowedAcrossScanContexts(t *testing.T) {
+	contextA := "test-report-context-a"
+	contextB := "test-report-context-b"
+	CleanupContext(contextA)
+	CleanupContext(contextB)
+	defer CleanupContext(contextA)
+	defer CleanupContext(contextB)
+
+	first, err := reportVulnWithContextID(contextA, validReportArgs())
+	if err != nil {
+		t.Fatalf("first report error = %v", err)
+	}
+	if _, ok := first.Metadata["vuln_id"].(string); !ok {
+		t.Fatalf("first report metadata = %#v, want vuln_id", first.Metadata)
+	}
+
+	second, err := reportVulnWithContextID(contextB, validReportArgs())
+	if err != nil {
+		t.Fatalf("second report error = %v", err)
+	}
+	if _, ok := second.Metadata["vuln_id"].(string); !ok {
+		t.Fatalf("second report metadata = %#v, want vuln_id", second.Metadata)
+	}
+	if got, _ := second.Metadata["duplicate"].(bool); got {
+		t.Fatalf("second report metadata = %#v, want a new finding in a separate scan context", second.Metadata)
+	}
+
+	third, err := reportVulnWithContextID(contextA, validReportArgs())
+	if err != nil {
+		t.Fatalf("third report error = %v", err)
+	}
+	if got, ok := third.Metadata["duplicate"].(bool); !ok || !got {
+		t.Fatalf("third report metadata = %#v, want duplicate=true within the same scan context", third.Metadata)
+	}
+
+	if got := len(GetVulnerabilitiesForContext(contextA)); got != 1 {
+		t.Fatalf("context A vulnerabilities = %d, want 1", got)
+	}
+	if got := len(GetVulnerabilitiesForContext(contextB)); got != 1 {
+		t.Fatalf("context B vulnerabilities = %d, want 1", got)
+	}
+}
+
 func TestReportVulnConcurrentDuplicatesOnlyAppendOnce(t *testing.T) {
 	contextID := "test-report-concurrent-duplicate"
 	CleanupContext(contextID)

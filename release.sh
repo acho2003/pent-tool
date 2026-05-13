@@ -10,6 +10,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 MAIN_GO="$REPO_ROOT/cmd/xalgorix/main.go"
+MAKEFILE="$REPO_ROOT/Makefile"
 BUILD_DIR="/tmp/xalgorix-release"
 
 # ─── Colors ───
@@ -68,11 +69,21 @@ echo ""
 # ─── Step 1: Bump version in source ───
 info "Bumping version in main.go..."
 sed -i "s/var version = \"$CURRENT\"/var version = \"$NEW_VERSION\"/" "$MAIN_GO"
+if [[ -f "$MAKEFILE" ]]; then
+    sed -i "s/^VERSION=.*/VERSION=$NEW_VERSION/" "$MAKEFILE"
+fi
 ok "Version bumped: $CURRENT → $NEW_VERSION"
 
 # ─── Step 2: Build & verify ───
 info "Building and verifying..."
-go build ./cmd/xalgorix/ || { die "Build failed! Reverting version bump."; git checkout "$MAIN_GO"; }
+# The previous version had `die` before `git checkout`, but `die` calls
+# `exit 1` so the checkout never ran and the version bump was left on disk.
+# Reorder: revert the bump first, then exit.
+if ! go build ./cmd/xalgorix/; then
+    warn "Build failed — reverting version bump"
+    git checkout -- "$MAIN_GO" "$MAKEFILE"
+    die "Build failed (version bump reverted)"
+fi
 ok "Build successful"
 
 # ─── Step 3: Build release binary ───

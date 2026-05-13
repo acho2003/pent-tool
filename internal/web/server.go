@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -28,6 +27,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +45,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Version is set by main.go at startup — single source of truth.
@@ -60,6 +61,7 @@ type RateLimiter struct {
 	limit    int
 	window   time.Duration
 	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
@@ -71,11 +73,13 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	}
 	// Cleanup old entries every minute
 	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-rl.stopCh:
 				return
-			case <-time.After(time.Minute):
+			case <-ticker.C:
 				rl.cleanup()
 			}
 		}
@@ -83,26 +87,57 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return rl
 }
 
-// Stop signals the cleanup goroutine to exit
+// Stop signals the cleanup goroutine to exit. Safe to call multiple times.
 func (rl *RateLimiter) Stop() {
-	close(rl.stopCh)
+	rl.stopOnce.Do(func() { close(rl.stopCh) })
 }
 
+// cleanup walks the request map and discards entries whose timestamps have
+// all aged out of the active window. Done in two passes (collect → delete)
+// to minimise lock contention with Allow() under high churn.
 func (rl *RateLimiter) cleanup() {
+	cutoff := time.Now().Add(-rl.window)
+
+	// Pass 1: collect IPs whose buckets are fully expired. RLock would be
+	// ideal, but the underlying mutex is sync.Mutex; the read cost is small.
 	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	now := time.Now()
+	var toDelete []string
 	for ip, times := range rl.requests {
-		var valid []time.Time
+		stillValid := false
 		for _, t := range times {
-			if now.Sub(t) < rl.window {
-				valid = append(valid, t)
+			if t.After(cutoff) {
+				stillValid = true
+				break
 			}
 		}
-		if len(valid) == 0 {
+		if !stillValid {
+			toDelete = append(toDelete, ip)
+		}
+	}
+	rl.mu.Unlock()
+
+	if len(toDelete) == 0 {
+		return
+	}
+
+	// Pass 2: re-check each IP under lock — a request could have arrived
+	// between passes and re-validated the bucket.
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for _, ip := range toDelete {
+		times, ok := rl.requests[ip]
+		if !ok {
+			continue
+		}
+		stillValid := false
+		for _, t := range times {
+			if t.After(cutoff) {
+				stillValid = true
+				break
+			}
+		}
+		if !stillValid {
 			delete(rl.requests, ip)
-		} else {
-			rl.requests[ip] = valid
 		}
 	}
 }
@@ -134,8 +169,11 @@ func (rl *RateLimiter) Allow(ip string) bool {
 func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip rate limiting for WebSocket and static files
-			if r.URL.Path == "/ws" || strings.HasPrefix(r.URL.Path, "/static") || strings.HasPrefix(r.URL.Path, "/assets") {
+			// Skip rate limiting for WebSocket, static files, and dashboard
+			// polling reads. Auth still wraps this middleware, so protected
+			// reads require a valid session before they reach this point.
+			if r.URL.Path == "/ws" || isStaticWebAssetPath(r.URL.Path) ||
+				isDashboardReadPath(r.Method, r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -154,6 +192,58 @@ func rateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+func isStaticWebAssetPath(path string) bool {
+	if path == "" || strings.HasPrefix(path, "/api/") || path == "/ws" {
+		return false
+	}
+	if strings.HasPrefix(path, "/static/") ||
+		strings.HasPrefix(path, "/assets/") ||
+		strings.HasPrefix(path, "/chunks/") {
+		return true
+	}
+	switch filepath.Ext(path) {
+	case ".css", ".js", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDashboardReadPath(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	switch path {
+	case "/api/auth/status",
+		"/api/status",
+		"/api/version",
+		"/api/scans",
+		"/api/instances",
+		"/api/queue/status":
+		return true
+	default:
+		return strings.HasPrefix(path, "/api/scans/") ||
+			strings.HasPrefix(path, "/api/instances/")
+	}
+}
+
+func setWebUICacheHeaders(w http.ResponseWriter) {
+	// The embedded SPA uses stable asset names (/app.js, /style.css). Disable
+	// browser caching so replacing the local binary takes effect on refresh.
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
+func canStartInstanceStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "saved", "stopped", "failed", "finished":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -185,6 +275,8 @@ const sessionDuration = 24 * time.Hour
 const sessionReaperInterval = 15 * time.Minute
 
 // generateSessionToken creates a cryptographically random session token.
+// 32 bytes of crypto/rand is already overwhelmingly sufficient entropy —
+// hashing it wouldn't add security and only obscured the source.
 // Returns an error if the system entropy source is unavailable instead of
 // terminating the whole process — callers should surface a 500 to the user.
 func generateSessionToken() (string, error) {
@@ -192,8 +284,89 @@ func generateSessionToken() (string, error) {
 	if _, err := cryptorand.Read(b); err != nil {
 		return "", fmt.Errorf("crypto/rand unavailable: %w", err)
 	}
-	hash := sha256.Sum256(b)
-	return hex.EncodeToString(hash[:]), nil
+	return hex.EncodeToString(b), nil
+}
+
+// loginAttempts tracks failed-login backoff per source IP. We replaced the
+// unconditional time.Sleep(1s) on every failure because it held an HTTP
+// connection open and let an attacker tie up worker goroutines with one IP.
+// Instead, we reject further attempts from an IP that has racked up too many
+// failures within a short window; legitimate users on a clean IP see no
+// latency hit.
+var (
+	loginAttempts   = make(map[string]*loginAttempt)
+	loginAttemptsMu sync.Mutex
+)
+
+type loginAttempt struct {
+	failures  int
+	firstFail time.Time
+	lockUntil time.Time
+}
+
+const (
+	loginAttemptWindow = 15 * time.Minute
+	loginMaxFailures   = 10
+	loginLockDuration  = 5 * time.Minute
+)
+
+// loginIsLocked returns (locked, retryAfterSeconds). It also garbage-collects
+// stale entries opportunistically so the map cannot grow unbounded.
+func loginIsLocked(ip string) (bool, int) {
+	loginAttemptsMu.Lock()
+	defer loginAttemptsMu.Unlock()
+	now := time.Now()
+	// Opportunistic GC — bounded work, runs only when this IP is queried.
+	for k, v := range loginAttempts {
+		if now.Sub(v.firstFail) > loginAttemptWindow && now.After(v.lockUntil) {
+			delete(loginAttempts, k)
+		}
+	}
+	a := loginAttempts[ip]
+	if a == nil {
+		return false, 0
+	}
+	if now.Before(a.lockUntil) {
+		return true, int(a.lockUntil.Sub(now).Seconds()) + 1
+	}
+	return false, 0
+}
+
+// loginRecordFailure increments the failure counter for an IP. After
+// loginMaxFailures within loginAttemptWindow, subsequent attempts are locked
+// out for loginLockDuration.
+func loginRecordFailure(ip string) {
+	loginAttemptsMu.Lock()
+	defer loginAttemptsMu.Unlock()
+	now := time.Now()
+	a := loginAttempts[ip]
+	if a == nil || now.Sub(a.firstFail) > loginAttemptWindow {
+		loginAttempts[ip] = &loginAttempt{failures: 1, firstFail: now}
+		return
+	}
+	a.failures++
+	if a.failures >= loginMaxFailures {
+		a.lockUntil = now.Add(loginLockDuration)
+	}
+}
+
+// loginRecordSuccess clears any failure history on a successful login.
+func loginRecordSuccess(ip string) {
+	loginAttemptsMu.Lock()
+	defer loginAttemptsMu.Unlock()
+	delete(loginAttempts, ip)
+}
+
+// clientIP extracts a comparable client identifier from the request. We
+// intentionally do not trust X-Forwarded-For; if you put xalgorix behind a
+// reverse proxy you should bind it to loopback and let the proxy enforce
+// auth, or extend this helper to honour a configured trusted-proxy list.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // isValidSession checks if a session token is valid and not expired
@@ -235,19 +408,27 @@ func startSessionReaper() {
 
 // isCSRFSafe returns true when a state-changing request is verifiably
 // originated from this site. We use Origin (and Referer as a fallback)
-// because every modern browser sends one of them on POST/PUT/PATCH/DELETE,
-// while non-browser API clients (curl, scripts, the LLM tooling) typically
-// send neither — those are allowed through. SameSite=Strict on the session
-// cookie already blocks the most common CSRF vectors; this is defense in
-// depth for the Sec-Fetch-Site and document-form-submit edge cases.
+// because every modern browser sends one of them on POST/PUT/PATCH/DELETE.
+// SameSite=Strict on the session cookie already blocks the most common CSRF
+// vectors; this is defense in depth for the Sec-Fetch-Site and
+// document-form-submit edge cases.
+//
+// Policy:
+//   - Safe methods (GET/HEAD/OPTIONS) are always allowed.
+//   - Sec-Fetch-Site: same-origin/none → allow; same-site/cross-site → deny.
+//   - Else fall back to Origin/Referer host == r.Host.
+//   - If none of the above are present AND the request carries our session
+//     cookie, the request looks like a browser navigation without the
+//     metadata we expected — refuse. Cookie-less non-browser clients
+//     (curl, scripts) are still allowed; an attacker has no way to forge
+//     a cookie on the victim, so allowing cookie-less requests is safe.
 func isCSRFSafe(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
 	}
 
-	// Browser hint: only "same-origin" is safe. Empty header means the
-	// client probably isn't a browser, which we allow.
+	// Browser hint: only "same-origin"/"none" are safe.
 	switch strings.ToLower(r.Header.Get("Sec-Fetch-Site")) {
 	case "":
 		// fall through to Origin/Referer checks
@@ -276,8 +457,23 @@ func isCSRFSafe(r *http.Request) bool {
 	if ok, present := check(r.Header.Get("Referer")); present {
 		return ok
 	}
-	// Neither Origin nor Referer nor Sec-Fetch-Site present: not a browser.
+
+	// Neither Origin nor Referer nor Sec-Fetch-Site present.
+	// If the client carries our session cookie this is suspicious (a real
+	// browser strips none of these on cookie-bearing POSTs in 2026) —
+	// refuse. Cookie-less requests are non-browser tooling, allow.
+	if _, err := r.Cookie(sessionCookieName); err == nil {
+		return false
+	}
 	return true
+}
+
+// authConfigured returns true when the server has dashboard credentials set
+// (either plaintext password or bcrypt hash). When false, the authMiddleware
+// short-circuits and serves all routes — used by the bind-time safety check
+// to refuse external interfaces without auth.
+func authConfigured(cfg *config.Config) bool {
+	return cfg.Username != "" && (cfg.Password != "" || cfg.PasswordHash != "")
 }
 
 // authMiddleware protects routes when auth is configured
@@ -302,15 +498,16 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 
 			// Skip auth if no credentials configured
-			if cfg.Username == "" || cfg.Password == "" {
+			if !authConfigured(cfg) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// Public routes that don't need auth
+			// Public routes that don't need auth. The React SPA owns the
+			// operator login screen, so its static assets must be reachable
+			// before a session exists.
 			if path == "/api/auth/login" || path == "/api/auth/status" ||
-				strings.HasPrefix(path, "/static/") || strings.HasPrefix(path, "/assets/") ||
-				strings.HasPrefix(path, "/uploads/") {
+				isStaticWebAssetPath(path) || strings.HasPrefix(path, "/uploads/") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -332,18 +529,54 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				return
 			}
 
-			// For page requests, serve login page
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(loginPageHTML))
+			// For page requests, serve the SPA shell. The client-side router
+			// will show the React login page after /api/auth/status reports
+			// that there is no active session.
+			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// verifyPassword checks a presented password against the configured credential.
+// Prefers a bcrypt hash (PasswordHash) when set; falls back to a constant-time
+// plaintext comparison for backwards compatibility. The plaintext path logs a
+// one-time deprecation warning so operators know to migrate.
+var plaintextPasswordWarnOnce sync.Once
+
+func (s *Server) verifyPassword(presented string) bool {
+	if s.cfg.PasswordHash != "" {
+		// bcrypt.CompareHashAndPassword is constant-time wrt password length
+		// for matching hashes and is the recommended verification path.
+		err := bcrypt.CompareHashAndPassword([]byte(s.cfg.PasswordHash), []byte(presented))
+		return err == nil
+	}
+	if s.cfg.Password == "" {
+		return false
+	}
+	plaintextPasswordWarnOnce.Do(func() {
+		log.Printf("[auth] WARNING: XALGORIX_PASSWORD is set in plaintext. Migrate to XALGORIX_PASSWORD_HASH (bcrypt) — see README.")
+	})
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(s.cfg.Password)) == 1
 }
 
 // handleLogin handles POST /api/auth/login
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	ip := clientIP(r)
+
+	// Per-IP lockout — replaces the old unconditional 1s sleep so we don't
+	// occupy goroutines on attacker traffic.
+	if locked, retryAfter := loginIsLocked(ip); locked {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("Too many failed attempts. Try again in %ds.", retryAfter),
+		})
 		return
 	}
 
@@ -357,19 +590,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Constant-time comparison to avoid leaking the username/password length
-	// or character-by-character match position via response time. We always
-	// compare both fields even on a username miss so the work performed is
-	// independent of which one is wrong.
+	// Constant-time username comparison; bcrypt for password. We always
+	// run the password compare even on a username miss so the work
+	// performed is independent of which side is wrong (timing-equalised).
 	userMatch := subtle.ConstantTimeCompare([]byte(creds.Username), []byte(s.cfg.Username)) == 1
-	passMatch := subtle.ConstantTimeCompare([]byte(creds.Password), []byte(s.cfg.Password)) == 1
+	passMatch := s.verifyPassword(creds.Password)
 	if !userMatch || !passMatch {
-		// Rate-limit failed attempts
-		time.Sleep(1 * time.Second)
+		loginRecordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid credentials"})
 		return
 	}
+
+	loginRecordSuccess(ip)
 
 	// Create session
 	token, err := generateSessionToken()
@@ -390,10 +623,24 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(sessionDuration.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecureRequest(r),
 	})
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// isSecureRequest returns true if the request is over TLS. Used to decide
+// whether to set the Secure flag on cookies — required for HTTPS deploys,
+// must be off for localhost HTTP development.
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	// Honour an X-Forwarded-Proto header only when running behind a trusted
+	// proxy; we keep it simple here and trust nothing by default. Operators
+	// behind a TLS-terminating proxy should set the cookie's Secure flag
+	// elsewhere if they need it.
+	return false
 }
 
 // handleLogout handles POST /api/auth/logout
@@ -405,12 +652,18 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		authSessionsMu.Unlock()
 	}
 
+	// Match the attributes of the cookie we set on login so browsers
+	// consistently replace/clear it. Without SameSite and Secure here,
+	// some browsers treat the deletion cookie as a different cookie and
+	// the original stays in the jar.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecureRequest(r),
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -419,7 +672,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 // handleAuthStatus handles GET /api/auth/status
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
-	authEnabled := s.cfg.Username != "" && s.cfg.Password != ""
+	authEnabled := authConfigured(s.cfg)
 
 	authenticated := false
 	if authEnabled {
@@ -437,8 +690,6 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		"authenticated": authenticated,
 	})
 }
-
-// loginPageHTML is defined in login.go
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -481,6 +732,14 @@ type wsClient struct {
 	send       chan []byte
 	server     *Server
 	instanceID string // GUARDED BY server.mu — see struct doc.
+
+	// authenticated is true when the WebSocket upgrade carried a valid
+	// session cookie (or auth is disabled and the connection is from
+	// loopback). Privileged scan-request fields like Model/APIKey/APIBase
+	// are only honoured for authenticated connections — otherwise a
+	// client could pivot the LLM to an attacker-controlled endpoint.
+	authenticated bool
+	fromLoopback  bool
 }
 
 // writePump drains the send channel and writes to the WebSocket.
@@ -529,52 +788,65 @@ func (c *wsClient) readPump() {
 		return nil
 	})
 
+	// Single decode path. The previous "fast path" tried to detect
+	// subscribe/unsubscribe via byte prefix, but it was order-dependent on
+	// JSON field layout and would fall through unexpectedly. The combined
+	// struct below handles all three message shapes in one Unmarshal.
+	type wsInbound struct {
+		Subscribe   string `json:"subscribe,omitempty"`
+		Unsubscribe bool   `json:"unsubscribe,omitempty"`
+		ScanRequest
+	}
+
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			break
 		}
 
-		// Fast path: check message type with quick prefix check before JSON unmarshal
-		// Avoids triple unmarshal for common subscribe/unsubscribe messages
-		switch {
-		case bytes.HasPrefix(msg, []byte(`{"subscribe"`)):
-			var subMsg struct {
-				Subscribe string `json:"subscribe"`
-			}
-			if err := json.Unmarshal(msg, &subMsg); err == nil && subMsg.Subscribe != "" {
-				c.server.mu.Lock()
-				c.instanceID = subMsg.Subscribe
-				c.server.mu.Unlock()
-				continue
-			}
-		case bytes.HasPrefix(msg, []byte(`{"unsubscribe"`)):
-			var unsubMsg struct {
-				Unsubscribe bool `json:"unsubscribe"`
-			}
-			if err := json.Unmarshal(msg, &unsubMsg); err == nil && unsubMsg.Unsubscribe {
-				c.server.mu.Lock()
-				c.instanceID = ""
-				c.server.mu.Unlock()
-				continue
-			}
+		var in wsInbound
+		if err := json.Unmarshal(msg, &in); err != nil {
+			continue
 		}
 
-		var req ScanRequest
-		if err := json.Unmarshal(msg, &req); err == nil && len(req.Targets) > 0 {
-			// Apply LLM provider settings from WebSocket message securely using a copy
-			scanCfg := *c.server.cfg // shallow copy
-			if req.Model != "" {
-				scanCfg.LLM = req.Model
-			}
-			if req.APIKey != "" {
-				scanCfg.APIKey = req.APIKey
-			}
-			if req.APIBase != "" {
-				scanCfg.APIBase = req.APIBase
-			}
-			go c.server.runMultiScan(req, &scanCfg)
+		// Subscribe / unsubscribe to per-instance broadcasts.
+		if in.Subscribe != "" {
+			c.server.mu.Lock()
+			c.instanceID = in.Subscribe
+			c.server.mu.Unlock()
+			continue
 		}
+		if in.Unsubscribe {
+			c.server.mu.Lock()
+			c.instanceID = ""
+			c.server.mu.Unlock()
+			continue
+		}
+
+		// Scan request.
+		if len(in.Targets) == 0 {
+			continue
+		}
+
+		// Only authenticated (or loopback-when-auth-off) clients may override
+		// LLM provider settings — otherwise an attacker could repoint the
+		// agent's brain to an endpoint that returns crafted tool calls.
+		scanCfg := *c.server.cfg // shallow copy
+		if c.authenticated {
+			if in.Model != "" {
+				scanCfg.LLM = in.Model
+			}
+			if in.APIKey != "" {
+				scanCfg.APIKey = in.APIKey
+			}
+			if in.APIBase != "" {
+				scanCfg.APIBase = in.APIBase
+			}
+		} else if in.Model != "" || in.APIKey != "" || in.APIBase != "" {
+			log.Printf("[ws] dropping LLM-provider overrides from unauthenticated client %s", c.conn.RemoteAddr())
+		}
+
+		go c.server.runMultiScan(in.ScanRequest, &scanCfg)
 	}
 }
 
@@ -610,6 +882,7 @@ type WSEvent struct {
 	Output         string            `json:"output,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	AgentID        string            `json:"agent_id,omitempty"`
+	InstanceID     string            `json:"instance_id,omitempty"`
 	Timestamp      string            `json:"timestamp,omitempty"`
 	Vulns          []VulnSummary     `json:"vulns,omitempty"`
 	TargetIndex    int               `json:"target_index,omitempty"`
@@ -645,27 +918,29 @@ type VulnSummary struct {
 
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
-	ID             string        `json:"id"`
-	Name           string        `json:"name,omitempty"` // user-defined scan name
-	Target         string        `json:"target"`
-	ParentTarget   string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
-	StartedAt      string        `json:"started_at"`
-	FinishedAt     string        `json:"finished_at,omitempty"`
-	Status         string        `json:"status"`                    // saved, running, finished, stopped
-	StopReason     string        `json:"stop_reason,omitempty"`     // why scan stopped (error, user, watchdog, etc.)
-	ScanMode       string        `json:"scan_mode,omitempty"`       // single, wildcard, dast
-	Instruction    string        `json:"instruction,omitempty"`     // custom scan instructions
-	SeverityFilter []string      `json:"severity_filter,omitempty"` // severity filter for scan
-	DiscordWebhook string        `json:"discord_webhook,omitempty"` // discord notification webhook
-	Events         []WSEvent     `json:"events"`
-	Vulns          []VulnSummary `json:"vulns"`
-	TotalTokens    int           `json:"total_tokens"`
-	Iterations     int           `json:"iterations"`
-	ToolCalls      int           `json:"tool_calls"`
-	CompanyName    string        `json:"company_name,omitempty"` // report branding: company name
-	LogoPath       string        `json:"logo_path,omitempty"`    // report branding: logo path
-	Phases         []int         `json:"phases,omitempty"`       // selected methodology phases
-	CurrentPhase   int           `json:"current_phase,omitempty"`
+	ID                       string        `json:"id"`
+	InstanceID               string        `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
+	Name                     string        `json:"name,omitempty"`        // user-defined scan name
+	Target                   string        `json:"target"`
+	ParentTarget             string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
+	StartedAt                string        `json:"started_at"`
+	FinishedAt               string        `json:"finished_at,omitempty"`
+	Status                   string        `json:"status"`                               // saved, running, finished, stopped
+	StopReason               string        `json:"stop_reason,omitempty"`                // why scan stopped (error, user, watchdog, etc.)
+	ScanMode                 string        `json:"scan_mode,omitempty"`                  // single, wildcard, dast
+	Instruction              string        `json:"instruction,omitempty"`                // custom scan instructions
+	SeverityFilter           []string      `json:"severity_filter,omitempty"`            // severity filter for scan
+	DiscordWebhook           string        `json:"discord_webhook,omitempty"`            // discord notification webhook
+	DiscordWebhookConfigured bool          `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
+	Events                   []WSEvent     `json:"events"`
+	Vulns                    []VulnSummary `json:"vulns"`
+	TotalTokens              int           `json:"total_tokens"`
+	Iterations               int           `json:"iterations"`
+	ToolCalls                int           `json:"tool_calls"`
+	CompanyName              string        `json:"company_name,omitempty"` // report branding: company name
+	LogoPath                 string        `json:"logo_path,omitempty"`    // report branding: logo path
+	Phases                   []int         `json:"phases,omitempty"`       // selected methodology phases
+	CurrentPhase             int           `json:"current_phase,omitempty"`
 }
 
 // QueueState persists scan queue state for recovery after restart
@@ -818,6 +1093,7 @@ type Server struct {
 	discordWebhook     string
 	discordMinSeverity string // minimum severity to send to Discord ("info", "low", "medium", "high", "critical")
 	rateLimiter        *RateLimiter
+	settingsMu         sync.Mutex
 	instances          map[string]*ScanInstance // concurrent scan instances
 	instancesMu        sync.RWMutex
 	postScanChatFn     func(*config.Config, []llm.Message) (string, error)
@@ -840,8 +1116,8 @@ func NewServer(cfg *config.Config, port int) *Server {
 		clients:            make(map[*wsClient]bool),
 		currentAgents:      make(map[string]*agent.Agent),
 		dataDir:            dataDir,
-		discordWebhook:     os.Getenv("XALGORIX_DISCORD_WEBHOOK"),
-		discordMinSeverity: strings.ToLower(strings.TrimSpace(os.Getenv("XALGORIX_DISCORD_MIN_SEVERITY"))),
+		discordWebhook:     cfg.DiscordWebhook,
+		discordMinSeverity: strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
 		rateLimiter:        rl,
 		instances:          make(map[string]*ScanInstance),
 		postScanChatFn: func(cfg *config.Config, messages []llm.Message) (string, error) {
@@ -863,7 +1139,7 @@ func (s *Server) Start() error {
 
 	// Reap expired session cookies in the background so the auth map cannot
 	// grow unbounded from abandoned logins.
-	if s.cfg.Username != "" && s.cfg.Password != "" {
+	if authConfigured(s.cfg) {
 		startSessionReaper()
 	}
 
@@ -882,14 +1158,18 @@ func (s *Server) Start() error {
 	// but assert with comma-ok so a future runtime change can't crash the server.
 	rfs, hasRfs := staticFS.(fs.ReadFileFS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		setWebUICacheHeaders(w)
 		// Try to serve the static file
 		path := r.URL.Path
 		if path == "/" {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-		// Check if it's a real static file - strip /static prefix since staticFS already points to static folder
-		strippedPath := strings.TrimPrefix(path, "/static/")
+		// Check if it's a real static file. Vite serves assets from the
+		// static root (/app.js, /style.css, /chunks/...), while older builds
+		// may request /static/app.js. staticFS already points at that root.
+		strippedPath := strings.TrimPrefix(path, "/")
+		strippedPath = strings.TrimPrefix(strippedPath, "static/")
 		if hasRfs {
 			if f, err := rfs.ReadFile(strippedPath); err == nil && f != nil {
 				// Rewrite URL to serve from staticFS root (which is already "static")
@@ -897,6 +1177,14 @@ func (s *Server) Start() error {
 				fileServer.ServeHTTP(w, r)
 				return
 			}
+		}
+		// Known static asset paths that didn't resolve to a real file are
+		// genuine 404s. App routes may contain dots in path params (for
+		// example scan ids derived from hostnames), so don't treat every
+		// dotted path as a file.
+		if isStaticWebAssetPath(path) {
+			http.NotFound(w, r)
+			return
 		}
 		// Not a static file — serve index.html (SPA catch-all)
 		r.URL.Path = "/"
@@ -918,6 +1206,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/report/", s.handleDownloadReport)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
 	mux.HandleFunc("/api/settings/agentmail", s.handleAgentMailSettings)
+	mux.HandleFunc("/api/settings/llm", s.handleLLMSettings)
+	mux.HandleFunc("/api/settings/environment", s.handleEnvironmentSettings)
 	mux.HandleFunc("/api/queue/status", s.handleQueueStatus)
 	mux.HandleFunc("/api/queue/resume", s.handleQueueResume)
 	mux.HandleFunc("/api/queue/clear", s.handleQueueClear)
@@ -937,19 +1227,65 @@ func (s *Server) Start() error {
 	authMw := authMiddleware(s.cfg)
 	rlMiddleware := rateLimitMiddleware(s.rateLimiter)
 
-	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
-	log.Printf("Xalgorix Web UI → http://localhost:%d", s.port)
+	// Bind to a specific interface. Default is 127.0.0.1 (loopback) so a
+	// fresh install isn't exposed to the network. Operators who want
+	// external access set XALGORIX_BIND=0.0.0.0 explicitly — and in that
+	// case auth MUST be configured or we refuse to start. This is a
+	// deliberate safety choice: the dashboard can launch arbitrary scans
+	// and a chat tool with the LLM, so an open port is a control plane.
+	bindAddr := s.cfg.BindAddr
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
+	isLoopback := bindAddr == "127.0.0.1" || bindAddr == "::1" || bindAddr == "localhost"
+	if !isLoopback && !authConfigured(s.cfg) {
+		return fmt.Errorf(
+			"refusing to bind to non-loopback address %q without auth: set XALGORIX_USERNAME and either XALGORIX_PASSWORD_HASH (bcrypt) or XALGORIX_PASSWORD in ~/.xalgorix.env, or set XALGORIX_BIND=127.0.0.1",
+			bindAddr,
+		)
+	}
+	addr := fmt.Sprintf("%s:%d", bindAddr, s.port)
+	if isLoopback {
+		log.Printf("Xalgorix Web UI → http://%s:%d (loopback only)", bindAddr, s.port)
+	} else {
+		log.Printf("Xalgorix Web UI → http://%s:%d (NETWORK-EXPOSED)", bindAddr, s.port)
+	}
 	log.Printf("Scan data → %s", s.dataDir)
 	log.Printf("Rate limiting: %d requests/%ds per IP", s.cfg.RateLimitRequests, s.cfg.RateLimitWindow)
-	if s.cfg.Username != "" && s.cfg.Password != "" {
-		log.Printf("🔒 Authentication enabled (user: %s)", s.cfg.Username)
+	if authConfigured(s.cfg) {
+		authMode := "plaintext"
+		if s.cfg.PasswordHash != "" {
+			authMode = "bcrypt"
+		}
+		log.Printf("Authentication enabled (user: %s, password: %s)", s.cfg.Username, authMode)
 	} else {
-		log.Printf("⚠️  Authentication disabled — set XALGORIX_USERNAME and XALGORIX_PASSWORD in ~/.xalgorix.env")
+		log.Printf("Authentication disabled — listening on loopback only. Set XALGORIX_USERNAME and XALGORIX_PASSWORD_HASH in ~/.xalgorix.env to enable.")
 	}
 
 	// ── Auto-resume interrupted scan queue after short startup delay ──
+	// Gate the resume on no scan having started in the meantime — without
+	// this, a user request arriving in the first 5 seconds would race with
+	// the auto-resume goroutine and both runMultiScan calls would stomp
+	// on the same cancelScan field.
 	go func() {
 		time.Sleep(5 * time.Second) // let HTTP server fully initialize
+		if s.running.Load() {
+			log.Printf("[AUTO-RESUME] Skipping — a scan is already running.")
+			return
+		}
+		s.instancesMu.RLock()
+		hasActive := false
+		for _, inst := range s.instances {
+			if inst.Status == "running" {
+				hasActive = true
+				break
+			}
+		}
+		s.instancesMu.RUnlock()
+		if hasActive {
+			log.Printf("[AUTO-RESUME] Skipping — an instance is already running.")
+			return
+		}
 		state, _ := s.validQueueState(true)
 		if state == nil {
 			return
@@ -1077,6 +1413,21 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture authentication state at upgrade time. authMiddleware has
+	// already validated the cookie for us when auth is configured —
+	// reaching this handler proves the cookie was valid. When auth is
+	// off, only loopback clients get the "authenticated" capability so
+	// the agent's brain can't be repointed from off-box.
+	ip := clientIP(r)
+	loopback := ip == "127.0.0.1" || ip == "::1" || ip == "localhost"
+	authed := false
+	if authConfigured(s.cfg) {
+		// authMiddleware accepted this request, so the session is valid.
+		authed = true
+	} else {
+		authed = loopback
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v", err)
@@ -1084,9 +1435,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &wsClient{
-		conn:   conn,
-		send:   make(chan []byte, wsSendBufSize),
-		server: s,
+		conn:          conn,
+		send:          make(chan []byte, wsSendBufSize),
+		server:        s,
+		authenticated: authed,
+		fromLoopback:  loopback,
 	}
 
 	s.mu.Lock()
@@ -1170,19 +1523,20 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[ERROR] failed to create saved-target dir %s: %v", savedDir, err)
 		} else {
 			rec := &ScanRecord{
-				ID:             instanceID,
-				Name:           req.Name,
-				Target:         targetStr,
-				Status:         "saved",
-				StartedAt:      now,
-				ScanMode:       req.ScanMode,
-				Instruction:    req.Instruction,
-				SeverityFilter: req.SeverityFilter,
-				Phases:         req.Phases,
-				CurrentPhase:   firstSelectedPhase(req.Phases),
-				CompanyName:    req.CompanyName,
-				LogoPath:       req.LogoPath,
-				DiscordWebhook: req.DiscordWebhook,
+				ID:                       instanceID,
+				Name:                     req.Name,
+				Target:                   targetStr,
+				Status:                   "saved",
+				StartedAt:                now,
+				ScanMode:                 req.ScanMode,
+				Instruction:              req.Instruction,
+				SeverityFilter:           req.SeverityFilter,
+				Phases:                   req.Phases,
+				CurrentPhase:             firstSelectedPhase(req.Phases),
+				CompanyName:              req.CompanyName,
+				LogoPath:                 req.LogoPath,
+				DiscordWebhook:           req.DiscordWebhook,
+				DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
 			}
 			s.saveScanRecordTo(rec, savedDir)
 		}
@@ -1472,15 +1826,16 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST /api/instances/{id}/start — start a saved scan
+	// POST /api/instances/{id}/start — start a saved scan, or start a new
+	// run from an existing finished/stopped/failed scan's saved config.
 	if len(parts) >= 2 && parts[1] == "start" && r.Method == http.MethodPost {
 		inst.mu.RLock()
-		currentStatus := inst.Status
+		currentStatus := strings.ToLower(strings.TrimSpace(inst.Status))
 		inst.mu.RUnlock()
-		if currentStatus != "saved" {
+		if !canStartInstanceStatus(currentStatus) {
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]string{
-				"error": "cannot start: instance is " + currentStatus + ", expected saved",
+				"error": "cannot start: instance is " + currentStatus,
 			})
 			return
 		}
@@ -1500,20 +1855,24 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		}
 		inst.mu.RUnlock()
 
-		// Remove the saved instance — runMultiScan creates a new pending one
-		s.instancesMu.Lock()
-		delete(s.instances, instanceID)
-		s.instancesMu.Unlock()
+		if currentStatus == "saved" {
+			// Remove the saved placeholder — runMultiScan creates a new
+			// pending/running instance. Finished scans are kept so their
+			// reports remain available while the new run starts separately.
+			s.instancesMu.Lock()
+			delete(s.instances, instanceID)
+			s.instancesMu.Unlock()
 
-		// Clean up on-disk saved-target directory
-		savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
-		os.RemoveAll(savedDir)
+			savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
+			os.RemoveAll(savedDir)
+		}
 
 		s.stopReq.Store(false)
 		scanCfg := *s.cfg
 		newID := randomSlug()
 		go s.runMultiScan(req, &scanCfg, newID)
 
+		s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
 		json.NewEncoder(w).Encode(map[string]string{"status": "started", "instance_id": newID})
 		return
 	}
@@ -1831,22 +2190,24 @@ func (s *Server) executeScanSession(sess *scanSession) {
 
 	// 4. Initialize scan record
 	sess.record = &ScanRecord{
-		ID:             sess.id,
-		Name:           sess.name,
-		Target:         sess.target,
-		ParentTarget:   sess.parentTarget,
-		ScanMode:       sess.scanMode,
-		Instruction:    sess.userInstruction,
-		SeverityFilter: append([]string(nil), sess.severityFilter...),
-		DiscordWebhook: sess.discordWebhook,
-		StartedAt:      time.Now().Format(time.RFC3339),
-		Status:         "running",
-		Events:         []WSEvent{},
-		Vulns:          []VulnSummary{},
-		CompanyName:    sess.companyName,
-		LogoPath:       sess.logoPath,
-		Phases:         append([]int(nil), sess.phases...),
-		CurrentPhase:   firstSelectedPhase(sess.phases),
+		ID:                       sess.id,
+		InstanceID:               sess.instanceID,
+		Name:                     sess.name,
+		Target:                   sess.target,
+		ParentTarget:             sess.parentTarget,
+		ScanMode:                 sess.scanMode,
+		Instruction:              sess.userInstruction,
+		SeverityFilter:           append([]string(nil), sess.severityFilter...),
+		DiscordWebhook:           sess.discordWebhook,
+		DiscordWebhookConfigured: sess.discordWebhook != "" || s.discordWebhook != "",
+		StartedAt:                time.Now().Format(time.RFC3339),
+		Status:                   "running",
+		Events:                   []WSEvent{},
+		Vulns:                    []VulnSummary{},
+		CompanyName:              sess.companyName,
+		LogoPath:                 sess.logoPath,
+		Phases:                   append([]int(nil), sess.phases...),
+		CurrentPhase:             firstSelectedPhase(sess.phases),
 	}
 	s.saveScanRecordTo(sess.record, sess.scanDir)
 
@@ -2895,22 +3256,24 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				newVulns := allVulns[vulnCountBefore:]
 				if len(newVulns) > 0 {
 					subScanRecord := ScanRecord{
-						ID:             filepath.Base(subScanDir),
-						Name:           req.Name,
-						Target:         subdomain,
-						ParentTarget:   target,
-						ScanMode:       "wildcard",
-						Instruction:    req.Instruction,
-						SeverityFilter: append([]string(nil), req.SeverityFilter...),
-						DiscordWebhook: req.DiscordWebhook,
-						StartedAt:      time.Now().Format(time.RFC3339),
-						Status:         "finished",
-						FinishedAt:     time.Now().Format(time.RFC3339),
-						Vulns:          []VulnSummary{},
-						CompanyName:    req.CompanyName,
-						LogoPath:       req.LogoPath,
-						Phases:         append([]int(nil), req.Phases...),
-						CurrentPhase:   22,
+						ID:                       filepath.Base(subScanDir),
+						InstanceID:               req.InstanceID,
+						Name:                     req.Name,
+						Target:                   subdomain,
+						ParentTarget:             target,
+						ScanMode:                 "wildcard",
+						Instruction:              req.Instruction,
+						SeverityFilter:           append([]string(nil), req.SeverityFilter...),
+						DiscordWebhook:           req.DiscordWebhook,
+						DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
+						StartedAt:                time.Now().Format(time.RFC3339),
+						Status:                   "finished",
+						FinishedAt:               time.Now().Format(time.RFC3339),
+						Vulns:                    []VulnSummary{},
+						CompanyName:              req.CompanyName,
+						LogoPath:                 req.LogoPath,
+						Phases:                   append([]int(nil), req.Phases...),
+						CurrentPhase:             22,
 					}
 					for _, v := range newVulns {
 						subScanRecord.Vulns = append(subScanRecord.Vulns, vulnToSummary(v))
@@ -3417,11 +3780,13 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Validate file extension
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	allowedExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".svg": true, ".gif": true, ".webp": true}
+	// Validate file extension. PDF reports can embed PNG/JPEG reliably; keep
+	// uploads constrained to formats the report renderer can use.
+	originalName := filepath.Base(header.Filename)
+	ext := strings.ToLower(filepath.Ext(originalName))
+	allowedExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true}
 	if !allowedExts[ext] {
-		http.Error(w, "unsupported image format: "+ext+" (allowed: png, jpg, jpeg, svg, gif, webp)", http.StatusBadRequest)
+		http.Error(w, "unsupported image format: "+ext+" (allowed: png, jpg, jpeg)", http.StatusBadRequest)
 		return
 	}
 
@@ -3433,9 +3798,14 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate unique filename: timestamp_originalname
-	sanitized := strings.ReplaceAll(header.Filename, " ", "_")
-	fileName := fmt.Sprintf("%d_%s", time.Now().UnixMilli(), sanitized)
+	// Generate unique filename: timestamp_sanitizedname.ext
+	nameOnly := strings.TrimSuffix(originalName, filepath.Ext(originalName))
+	safeName := regexp.MustCompile(`[^a-zA-Z0-9._-]+`).ReplaceAllString(nameOnly, "_")
+	safeName = strings.Trim(safeName, "._-")
+	if safeName == "" {
+		safeName = "logo"
+	}
+	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixMilli(), safeName, ext)
 	dstPath := filepath.Join(logosDir, fileName)
 
 	dst, err := os.Create(dstPath)
@@ -3459,7 +3829,7 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"path":     servingPath,
-		"filename": header.Filename,
+		"filename": originalName,
 	})
 }
 
@@ -3650,7 +4020,7 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 
 	// First: walk the nested tree to find the scan by ID (dataDir/target/date/slug/scan.json)
 	for _, entry := range s.findAllScans() {
-		if entry.rec.ID == scanID || filepath.Base(entry.dir) == scanID {
+		if entry.rec.ID == scanID || entry.rec.InstanceID == scanID || filepath.Base(entry.dir) == scanID {
 			return entry.dir, &entry.rec
 		}
 	}
@@ -3663,6 +4033,44 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 		}
 	}
 	return "", nil
+}
+
+var shortHexIDPattern = regexp.MustCompile(`^[a-f0-9]{8}$`)
+
+func (s *Server) findRecentScanForShortAlias(scanID string) (string, *ScanRecord) {
+	if !shortHexIDPattern.MatchString(scanID) {
+		return "", nil
+	}
+
+	entries := s.findAllScans()
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].rec.StartedAt > entries[j].rec.StartedAt
+	})
+
+	for _, entry := range entries {
+		if entry.rec.ParentTarget != "" {
+			continue
+		}
+		startedAt, err := time.Parse(time.RFC3339Nano, entry.rec.StartedAt)
+		if err != nil {
+			continue
+		}
+		if time.Since(startedAt) > 24*time.Hour {
+			continue
+		}
+		log.Printf("[web] Resolving short scan route %s to recent scan %s", scanID, entry.rec.ID)
+		return entry.dir, &entry.rec
+	}
+	return "", nil
+}
+
+func (s *Server) markDiscordWebhookConfigured(rec *ScanRecord) {
+	if rec == nil {
+		return
+	}
+	rec.DiscordWebhookConfigured = rec.DiscordWebhookConfigured ||
+		rec.DiscordWebhook != "" ||
+		s.discordWebhook != ""
 }
 
 func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
@@ -3680,27 +4088,29 @@ func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 	severityFilter := append([]string(nil), inst.SeverityFilter...)
 
 	return &ScanRecord{
-		ID:             inst.ID,
-		Name:           inst.Name,
-		Target:         inst.Targets,
-		ParentTarget:   inst.ParentTarget,
-		StartedAt:      inst.StartedAt,
-		FinishedAt:     inst.FinishedAt,
-		Status:         inst.Status,
-		StopReason:     inst.StopReason,
-		ScanMode:       inst.ScanMode,
-		Instruction:    inst.Instruction,
-		SeverityFilter: severityFilter,
-		DiscordWebhook: inst.DiscordWebhook,
-		Events:         events,
-		Vulns:          vulns,
-		TotalTokens:    inst.TotalTokens,
-		Iterations:     inst.Iterations,
-		ToolCalls:      inst.ToolCalls,
-		CompanyName:    inst.CompanyName,
-		LogoPath:       inst.LogoPath,
-		Phases:         phases,
-		CurrentPhase:   inst.CurrentPhase,
+		ID:                       inst.ID,
+		InstanceID:               inst.ID,
+		Name:                     inst.Name,
+		Target:                   inst.Targets,
+		ParentTarget:             inst.ParentTarget,
+		StartedAt:                inst.StartedAt,
+		FinishedAt:               inst.FinishedAt,
+		Status:                   inst.Status,
+		StopReason:               inst.StopReason,
+		ScanMode:                 inst.ScanMode,
+		Instruction:              inst.Instruction,
+		SeverityFilter:           severityFilter,
+		DiscordWebhook:           inst.DiscordWebhook,
+		DiscordWebhookConfigured: inst.DiscordWebhook != "",
+		Events:                   events,
+		Vulns:                    vulns,
+		TotalTokens:              inst.TotalTokens,
+		Iterations:               inst.Iterations,
+		ToolCalls:                inst.ToolCalls,
+		CompanyName:              inst.CompanyName,
+		LogoPath:                 inst.LogoPath,
+		Phases:                   phases,
+		CurrentPhase:             inst.CurrentPhase,
 	}
 }
 
@@ -3710,6 +4120,16 @@ func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 // Running scans from a previous server instance are marked as "stopped" since the agent process is gone.
 func (s *Server) rebuildInstancesFromDisk() {
 	for _, entry := range s.findAllScans() {
+		// If scan was "running" from a previous server instance, it's no longer active.
+		// Persist the correction so /api/scans and /api/instances agree after restart.
+		if entry.rec.Status == "running" {
+			stoppedAt := time.Now().Format(time.RFC3339)
+			entry.rec.Status = "stopped"
+			entry.rec.StopReason = "server_restart"
+			entry.rec.FinishedAt = stoppedAt
+			s.saveScanRecordTo(&entry.rec, entry.dir)
+		}
+
 		// Skip subdomain scans — they belong to their parent wildcard scan
 		if entry.rec.ParentTarget != "" {
 			continue
@@ -3743,12 +4163,6 @@ func (s *Server) rebuildInstancesFromDisk() {
 		}
 		chatCfg := *s.cfg
 		inst.chatCfg = &chatCfg
-		// If scan was "running" from a previous server instance, it's no longer active
-		if inst.Status == "running" {
-			inst.Status = "stopped"
-			inst.StopReason = "server_restart"
-			inst.FinishedAt = time.Now().Format(time.RFC3339)
-		}
 		s.instances[entry.rec.ID] = inst
 	}
 }
@@ -3788,7 +4202,10 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 // handleDownloadReport serves the PDF report for a scan.
 func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 	scanID := strings.TrimPrefix(r.URL.Path, "/api/report/")
-	if scanID == "" {
+	// Normalise: strip any path separators so a crafted /api/report/../etc/passwd
+	// can never escape the scan-dir even if a future caller forgets.
+	scanID = filepath.Base(scanID)
+	if scanID == "" || scanID == "." || scanID == "/" {
 		http.Error(w, "scan ID required", http.StatusBadRequest)
 		return
 	}
@@ -3810,15 +4227,31 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	reportPath := filepath.Join(scanDir, fmt.Sprintf("xalgorix_report_%s.pdf", scanID))
-
-	// If report doesn't exist, try to generate it
-	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
-		if _, err := s.generateReportAt(rec, scanDir); err != nil {
-			log.Printf("Report generation error: %v", err)
+	reportPath, err := s.generateReportAt(rec, scanDir)
+	if err != nil {
+		log.Printf("Report generation error: %v", err)
+		fallbackPath := filepath.Join(scanDir, fmt.Sprintf("xalgorix_report_%s.pdf", scanID))
+		if info, statErr := os.Stat(fallbackPath); statErr == nil && info.Mode().IsRegular() {
+			reportPath = fallbackPath
+		} else {
 			http.Error(w, "failed to generate report: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	// Defense-in-depth: confirm the resolved target is a regular file before
+	// handing it to http.ServeFile. ServeFile will happily render a directory
+	// index if asked for a directory.
+	info, err := os.Stat(reportPath)
+	if err != nil {
+		log.Printf("Report stat failed for %s: %v", reportPath, err)
+		http.Error(w, "report not available", http.StatusNotFound)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		log.Printf("Report path is not a regular file: %s (mode=%s)", reportPath, info.Mode())
+		http.Error(w, "report not available", http.StatusNotFound)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/pdf")
@@ -3863,21 +4296,18 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 			req.Window = 3600
 		}
 
-		// Update config
-		s.cfg.RateLimitRequests = req.Requests
-		s.cfg.RateLimitWindow = req.Window
-
-		// Recreate rate limiter with new settings
-		if s.rateLimiter != nil {
-			s.rateLimiter.Stop()
+		if _, err := s.applyEnvironmentUpdates(map[string]string{
+			"XALGORIX_RATE_LIMIT_REQUESTS": strconv.Itoa(req.Requests),
+			"XALGORIX_RATE_LIMIT_WINDOW":   strconv.Itoa(req.Window),
+		}); err != nil {
+			log.Printf("Failed to save rate limit settings: %v", err)
+			http.Error(w, "failed to save rate limit settings", http.StatusInternalServerError)
+			return
 		}
-		s.rateLimiter = NewRateLimiter(req.Requests, time.Duration(req.Window)*time.Second)
-
-		log.Printf("Rate limiting updated: %d requests/%ds per IP", req.Requests, req.Window)
 
 		json.NewEncoder(w).Encode(map[string]int{
-			"requests": req.Requests,
-			"window":   req.Window,
+			"requests": s.cfg.RateLimitRequests,
+			"window":   s.cfg.RateLimitWindow,
 		})
 
 	default:
@@ -3930,55 +4360,14 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 			effectiveAPIKey = s.cfg.AgentMailAPIKey
 		}
 
-		// Update config
-		s.cfg.AgentMailPod = req.Pod
-		s.cfg.AgentMailAPIKey = effectiveAPIKey
-
-		// Save to env file — read existing content and update only relevant keys
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			log.Printf("Error: failed to get home directory for env file: %v", homeErr)
-			http.Error(w, "failed to determine home directory", http.StatusInternalServerError)
-			return
+		updates := map[string]string{"AGENTMAIL_POD": req.Pod}
+		if !preserveKey {
+			updates["AGENTMAIL_API_KEY"] = effectiveAPIKey
 		}
-		envFile := filepath.Join(home, ".xalgorix.env")
-
-		existing, _ := os.ReadFile(envFile) // OK to ignore — file may not exist yet
-		lines := strings.Split(string(existing), "\n")
-		var newLines []string
-		podSet, keySet := false, false
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "AGENTMAIL_POD=") {
-				newLines = append(newLines, "AGENTMAIL_POD="+req.Pod)
-				podSet = true
-			} else if strings.HasPrefix(trimmed, "AGENTMAIL_API_KEY=") {
-				if preserveKey {
-					newLines = append(newLines, line)
-				} else {
-					newLines = append(newLines, "AGENTMAIL_API_KEY="+effectiveAPIKey)
-				}
-				keySet = true
-			} else {
-				newLines = append(newLines, line)
-			}
-		}
-		if !podSet {
-			newLines = append(newLines, "AGENTMAIL_POD="+req.Pod)
-		}
-		if !keySet && effectiveAPIKey != "" {
-			newLines = append(newLines, "AGENTMAIL_API_KEY="+effectiveAPIKey)
-		}
-
-		if err := os.WriteFile(envFile, []byte(strings.Join(newLines, "\n")), 0o600); err != nil {
+		if _, err := s.applyEnvironmentUpdates(updates); err != nil {
 			log.Printf("Failed to save AgentMail settings: %v", err)
-		} else {
-			// os.WriteFile only honours the mode arg when *creating*; if the
-			// file already existed with looser perms (e.g. user ran `nano`
-			// and saved at the umask default of 0644) we must chmod it.
-			if chmodErr := os.Chmod(envFile, 0o600); chmodErr != nil {
-				log.Printf("Warning: could not chmod %s to 0600: %v", envFile, chmodErr)
-			}
+			http.Error(w, "failed to save AgentMail settings", http.StatusInternalServerError)
+			return
 		}
 
 		log.Printf("AgentMail settings updated: pod=%s", req.Pod)
@@ -3997,8 +4386,14 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 // handleVersion returns the current Xalgorix version
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]any{
 		"version": Version,
+		"ai": map[string]any{
+			"configured": s.cfg.APIKey != "" && s.cfg.LLM != "",
+			"provider":   llmProviderLabel(s.cfg.LLM, s.cfg.APIBase),
+			"model":      s.cfg.LLM,
+			"gateway":    llmGatewayName(s.cfg.LLM, s.cfg.APIBase),
+		},
 	})
 }
 
@@ -4364,7 +4759,9 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(allScans, func(i, j int) bool {
 			return allScans[i].rec.StartedAt > allScans[j].rec.StartedAt
 		})
-		data, _ := json.Marshal(allScans[0].rec)
+		rec := allScans[0].rec
+		s.markDiscordWebhookConfigured(&rec)
+		data, _ := json.Marshal(rec)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 		return
@@ -4375,13 +4772,26 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	// may differ from scan record IDs (directory slugs). We need to clean up both.
 	if r.Method == http.MethodDelete {
 		// Try to find and delete from disk
-		dir, _ := s.findScanByID(scanID)
+		dir, rec := s.findScanByID(scanID)
 		if dir != "" {
 			os.RemoveAll(dir)
 		}
-		// Always remove from in-memory instances map
+		instanceIDs := []string{scanID}
+		if rec != nil {
+			instanceIDs = append(instanceIDs, rec.ID, rec.InstanceID)
+		}
+		seenInstanceIDs := make(map[string]bool, len(instanceIDs))
 		s.instancesMu.Lock()
-		delete(s.instances, scanID)
+		for _, id := range instanceIDs {
+			if id == "" || seenInstanceIDs[id] {
+				continue
+			}
+			seenInstanceIDs[id] = true
+			if inst := s.instances[id]; inst != nil && inst.cancel != nil {
+				inst.cancel()
+			}
+			delete(s.instances, id)
+		}
 		s.instancesMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"deleted"}`))
@@ -4393,6 +4803,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		inst := s.instances[scanID]
 		s.instancesMu.RUnlock()
 		if rec := scanRecordFromInstance(inst); rec != nil {
+			s.markDiscordWebhookConfigured(rec)
 			data, _ := json.Marshal(rec)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(data)
@@ -4403,11 +4814,16 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	dir, rec := s.findScanByID(scanID)
 	_ = dir
 	if rec == nil {
+		dir, rec = s.findRecentScanForShortAlias(scanID)
+		_ = dir
+	}
+	if rec == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`null`))
 		return
 	}
 
+	s.markDiscordWebhookConfigured(rec)
 	data, _ := json.Marshal(rec)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -4429,6 +4845,7 @@ func logMemStats(label string) {
 }
 
 func (s *Server) broadcast(evt WSEvent) {
+	evt = withEventTimestamp(evt)
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return
@@ -4452,10 +4869,14 @@ func (s *Server) broadcast(evt WSEvent) {
 	}
 }
 
-// broadcastToInstance sends an event only to clients subscribed to a specific instance.
-// Also sends to unsubscribed clients (backward compatibility for single-scan workflow).
+// broadcastToInstance sends an event to clients subscribed to a specific instance
+// and to dashboard clients without an instance subscription.
 // Buffers events into the instance for replay.
 func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
+	evt = withEventTimestamp(evt)
+	if evt.InstanceID == "" {
+		evt.InstanceID = instanceID
+	}
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return
@@ -4488,9 +4909,7 @@ func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
 	defer s.mu.RUnlock()
 
 	for client := range s.clients {
-		// Send ONLY to clients explicitly subscribed to this instance.
-		// Dashboard clients (instanceID=="") receive updates via broadcastDashboard.
-		if client.instanceID == instanceID {
+		if client.instanceID == "" || client.instanceID == instanceID {
 			select {
 			case client.send <- data:
 			default:
@@ -4505,6 +4924,7 @@ func (s *Server) broadcastToInstance(instanceID string, evt WSEvent) {
 
 // broadcastDashboard sends an event only to dashboard clients (no instance subscription).
 func (s *Server) broadcastDashboard(evt WSEvent) {
+	evt = withEventTimestamp(evt)
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return
@@ -4524,6 +4944,77 @@ func (s *Server) broadcastDashboard(evt WSEvent) {
 				}(client)
 			}
 		}
+	}
+}
+
+func withEventTimestamp(evt WSEvent) WSEvent {
+	if strings.TrimSpace(evt.Timestamp) == "" {
+		evt.Timestamp = time.Now().Format(time.RFC3339)
+	}
+	return evt
+}
+
+func llmProviderLabel(model, apiBase string) string {
+	provider := llmProviderKey(model, apiBase)
+	switch provider {
+	case "vercel":
+		return "Vercel AI Gateway"
+	case "minimax":
+		return "MiniMax"
+	case "openai":
+		return "OpenAI"
+	case "anthropic":
+		return "Anthropic"
+	case "google", "gemini":
+		return "Google Gemini"
+	case "deepseek":
+		return "DeepSeek"
+	case "groq":
+		return "Groq"
+	case "ollama":
+		return "Ollama"
+	case "":
+		return "Not configured"
+	default:
+		return strings.ToUpper(provider[:1]) + provider[1:]
+	}
+}
+
+func llmGatewayName(model, apiBase string) string {
+	if llmProviderKey(model, apiBase) == "vercel" {
+		return "vercel"
+	}
+	return ""
+}
+
+func llmProviderKey(model, apiBase string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	apiBase = strings.ToLower(strings.TrimSpace(apiBase))
+	if strings.Contains(apiBase, "vercel") || strings.HasPrefix(model, "vercel/") {
+		return "vercel"
+	}
+	if idx := strings.Index(model, "/"); idx > 0 {
+		return model[:idx]
+	}
+	switch {
+	case strings.Contains(apiBase, "minimax"):
+		return "minimax"
+	case strings.Contains(apiBase, "anthropic"):
+		return "anthropic"
+	case strings.Contains(apiBase, "generativelanguage") || strings.Contains(apiBase, "googleapis"):
+		return "google"
+	case strings.Contains(apiBase, "deepseek"):
+		return "deepseek"
+	case strings.Contains(apiBase, "groq"):
+		return "groq"
+	case strings.Contains(apiBase, "openai"):
+		return "openai"
+	case strings.Contains(apiBase, "ollama") || strings.Contains(apiBase, "localhost:11434"):
+		return "ollama"
+	case model != "":
+		return model
+	default:
+		return ""
 	}
 }
 

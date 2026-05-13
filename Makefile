@@ -1,11 +1,25 @@
-.PHONY: build run clean test test-ci test-cover test-race install fmt vet lint tidy all
+.PHONY: build run clean test test-ci test-cover test-race install fmt vet lint tidy all webui webui-install webui-dev
 
 BINARY=xalgorix
 BUILD_DIR=./build
-VERSION=4.2.9
+VERSION=4.4.0
 LDFLAGS=-ldflags "-s -w -X main.version=$(VERSION)"
 
-build:
+webui/node_modules: webui/package.json
+	@echo "Installing webui dependencies..."
+	cd webui && npm install --no-audit --no-fund
+	@touch webui/node_modules
+
+webui-install: webui/node_modules
+
+webui: webui/node_modules
+	@echo "Building webui (React) → internal/web/static..."
+	cd webui && npm run build
+
+webui-dev: webui/node_modules
+	cd webui && npm run dev
+
+build: webui
 	@echo "Building $(BINARY)..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/xalgorix/
@@ -33,7 +47,6 @@ test-ci:
 	go test ./... -race
 	go vet ./...
 	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; else echo "staticcheck not installed; skipping"; fi
-	node --check internal/web/static/app.js
 	go build ./cmd/xalgorix
 
 install: build

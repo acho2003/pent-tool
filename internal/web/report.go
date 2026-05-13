@@ -2,7 +2,12 @@ package web
 
 import (
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"math"
+	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -11,6 +16,240 @@ import (
 
 	"github.com/go-pdf/fpdf"
 )
+
+type reportPalette struct {
+	bg       [3]int
+	card     [3]int
+	muted    [3]int
+	border   [3]int
+	fg       [3]int
+	subtle   [3]int
+	accent   [3]int
+	critical [3]int
+	high     [3]int
+	medium   [3]int
+	low      [3]int
+	info     [3]int
+	code     [3]int
+}
+
+func themeReportPalette() reportPalette {
+	return reportPalette{
+		bg:       [3]int{5, 5, 5},       // #050505
+		card:     [3]int{10, 10, 10},    // #0a0a0a
+		muted:    [3]int{17, 17, 17},    // #111111
+		border:   [3]int{38, 38, 38},    // #262626
+		fg:       [3]int{250, 250, 250}, // #fafafa
+		subtle:   [3]int{161, 161, 170}, // #a1a1aa
+		accent:   [3]int{16, 185, 129},  // #10b981
+		critical: [3]int{220, 38, 38},   // #dc2626
+		high:     [3]int{234, 88, 12},   // #ea580c
+		medium:   [3]int{202, 138, 4},   // #ca8a04
+		low:      [3]int{37, 99, 235},   // #2563eb
+		info:     [3]int{82, 82, 82},    // #525252
+		code:     [3]int{23, 23, 23},    // #171717
+	}
+}
+
+func parseReportTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func formatReportDate(t time.Time) string {
+	if t.IsZero() {
+		return "Not recorded"
+	}
+	return t.Format("January 2, 2006")
+}
+
+func formatReportTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return "Not recorded"
+	}
+	return t.Format("2006-01-02 15:04:05 MST")
+}
+
+func formatReportDuration(startTime, endTime time.Time) string {
+	if startTime.IsZero() || endTime.IsZero() || endTime.Before(startTime) {
+		return "In progress"
+	}
+	d := endTime.Sub(startTime).Round(time.Second)
+	if d.Hours() >= 1 {
+		return fmt.Sprintf("%dh %dm %ds", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
+	}
+	if d.Minutes() >= 1 {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+func reportDisplayText(value string, fallback string, max int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" {
+		value = fallback
+	}
+	if max > 0 && len([]rune(value)) > max {
+		runes := []rune(value)
+		return string(runes[:max-3]) + "..."
+	}
+	return value
+}
+
+func reportHostLabel(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "Target"
+	}
+	parsed, err := url.Parse(target)
+	if err == nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	if !strings.Contains(target, "://") {
+		if parsed, err := url.Parse("https://" + target); err == nil && parsed.Hostname() != "" {
+			return parsed.Hostname()
+		}
+	}
+	return strings.Trim(target, "/")
+}
+
+func reportBrandName(scan *ScanRecord) string {
+	if scan == nil {
+		return "Target"
+	}
+	for _, candidate := range []string{scan.CompanyName, scan.Name, reportHostLabel(scan.Target), scan.Target} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return "Target"
+}
+
+func reportInitials(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "XT"
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ' ' || r == '-' || r == '_' || r == '.' || r == '/' || r == ':'
+	})
+	initials := ""
+	for _, part := range parts {
+		for _, r := range part {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				if r >= 'a' && r <= 'z' {
+					r -= 'a' - 'A'
+				}
+				initials += string(r)
+				break
+			}
+		}
+		if len(initials) >= 2 {
+			break
+		}
+	}
+	if initials == "" {
+		return "XT"
+	}
+	return initials
+}
+
+func prepareReportCodeBlock(content string, maxLines, maxCols int) string {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return ""
+	}
+	var out []string
+	truncated := false
+	for _, line := range strings.Split(content, "\n") {
+		runes := []rune(line)
+		if len(runes) == 0 {
+			out = append(out, "")
+		}
+		for len(runes) > 0 {
+			if len(out) >= maxLines {
+				truncated = true
+				break
+			}
+			take := maxCols
+			if len(runes) < take {
+				take = len(runes)
+			}
+			out = append(out, string(runes[:take]))
+			runes = runes[take:]
+		}
+		if truncated {
+			break
+		}
+	}
+	if truncated || len(out) > maxLines {
+		if len(out) >= maxLines {
+			out = out[:maxLines]
+		}
+		out = append(out, "... (truncated)")
+	}
+	return strings.Join(out, "\n")
+}
+
+func supportedReportLogoExt(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png", ".jpg", ".jpeg":
+		return true
+	default:
+		return false
+	}
+}
+
+func validReportLogo(path string) bool {
+	if !supportedReportLogoExt(path) {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	_, _, err = image.DecodeConfig(file)
+	return err == nil
+}
+
+func (s *Server) resolveReportLogoPath(logoPath string) (string, bool) {
+	logoPath = strings.TrimSpace(logoPath)
+	if logoPath == "" {
+		return "", false
+	}
+	var candidates []string
+	if strings.HasPrefix(logoPath, "/uploads/logos/") {
+		candidates = append(candidates, filepath.Join(s.dataDir, "logos", filepath.Base(logoPath)))
+	} else if filepath.IsAbs(logoPath) {
+		candidates = append(candidates, logoPath)
+	} else {
+		candidates = append(candidates,
+			filepath.Join(s.currentScanDir, logoPath),
+			filepath.Join(s.dataDir, "logos", filepath.Base(logoPath)),
+			logoPath,
+		)
+	}
+	for _, candidate := range candidates {
+		if validReportLogo(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
 
 // riskScore computes a weighted overall risk score (0-10) from vulnerabilities.
 // Formula: weighted average of top-5 CVSS scores + severity count penalty.
@@ -239,18 +478,26 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetAutoPageBreak(true, 20)
 
-	// Colors - dark theme to match UI
-	darkBg := [3]int{15, 23, 42}    // #0f172a - main background
-	coral := [3]int{244, 63, 94}    // #F43F5E - primary accent (coral rose)
-	teal := [3]int{45, 212, 191}    // #2DD4BF - secondary accent
-	white := [3]int{240, 240, 242}  // #f0f0f2 - text
-	gray := [3]int{148, 163, 184}   // muted text
-	red := [3]int{220, 53, 69}      // critical
-	orange := [3]int{220, 120, 50}  // high
-	amber := [3]int{220, 170, 50}   // medium
-	greenLow := [3]int{40, 167, 69} // low
-	cyan := [3]int{6, 182, 212}     // info
-	sectionBg := [3]int{30, 41, 59} // #1e293b
+	palette := themeReportPalette()
+	darkBg := palette.bg
+	coral := palette.accent
+	teal := palette.accent
+	white := palette.fg
+	gray := palette.subtle
+	red := palette.critical
+	orange := palette.high
+	amber := palette.medium
+	greenLow := palette.low
+	cyan := palette.subtle
+	sectionBg := palette.card
+	codeBg := palette.code
+	border := palette.border
+
+	startTime := parseReportTime(scan.StartedAt)
+	endTime := parseReportTime(scan.FinishedAt)
+	duration := formatReportDuration(startTime, endTime)
+	brandName := reportBrandName(scan)
+	logoPath, hasLogo := s.resolveReportLogoPath(scan.LogoPath)
 
 	// Helper: set text color
 	setColor := func(c [3]int) {
@@ -261,6 +508,42 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	drawRect := func(x, y, w, h float64, c [3]int) {
 		pdf.SetFillColor(c[0], c[1], c[2])
 		pdf.Rect(x, y, w, h, "F")
+	}
+
+	drawStrokeRect := func(x, y, w, h float64, c [3]int) {
+		pdf.SetDrawColor(c[0], c[1], c[2])
+		pdf.Rect(x, y, w, h, "D")
+	}
+
+	// fpdf can create pages implicitly when MultiCell content crosses a page
+	// boundary. Paint every implicit page before content lands on it.
+	pdf.SetHeaderFunc(func() {
+		drawRect(0, 0, 210, 297, darkBg)
+		drawRect(0, 0, 210, 1.5, coral)
+	})
+
+	drawLogoOrInitials := func(x, y, w, h float64) {
+		drawRect(x, y, w, h, palette.muted)
+		drawStrokeRect(x, y, w, h, border)
+		if hasLogo {
+			info := pdf.RegisterImage(logoPath, "")
+			if info != nil && info.Height() > 0 && info.Width() > 0 {
+				maxW := w - 6
+				maxH := h - 6
+				imgW := maxW
+				imgH := info.Height() * imgW / info.Width()
+				if imgH > maxH {
+					imgH = maxH
+					imgW = info.Width() * imgH / info.Height()
+				}
+				pdf.ImageOptions(logoPath, x+(w-imgW)/2, y+(h-imgH)/2, imgW, imgH, false, fpdf.ImageOptions{}, 0, "")
+				return
+			}
+		}
+		pdf.SetFont("Helvetica", "B", 16)
+		setColor(white)
+		pdf.SetXY(x, y+h/2-4)
+		pdf.CellFormat(w, 8, reportInitials(brandName), "", 0, "C", false, 0, "")
 	}
 
 	// Helper: severity color
@@ -283,79 +566,74 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	pdf.AddPage()
 	drawRect(0, 0, 210, 297, darkBg)
 
-	// Top accent line
 	drawRect(0, 0, 210, 3, coral)
+	drawRect(14, 28, 182, 82, sectionBg)
+	drawStrokeRect(14, 28, 182, 82, border)
+	drawRect(14, 28, 2, 82, coral)
+	drawLogoOrInitials(26, 44, 38, 38)
 
-	// Branding: company logo placeholder (if logo path provided)
-	if scan.LogoPath != "" {
-		// Try to load the logo; silently skip if file missing
-		info := pdf.RegisterImage(scan.LogoPath, "")
-		if info != nil {
-			// Scale logo to max 40mm height, centered
-			logoW := info.Width() * 40.0 / info.Height()
-			pdf.ImageOptions(scan.LogoPath, (210-logoW)/2, 30, logoW, 40, false, fpdf.ImageOptions{}, 0, "")
-			pdf.SetY(75)
-		} else {
-			pdf.SetY(80)
-		}
-	} else {
-		pdf.SetY(80)
-	}
-
-	// Title
-	pdf.SetFont("Helvetica", "B", 42)
-	setColor(coral)
-	pdf.CellFormat(190, 16, "XALGORIX", "", 1, "C", false, 0, "")
-
-	pdf.SetFont("Helvetica", "", 14)
+	pdf.SetXY(74, 41)
+	pdf.SetFont("Helvetica", "B", 23)
 	setColor(white)
-	pdf.CellFormat(190, 10, "Penetration Test Report", "", 1, "C", false, 0, "")
+	pdf.MultiCell(112, 9, "Security Assessment Report", "", "L", false)
 
-	// Branding: company name
-	if scan.CompanyName != "" {
-		pdf.Ln(4)
-		pdf.SetFont("Helvetica", "", 12)
-		setColor(teal)
-		pdf.CellFormat(190, 8, fmt.Sprintf("Prepared for: %s", scan.CompanyName), "", 1, "C", false, 0, "")
-	}
-
-	// Divider
-	pdf.SetY(120)
-	drawRect(60, pdf.GetY(), 90, 0.5, coral)
-
-	// Target info
-	pdf.SetY(135)
-	pdf.SetFont("Helvetica", "", 12)
-	setColor(gray)
-	pdf.CellFormat(190, 8, "Target", "", 1, "C", false, 0, "")
+	pdf.SetXY(74, 62)
 	pdf.SetFont("Helvetica", "B", 14)
-	setColor(white)
-	target := scan.Target
-	if len(target) > 50 {
-		pdf.SetFont("Helvetica", "B", 10)
-	}
-	pdf.MultiCell(170, 10, target, "", "C", false)
+	setColor(coral)
+	pdf.MultiCell(112, 7, reportDisplayText(brandName, "Target", 60), "", "L", false)
 
-	// Date
-	pdf.Ln(8)
-	pdf.SetFont("Helvetica", "", 11)
+	pdf.SetXY(74, 78)
+	pdf.SetFont("Courier", "", 8)
 	setColor(gray)
-	startTime, _ := time.Parse(time.RFC3339, scan.StartedAt)
-	pdf.CellFormat(190, 7, fmt.Sprintf("Date: %s", startTime.Format("January 2, 2006")), "", 1, "C", false, 0, "")
+	pdf.MultiCell(112, 4.5, reportDisplayText(scan.Target, "No target recorded", 95), "", "L", false)
 
-	// Scan ID
-	pdf.SetFont("Helvetica", "", 9)
-	pdf.CellFormat(190, 7, fmt.Sprintf("Scan ID: %s", scan.ID), "", 1, "C", false, 0, "")
+	pdf.SetY(124)
+	coverRisk := riskLabel(riskScore(scan.Vulns))
+	coverCards := []struct {
+		label string
+		value string
+		color [3]int
+	}{
+		{"Status", strings.ToUpper(reportDisplayText(scan.Status, "unknown", 18)), coral},
+		{"Risk", coverRisk, sevColor(strings.ToLower(coverRisk))},
+		{"Findings", fmt.Sprintf("%d", len(scan.Vulns)), red},
+		{"Started", formatReportDate(startTime), gray},
+	}
+	coverCardW := 42.5
+	for i, c := range coverCards {
+		x := 14 + float64(i)*(coverCardW+4)
+		drawRect(x, 124, coverCardW, 27, sectionBg)
+		drawStrokeRect(x, 124, coverCardW, 27, border)
+		drawRect(x, 124, coverCardW, 1.2, c.color)
+		pdf.SetXY(x+4, 131)
+		pdf.SetFont("Helvetica", "", 7.5)
+		setColor(gray)
+		pdf.CellFormat(coverCardW-8, 4, strings.ToUpper(c.label), "", 1, "L", false, 0, "")
+		pdf.SetXY(x+4, 138)
+		pdf.SetFont("Helvetica", "B", 11)
+		setColor(c.color)
+		pdf.CellFormat(coverCardW-8, 6, c.value, "", 0, "L", false, 0, "")
+	}
 
-	// Bottom accent
-	drawRect(0, 294, 210, 3, coral)
+	pdf.SetXY(14, 176)
+	pdf.SetFont("Helvetica", "B", 10)
+	setColor(gray)
+	pdf.CellFormat(182, 6, "SCAN ID", "", 1, "L", false, 0, "")
+	pdf.SetX(14)
+	pdf.SetFont("Courier", "", 10)
+	setColor(white)
+	pdf.CellFormat(182, 7, reportDisplayText(scan.ID, "not recorded", 90), "", 1, "L", false, 0, "")
 
-	// Footer
-	pdf.SetY(270)
+	pdf.SetY(248)
+	drawRect(14, pdf.GetY(), 182, 0.3, border)
+	pdf.Ln(8)
+	pdf.SetFont("Helvetica", "B", 10)
+	setColor(white)
+	pdf.CellFormat(182, 5, "Xalgorix", "", 1, "L", false, 0, "")
 	pdf.SetFont("Helvetica", "", 8)
 	setColor(gray)
-	pdf.CellFormat(190, 5, "Generated by Xalgorix - Autonomous AI-Powered Pentesting Engine", "", 1, "C", false, 0, "")
-	pdf.CellFormat(190, 5, "https://github.com/xalgord/xalgorix", "", 1, "C", false, 0, "")
+	pdf.CellFormat(182, 5, "Autonomous AI-powered security assessment", "", 1, "L", false, 0, "")
+	drawRect(0, 294, 210, 3, coral)
 
 	// ─── EXECUTIVE SUMMARY ─────────────────────────────────
 	pdf.AddPage()
@@ -374,19 +652,6 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		label string
 		value string
 		color [3]int
-	}
-
-	endTime, _ := time.Parse(time.RFC3339, scan.FinishedAt)
-	duration := "N/A"
-	if !startTime.IsZero() && !endTime.IsZero() {
-		d := endTime.Sub(startTime)
-		if d.Hours() >= 1 {
-			duration = fmt.Sprintf("%dh %dm %ds", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
-		} else if d.Minutes() >= 1 {
-			duration = fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
-		} else {
-			duration = fmt.Sprintf("%ds", int(d.Seconds()))
-		}
 	}
 
 	// Count severity
@@ -521,8 +786,8 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		{"Iterations", fmt.Sprintf("%d", scan.Iterations)},
 		{"Tool Calls", fmt.Sprintf("%d", scan.ToolCalls)},
 		{"Total Tokens", fmt.Sprintf("%d", scan.TotalTokens)},
-		{"Started", startTime.Format("2006-01-02 15:04:05 MST")},
-		{"Finished", endTime.Format("2006-01-02 15:04:05 MST")},
+		{"Started", formatReportTimestamp(startTime)},
+		{"Finished", formatReportTimestamp(endTime)},
 	}
 
 	for i, m := range metaItems {
@@ -589,7 +854,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			bgColor = sectionBg
 		}
 		if executed {
-			bgColor = [3]int{18, 65, 75}
+			bgColor = palette.muted
 		}
 		drawRect(10, rowY, 190, 7, bgColor)
 		// Status indicator
@@ -895,10 +1160,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				if sec.label == "POC SCRIPT" || sec.label == "ENDPOINT" || sec.label == "EXPLOITATION PROOF" {
 					// Code-style content with dynamic height
 					codeY := pdf.GetY()
-					content := sec.content
-					if len(content) > 2000 {
-						content = content[:2000] + "\n... (truncated)"
-					}
+					content := prepareReportCodeBlock(sec.content, 34, 96)
 					// Calculate dynamic height based on content
 					lines := strings.Count(content, "\n") + 1
 					blockHeight := float64(lines)*4 + 6 // 4mm per line + padding
@@ -916,7 +1178,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 						pdf.SetY(15)
 						codeY = pdf.GetY()
 					}
-					drawRect(14, codeY, 182, blockHeight, [3]int{20, 25, 40})
+					drawRect(14, codeY, 182, blockHeight, codeBg)
 					pdf.SetXY(17, codeY+3)
 					pdf.SetFont("Courier", "", 7)
 					if sec.label == "EXPLOITATION PROOF" {
@@ -1041,7 +1303,14 @@ https://github.com/xalgord/xalgorix`
 	pdf.MultiCell(182, 5, disclaimer, "", "L", false)
 
 	// Save PDF — use currentScanDir which is the actual scan directory
-	filename := fmt.Sprintf("xalgorix_report_%s.pdf", scan.ID)
+	reportID := scan.ID
+	if strings.TrimSpace(reportID) == "" && s.currentScanDir != "" {
+		reportID = filepath.Base(s.currentScanDir)
+	}
+	if strings.TrimSpace(reportID) == "" {
+		reportID = "scan"
+	}
+	filename := fmt.Sprintf("xalgorix_report_%s.pdf", reportID)
 	// Try saving to the scan directory first, fall back to dataDir
 	outPath := filepath.Join(s.currentScanDir, filename)
 	if s.currentScanDir == "" {

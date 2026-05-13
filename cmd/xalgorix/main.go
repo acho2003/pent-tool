@@ -31,7 +31,9 @@ import (
 // The hardcoded fallback is only used when developers `go run` the package
 // without ldflags. It is a `var` (not `const`) precisely so ldflags can
 // rewrite it.
-var version = "4.3.17"
+var version = "4.4.0"
+
+const defaultWebPort = 9137
 
 func main() {
 	// Top-level crash recovery — catches panics that escape all other handlers.
@@ -217,13 +219,16 @@ func main() {
 	if args.model != "" {
 		cfg.LLM = args.model
 	}
+	if args.bind != "" {
+		cfg.BindAddr = args.bind
+	}
 
 	// Web UI mode — no target or API config required at launch
 	if args.webUI {
 
 		port := args.port
 		if port == 0 {
-			port = 1337
+			port = defaultWebPort
 		}
 
 		fmt.Print(tui.Banner)
@@ -261,6 +266,7 @@ type cliArgs struct {
 	targets     []string
 	instruction string
 	model       string
+	bind        string
 	version     bool
 	update      bool
 	webUI       bool
@@ -304,6 +310,11 @@ func parseArgs() cliArgs {
 			}
 		case "--web", "-w":
 			args.webUI = true
+		case "--bind":
+			if i+1 < len(osArgs) {
+				i++
+				args.bind = osArgs[i]
+			}
 		case "--update", "-up":
 			args.update = true
 		case "--version", "-v":
@@ -328,6 +339,8 @@ func parseArgs() cliArgs {
 				args.model = strings.TrimPrefix(osArgs[i], "--model=")
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
+			} else if strings.HasPrefix(osArgs[i], "--bind=") {
+				args.bind = strings.TrimPrefix(osArgs[i], "--bind=")
 			}
 		}
 	}
@@ -342,12 +355,14 @@ func printUsage() {
 	fmt.Println("  Autonomous AI Pentesting Engine")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  xalgorix --web                  Start the Web UI (default port 1337)")
+	fmt.Printf("  xalgorix --web                  Start the Web UI (default port %d)\n", defaultWebPort)
 	fmt.Println("  xalgorix --target <url> [flags]  Run a scan in CLI mode")
 	fmt.Println()
 	fmt.Println("Modes:")
 	fmt.Println("  -w, --web                 Launch the Web UI dashboard")
-	fmt.Println("  -p, --port <port>         Web UI port (default: 1337)")
+	fmt.Printf("  -p, --port <port>         Web UI port (default: %d)\n", defaultWebPort)
+	fmt.Println("      --bind <addr>         Bind address (default: 127.0.0.1).")
+	fmt.Println("                            Use 0.0.0.0 to expose externally (REQUIRES auth).")
 	fmt.Println()
 	fmt.Println("Service Commands:")
 	fmt.Println("  --start                   Install and start as systemd service")
@@ -407,8 +422,8 @@ func handleStart() {
 	exec.Command("pkill", "-f", "xalgorix.*--web").Run()
 	time.Sleep(1 * time.Second)
 
-	// Also kill anything using port 1337 (ignore if port is free)
-	exec.Command("fuser", "-k", "1337/tcp").Run()
+	// Also kill anything using the default web port (ignore if port is free)
+	exec.Command("fuser", "-k", fmt.Sprintf("%d/tcp", defaultWebPort)).Run()
 	time.Sleep(1 * time.Second)
 
 	// Create systemd service file
@@ -459,7 +474,7 @@ func handleStart() {
 	}
 
 	fmt.Println("✅ Xalgorix installed and started as systemd service!")
-	fmt.Println("   Web UI: http://localhost:1337")
+	fmt.Printf("   Web UI: http://localhost:%d\n", defaultWebPort)
 	fmt.Println("   Logs:   journalctl -u xalgorix -f")
 	fmt.Println("   Status: systemctl status xalgorix")
 }
@@ -520,7 +535,7 @@ func startBackground() {
 	}
 
 	fmt.Println("✅ Xalgorix started in background!")
-	fmt.Println("   Web UI: http://localhost:1337")
+	fmt.Printf("   Web UI: http://localhost:%d\n", defaultWebPort)
 	fmt.Println("   Logs:   tail -f /tmp/xalgorix.log")
 	fmt.Printf("   PID:    %d\n", startCmd.Process.Pid)
 }
@@ -529,7 +544,7 @@ func startBackground() {
 func handleStop() {
 	// Try to send stop notification to Discord first
 	go func() {
-		resp, err := http.Get("http://localhost:1337/api/stop-notify")
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/stop-notify", defaultWebPort))
 		if err == nil {
 			resp.Body.Close()
 		}
@@ -565,7 +580,7 @@ func handleRestart() {
 	}
 
 	fmt.Println("✅ Xalgorix restarted!")
-	fmt.Println("   Web UI: http://localhost:1337")
+	fmt.Printf("   Web UI: http://localhost:%d\n", defaultWebPort)
 }
 
 // handleUninstall removes xalgorix from the system
@@ -604,9 +619,53 @@ func handleUninstall() {
 	fmt.Println("✅ Uninstall complete!")
 }
 
+// autoUpdateInterval is how often a CLI invocation may hit the GitHub API.
+// Without a TTL every `xalgorix --target ...` invocation blocks for up to
+// 15s waiting on GitHub — annoying for users and rate-limit-prone.
+const autoUpdateInterval = 6 * time.Hour
+
+// autoUpdateCheckPath returns the timestamp marker for the last successful
+// update check. Using ~/.xalgorix/last_update_check so it survives across
+// invocations and lives next to the rest of our local state.
+func autoUpdateCheckPath() string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/root"
+	}
+	dir := filepath.Join(home, ".xalgorix")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "last_update_check")
+}
+
+// autoUpdateThrottled returns true when the last update check happened
+// within autoUpdateInterval. Failures to read/write the marker are
+// non-fatal — the worst case is one extra GitHub fetch.
+func autoUpdateThrottled() bool {
+	info, err := os.Stat(autoUpdateCheckPath())
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) < autoUpdateInterval
+}
+
+func touchAutoUpdateMarker() {
+	now := time.Now()
+	path := autoUpdateCheckPath()
+	if f, err := os.Create(path); err == nil {
+		f.Close()
+	}
+	_ = os.Chtimes(path, now, now)
+}
+
 // autoUpdate checks GitHub for a newer release and self-updates if found.
 func autoUpdate() {
+	if autoUpdateThrottled() {
+		return
+	}
 	latestVer, downloadURL := fetchLatestRelease()
+	// Mark the check as performed even on failure so a flaky GitHub doesn't
+	// produce a blocking call on every invocation.
+	touchAutoUpdateMarker()
 	if latestVer == "" || latestVer == version {
 		return
 	}

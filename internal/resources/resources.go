@@ -479,10 +479,6 @@ func envInt64(key string, defaultVal int64) int64 {
 	return v
 }
 
-func envInt(key string, defaultVal int) int {
-	return int(envInt64(key, int64(defaultVal)))
-}
-
 func envOptionalInt(key string) int {
 	s, ok := os.LookupEnv(key)
 	if !ok || strings.TrimSpace(s) == "" {
