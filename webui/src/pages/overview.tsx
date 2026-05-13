@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import type { VulnSummary } from "@/types/api";
 import {
   Activity,
   AlertOctagon,
@@ -48,7 +49,7 @@ export default function OverviewPage() {
   const activeInstance = runningInstances[0];
 
   const aggregateVulns = useMemo(() => {
-    const map = new Map<string, { vuln: any; instanceId: string }>();
+    const map = new Map<string, { vuln: VulnSummary; instanceId: string }>();
     for (const inst of allInstances) {
       for (const v of inst.vulns || []) {
         if (!map.has(v.id)) map.set(v.id, { vuln: v, instanceId: inst.id });
@@ -63,8 +64,15 @@ export default function OverviewPage() {
     return s === "critical" || s === "high";
   }).length;
 
+  // ScanInstance.targets is a comma-separated string; trim each entry so we
+  // collapse "a.com, b.com" and "a.com,b.com" to the same logical target.
   const targetsScanned = new Set(
-    allInstances.flatMap((i) => i.targets.split(", ").filter(Boolean)),
+    allInstances.flatMap((i) =>
+      i.targets
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
+    ),
   ).size;
 
   const recentScans = allInstances.slice(0, 6);
@@ -297,8 +305,10 @@ export default function OverviewPage() {
               <ul className="divide-y divide-border">
                 {recentCritical.map(({ vuln, instanceId }) => (
                   <li key={`${instanceId}-${vuln.id}`}>
+                    {/* Findings deep-link route doesn't exist; route to the
+                        owning scan, where the Findings tab renders this vuln. */}
                     <Link
-                      to={`/findings/${instanceId}/${vuln.id}`}
+                      to={`/scans/${instanceId}`}
                       className="block px-5 py-3 transition-colors hover:bg-accent/40"
                     >
                       <div className="flex items-center gap-2">
@@ -349,9 +359,9 @@ function Row({
   label,
   value,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
-  value: React.ReactNode;
+  value: ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between gap-3">

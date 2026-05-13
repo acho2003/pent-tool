@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -89,7 +89,7 @@ export default function ScansPage() {
       {error ? (
         <ErrorState
           title="Could not load scans"
-          description={String(error)}
+          description={error instanceof Error ? error.message : "Unknown error"}
           action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
         />
       ) : isLoading ? (
@@ -176,10 +176,10 @@ function ScanTable({ scans }: { scans: ScanListItem[] }) {
   )
 }
 
-function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function Th({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <th className={`px-3 py-2 text-left font-medium ${className}`}>{children}</th>
 }
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function Td({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <td className={`px-3 py-3 align-middle ${className}`}>{children}</td>
 }
 

@@ -134,10 +134,17 @@ const server = http.createServer((req, res) => {
           ];
     return json(res, { ...sc, events: [], vulns });
   }
-  if (req.method === "POST" && req.url === "/api/start") {
+  // Real client posts to /api/scan; legacy/curl users sometimes hit /api/start.
+  // Accept both so the dashboard's "New scan" flow works against the mock.
+  if (
+    req.method === "POST" &&
+    (req.url === "/api/scan" || req.url === "/api/start")
+  ) {
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => json(res, { instance_id: "inst_01", id: "scan_01", ok: true }));
+    req.on("end", () =>
+      json(res, { status: "started", instance_id: "inst_01", id: "scan_01", ok: true }),
+    );
     return;
   }
   json(res, { ok: true });

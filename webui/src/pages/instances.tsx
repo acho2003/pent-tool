@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -42,7 +43,7 @@ export default function InstancesPage() {
       {error ? (
         <ErrorState
           title="Could not load instances"
-          description={String(error)}
+          description={error instanceof Error ? error.message : "Unknown error"}
           action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
         />
       ) : isLoading ? (
@@ -125,7 +126,7 @@ function ResourceStat({
   value,
   sub,
 }: {
-  icon: React.ReactNode
+  icon: ReactNode
   label: string
   value: string
   sub?: string
@@ -241,7 +242,7 @@ function InstanceCard({ instance }: { instance: ScanInstance }) {
   )
 }
 
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function Stat({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
     <div className="rounded-md border border-border bg-muted/30 p-2">
       <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">

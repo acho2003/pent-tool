@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { PHASES } from "@/components/phase-progress";
 import { useStartScan } from "@/api/queries";
 import { cn } from "@/lib/utils";
 
@@ -35,32 +36,6 @@ const SCAN_MODES = [
     hint: "Authenticated app testing with browser-driven probes.",
   },
 ];
-
-const PHASES: { id: number; name: string; recon?: boolean; report?: boolean }[] =
-  [
-    { id: 1, name: "Reconnaissance", recon: true },
-    { id: 2, name: "Manual Vuln Discovery" },
-    { id: 3, name: "Directory & File Discovery" },
-    { id: 4, name: "CORS & Cookies" },
-    { id: 5, name: "Auth & Session" },
-    { id: 6, name: "Injection" },
-    { id: 7, name: "SSRF" },
-    { id: 8, name: "IDOR / BAC" },
-    { id: 9, name: "API & GraphQL" },
-    { id: 10, name: "File Upload" },
-    { id: 11, name: "Deserialization & RCE" },
-    { id: 12, name: "Race & Business Logic" },
-    { id: 13, name: "Subdomain Takeover" },
-    { id: 14, name: "Open Redirect" },
-    { id: 15, name: "Email Security" },
-    { id: 16, name: "Cloud & Infrastructure" },
-    { id: 17, name: "WebSocket" },
-    { id: 18, name: "CMS-Specific" },
-    { id: 19, name: "Broken Links & Spoofing" },
-    { id: 20, name: "Exploit Verification" },
-    { id: 21, name: "Zero-Day Discovery" },
-    { id: 22, name: "Final Report", report: true },
-  ];
 
 const SEVERITIES = ["info", "low", "medium", "high", "critical"];
 
