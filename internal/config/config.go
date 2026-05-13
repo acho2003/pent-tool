@@ -53,8 +53,23 @@ type Config struct {
 	AgentMailPod    string // AGENTMAIL_POD - AgentMail pod (e.g., "am_us_pod_47")
 
 	// Dashboard auth
-	Username string // XALGORIX_USERNAME - dashboard login username
-	Password string // XALGORIX_PASSWORD - dashboard login password
+	Username     string // XALGORIX_USERNAME - dashboard login username
+	Password     string // XALGORIX_PASSWORD - dashboard login password (DEPRECATED: prefer PasswordHash)
+	PasswordHash string // XALGORIX_PASSWORD_HASH - bcrypt hash of the dashboard password (preferred)
+
+	// Network binding
+	// BindAddr controls which interface the web server listens on. Defaults to
+	// 127.0.0.1 so a fresh install is not exposed to the network. Set
+	// XALGORIX_BIND=0.0.0.0 (or a specific interface IP) to expose externally —
+	// but in that case Username + (Password|PasswordHash) MUST be configured or
+	// the server will refuse to start.
+	BindAddr string // XALGORIX_BIND - listen address (default 127.0.0.1)
+
+	// Auto-install gating — the LLM-driven terminal tool can call apt/cargo/npm
+	// for missing binaries. Letting that happen under sudo on a multi-user box
+	// is a privilege-escalation surface, so it's now opt-in.
+	AllowAutoInstall     bool // XALGORIX_ALLOW_AUTO_INSTALL - permit package auto-install (default false unless root)
+	AllowAutoInstallSudo bool // XALGORIX_AUTO_INSTALL_SUDO  - permit sudo-prefixed installs (default false)
 
 	// Proxy settings
 	UseProxy      bool   // XALGORIX_USE_PROXY — enable proxy support
@@ -142,8 +157,17 @@ func load() *Config {
 		AgentMailPod:    envOr("AGENTMAIL_POD", ""),
 
 		// Dashboard auth
-		Username: envOr("XALGORIX_USERNAME", ""),
-		Password: envOr("XALGORIX_PASSWORD", ""),
+		Username:     envOr("XALGORIX_USERNAME", ""),
+		Password:     envOr("XALGORIX_PASSWORD", ""),
+		PasswordHash: envOr("XALGORIX_PASSWORD_HASH", ""),
+
+		// Network binding — loopback-only by default.
+		BindAddr: envOr("XALGORIX_BIND", "127.0.0.1"),
+
+		// Auto-install gates — default off for non-root; root sessions keep the
+		// historical behaviour so existing systemd deployments keep working.
+		AllowAutoInstall:     envOrBool("XALGORIX_ALLOW_AUTO_INSTALL", os.Getuid() == 0),
+		AllowAutoInstallSudo: envOrBool("XALGORIX_AUTO_INSTALL_SUDO", false),
 
 		// Proxy
 		UseProxy:      envOrBool("XALGORIX_USE_PROXY", false),

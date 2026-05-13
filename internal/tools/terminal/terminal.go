@@ -984,7 +984,40 @@ func resolvePackage(cmd string) string {
 	return ""
 }
 
+// sudoPrefix returns "sudo " when the process is non-root AND the operator
+// has explicitly opted in via XALGORIX_AUTO_INSTALL_SUDO=1. The previous
+// behaviour was to silently sudo any install attempt, which is a privilege
+// escalation surface when xalgorix is launched by a user with passwordless
+// sudo (which the --start systemd flow encourages).
+func sudoPrefix() string {
+	if os.Getuid() == 0 {
+		return ""
+	}
+	if cfg := config.Get(); cfg.AllowAutoInstallSudo {
+		return "sudo "
+	}
+	return ""
+}
+
+// installPackage installs a system package on demand. Gated behind
+// XALGORIX_ALLOW_AUTO_INSTALL — defaults to true for root and false for
+// non-root, so a stock unprivileged xalgorix invocation can never call
+// apt-get/cargo/npm to install software without the operator's say-so.
 func installPackage(pkg string) string {
+	// Auto-install gate. Two reasons this is opt-in for non-root:
+	//   1) `apt-get install` runs maintainer scripts as root.
+	//   2) `npm install -g` of an attacker-chosen name (typosquat) gets a
+	//      shell as the install user.
+	// The agent's tool prompt should learn to surface "tool not installed"
+	// to the human rather than try to install behind their back.
+	cfg := config.Get()
+	if !cfg.AllowAutoInstall {
+		return fmt.Sprintf(
+			"[install %s blocked: auto-install is disabled. Set XALGORIX_ALLOW_AUTO_INSTALL=1 in ~/.xalgorix.env to enable, or install manually.]",
+			pkg,
+		)
+	}
+
 	// Special handling for pipx-installed tools
 	pipxTools := map[string]string{
 		"scrapling": "scrapling",
@@ -1044,11 +1077,10 @@ func installPackage(pkg string) string {
 
 	// Cargo (Rust) tools
 	if cargoPkg, ok := cargoTools[pkg]; ok {
-		// Try apt first (faster), then cargo install as fallback
-		installCmd := fmt.Sprintf("apt-get install -y -q %s 2>&1 || cargo install %s 2>&1", cargoPkg, cargoPkg)
-		if os.Getuid() != 0 {
-			installCmd = fmt.Sprintf("sudo apt-get install -y -q %s 2>&1 || cargo install %s 2>&1", cargoPkg, cargoPkg)
-		}
+		// Try apt first (faster), then cargo install as fallback. The cargo
+		// fallback runs as the current user (no sudo) so it lands in
+		// ~/.cargo/bin and respects user toolchain.
+		installCmd := fmt.Sprintf("%sapt-get install -y -q %s 2>&1 || cargo install %s 2>&1", sudoPrefix(), cargoPkg, cargoPkg)
 		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
@@ -1086,9 +1118,9 @@ func installPackage(pkg string) string {
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
 		out, err := cmd.CombinedOutput()
-		if err != nil {
-			// Try with sudo
-			installCmd = "sudo " + installCmd
+		if err != nil && sudoPrefix() != "" {
+			// Try with sudo only if the operator has opted in.
+			installCmd = sudoPrefix() + installCmd
 			cmd = exec.CommandContext(ctx, "bash", "-c", installCmd)
 			out, err = cmd.CombinedOutput()
 		}
@@ -1115,10 +1147,11 @@ func installPackage(pkg string) string {
 		return fmt.Sprintf("[cannot auto-install: no supported package manager found for %s]", pkg)
 	}
 
-	// Prefix with sudo if not running as root
-	if os.Getuid() != 0 {
-		installCmd = "sudo " + installCmd
-	}
+	// Prefix with sudo only when the operator has opted in via
+	// XALGORIX_AUTO_INSTALL_SUDO=1. Without that, this install will fail
+	// for non-root users — which is the safer default than silently
+	// escalating package-manager invocations.
+	installCmd = sudoPrefix() + installCmd
 
 	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second) // 10 min for pkg install
 	defer cancel()
@@ -1198,6 +1231,17 @@ var blockedPatterns = []struct {
 
 // isBlockedCommand checks if a command matches any blocked pattern.
 // It also detects encoding attempts (base64, hex, etc.) and checks decoded content.
+//
+// IMPORTANT: This is a BEST-EFFORT GUARDRAIL, not a security boundary.
+// A determined adversary (or a confused LLM) can trivially bypass any
+// string-based denylist via subshells, quoting tricks (r''m), variable
+// expansion (rm$IFS-rf$IFS/), eval $'\\x72m -rf /', fetching a script over
+// HTTP then piping to sh, writing destructive code with tee, etc.
+//
+// The real isolation must be operational: run xalgorix as an unprivileged
+// user, inside a container/VM, with the workspace mounted read-write and
+// the rest of the filesystem read-only. The blocklist is here to catch
+// honest mistakes, not malice.
 func isBlockedCommand(cmd string) string {
 	// First check the raw command
 	if reason := checkBlocked(cmd); reason != "" {

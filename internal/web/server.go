@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -35,6 +34,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/bcrypt"
 	"github.com/xalgord/xalgorix/v4/internal/agent"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
@@ -60,6 +60,7 @@ type RateLimiter struct {
 	limit    int
 	window   time.Duration
 	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
@@ -71,11 +72,13 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	}
 	// Cleanup old entries every minute
 	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-rl.stopCh:
 				return
-			case <-time.After(time.Minute):
+			case <-ticker.C:
 				rl.cleanup()
 			}
 		}
@@ -83,26 +86,57 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return rl
 }
 
-// Stop signals the cleanup goroutine to exit
+// Stop signals the cleanup goroutine to exit. Safe to call multiple times.
 func (rl *RateLimiter) Stop() {
-	close(rl.stopCh)
+	rl.stopOnce.Do(func() { close(rl.stopCh) })
 }
 
+// cleanup walks the request map and discards entries whose timestamps have
+// all aged out of the active window. Done in two passes (collect → delete)
+// to minimise lock contention with Allow() under high churn.
 func (rl *RateLimiter) cleanup() {
+	cutoff := time.Now().Add(-rl.window)
+
+	// Pass 1: collect IPs whose buckets are fully expired. RLock would be
+	// ideal, but the underlying mutex is sync.Mutex; the read cost is small.
 	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	now := time.Now()
+	var toDelete []string
 	for ip, times := range rl.requests {
-		var valid []time.Time
+		stillValid := false
 		for _, t := range times {
-			if now.Sub(t) < rl.window {
-				valid = append(valid, t)
+			if t.After(cutoff) {
+				stillValid = true
+				break
 			}
 		}
-		if len(valid) == 0 {
+		if !stillValid {
+			toDelete = append(toDelete, ip)
+		}
+	}
+	rl.mu.Unlock()
+
+	if len(toDelete) == 0 {
+		return
+	}
+
+	// Pass 2: re-check each IP under lock — a request could have arrived
+	// between passes and re-validated the bucket.
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for _, ip := range toDelete {
+		times, ok := rl.requests[ip]
+		if !ok {
+			continue
+		}
+		stillValid := false
+		for _, t := range times {
+			if t.After(cutoff) {
+				stillValid = true
+				break
+			}
+		}
+		if !stillValid {
 			delete(rl.requests, ip)
-		} else {
-			rl.requests[ip] = valid
 		}
 	}
 }
@@ -185,6 +219,8 @@ const sessionDuration = 24 * time.Hour
 const sessionReaperInterval = 15 * time.Minute
 
 // generateSessionToken creates a cryptographically random session token.
+// 32 bytes of crypto/rand is already overwhelmingly sufficient entropy —
+// hashing it wouldn't add security and only obscured the source.
 // Returns an error if the system entropy source is unavailable instead of
 // terminating the whole process — callers should surface a 500 to the user.
 func generateSessionToken() (string, error) {
@@ -192,8 +228,89 @@ func generateSessionToken() (string, error) {
 	if _, err := cryptorand.Read(b); err != nil {
 		return "", fmt.Errorf("crypto/rand unavailable: %w", err)
 	}
-	hash := sha256.Sum256(b)
-	return hex.EncodeToString(hash[:]), nil
+	return hex.EncodeToString(b), nil
+}
+
+// loginAttempts tracks failed-login backoff per source IP. We replaced the
+// unconditional time.Sleep(1s) on every failure because it held an HTTP
+// connection open and let an attacker tie up worker goroutines with one IP.
+// Instead, we reject further attempts from an IP that has racked up too many
+// failures within a short window; legitimate users on a clean IP see no
+// latency hit.
+var (
+	loginAttempts   = make(map[string]*loginAttempt)
+	loginAttemptsMu sync.Mutex
+)
+
+type loginAttempt struct {
+	failures  int
+	firstFail time.Time
+	lockUntil time.Time
+}
+
+const (
+	loginAttemptWindow = 15 * time.Minute
+	loginMaxFailures   = 10
+	loginLockDuration  = 5 * time.Minute
+)
+
+// loginIsLocked returns (locked, retryAfterSeconds). It also garbage-collects
+// stale entries opportunistically so the map cannot grow unbounded.
+func loginIsLocked(ip string) (bool, int) {
+	loginAttemptsMu.Lock()
+	defer loginAttemptsMu.Unlock()
+	now := time.Now()
+	// Opportunistic GC — bounded work, runs only when this IP is queried.
+	for k, v := range loginAttempts {
+		if now.Sub(v.firstFail) > loginAttemptWindow && now.After(v.lockUntil) {
+			delete(loginAttempts, k)
+		}
+	}
+	a := loginAttempts[ip]
+	if a == nil {
+		return false, 0
+	}
+	if now.Before(a.lockUntil) {
+		return true, int(a.lockUntil.Sub(now).Seconds()) + 1
+	}
+	return false, 0
+}
+
+// loginRecordFailure increments the failure counter for an IP. After
+// loginMaxFailures within loginAttemptWindow, subsequent attempts are locked
+// out for loginLockDuration.
+func loginRecordFailure(ip string) {
+	loginAttemptsMu.Lock()
+	defer loginAttemptsMu.Unlock()
+	now := time.Now()
+	a := loginAttempts[ip]
+	if a == nil || now.Sub(a.firstFail) > loginAttemptWindow {
+		loginAttempts[ip] = &loginAttempt{failures: 1, firstFail: now}
+		return
+	}
+	a.failures++
+	if a.failures >= loginMaxFailures {
+		a.lockUntil = now.Add(loginLockDuration)
+	}
+}
+
+// loginRecordSuccess clears any failure history on a successful login.
+func loginRecordSuccess(ip string) {
+	loginAttemptsMu.Lock()
+	defer loginAttemptsMu.Unlock()
+	delete(loginAttempts, ip)
+}
+
+// clientIP extracts a comparable client identifier from the request. We
+// intentionally do not trust X-Forwarded-For; if you put xalgorix behind a
+// reverse proxy you should bind it to loopback and let the proxy enforce
+// auth, or extend this helper to honour a configured trusted-proxy list.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // isValidSession checks if a session token is valid and not expired
@@ -235,19 +352,27 @@ func startSessionReaper() {
 
 // isCSRFSafe returns true when a state-changing request is verifiably
 // originated from this site. We use Origin (and Referer as a fallback)
-// because every modern browser sends one of them on POST/PUT/PATCH/DELETE,
-// while non-browser API clients (curl, scripts, the LLM tooling) typically
-// send neither — those are allowed through. SameSite=Strict on the session
-// cookie already blocks the most common CSRF vectors; this is defense in
-// depth for the Sec-Fetch-Site and document-form-submit edge cases.
+// because every modern browser sends one of them on POST/PUT/PATCH/DELETE.
+// SameSite=Strict on the session cookie already blocks the most common CSRF
+// vectors; this is defense in depth for the Sec-Fetch-Site and
+// document-form-submit edge cases.
+//
+// Policy:
+//   - Safe methods (GET/HEAD/OPTIONS) are always allowed.
+//   - Sec-Fetch-Site: same-origin/none → allow; same-site/cross-site → deny.
+//   - Else fall back to Origin/Referer host == r.Host.
+//   - If none of the above are present AND the request carries our session
+//     cookie, the request looks like a browser navigation without the
+//     metadata we expected — refuse. Cookie-less non-browser clients
+//     (curl, scripts) are still allowed; an attacker has no way to forge
+//     a cookie on the victim, so allowing cookie-less requests is safe.
 func isCSRFSafe(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
 	}
 
-	// Browser hint: only "same-origin" is safe. Empty header means the
-	// client probably isn't a browser, which we allow.
+	// Browser hint: only "same-origin"/"none" are safe.
 	switch strings.ToLower(r.Header.Get("Sec-Fetch-Site")) {
 	case "":
 		// fall through to Origin/Referer checks
@@ -276,8 +401,23 @@ func isCSRFSafe(r *http.Request) bool {
 	if ok, present := check(r.Header.Get("Referer")); present {
 		return ok
 	}
-	// Neither Origin nor Referer nor Sec-Fetch-Site present: not a browser.
+
+	// Neither Origin nor Referer nor Sec-Fetch-Site present.
+	// If the client carries our session cookie this is suspicious (a real
+	// browser strips none of these on cookie-bearing POSTs in 2026) —
+	// refuse. Cookie-less requests are non-browser tooling, allow.
+	if _, err := r.Cookie(sessionCookieName); err == nil {
+		return false
+	}
 	return true
+}
+
+// authConfigured returns true when the server has dashboard credentials set
+// (either plaintext password or bcrypt hash). When false, the authMiddleware
+// short-circuits and serves all routes — used by the bind-time safety check
+// to refuse external interfaces without auth.
+func authConfigured(cfg *config.Config) bool {
+	return cfg.Username != "" && (cfg.Password != "" || cfg.PasswordHash != "")
 }
 
 // authMiddleware protects routes when auth is configured
@@ -302,7 +442,7 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			}
 
 			// Skip auth if no credentials configured
-			if cfg.Username == "" || cfg.Password == "" {
+			if !authConfigured(cfg) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -340,10 +480,46 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
+// verifyPassword checks a presented password against the configured credential.
+// Prefers a bcrypt hash (PasswordHash) when set; falls back to a constant-time
+// plaintext comparison for backwards compatibility. The plaintext path logs a
+// one-time deprecation warning so operators know to migrate.
+var plaintextPasswordWarnOnce sync.Once
+
+func (s *Server) verifyPassword(presented string) bool {
+	if s.cfg.PasswordHash != "" {
+		// bcrypt.CompareHashAndPassword is constant-time wrt password length
+		// for matching hashes and is the recommended verification path.
+		err := bcrypt.CompareHashAndPassword([]byte(s.cfg.PasswordHash), []byte(presented))
+		return err == nil
+	}
+	if s.cfg.Password == "" {
+		return false
+	}
+	plaintextPasswordWarnOnce.Do(func() {
+		log.Printf("[auth] WARNING: XALGORIX_PASSWORD is set in plaintext. Migrate to XALGORIX_PASSWORD_HASH (bcrypt) — see README.")
+	})
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(s.cfg.Password)) == 1
+}
+
 // handleLogin handles POST /api/auth/login
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	ip := clientIP(r)
+
+	// Per-IP lockout — replaces the old unconditional 1s sleep so we don't
+	// occupy goroutines on attacker traffic.
+	if locked, retryAfter := loginIsLocked(ip); locked {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("Too many failed attempts. Try again in %ds.", retryAfter),
+		})
 		return
 	}
 
@@ -357,19 +533,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Constant-time comparison to avoid leaking the username/password length
-	// or character-by-character match position via response time. We always
-	// compare both fields even on a username miss so the work performed is
-	// independent of which one is wrong.
+	// Constant-time username comparison; bcrypt for password. We always
+	// run the password compare even on a username miss so the work
+	// performed is independent of which side is wrong (timing-equalised).
 	userMatch := subtle.ConstantTimeCompare([]byte(creds.Username), []byte(s.cfg.Username)) == 1
-	passMatch := subtle.ConstantTimeCompare([]byte(creds.Password), []byte(s.cfg.Password)) == 1
+	passMatch := s.verifyPassword(creds.Password)
 	if !userMatch || !passMatch {
-		// Rate-limit failed attempts
-		time.Sleep(1 * time.Second)
+		loginRecordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid credentials"})
 		return
 	}
+
+	loginRecordSuccess(ip)
 
 	// Create session
 	token, err := generateSessionToken()
@@ -390,10 +566,24 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(sessionDuration.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecureRequest(r),
 	})
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// isSecureRequest returns true if the request is over TLS. Used to decide
+// whether to set the Secure flag on cookies — required for HTTPS deploys,
+// must be off for localhost HTTP development.
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	// Honour an X-Forwarded-Proto header only when running behind a trusted
+	// proxy; we keep it simple here and trust nothing by default. Operators
+	// behind a TLS-terminating proxy should set the cookie's Secure flag
+	// elsewhere if they need it.
+	return false
 }
 
 // handleLogout handles POST /api/auth/logout
@@ -405,12 +595,18 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		authSessionsMu.Unlock()
 	}
 
+	// Match the attributes of the cookie we set on login so browsers
+	// consistently replace/clear it. Without SameSite and Secure here,
+	// some browsers treat the deletion cookie as a different cookie and
+	// the original stays in the jar.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecureRequest(r),
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -419,7 +615,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 // handleAuthStatus handles GET /api/auth/status
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
-	authEnabled := s.cfg.Username != "" && s.cfg.Password != ""
+	authEnabled := authConfigured(s.cfg)
 
 	authenticated := false
 	if authEnabled {
@@ -481,6 +677,14 @@ type wsClient struct {
 	send       chan []byte
 	server     *Server
 	instanceID string // GUARDED BY server.mu — see struct doc.
+
+	// authenticated is true when the WebSocket upgrade carried a valid
+	// session cookie (or auth is disabled and the connection is from
+	// loopback). Privileged scan-request fields like Model/APIKey/APIBase
+	// are only honoured for authenticated connections — otherwise a
+	// client could pivot the LLM to an attacker-controlled endpoint.
+	authenticated bool
+	fromLoopback  bool
 }
 
 // writePump drains the send channel and writes to the WebSocket.
@@ -529,52 +733,65 @@ func (c *wsClient) readPump() {
 		return nil
 	})
 
+	// Single decode path. The previous "fast path" tried to detect
+	// subscribe/unsubscribe via byte prefix, but it was order-dependent on
+	// JSON field layout and would fall through unexpectedly. The combined
+	// struct below handles all three message shapes in one Unmarshal.
+	type wsInbound struct {
+		Subscribe   string `json:"subscribe,omitempty"`
+		Unsubscribe bool   `json:"unsubscribe,omitempty"`
+		ScanRequest
+	}
+
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			break
 		}
 
-		// Fast path: check message type with quick prefix check before JSON unmarshal
-		// Avoids triple unmarshal for common subscribe/unsubscribe messages
-		switch {
-		case bytes.HasPrefix(msg, []byte(`{"subscribe"`)):
-			var subMsg struct {
-				Subscribe string `json:"subscribe"`
-			}
-			if err := json.Unmarshal(msg, &subMsg); err == nil && subMsg.Subscribe != "" {
-				c.server.mu.Lock()
-				c.instanceID = subMsg.Subscribe
-				c.server.mu.Unlock()
-				continue
-			}
-		case bytes.HasPrefix(msg, []byte(`{"unsubscribe"`)):
-			var unsubMsg struct {
-				Unsubscribe bool `json:"unsubscribe"`
-			}
-			if err := json.Unmarshal(msg, &unsubMsg); err == nil && unsubMsg.Unsubscribe {
-				c.server.mu.Lock()
-				c.instanceID = ""
-				c.server.mu.Unlock()
-				continue
-			}
+		var in wsInbound
+		if err := json.Unmarshal(msg, &in); err != nil {
+			continue
 		}
 
-		var req ScanRequest
-		if err := json.Unmarshal(msg, &req); err == nil && len(req.Targets) > 0 {
-			// Apply LLM provider settings from WebSocket message securely using a copy
-			scanCfg := *c.server.cfg // shallow copy
-			if req.Model != "" {
-				scanCfg.LLM = req.Model
-			}
-			if req.APIKey != "" {
-				scanCfg.APIKey = req.APIKey
-			}
-			if req.APIBase != "" {
-				scanCfg.APIBase = req.APIBase
-			}
-			go c.server.runMultiScan(req, &scanCfg)
+		// Subscribe / unsubscribe to per-instance broadcasts.
+		if in.Subscribe != "" {
+			c.server.mu.Lock()
+			c.instanceID = in.Subscribe
+			c.server.mu.Unlock()
+			continue
 		}
+		if in.Unsubscribe {
+			c.server.mu.Lock()
+			c.instanceID = ""
+			c.server.mu.Unlock()
+			continue
+		}
+
+		// Scan request.
+		if len(in.Targets) == 0 {
+			continue
+		}
+
+		// Only authenticated (or loopback-when-auth-off) clients may override
+		// LLM provider settings — otherwise an attacker could repoint the
+		// agent's brain to an endpoint that returns crafted tool calls.
+		scanCfg := *c.server.cfg // shallow copy
+		if c.authenticated {
+			if in.Model != "" {
+				scanCfg.LLM = in.Model
+			}
+			if in.APIKey != "" {
+				scanCfg.APIKey = in.APIKey
+			}
+			if in.APIBase != "" {
+				scanCfg.APIBase = in.APIBase
+			}
+		} else if in.Model != "" || in.APIKey != "" || in.APIBase != "" {
+			log.Printf("[ws] dropping LLM-provider overrides from unauthenticated client %s", c.conn.RemoteAddr())
+		}
+
+		go c.server.runMultiScan(in.ScanRequest, &scanCfg)
 	}
 }
 
@@ -863,7 +1080,7 @@ func (s *Server) Start() error {
 
 	// Reap expired session cookies in the background so the auth map cannot
 	// grow unbounded from abandoned logins.
-	if s.cfg.Username != "" && s.cfg.Password != "" {
+	if authConfigured(s.cfg) {
 		startSessionReaper()
 	}
 
@@ -897,6 +1114,14 @@ func (s *Server) Start() error {
 				fileServer.ServeHTTP(w, r)
 				return
 			}
+		}
+		// Asset-style paths (have an extension and look like a file) that
+		// didn't resolve to a real static file are genuine 404s — returning
+		// index.html for them would give the browser an HTML payload with
+		// the wrong Content-Type, breaking module script imports.
+		if ext := filepath.Ext(path); ext != "" && ext != ".html" {
+			http.NotFound(w, r)
+			return
 		}
 		// Not a static file — serve index.html (SPA catch-all)
 		r.URL.Path = "/"
@@ -937,19 +1162,65 @@ func (s *Server) Start() error {
 	authMw := authMiddleware(s.cfg)
 	rlMiddleware := rateLimitMiddleware(s.rateLimiter)
 
-	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
-	log.Printf("Xalgorix Web UI → http://localhost:%d", s.port)
+	// Bind to a specific interface. Default is 127.0.0.1 (loopback) so a
+	// fresh install isn't exposed to the network. Operators who want
+	// external access set XALGORIX_BIND=0.0.0.0 explicitly — and in that
+	// case auth MUST be configured or we refuse to start. This is a
+	// deliberate safety choice: the dashboard can launch arbitrary scans
+	// and a chat tool with the LLM, so an open port is a control plane.
+	bindAddr := s.cfg.BindAddr
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
+	isLoopback := bindAddr == "127.0.0.1" || bindAddr == "::1" || bindAddr == "localhost"
+	if !isLoopback && !authConfigured(s.cfg) {
+		return fmt.Errorf(
+			"refusing to bind to non-loopback address %q without auth: set XALGORIX_USERNAME and either XALGORIX_PASSWORD_HASH (bcrypt) or XALGORIX_PASSWORD in ~/.xalgorix.env, or set XALGORIX_BIND=127.0.0.1",
+			bindAddr,
+		)
+	}
+	addr := fmt.Sprintf("%s:%d", bindAddr, s.port)
+	if isLoopback {
+		log.Printf("Xalgorix Web UI → http://%s:%d (loopback only)", bindAddr, s.port)
+	} else {
+		log.Printf("Xalgorix Web UI → http://%s:%d (NETWORK-EXPOSED)", bindAddr, s.port)
+	}
 	log.Printf("Scan data → %s", s.dataDir)
 	log.Printf("Rate limiting: %d requests/%ds per IP", s.cfg.RateLimitRequests, s.cfg.RateLimitWindow)
-	if s.cfg.Username != "" && s.cfg.Password != "" {
-		log.Printf("🔒 Authentication enabled (user: %s)", s.cfg.Username)
+	if authConfigured(s.cfg) {
+		authMode := "plaintext"
+		if s.cfg.PasswordHash != "" {
+			authMode = "bcrypt"
+		}
+		log.Printf("Authentication enabled (user: %s, password: %s)", s.cfg.Username, authMode)
 	} else {
-		log.Printf("⚠️  Authentication disabled — set XALGORIX_USERNAME and XALGORIX_PASSWORD in ~/.xalgorix.env")
+		log.Printf("Authentication disabled — listening on loopback only. Set XALGORIX_USERNAME and XALGORIX_PASSWORD_HASH in ~/.xalgorix.env to enable.")
 	}
 
 	// ── Auto-resume interrupted scan queue after short startup delay ──
+	// Gate the resume on no scan having started in the meantime — without
+	// this, a user request arriving in the first 5 seconds would race with
+	// the auto-resume goroutine and both runMultiScan calls would stomp
+	// on the same cancelScan field.
 	go func() {
 		time.Sleep(5 * time.Second) // let HTTP server fully initialize
+		if s.running.Load() {
+			log.Printf("[AUTO-RESUME] Skipping — a scan is already running.")
+			return
+		}
+		s.instancesMu.RLock()
+		hasActive := false
+		for _, inst := range s.instances {
+			if inst.Status == "running" {
+				hasActive = true
+				break
+			}
+		}
+		s.instancesMu.RUnlock()
+		if hasActive {
+			log.Printf("[AUTO-RESUME] Skipping — an instance is already running.")
+			return
+		}
 		state, _ := s.validQueueState(true)
 		if state == nil {
 			return
@@ -1077,6 +1348,21 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture authentication state at upgrade time. authMiddleware has
+	// already validated the cookie for us when auth is configured —
+	// reaching this handler proves the cookie was valid. When auth is
+	// off, only loopback clients get the "authenticated" capability so
+	// the agent's brain can't be repointed from off-box.
+	ip := clientIP(r)
+	loopback := ip == "127.0.0.1" || ip == "::1" || ip == "localhost"
+	authed := false
+	if authConfigured(s.cfg) {
+		// authMiddleware accepted this request, so the session is valid.
+		authed = true
+	} else {
+		authed = loopback
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v", err)
@@ -1084,9 +1370,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &wsClient{
-		conn:   conn,
-		send:   make(chan []byte, wsSendBufSize),
-		server: s,
+		conn:          conn,
+		send:          make(chan []byte, wsSendBufSize),
+		server:        s,
+		authenticated: authed,
+		fromLoopback:  loopback,
 	}
 
 	s.mu.Lock()
@@ -3788,7 +4076,10 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 // handleDownloadReport serves the PDF report for a scan.
 func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 	scanID := strings.TrimPrefix(r.URL.Path, "/api/report/")
-	if scanID == "" {
+	// Normalise: strip any path separators so a crafted /api/report/../etc/passwd
+	// can never escape the scan-dir even if a future caller forgets.
+	scanID = filepath.Base(scanID)
+	if scanID == "" || scanID == "." || scanID == "/" {
 		http.Error(w, "scan ID required", http.StatusBadRequest)
 		return
 	}
@@ -3819,6 +4110,21 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to generate report: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	// Defense-in-depth: confirm the resolved target is a regular file before
+	// handing it to http.ServeFile. ServeFile will happily render a directory
+	// index if asked for a directory.
+	info, err := os.Stat(reportPath)
+	if err != nil {
+		log.Printf("Report stat failed for %s: %v", reportPath, err)
+		http.Error(w, "report not available", http.StatusNotFound)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		log.Printf("Report path is not a regular file: %s (mode=%s)", reportPath, info.Mode())
+		http.Error(w, "report not available", http.StatusNotFound)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/pdf")

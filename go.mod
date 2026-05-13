@@ -10,6 +10,7 @@ require (
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/go-rod/rod v0.116.2
 	github.com/gorilla/websocket v1.5.3
+	golang.org/x/crypto v0.39.0
 )
 
 require (
