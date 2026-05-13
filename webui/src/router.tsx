@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import { createBrowserRouter, Navigate, type RouteObject } from "react-router-dom"
 import { AuthBootstrap, RequireAuth, RedirectIfAuthed } from "@/app"
 import OverviewPage from "@/pages/overview"
@@ -14,7 +15,7 @@ import SettingsPage from "@/pages/settings"
 import LoginPage from "@/pages/login"
 import NotFoundPage from "@/pages/not-found"
 
-function Root({ children }: { children: React.ReactNode }) {
+function Root({ children }: { children: ReactNode }) {
   return <AuthBootstrap>{children}</AuthBootstrap>
 }
 

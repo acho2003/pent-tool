@@ -17,17 +17,7 @@ export const Input = React.forwardRef<
 ));
 Input.displayName = "Input";
 
-export const Textarea = React.forwardRef<
-  HTMLTextAreaElement,
-  React.TextareaHTMLAttributes<HTMLTextAreaElement>
->(({ className, ...props }, ref) => (
-  <textarea
-    ref={ref}
-    className={cn(
-      "flex min-h-20 w-full rounded-md border border-border bg-input/40 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-      className,
-    )}
-    {...props}
-  />
-));
-Textarea.displayName = "Textarea";
+// `Textarea` lives in `./textarea.tsx`. Importing it from here was previously
+// possible and shipped a divergent style — keep the re-export so old imports
+// don't silently break while we standardize on one definition.
+export { Textarea } from "./textarea";

@@ -32,6 +32,47 @@ function dispatchAuthExpired() {
 
 export const AUTH_EXPIRED = AUTH_EXPIRED_EVENT
 
+/**
+ * Structured HTTP error thrown by `http()`. Carries the status code, the
+ * raw response body, and any JSON-decoded body so callers (login form,
+ * settings, etc.) can render a friendly message instead of leaking the
+ * raw `HTTP 401 Unauthorized: {"error":"…"}` envelope into the UI.
+ */
+export class HttpError extends Error {
+  status: number
+  statusText: string
+  body: string
+  data: unknown
+  retryAfter?: number
+  constructor(opts: {
+    status: number
+    statusText: string
+    body: string
+    data: unknown
+    retryAfter?: number
+  }) {
+    // `message` stays useful for unhandled-error toasts / console logs, but
+    // UI code should branch on `.status` and use `.data?.error` when it
+    // wants a polished string.
+    const fromData =
+      opts.data && typeof opts.data === "object" && "error" in (opts.data as Record<string, unknown>)
+        ? String((opts.data as { error?: unknown }).error ?? "")
+        : ""
+    const detail = fromData || opts.body
+    super(
+      `HTTP ${opts.status}${opts.statusText ? ` ${opts.statusText}` : ""}${
+        detail ? `: ${detail}` : ""
+      }`,
+    )
+    this.name = "HttpError"
+    this.status = opts.status
+    this.statusText = opts.statusText
+    this.body = opts.body
+    this.data = opts.data
+    this.retryAfter = opts.retryAfter
+  }
+}
+
 async function http<T>(
   path: string,
   init?: RequestInit & { json?: unknown },
@@ -45,12 +86,26 @@ async function http<T>(
     body = JSON.stringify(init.json)
     ;(headers as Record<string, string>)["Content-Type"] = "application/json"
   }
-  const res = await fetch(path, {
-    credentials: "same-origin",
-    ...init,
-    headers,
-    body,
-  })
+  let res: Response
+  try {
+    res = await fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      headers,
+      body,
+    })
+  } catch (err) {
+    // Network-level failure: server unreachable, DNS, CORS, abort. Surface
+    // it as an HttpError with status 0 so callers can distinguish it from
+    // a real HTTP response.
+    throw new HttpError({
+      status: 0,
+      statusText: "Network error",
+      body: err instanceof Error ? err.message : String(err),
+      data: null,
+    })
+  }
+
   if (!res.ok) {
     // Surface session expiry / auth failure to the rest of the app, but
     // never on the login endpoint itself (that 401 is just "bad password"
@@ -58,15 +113,29 @@ async function http<T>(
     if (res.status === 401 && path !== "/api/auth/login") {
       dispatchAuthExpired()
     }
-    let detail = ""
+    let rawBody = ""
     try {
-      detail = await res.text()
+      rawBody = await res.text()
     } catch {
       /* ignore */
     }
-    throw new Error(
-      `HTTP ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
-    )
+    let parsed: unknown = null
+    if (rawBody) {
+      try {
+        parsed = JSON.parse(rawBody)
+      } catch {
+        /* not JSON, leave as null */
+      }
+    }
+    const retryHeader = res.headers.get("Retry-After")
+    const retryAfter = retryHeader ? Number(retryHeader) : undefined
+    throw new HttpError({
+      status: res.status,
+      statusText: res.statusText,
+      body: rawBody,
+      data: parsed,
+      retryAfter: Number.isFinite(retryAfter) ? retryAfter : undefined,
+    })
   }
   const ct = res.headers.get("content-type") || ""
   if (ct.includes("application/json")) {

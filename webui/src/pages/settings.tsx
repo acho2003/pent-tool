@@ -79,7 +79,7 @@ export default function SettingsPage() {
           ) : rate.error ? (
             <ErrorState
               title="Failed to load rate limits"
-              description={String(rate.error)}
+              description={rate.error instanceof Error ? rate.error.message : "Unknown error"}
               action={
                 <Button size="sm" variant="outline" onClick={() => rate.refetch()}>
                   Retry
@@ -156,7 +156,7 @@ export default function SettingsPage() {
           ) : mail.error ? (
             <ErrorState
               title="Failed to load AgentMail settings"
-              description={String(mail.error)}
+              description={mail.error instanceof Error ? mail.error.message : "Unknown error"}
               action={
                 <Button size="sm" variant="outline" onClick={() => mail.refetch()}>
                   Retry

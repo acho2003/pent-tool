@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth, type AuthState } from "@/store/auth";
 import { AppShell } from "@/layout/app-shell";
+import { BackendUnreachable } from "@/pages/backend-unreachable";
 
 export function AuthBootstrap({ children }: { children: ReactNode }) {
   const refresh = useAuth((s: AuthState) => s.refresh);
@@ -17,6 +18,13 @@ export function AuthBootstrap({ children }: { children: ReactNode }) {
         </div>
       </div>
     );
+  }
+  // When the API isn't reachable at all, render a remediation page in
+  // place of every route — the login form would be misleading because
+  // submitting it would just produce another 404. We render this above
+  // the router so it covers /, /login, and every protected page alike.
+  if (status === "no-backend") {
+    return <BackendUnreachable />;
   }
   return <>{children}</>;
 }
@@ -39,6 +47,8 @@ export function RequireAuth() {
 
 export function RedirectIfAuthed({ children }: { children: ReactNode }) {
   const status = useAuth((s: AuthState) => s.status);
-  if (status === "authed") return <Navigate to="/" replace />;
+  if (status === "authed" || status === "disabled") {
+    return <Navigate to="/" replace />;
+  }
   return <>{children}</>;
 }

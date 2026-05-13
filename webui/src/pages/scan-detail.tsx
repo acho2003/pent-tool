@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react"
-import { Link, useParams } from "react-router-dom"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { Link, useNavigate, useParams } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
@@ -29,6 +29,7 @@ import { LiveFeed, type FeedFilter } from "@/components/live-feed"
 import type { VulnSummary } from "@/types/api"
 
 export default function ScanDetailPage() {
+  const navigate = useNavigate()
   const { scanId } = useParams<{ scanId: string }>()
   const id = scanId ?? ""
   const { data: scan, isLoading, error, refetch } = useScan(id)
@@ -49,7 +50,7 @@ export default function ScanDetailPage() {
     return (
       <ErrorState
         title="Could not load scan"
-        description={String(error)}
+        description={error instanceof Error ? error.message : "Unknown error"}
         action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
       />
     )
@@ -132,10 +133,10 @@ export default function ScanDetailPage() {
             variant="ghost"
             size="sm"
             onClick={() => {
-              if (confirm("Permanently delete this scan and all its events?")) {
+              if (window.confirm("Permanently delete this scan and all its events?")) {
                 del.mutate(scan.id, {
                   onSuccess: () => {
-                    window.location.href = "/scans"
+                    navigate("/scans", { replace: true })
                   },
                 })
               }
@@ -358,7 +359,7 @@ function EventsTab({ events }: { events: FeedEvent[] }) {
 }
 
 function ConfigTab({ scan }: { scan: NonNullable<ReturnType<typeof useScan>["data"]> }) {
-  const items: Array<{ k: string; v: React.ReactNode }> = [
+  const items: Array<{ k: string; v: ReactNode }> = [
     { k: "Scan mode", v: scan.scan_mode || "—" },
     { k: "Severity filter", v: (scan.severity_filter ?? []).join(", ") || "all" },
     { k: "Phases", v: (scan.phases ?? []).join(", ") || "all" },
