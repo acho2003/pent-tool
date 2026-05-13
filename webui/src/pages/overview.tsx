@@ -35,7 +35,7 @@ import {
   timeAgo,
 } from "@/lib/utils";
 
-export function OverviewPage() {
+export default function OverviewPage() {
   const { data: status } = useStatus();
   const { data: instances, isLoading: instancesLoading, error: instancesError } =
     useInstances();

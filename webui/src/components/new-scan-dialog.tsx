@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react"
-import { useNavigate } from "react-router-dom"
+import { useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Dialog,
   DialogContent,
@@ -7,51 +7,59 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Button } from "@/components/ui/button"
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import { useCreateScan } from "@/api/queries"
+} from "@/components/ui/select";
+import { useStartScan } from "@/api/queries";
 
 export default function NewScanDialog({
   open,
   onOpenChange,
 }: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
 }) {
-  const navigate = useNavigate()
-  const [target, setTarget] = useState("")
-  const [profile, setProfile] = useState("balanced")
-  const [tags, setTags] = useState("")
-  const [error, setError] = useState<string | null>(null)
-  const mutation = useCreateScan()
+  const navigate = useNavigate();
+  const [targets, setTargets] = useState("");
+  const [scanMode, setScanMode] = useState("balanced");
+  const [instruction, setInstruction] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const mutation = useStartScan();
 
   async function onSubmit(e: FormEvent) {
-    e.preventDefault()
-    setError(null)
+    e.preventDefault();
+    setError(null);
+    const list = targets
+      .split(/[\n,]/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (list.length === 0) {
+      setError("Provide at least one target.");
+      return;
+    }
     try {
       const res = await mutation.mutateAsync({
-        target: target.trim(),
-        profile,
-        tags: tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-      })
-      onOpenChange(false)
-      setTarget("")
-      setTags("")
-      if (res?.id) navigate(`/scans/${res.id}`)
+        targets: list,
+        scan_mode: scanMode,
+        instruction: instruction.trim() || undefined,
+        name: name.trim() || undefined,
+      });
+      onOpenChange(false);
+      setTargets("");
+      setInstruction("");
+      setName("");
+      if (res?.instance_id) navigate(`/instances`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create scan")
+      setError(err instanceof Error ? err.message : "Failed to start scan");
     }
   }
 
@@ -61,45 +69,57 @@ export default function NewScanDialog({
         <DialogHeader>
           <DialogTitle>New scan</DialogTitle>
           <DialogDescription>
-            Provide an authorized target and select an engagement profile.
+            Authorize one or more targets and choose a scan profile.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="target">Target</Label>
-            <Input
-              id="target"
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              placeholder="example.com or 10.0.0.0/24"
+            <Label htmlFor="targets">Targets</Label>
+            <textarea
+              id="targets"
+              value={targets}
+              onChange={(e) => setTargets(e.target.value)}
+              placeholder="example.com&#10;10.0.0.0/24&#10;https://api.example.com"
               required
-              autoFocus
+              rows={4}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
             <p className="text-xs text-muted-foreground">
-              Only run engagements against assets you are explicitly authorized to test.
+              One per line or comma-separated. Only test assets you are authorized to scan.
             </p>
           </div>
-          <div className="space-y-2">
-            <Label>Profile</Label>
-            <Select value={profile} onValueChange={setProfile}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="passive">Passive recon</SelectItem>
-                <SelectItem value="balanced">Balanced</SelectItem>
-                <SelectItem value="aggressive">Aggressive</SelectItem>
-                <SelectItem value="exploit">Full exploitation</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Mode</Label>
+              <Select value={scanMode} onValueChange={setScanMode}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="passive">Passive</SelectItem>
+                  <SelectItem value="balanced">Balanced</SelectItem>
+                  <SelectItem value="aggressive">Aggressive</SelectItem>
+                  <SelectItem value="exploit">Exploitation</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="name">Name (optional)</Label>
+              <Input
+                id="name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="prod-edge sweep"
+              />
+            </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="tags">Tags</Label>
+            <Label htmlFor="instruction">Instruction (optional)</Label>
             <Input
-              id="tags"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="prod, public-bounty"
+              id="instruction"
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              placeholder="Focus on auth + injection. Skip noisy enumeration."
             />
           </div>
           {error && (
@@ -111,12 +131,12 @@ export default function NewScanDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending || !target.trim()}>
-              {mutation.isPending ? "Creating…" : "Start scan"}
+            <Button type="submit" disabled={mutation.isPending || !targets.trim()}>
+              {mutation.isPending ? "Starting…" : "Start scan"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

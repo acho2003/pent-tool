@@ -3,7 +3,7 @@ import { api } from "@/api/client"
 
 type Status = "loading" | "anon" | "authed" | "disabled"
 
-interface AuthState {
+export interface AuthState {
   status: Status
   // Whether the backend has auth configured. When `false`, requests still
   // succeed but we don't show login UI.
