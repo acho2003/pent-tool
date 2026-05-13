@@ -100,8 +100,11 @@ const handlers = {
       current_idx: 0,
       total: 2,
     }),
+  // Field is `window` (not `window_seconds`) to match the Go backend shape
+  // and the RateLimitSettings TS type the SPA reads — otherwise the
+  // Settings page falls back to 1 because `data.window` is undefined.
   "GET /api/settings/rate-limit": (req, res) =>
-    json(res, { requests: 60, window_seconds: 60 }),
+    json(res, { requests: 60, window: 60 }),
   "GET /api/settings/agentmail": (req, res) =>
     json(res, { pod: "ops-pod-1", hasApiKey: true }),
 };
@@ -117,10 +120,41 @@ const server = http.createServer((req, res) => {
   }
   const scanMatch = req.url.match(/^\/api\/scans\/([^/?]+)$/);
   if (scanMatch) {
-    const sc = scans.find((s) => s.id === scanMatch[1]);
+    const id = scanMatch[1];
+    // The real Go backend resolves /api/scans/{id} against both scan record
+    // ids (directory slugs like `scan_01`) AND in-memory instance ids
+    // (`inst_01`). The dashboard relies on this — for example the Overview's
+    // "Recent Scans" list and the Instances cards both link to
+    // `/scans/${instance.id}`. Mirror that lookup here so the mock matches
+    // production behaviour instead of 404-ing in dev.
+    let sc = scans.find((s) => s.id === id);
+    if (!sc) {
+      const inst = instances.find((i) => i.id === id);
+      if (inst) {
+        sc = {
+          id: inst.id,
+          name: inst.name,
+          target: inst.targets,
+          parent_target: inst.parent_target,
+          started_at: inst.started_at,
+          finished_at: inst.finished_at,
+          status: inst.status,
+          scan_mode: inst.scan_mode,
+          instruction: inst.instruction,
+          severity_filter: inst.severity_filter,
+          phases: inst.phases,
+          current_phase: inst.current_phase,
+          company_name: inst.company_name,
+          vuln_count: inst.vuln_count,
+          iterations: inst.iterations,
+          tool_calls: inst.tool_calls,
+          total_tokens: inst.total_tokens,
+        };
+      }
+    }
     if (!sc) return json(res, { error: "not found" }, 404);
     const vulns =
-      sc.id === "scan_01"
+      sc.id === "scan_01" || sc.id === "inst_01"
         ? [
             { id: "v1", title: "SQL Injection in /search", severity: "critical", endpoint: "https://acme.com/search?q=", cvss: 9.8, cve: "CVE-2024-1234" },
             { id: "v2", title: "Reflected XSS in /login", severity: "high", endpoint: "https://acme.com/login", cvss: 7.5 },
