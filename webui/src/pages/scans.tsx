@@ -10,34 +10,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ScanStatusPill, ScanPhaseBadge } from "@/components/scan-status-pill"
+import { ScanStatusPill } from "@/components/scan-status-pill"
 import { EmptyState, ErrorState } from "@/components/states"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useScans } from "@/api/queries"
-import { formatRelative } from "@/lib/utils"
-import type { Scan } from "@/types/api"
-import { Search, Plus, ArrowUpDown, AlertOctagon, AlertTriangle, Activity, Zap } from "lucide-react"
+import { useScansList } from "@/api/queries"
+import { timeAgo, shortId } from "@/lib/utils"
+import type { ScanListItem } from "@/types/api"
+import { Search, Plus, ArrowUpDown, ShieldAlert } from "lucide-react"
 import NewScanDialog from "@/components/new-scan-dialog"
 
 export default function ScansPage() {
-  const { data, isLoading, error, refetch } = useScans()
+  const { data, isLoading, error, refetch } = useScansList()
   const [q, setQ] = useState("")
   const [status, setStatus] = useState<string>("all")
   const [newOpen, setNewOpen] = useState(false)
 
-  const scans = useMemo(() => {
-    let list = data ?? []
+  const scans = useMemo<ScanListItem[]>(() => {
+    let list: ScanListItem[] = data ?? []
     if (status !== "all") list = list.filter((s) => s.status === status)
     if (q.trim()) {
       const needle = q.toLowerCase()
       list = list.filter(
         (s) =>
           s.target.toLowerCase().includes(needle) ||
-          s.id.toLowerCase().includes(needle) ||
-          (s.tags ?? []).some((t) => t.toLowerCase().includes(needle)),
+          s.id.toLowerCase().includes(needle),
       )
     }
-    return list
+    // newest first
+    return [...list].sort(
+      (a, b) =>
+        new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
+    )
   }, [data, q, status])
 
   return (
@@ -45,7 +48,7 @@ export default function ScansPage() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-sans text-2xl font-semibold tracking-tight">Scans</h1>
-          <p className="text-sm text-muted-foreground">Manage continuous offensive engagements.</p>
+          <p className="text-sm text-muted-foreground">All historical and in-flight scans.</p>
         </div>
         <Button onClick={() => setNewOpen(true)} className="self-start sm:self-auto">
           <Plus className="mr-1 h-4 w-4" />
@@ -61,21 +64,22 @@ export default function ScansPage() {
               <Input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search target, scan id, or tag…"
+                placeholder="Search target or scan id…"
                 className="pl-9"
               />
             </div>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger className="w-full sm:w-44">
-                <SelectValue />
+                <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="queued">Queued</SelectItem>
                 <SelectItem value="running">Running</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
+                <SelectItem value="paused">Paused</SelectItem>
+                <SelectItem value="saved">Saved</SelectItem>
+                <SelectItem value="finished">Finished</SelectItem>
+                <SelectItem value="stopped">Stopped</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="cancelled">Cancelled</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -83,7 +87,11 @@ export default function ScansPage() {
       </Card>
 
       {error ? (
-        <ErrorState message={String(error)} onRetry={() => refetch()} />
+        <ErrorState
+          title="Could not load scans"
+          description={String(error)}
+          action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
+        />
       ) : isLoading ? (
         <ScanListSkeleton />
       ) : scans.length === 0 ? (
@@ -106,7 +114,7 @@ export default function ScansPage() {
   )
 }
 
-function ScanTable({ scans }: { scans: Scan[] }) {
+function ScanTable({ scans }: { scans: ScanListItem[] }) {
   return (
     <Card>
       <CardContent className="p-0">
@@ -118,10 +126,9 @@ function ScanTable({ scans }: { scans: Scan[] }) {
                   Target <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-60" />
                 </Th>
                 <Th>Status</Th>
-                <Th>Phase</Th>
                 <Th>Findings</Th>
-                <Th>Started</Th>
-                <Th className="pr-4 text-right">Duration</Th>
+                <Th>Tokens</Th>
+                <Th className="pr-4">Started</Th>
               </tr>
             </thead>
             <tbody>
@@ -132,32 +139,32 @@ function ScanTable({ scans }: { scans: Scan[] }) {
                 >
                   <Td className="pl-4">
                     <Link to={`/scans/${s.id}`} className="block">
-                      <div className="font-mono text-sm font-medium text-foreground group-hover:text-primary">
+                      <div className="mono text-sm font-medium text-foreground group-hover:text-primary">
                         {s.target}
                       </div>
-                      <div className="text-xs text-muted-foreground">{s.id.slice(0, 12)}</div>
+                      <div className="text-xs text-muted-foreground mono">{shortId(s.id, 12)}</div>
                     </Link>
                   </Td>
                   <Td>
                     <ScanStatusPill status={s.status} />
                   </Td>
                   <Td>
-                    {s.phase ? (
-                      <ScanPhaseBadge phase={s.phase} />
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
+                    <div className="inline-flex items-center gap-1 mono text-xs">
+                      <ShieldAlert
+                        className={
+                          s.vuln_count > 0
+                            ? "h-3 w-3 text-amber-400"
+                            : "h-3 w-3 text-muted-foreground"
+                        }
+                      />
+                      {s.vuln_count ?? 0}
+                    </div>
                   </Td>
-                  <Td>
-                    <FindingsInline scan={s} />
+                  <Td className="mono text-xs text-muted-foreground">
+                    {s.total_tokens ? s.total_tokens.toLocaleString() : "—"}
                   </Td>
-                  <Td>
-                    <span className="text-muted-foreground">
-                      {s.started_at ? formatRelative(s.started_at) : "—"}
-                    </span>
-                  </Td>
-                  <Td className="pr-4 text-right font-mono text-xs text-muted-foreground">
-                    {durationOf(s)}
+                  <Td className="pr-4">
+                    <span className="text-muted-foreground">{timeAgo(s.started_at)}</span>
                   </Td>
                 </tr>
               ))}
@@ -167,39 +174,6 @@ function ScanTable({ scans }: { scans: Scan[] }) {
       </CardContent>
     </Card>
   )
-}
-
-function FindingsInline({ scan }: { scan: Scan }) {
-  const c = scan.findings_counts ?? {}
-  const items: { icon: React.ReactNode; n: number; tone: string }[] = []
-  if (c.critical) items.push({ icon: <AlertOctagon className="h-3 w-3" />, n: c.critical, tone: "text-severity-critical" })
-  if (c.high) items.push({ icon: <AlertTriangle className="h-3 w-3" />, n: c.high, tone: "text-severity-high" })
-  if (c.medium) items.push({ icon: <Activity className="h-3 w-3" />, n: c.medium, tone: "text-severity-medium" })
-  if (c.low) items.push({ icon: <Zap className="h-3 w-3" />, n: c.low, tone: "text-severity-low" })
-  if (items.length === 0) return <span className="text-muted-foreground">—</span>
-  return (
-    <div className="flex items-center gap-2">
-      {items.map((it, i) => (
-        <span key={i} className={`inline-flex items-center gap-1 font-mono text-xs ${it.tone}`}>
-          {it.icon}
-          {it.n}
-        </span>
-      ))}
-    </div>
-  )
-}
-
-function durationOf(s: Scan) {
-  if (!s.started_at) return "—"
-  const start = new Date(s.started_at).getTime()
-  const end = s.completed_at ? new Date(s.completed_at).getTime() : Date.now()
-  const sec = Math.max(0, Math.floor((end - start) / 1000))
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const ss = sec % 60
-  if (h) return `${h}h ${m}m`
-  if (m) return `${m}m ${ss}s`
-  return `${ss}s`
 }
 
 function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {

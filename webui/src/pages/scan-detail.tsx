@@ -1,60 +1,73 @@
-import { useMemo } from "react"
-import { Link, useParams, useNavigate } from "react-router-dom"
+import { useEffect, useMemo, useState } from "react"
+import { Link, useParams } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ScanStatusPill, ScanPhaseBadge } from "@/components/scan-status-pill"
+import { ScanStatusPill } from "@/components/scan-status-pill"
 import { SeverityBadge } from "@/components/severity-badge"
-import { PhaseProgress, RiskScoreRing } from "@/components/phase-progress"
+import { PhaseProgress, PHASES } from "@/components/phase-progress"
 import { CopyButton } from "@/components/copy-button"
 import { ErrorState, EmptyState } from "@/components/states"
-import {
-  useScan,
-  useScanFindings,
-  useScanEvents,
-  useCancelScan,
-  useExportScan,
-} from "@/api/queries"
-import { useWS } from "@/store/ws"
-import { formatRelative } from "@/lib/utils"
+import { useScan, useStopInstance, useStartSavedInstance, useDeleteScan } from "@/api/queries"
+import { api } from "@/api/client"
+import { useWSStore, filterEventsForInstance, type FeedEvent } from "@/store/ws"
+import { timeAgo, formatTime, formatDuration, severityRank, normalizeSeverity, cn } from "@/lib/utils"
 import {
   ChevronLeft,
   Download,
   X,
-  ExternalLink,
+  Play,
+  Trash2,
   ShieldAlert,
   Terminal,
-  Network,
   Sparkles,
+  ListChecks,
 } from "lucide-react"
-import { LiveFeed } from "@/components/live-feed"
+import { LiveFeed, type FeedFilter } from "@/components/live-feed"
+import type { VulnSummary } from "@/types/api"
 
 export default function ScanDetailPage() {
   const { scanId } = useParams<{ scanId: string }>()
-  const navigate = useNavigate()
   const id = scanId ?? ""
   const { data: scan, isLoading, error, refetch } = useScan(id)
-  const cancel = useCancelScan()
-  const exporter = useExportScan()
+  const stop = useStopInstance()
+  const start = useStartSavedInstance()
+  const del = useDeleteScan()
+  const subscribe = useWSStore((s) => s.subscribe)
+  const unsubscribe = useWSStore((s) => s.unsubscribe)
+  const liveEvents = useWSStore((s) => s.events)
 
-  // Subscribe to the WS room for this scan so live findings/events flow in.
-  useWS((s) => s.subscribe)
-  // simple side-effect: call subscribe once
-  // (handled below in useMemo to avoid re-subscribing)
+  useEffect(() => {
+    if (!id) return
+    subscribe(id)
+    return () => unsubscribe()
+  }, [id, subscribe, unsubscribe])
 
-  useMemo(() => {
-    const sub = useWS.getState().subscribe
-    const unsub = useWS.getState().unsubscribe
-    if (id) sub(`scan:${id}`)
-    return () => unsub(`scan:${id}`)
-  }, [id])
-
-  if (error) return <ErrorState message={String(error)} onRetry={() => refetch()} />
+  if (error)
+    return (
+      <ErrorState
+        title="Could not load scan"
+        description={String(error)}
+        action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
+      />
+    )
   if (isLoading || !scan) return <ScanDetailSkeleton />
 
-  const canCancel = scan.status === "running" || scan.status === "queued"
+  const status = (scan.status || "").toLowerCase()
+  const canStop = status === "running" || status === "paused"
+  const canStart = status === "saved" || status === "stopped" || status === "failed" || status === "finished"
+
+  // Combine persisted events from the scan record with the live websocket
+  // feed for this instance, deduped by content.
+  const wsForScan = filterEventsForInstance(liveEvents, id)
+  const persistedAsFeed: FeedEvent[] = (scan.events ?? []).map((e, i) => ({
+    ...e,
+    _key: `persisted:${i}`,
+    _receivedAt: e.timestamp ? new Date(e.timestamp).getTime() : Date.now(),
+  }))
+  const mergedEvents = mergeEventStreams(persistedAsFeed, wsForScan)
 
   return (
     <>
@@ -66,83 +79,115 @@ export default function ScanDetailPage() {
       </div>
 
       <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <h1 className="font-mono text-2xl font-semibold tracking-tight text-foreground">{scan.target}</h1>
+        <div className="space-y-2 min-w-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="font-mono text-2xl font-semibold tracking-tight text-foreground truncate">
+              {scan.target}
+            </h1>
             <CopyButton value={scan.target} />
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-mono">{scan.id}</span>
+            <span className="mono">{scan.id}</span>
             <span>·</span>
-            <span>Started {scan.started_at ? formatRelative(scan.started_at) : "—"}</span>
-            {scan.tags?.length ? (
+            <span>Started {timeAgo(scan.started_at)}</span>
+            <span>·</span>
+            <span>Duration {formatDuration(scan.started_at, scan.finished_at)}</span>
+            {scan.scan_mode && (
               <>
                 <span>·</span>
-                <div className="flex items-center gap-1">
-                  {scan.tags.map((t) => (
-                    <Badge key={t} variant="outline" className="font-normal">
-                      {t}
-                    </Badge>
-                  ))}
-                </div>
+                <Badge variant="outline" className="font-normal capitalize">{scan.scan_mode}</Badge>
               </>
-            ) : null}
+            )}
           </div>
         </div>
+
         <div className="flex flex-wrap items-center gap-2">
           <ScanStatusPill status={scan.status} />
-          {scan.phase && <ScanPhaseBadge phase={scan.phase} />}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => exporter.mutate({ scanId: id, format: "json" })}
-            disabled={exporter.isPending}
-          >
-            <Download className="mr-1 h-4 w-4" />
-            Export
+          <Button variant="outline" size="sm" asChild>
+            <a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer">
+              <Download className="mr-1 h-4 w-4" /> Report
+            </a>
           </Button>
-          {canCancel && (
+          {canStart && (
             <Button
-              variant="destructive"
+              variant="outline"
               size="sm"
-              onClick={() => {
-                if (confirm("Cancel this scan? In-flight operations will be stopped.")) {
-                  cancel.mutate(id, {
-                    onSuccess: () => navigate(0),
-                  })
-                }
-              }}
-              disabled={cancel.isPending}
+              onClick={() => start.mutate(scan.id)}
+              disabled={start.isPending}
             >
-              <X className="mr-1 h-4 w-4" />
-              Cancel
+              <Play className="mr-1 h-4 w-4" /> Start
             </Button>
           )}
+          {canStop && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => stop.mutate(scan.id)}
+              disabled={stop.isPending}
+            >
+              <X className="mr-1 h-4 w-4" /> Stop
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (confirm("Permanently delete this scan and all its events?")) {
+                del.mutate(scan.id, {
+                  onSuccess: () => {
+                    window.location.href = "/scans"
+                  },
+                })
+              }
+            }}
+            disabled={del.isPending}
+          >
+            <Trash2 className="mr-1 h-4 w-4" /> Delete
+          </Button>
         </div>
       </header>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Phase progress</CardTitle>
-            <CardDescription>Real-time view of the autonomous engagement.</CardDescription>
+            <CardTitle className="text-sm">Phase progress</CardTitle>
+            <CardDescription>
+              Xalgorix runs a 10-phase autonomous methodology. Currently:{" "}
+              <span className="text-foreground">
+                {currentPhaseLabel(scan.current_phase)}
+              </span>
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
             <PhaseProgress
-              phase={scan.phase ?? null}
+              current={scan.current_phase}
+              selected={scan.phases}
               status={scan.status}
-              progress={scan.progress}
             />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {PHASES.map((p) => (
+                <div
+                  key={p.id}
+                  className={cn(
+                    "rounded-md border border-border bg-muted/20 px-2 py-1.5 text-[11px]",
+                    scan.current_phase === p.id && "border-amber-400/50 text-amber-300",
+                  )}
+                >
+                  <span className="text-muted-foreground mono mr-1.5">{p.id}</span>
+                  {p.name}
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Risk score</CardTitle>
-            <CardDescription>AI-derived composite risk</CardDescription>
+            <CardTitle className="text-sm">Risk overview</CardTitle>
+            <CardDescription>{(scan.vulns ?? []).length} findings</CardDescription>
           </CardHeader>
-          <CardContent className="flex items-center justify-center py-2">
-            <RiskScoreRing score={scan.risk_score ?? 0} />
+          <CardContent>
+            <RiskBreakdown vulns={scan.vulns ?? []} />
           </CardContent>
         </Card>
       </div>
@@ -153,83 +198,144 @@ export default function ScanDetailPage() {
             <ShieldAlert className="mr-1.5 h-3.5 w-3.5" />
             Findings
           </TabsTrigger>
-          <TabsTrigger value="recon">
-            <Network className="mr-1.5 h-3.5 w-3.5" />
-            Recon
-          </TabsTrigger>
           <TabsTrigger value="events">
             <Terminal className="mr-1.5 h-3.5 w-3.5" />
             Events
           </TabsTrigger>
-          <TabsTrigger value="ai">
-            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-            AI analysis
+          <TabsTrigger value="config">
+            <ListChecks className="mr-1.5 h-3.5 w-3.5" />
+            Config
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="findings">
-          <FindingsTab scanId={id} />
-        </TabsContent>
-        <TabsContent value="recon">
-          <ReconTab scan={scan} />
+        <TabsContent value="findings" className="space-y-2">
+          <FindingsTab vulns={scan.vulns ?? []} />
         </TabsContent>
         <TabsContent value="events">
-          <EventsTab scanId={id} />
+          <EventsTab events={mergedEvents} />
         </TabsContent>
-        <TabsContent value="ai">
-          <AITab scan={scan} />
+        <TabsContent value="config">
+          <ConfigTab scan={scan} />
         </TabsContent>
       </Tabs>
     </>
   )
 }
 
-function FindingsTab({ scanId }: { scanId: string }) {
-  const { data, isLoading, error, refetch } = useScanFindings(scanId)
-  if (error) return <ErrorState message={String(error)} onRetry={() => refetch()} />
-  if (isLoading) return <Skeleton className="h-64 w-full" />
-  if (!data || data.length === 0)
+function currentPhaseLabel(p?: number): string {
+  if (!p) return "—"
+  const found = PHASES.find((x) => x.id === p)
+  return found ? `${p}. ${found.name}` : `Phase ${p}`
+}
+
+function mergeEventStreams(persisted: FeedEvent[], live: FeedEvent[]): FeedEvent[] {
+  const seen = new Set<string>()
+  const out: FeedEvent[] = []
+  for (const e of persisted) {
+    const k = `${e.type}|${e.timestamp || ""}|${(e.content || e.output || "").slice(0, 80)}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+  }
+  for (const e of live) {
+    const k = `${e.type}|${e.timestamp || ""}|${(e.content || e.output || "").slice(0, 80)}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+  }
+  return out
+}
+
+function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+    for (const v of vulns) {
+      c[normalizeSeverity(v.severity)] += 1
+    }
+    return c
+  }, [vulns])
+  const total = vulns.length || 1
+  const order: Array<keyof typeof counts> = ["critical", "high", "medium", "low", "info"]
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end gap-1">
+        {order.map((sev) => {
+          const n = counts[sev as string]
+          if (!n) return null
+          const pct = Math.max(4, Math.round((n / total) * 100))
+          return (
+            <div
+              key={sev}
+              className={cn(
+                "h-12 rounded-sm",
+                sev === "critical" && "bg-red-500/70",
+                sev === "high" && "bg-orange-500/70",
+                sev === "medium" && "bg-amber-400/70",
+                sev === "low" && "bg-blue-400/70",
+                sev === "info" && "bg-neutral-500/60",
+              )}
+              style={{ width: `${pct}%` }}
+              title={`${sev}: ${n}`}
+            />
+          )
+        })}
+        {vulns.length === 0 && (
+          <div className="h-12 w-full rounded-sm border border-dashed border-border" />
+        )}
+      </div>
+      <div className="grid grid-cols-5 gap-1.5 text-[11px]">
+        {order.map((sev) => (
+          <div key={sev} className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
+            <div className="text-muted-foreground uppercase tracking-wide">{sev}</div>
+            <div className="mono text-base text-foreground">{counts[sev as string]}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FindingsTab({ vulns }: { vulns: VulnSummary[] }) {
+  const sorted = useMemo(
+    () => [...vulns].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)),
+    [vulns],
+  )
+  if (sorted.length === 0)
     return (
       <EmptyState
         title="No findings yet"
-        description="Findings will appear here as the engagement progresses."
+        description="Vulnerabilities will appear here as the engagement progresses."
       />
     )
 
   return (
     <div className="space-y-2">
-      {data.map((f) => (
+      {sorted.map((f) => (
         <Card key={f.id}>
           <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0 space-y-1">
+            <div className="min-w-0 space-y-1 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <SeverityBadge severity={f.severity} />
-                <h3 className="truncate font-medium text-foreground">{f.title}</h3>
+                <h3 className="font-medium text-foreground">{f.title}</h3>
                 {f.cve && (
-                  <Badge variant="outline" className="font-mono">
-                    {f.cve}
-                  </Badge>
+                  <Badge variant="outline" className="mono">{f.cve}</Badge>
                 )}
               </div>
               {f.description && (
-                <p className="text-sm leading-relaxed text-muted-foreground">{f.description}</p>
+                <p className="text-sm leading-relaxed text-muted-foreground line-clamp-3">
+                  {f.description}
+                </p>
               )}
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                {f.host && <span className="font-mono">{f.host}</span>}
-                {f.port != null && <span className="font-mono">:{f.port}</span>}
-                {f.path && <span className="font-mono">{f.path}</span>}
-                <span>· {formatRelative(f.detected_at)}</span>
+                {f.target && <span className="mono">{f.target}</span>}
+                {f.endpoint && <span className="mono">{f.endpoint}</span>}
+                {f.method && <span className="mono">{f.method}</span>}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {f.cvss != null && (
-                <Badge variant="outline" className="font-mono">
-                  CVSS {f.cvss.toFixed(1)}
-                </Badge>
+              {f.cvss != null && f.cvss > 0 && (
+                <Badge variant="outline" className="mono">CVSS {f.cvss.toFixed(1)}</Badge>
               )}
-              <Button variant="ghost" size="icon" aria-label="Open finding">
-                <ExternalLink className="h-4 w-4" />
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -238,131 +344,55 @@ function FindingsTab({ scanId }: { scanId: string }) {
   )
 }
 
-function EventsTab({ scanId }: { scanId: string }) {
-  const { data, isLoading, error, refetch } = useScanEvents(scanId)
+function EventsTab({ events }: { events: FeedEvent[] }) {
+  const [filter, setFilter] = useState<FeedFilter>("all")
   return (
     <LiveFeed
-      title="Engagement events"
-      events={data ?? []}
-      isLoading={isLoading}
-      error={error ? String(error) : null}
-      onRetry={() => refetch()}
-      filterKey={`scan:${scanId}`}
+      events={events}
+      filter={filter}
+      onFilterChange={setFilter}
+      emptyTitle="No events yet"
+      emptyDescription="Once the scan starts producing output it will stream here."
     />
   )
 }
 
-function ReconTab({ scan }: { scan: NonNullable<ReturnType<typeof useScan>["data"]> }) {
-  const recon = scan.recon ?? null
-  if (!recon)
-    return (
-      <EmptyState
-        title="No recon data"
-        description="Reconnaissance data will appear once the recon phase begins."
-      />
-    )
-  return (
-    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-      <ReconCard title="Subdomains" items={recon.subdomains ?? []} />
-      <ReconCard title="Open ports" items={(recon.open_ports ?? []).map((p) => `${p.host}:${p.port}`)} />
-      <ReconCard title="Technologies" items={recon.technologies ?? []} />
-      <ReconCard title="Endpoints" items={recon.endpoints ?? []} />
-      <ReconCard title="Certificates" items={recon.certificates ?? []} />
-      <ReconCard title="DNS records" items={recon.dns_records ?? []} />
-    </div>
-  )
-}
-
-function ReconCard({ title, items }: { title: string; items: string[] }) {
+function ConfigTab({ scan }: { scan: NonNullable<ReturnType<typeof useScan>["data"]> }) {
+  const items: Array<{ k: string; v: React.ReactNode }> = [
+    { k: "Scan mode", v: scan.scan_mode || "—" },
+    { k: "Severity filter", v: (scan.severity_filter ?? []).join(", ") || "all" },
+    { k: "Phases", v: (scan.phases ?? []).join(", ") || "all" },
+    { k: "Iterations", v: <span className="mono">{scan.iterations}</span> },
+    { k: "Tool calls", v: <span className="mono">{scan.tool_calls}</span> },
+    { k: "Tokens", v: <span className="mono">{scan.total_tokens?.toLocaleString() ?? 0}</span> },
+    { k: "Stop reason", v: scan.stop_reason || "—" },
+    { k: "Started", v: formatTime(scan.started_at) },
+    { k: "Finished", v: scan.finished_at ? formatTime(scan.finished_at) : "—" },
+    { k: "Discord webhook", v: scan.discord_webhook ? "configured" : "none" },
+  ]
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center justify-between text-sm">
-          <span>{title}</span>
-          <Badge variant="outline" className="font-mono">
-            {items.length}
-          </Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="max-h-64 overflow-y-auto p-0">
-        {items.length === 0 ? (
-          <div className="px-4 pb-4 text-xs text-muted-foreground">No data</div>
-        ) : (
-          <ul className="divide-y divide-border/60">
-            {items.map((it, i) => (
-              <li key={i} className="px-4 py-2 font-mono text-xs text-foreground/90">
-                {it}
-              </li>
-            ))}
-          </ul>
-        )}
+      <CardContent className="p-0">
+        <dl className="divide-y divide-border/60">
+          {items.map((it) => (
+            <div key={it.k} className="grid grid-cols-3 gap-2 px-4 py-3 text-sm">
+              <dt className="text-muted-foreground">{it.k}</dt>
+              <dd className="col-span-2 text-foreground">{it.v}</dd>
+            </div>
+          ))}
+          {scan.instruction && (
+            <div className="grid grid-cols-3 gap-2 px-4 py-3 text-sm">
+              <dt className="text-muted-foreground flex items-center gap-1">
+                <Sparkles className="h-3 w-3" /> Instruction
+              </dt>
+              <dd className="col-span-2 whitespace-pre-wrap text-foreground/90">
+                {scan.instruction}
+              </dd>
+            </div>
+          )}
+        </dl>
       </CardContent>
     </Card>
-  )
-}
-
-function AITab({ scan }: { scan: NonNullable<ReturnType<typeof useScan>["data"]> }) {
-  const summary = scan.ai_summary
-  if (!summary)
-    return (
-      <EmptyState
-        title="No AI analysis yet"
-        description="Once enough signal is collected, the model will produce an exploit chain and remediation guidance."
-      />
-    )
-  return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle>Summary</CardTitle>
-        </CardHeader>
-        <CardContent className="prose prose-sm prose-invert max-w-none whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-          {summary.summary}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Exploit chain</CardTitle>
-          <CardDescription>Ordered steps proposed by the model</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {summary.exploit_chain?.length ? (
-            <ol className="space-y-3 text-sm">
-              {summary.exploit_chain.map((step, i) => (
-                <li key={i} className="flex gap-3">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border bg-muted font-mono text-xs">
-                    {i + 1}
-                  </span>
-                  <div className="space-y-1">
-                    <div className="font-medium text-foreground">{step.title}</div>
-                    {step.detail && <div className="text-muted-foreground">{step.detail}</div>}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="text-sm text-muted-foreground">No chain produced.</p>
-          )}
-        </CardContent>
-      </Card>
-      {summary.remediation?.length ? (
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Remediation</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2 text-sm">
-              {summary.remediation.map((r, i) => (
-                <li key={i} className="flex gap-2">
-                  <span className="text-muted-foreground">—</span>
-                  <span className="text-foreground/90">{r}</span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      ) : null}
-    </div>
   )
 }
 

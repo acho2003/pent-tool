@@ -4,14 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { api } from "@/api/client"
 import { useAuth } from "@/store/auth"
 import { AlertCircle } from "lucide-react"
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { setSession } = useAuth()
+  const login = useAuth((s) => s.login)
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -24,8 +23,7 @@ export default function LoginPage() {
     setError(null)
     setLoading(true)
     try {
-      const res = await api.login(username, password)
-      setSession(res.user, res.csrf_token)
+      await login(username, password)
       navigate(from, { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed")

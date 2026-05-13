@@ -1,12 +1,31 @@
+import { Link } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState, ErrorState } from "@/components/states"
-import { useInstances, useInstanceAction } from "@/api/queries"
-import { formatRelative, cn } from "@/lib/utils"
-import type { Instance } from "@/types/api"
-import { Cpu, MemoryStick, Activity, Pause, Play, RotateCw } from "lucide-react"
+import {
+  useInstances,
+  useStopInstance,
+  useStartSavedInstance,
+  useRestartInstance,
+} from "@/api/queries"
+import { ScanStatusPill } from "@/components/scan-status-pill"
+import { PhaseProgress } from "@/components/phase-progress"
+import { timeAgo, formatDuration, shortId } from "@/lib/utils"
+import type { ScanInstance } from "@/types/api"
+import {
+  Cpu,
+  MemoryStick,
+  HardDrive,
+  Play,
+  Square,
+  RotateCw,
+  Layers,
+  Coins,
+  ShieldAlert,
+  ExternalLink,
+} from "lucide-react"
 
 export default function InstancesPage() {
   const { data, isLoading, error, refetch } = useInstances()
@@ -15,89 +34,204 @@ export default function InstancesPage() {
     <>
       <header className="flex flex-col gap-1">
         <h1 className="font-sans text-2xl font-semibold tracking-tight">Instances</h1>
-        <p className="text-sm text-muted-foreground">Worker agents executing offensive operations.</p>
+        <p className="text-sm text-muted-foreground">
+          Active scan instances and the host resources they consume.
+        </p>
       </header>
 
       {error ? (
-        <ErrorState message={String(error)} onRetry={() => refetch()} />
+        <ErrorState
+          title="Could not load instances"
+          description={String(error)}
+          action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
+        />
       ) : isLoading ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-44" />
+            <Skeleton key={i} className="h-48" />
           ))}
         </div>
-      ) : !data || data.length === 0 ? (
-        <EmptyState title="No instances registered" description="Start a worker agent to see it here." />
       ) : (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {data.map((inst) => (
-            <InstanceCard key={inst.id} instance={inst} />
-          ))}
-        </div>
+        <>
+          {data?.resources && <ResourcesBar resources={data.resources} />}
+          {!data || !data.instances || data.instances.length === 0 ? (
+            <EmptyState
+              title="No instances"
+              description="Start a scan to see it appear here as a running instance."
+            />
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {data.instances.map((inst) => (
+                <InstanceCard key={inst.id} instance={inst} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </>
   )
 }
 
-function InstanceCard({ instance }: { instance: Instance }) {
-  const action = useInstanceAction()
-  const stateColor =
-    instance.state === "online"
-      ? "bg-success"
-      : instance.state === "busy"
-        ? "bg-warning"
-        : instance.state === "offline"
-          ? "bg-muted-foreground"
-          : "bg-destructive"
+function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof useInstances>["data"]>["resources"] }) {
+  const cpu = Math.min(100, Math.round((resources.cpu_load_1m / Math.max(1, resources.cpu_cores)) * 100))
+  const ramTotal = resources.ram_total_mb || 1
+  const ramUsed = ramTotal - resources.ram_available_mb
+  const ramPct = Math.min(100, Math.max(0, Math.round((ramUsed / ramTotal) * 100)))
+  const diskFreeGb = (resources.disk_free_mb / 1024).toFixed(1)
+  const level = (resources.level || "").toLowerCase()
+  const levelColor =
+    level === "critical"
+      ? "bg-red-500/10 border-red-500/30 text-red-300"
+      : level === "warning" || level === "warn"
+        ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
+        : "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+
+  return (
+    <Card>
+      <CardContent className="grid gap-3 p-4 md:grid-cols-4">
+        <ResourceStat
+          icon={<Cpu className="h-3 w-3" />}
+          label="CPU LOAD"
+          value={`${cpu}%`}
+          sub={`${resources.cpu_load_1m.toFixed(2)} / ${resources.cpu_cores} cores`}
+        />
+        <ResourceStat
+          icon={<MemoryStick className="h-3 w-3" />}
+          label="MEMORY"
+          value={`${ramPct}%`}
+          sub={`${Math.round(ramUsed)}MB used`}
+        />
+        <ResourceStat
+          icon={<HardDrive className="h-3 w-3" />}
+          label="DISK FREE"
+          value={`${diskFreeGb}GB`}
+          sub={`Max ${resources.effective_max_instances} instances`}
+        />
+        <div className={`rounded-md border px-3 py-2 text-xs ${levelColor}`}>
+          <div className="uppercase tracking-wide opacity-70">Resource level</div>
+          <div className="mt-0.5 font-medium capitalize">{resources.level || "ok"}</div>
+          {resources.reason && (
+            <div className="mt-0.5 opacity-70 line-clamp-2">{resources.reason}</div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function ResourceStat({
+  icon,
+  label,
+  value,
+  sub,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: string
+  sub?: string
+}) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+        {icon}
+        {label}
+      </div>
+      <div className="mono mt-0.5 text-xl text-foreground">{value}</div>
+      {sub && <div className="text-[11px] text-muted-foreground mono">{sub}</div>}
+    </div>
+  )
+}
+
+function InstanceCard({ instance }: { instance: ScanInstance }) {
+  const stop = useStopInstance()
+  const start = useStartSavedInstance()
+  const restart = useRestartInstance()
+  const status = (instance.status || "").toLowerCase()
+  const canStop = status === "running" || status === "paused"
+  const canStart = status === "saved" || status === "stopped" || status === "failed" || status === "finished"
 
   return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <CardTitle className="truncate font-mono text-sm">{instance.name ?? instance.id}</CardTitle>
-            <CardDescription className="truncate text-xs">{instance.region ?? "—"}</CardDescription>
+            <CardTitle className="truncate mono text-sm">
+              {instance.name || instance.targets || shortId(instance.id)}
+            </CardTitle>
+            <CardDescription className="mono text-xs truncate">
+              {shortId(instance.id, 12)}
+              {instance.scan_mode && <> · {instance.scan_mode}</>}
+            </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
-            <span className={cn("h-2 w-2 rounded-full", stateColor)} />
-            <Badge variant="outline" className="capitalize">
-              {instance.state}
-            </Badge>
-          </div>
+          <ScanStatusPill status={instance.status} />
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="grid grid-cols-3 gap-2 text-xs">
-          <Stat icon={<Cpu className="h-3 w-3" />} label="CPU" value={pct(instance.cpu_pct)} />
-          <Stat icon={<MemoryStick className="h-3 w-3" />} label="MEM" value={pct(instance.mem_pct)} />
-          <Stat icon={<Activity className="h-3 w-3" />} label="JOBS" value={String(instance.active_jobs ?? 0)} />
+        <div className="grid grid-cols-3 gap-2">
+          <Stat
+            icon={<ShieldAlert className="h-3 w-3" />}
+            label="VULNS"
+            value={String(instance.vuln_count ?? 0)}
+          />
+          <Stat
+            icon={<Layers className="h-3 w-3" />}
+            label="ITERS"
+            value={String(instance.iterations ?? 0)}
+          />
+          <Stat
+            icon={<Coins className="h-3 w-3" />}
+            label="TOKENS"
+            value={
+              instance.total_tokens
+                ? compactNumber(instance.total_tokens)
+                : "0"
+            }
+          />
         </div>
-        <div className="border-t border-border pt-3 text-xs text-muted-foreground">
-          <div>Last seen {formatRelative(instance.last_seen)}</div>
-          {instance.version && <div className="font-mono">v{instance.version}</div>}
+        <PhaseProgress
+          current={instance.current_phase}
+          selected={instance.phases}
+          status={instance.status}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+          <div>
+            <div>Started {timeAgo(instance.started_at)}</div>
+            <div className="mono">
+              {formatDuration(instance.started_at, instance.finished_at)}
+            </div>
+          </div>
+          <Button asChild size="sm" variant="ghost" className="h-7">
+            <Link to={`/scans/${instance.id}`}>
+              Open <ExternalLink className="ml-1 h-3 w-3" />
+            </Link>
+          </Button>
         </div>
         <div className="flex flex-wrap gap-2 pt-1">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={action.isPending || instance.state === "offline"}
-            onClick={() => action.mutate({ id: instance.id, action: "pause" })}
-          >
-            <Pause className="mr-1 h-3.5 w-3.5" /> Pause
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={action.isPending}
-            onClick={() => action.mutate({ id: instance.id, action: "resume" })}
-          >
-            <Play className="mr-1 h-3.5 w-3.5" /> Resume
-          </Button>
+          {canStart && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={start.isPending}
+              onClick={() => start.mutate(instance.id)}
+            >
+              <Play className="mr-1 h-3.5 w-3.5" /> Start
+            </Button>
+          )}
+          {canStop && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={stop.isPending}
+              onClick={() => stop.mutate(instance.id)}
+            >
+              <Square className="mr-1 h-3.5 w-3.5" /> Stop
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"
-            disabled={action.isPending}
-            onClick={() => action.mutate({ id: instance.id, action: "restart" })}
+            disabled={restart.isPending}
+            onClick={() => restart.mutate(instance.id)}
           >
             <RotateCw className="mr-1 h-3.5 w-3.5" /> Restart
           </Button>
@@ -114,12 +248,13 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
         {icon}
         {label}
       </div>
-      <div className="font-mono text-base text-foreground">{value}</div>
+      <div className="mono text-base text-foreground">{value}</div>
     </div>
   )
 }
 
-function pct(n: number | null | undefined) {
-  if (n == null) return "—"
-  return `${Math.round(n)}%`
+function compactNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
 }
