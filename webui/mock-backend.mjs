@@ -147,6 +147,20 @@ const server = http.createServer((req, res) => {
     );
     return;
   }
+  // Auth: mock reports auth as disabled (auth_enabled:false) so the SPA
+  // never shows the login screen against the mock. Still, callers that
+  // intentionally hit /api/auth/login or /logout should get a 200 instead
+  // of falling through to the catch-all (which would otherwise return 200
+  // {ok:true} but mask the fact that no real session is established).
+  if (req.method === "POST" && req.url === "/api/auth/login") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => json(res, { status: "ok" }));
+    return;
+  }
+  if (req.method === "POST" && req.url === "/api/auth/logout") {
+    return json(res, { status: "logged_out" });
+  }
   json(res, { ok: true });
 });
 
