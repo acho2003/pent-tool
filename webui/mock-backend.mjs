@@ -298,12 +298,13 @@ const server = http.createServer(async (req, res) => {
     const targetsArr = Array.isArray(body.targets) ? body.targets : [];
     const primary = targetsArr[0] || "demo.local";
     const id = `inst_${String(state.instances.length + 1).padStart(2, "0")}`;
+    const saveOnly = body.save_only === true;
     const newInst = {
       id,
       name: body.name || `Scan ${id}`,
       targets: targetsArr.join(",") || primary,
       parent_target: primary,
-      status: "running",
+      status: saveOnly ? "saved" : "running",
       started_at: nowIso(),
       iterations: 0,
       tool_calls: 0,
@@ -322,7 +323,7 @@ const server = http.createServer(async (req, res) => {
       ...buildScanFromInstance(newInst),
       id: `scan_${String(state.scans.length + 1).padStart(2, "0")}`,
     });
-    return ok(res, { status: "started", instance_id: id, id });
+    return ok(res, { status: saveOnly ? "saved" : "started", instance_id: id, id });
   }
   if (method === "POST" && url === "/api/stop") {
     for (const i of state.instances) {

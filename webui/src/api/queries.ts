@@ -126,6 +126,7 @@ export function useStartScan() {
     mutationFn: (req: ScanRequest) => api.startScan(req),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.instances });
+      qc.invalidateQueries({ queryKey: qk.scans });
       qc.invalidateQueries({ queryKey: qk.status });
     },
   });

@@ -916,31 +916,47 @@ type VulnSummary struct {
 	VerificationMethod string  `json:"verification_method,omitempty"`
 }
 
+// SubScanSummary is a child target scanned as part of a wildcard parent scan.
+type SubScanSummary struct {
+	ID          string `json:"id"`
+	Target      string `json:"target"`
+	StartedAt   string `json:"started_at,omitempty"`
+	FinishedAt  string `json:"finished_at,omitempty"`
+	Status      string `json:"status"`
+	VulnCount   int    `json:"vuln_count"`
+	TotalTokens int    `json:"total_tokens"`
+}
+
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
-	ID                       string        `json:"id"`
-	InstanceID               string        `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
-	Name                     string        `json:"name,omitempty"`        // user-defined scan name
-	Target                   string        `json:"target"`
-	ParentTarget             string        `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
-	StartedAt                string        `json:"started_at"`
-	FinishedAt               string        `json:"finished_at,omitempty"`
-	Status                   string        `json:"status"`                               // saved, running, finished, stopped
-	StopReason               string        `json:"stop_reason,omitempty"`                // why scan stopped (error, user, watchdog, etc.)
-	ScanMode                 string        `json:"scan_mode,omitempty"`                  // single, wildcard, dast
-	Instruction              string        `json:"instruction,omitempty"`                // custom scan instructions
-	SeverityFilter           []string      `json:"severity_filter,omitempty"`            // severity filter for scan
-	DiscordWebhook           string        `json:"discord_webhook,omitempty"`            // discord notification webhook
-	DiscordWebhookConfigured bool          `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
-	Events                   []WSEvent     `json:"events"`
-	Vulns                    []VulnSummary `json:"vulns"`
-	TotalTokens              int           `json:"total_tokens"`
-	Iterations               int           `json:"iterations"`
-	ToolCalls                int           `json:"tool_calls"`
-	CompanyName              string        `json:"company_name,omitempty"` // report branding: company name
-	LogoPath                 string        `json:"logo_path,omitempty"`    // report branding: logo path
-	Phases                   []int         `json:"phases,omitempty"`       // selected methodology phases
-	CurrentPhase             int           `json:"current_phase,omitempty"`
+	ID                       string           `json:"id"`
+	InstanceID               string           `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
+	Name                     string           `json:"name,omitempty"`        // user-defined scan name
+	Target                   string           `json:"target"`
+	ParentTarget             string           `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
+	StartedAt                string           `json:"started_at"`
+	FinishedAt               string           `json:"finished_at,omitempty"`
+	Status                   string           `json:"status"`                               // saved, running, finished, stopped
+	StopReason               string           `json:"stop_reason,omitempty"`                // why scan stopped (error, user, watchdog, etc.)
+	ScanMode                 string           `json:"scan_mode,omitempty"`                  // single, wildcard, dast
+	Instruction              string           `json:"instruction,omitempty"`                // custom scan instructions
+	SeverityFilter           []string         `json:"severity_filter,omitempty"`            // severity filter for scan
+	DiscordWebhook           string           `json:"discord_webhook,omitempty"`            // discord notification webhook
+	DiscordWebhookConfigured bool             `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
+	Events                   []WSEvent        `json:"events"`
+	Vulns                    []VulnSummary    `json:"vulns"`
+	TotalTokens              int              `json:"total_tokens"`
+	Iterations               int              `json:"iterations"`
+	ToolCalls                int              `json:"tool_calls"`
+	CompanyName              string           `json:"company_name,omitempty"` // report branding: company name
+	LogoPath                 string           `json:"logo_path,omitempty"`    // report branding: logo path
+	Phases                   []int            `json:"phases,omitempty"`       // selected methodology phases
+	CurrentPhase             int              `json:"current_phase,omitempty"`
+	SubScans                 []SubScanSummary `json:"sub_scans,omitempty"`
+	SubScanTotal             int              `json:"sub_scan_total,omitempty"`
+	SubScanCompleted         int              `json:"sub_scan_completed,omitempty"`
+	SubScanRunning           int              `json:"sub_scan_running,omitempty"`
+	SubScanRemaining         int              `json:"sub_scan_remaining,omitempty"`
 }
 
 // QueueState persists scan queue state for recovery after restart
@@ -3166,6 +3182,30 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 			TotalTargets: total,
 		})
 	}
+	pendingSubScans := make([]SubScanSummary, 0, len(subdomains))
+	for _, subdomain := range subdomains {
+		pendingSubScans = append(pendingSubScans, SubScanSummary{
+			Target: subdomain,
+			Status: "pending",
+		})
+	}
+	if discoverySess.record != nil {
+		discoverySess.record.SubScans = pendingSubScans
+		discoverySess.record.SubScanTotal = len(subdomains)
+		discoverySess.record.SubScanRemaining = len(subdomains)
+		s.saveScanRecordTo(discoverySess.record, scanDir)
+	}
+	s.broadcastToInstance(req.InstanceID, WSEvent{
+		Type:           "subdomains_discovered",
+		Content:        fmt.Sprintf("Discovered %d subdomains for %s", len(subdomains), target),
+		Target:         target,
+		Output:         strings.Join(subdomains, "\n"),
+		TargetIndex:    idx + 1,
+		TotalTargets:   total,
+		SubTargetTotal: len(subdomains),
+		ParentTarget:   target,
+		CurrentPhase:   firstSelectedPhase(req.Phases),
+	})
 
 	// ── PHASE 2: Scan each subdomain individually ──
 	for j, subdomain := range subdomains {
@@ -4018,8 +4058,21 @@ func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 		return "", nil
 	}
 
-	// First: walk the nested tree to find the scan by ID (dataDir/target/date/slug/scan.json)
-	for _, entry := range s.findAllScans() {
+	// First: prefer top-level scans. Multiple wildcard child records share the
+	// same instance id; returning a child here makes the UI route land on one
+	// subdomain instead of the parent wildcard scan.
+	entries := s.findAllScans()
+	for _, entry := range entries {
+		if entry.rec.ParentTarget != "" {
+			continue
+		}
+		if entry.rec.ID == scanID || entry.rec.InstanceID == scanID || filepath.Base(entry.dir) == scanID {
+			return entry.dir, &entry.rec
+		}
+	}
+	// Second: allow direct child lookup when the caller explicitly uses a child
+	// scan id, for report generation and historical compatibility.
+	for _, entry := range entries {
 		if entry.rec.ID == scanID || entry.rec.InstanceID == scanID || filepath.Base(entry.dir) == scanID {
 			return entry.dir, &entry.rec
 		}
@@ -4114,6 +4167,226 @@ func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 	}
 }
 
+func normalizeScanTarget(target string) string {
+	target = strings.ToLower(strings.TrimSpace(target))
+	target = strings.TrimPrefix(target, "https://")
+	target = strings.TrimPrefix(target, "http://")
+	target = strings.TrimRight(target, "/")
+	return target
+}
+
+func isFinishedSubScanStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "finished", "completed", "stopped", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isChildOfScan(parent, child *ScanRecord) bool {
+	if parent == nil || child == nil || child.ParentTarget == "" {
+		return false
+	}
+	if parent.InstanceID != "" && child.InstanceID == parent.InstanceID {
+		return true
+	}
+	return normalizeScanTarget(child.ParentTarget) == normalizeScanTarget(parent.Target)
+}
+
+func (s *Server) instanceForRecord(rec *ScanRecord) *ScanInstance {
+	if rec == nil {
+		return nil
+	}
+	s.instancesMu.RLock()
+	defer s.instancesMu.RUnlock()
+	if rec.InstanceID != "" {
+		if inst := s.instances[rec.InstanceID]; inst != nil {
+			return inst
+		}
+	}
+	return s.instances[rec.ID]
+}
+
+func (s *Server) applyInstanceSnapshot(rec *ScanRecord, includeEvents bool) {
+	inst := s.instanceForRecord(rec)
+	if inst == nil {
+		return
+	}
+	snapshot := scanRecordFromInstance(inst)
+	if snapshot == nil {
+		return
+	}
+	if rec.InstanceID == "" {
+		rec.InstanceID = snapshot.InstanceID
+	}
+	rec.Status = snapshot.Status
+	rec.FinishedAt = snapshot.FinishedAt
+	rec.StopReason = snapshot.StopReason
+	rec.Iterations = snapshot.Iterations
+	rec.ToolCalls = snapshot.ToolCalls
+	rec.TotalTokens = snapshot.TotalTokens
+	rec.Vulns = snapshot.Vulns
+	rec.CurrentPhase = snapshot.CurrentPhase
+	if includeEvents {
+		rec.Events = snapshot.Events
+	}
+}
+
+func (s *Server) attachWildcardSubScans(rec *ScanRecord) {
+	if rec == nil || rec.ParentTarget != "" {
+		return
+	}
+
+	children := make(map[string]*SubScanSummary)
+	order := []string{}
+	add := func(key string, summary SubScanSummary) *SubScanSummary {
+		key = normalizeScanTarget(key)
+		if key == "" {
+			key = normalizeScanTarget(summary.Target)
+		}
+		if key == "" {
+			return nil
+		}
+		if existing := children[key]; existing != nil {
+			if summary.ID != "" {
+				existing.ID = summary.ID
+			}
+			if summary.Target != "" {
+				existing.Target = summary.Target
+			}
+			if summary.StartedAt != "" {
+				existing.StartedAt = summary.StartedAt
+			}
+			if summary.FinishedAt != "" {
+				existing.FinishedAt = summary.FinishedAt
+			}
+			if summary.Status != "" && !(isFinishedSubScanStatus(existing.Status) && strings.EqualFold(summary.Status, "running")) {
+				existing.Status = summary.Status
+			}
+			if summary.VulnCount > 0 {
+				existing.VulnCount = summary.VulnCount
+			}
+			if summary.TotalTokens > 0 {
+				existing.TotalTokens = summary.TotalTokens
+			}
+			return existing
+		}
+		if summary.Status == "" {
+			summary.Status = "running"
+		}
+		children[key] = &summary
+		order = append(order, key)
+		return children[key]
+	}
+
+	total := 0
+	if rec.SubScanTotal > total {
+		total = rec.SubScanTotal
+	}
+	for _, child := range rec.SubScans {
+		add(child.Target, child)
+	}
+
+	for _, entry := range s.findAllScans() {
+		child := entry.rec
+		if !isChildOfScan(rec, &child) {
+			continue
+		}
+		for _, vuln := range child.Vulns {
+			appendVulnSummaryUnique(&rec.Vulns, vuln)
+		}
+		add(child.Target, SubScanSummary{
+			ID:          child.ID,
+			Target:      child.Target,
+			StartedAt:   child.StartedAt,
+			FinishedAt:  child.FinishedAt,
+			Status:      child.Status,
+			VulnCount:   len(child.Vulns),
+			TotalTokens: child.TotalTokens,
+		})
+	}
+
+	for _, evt := range rec.Events {
+		if evt.SubTargetTotal > total {
+			total = evt.SubTargetTotal
+		}
+		if evt.ParentTarget == "" && evt.SubTargetTotal == 0 {
+			continue
+		}
+		target := strings.TrimSpace(evt.Target)
+		if target == "" {
+			continue
+		}
+		status := ""
+		startedAt := ""
+		finishedAt := ""
+		switch evt.Type {
+		case "target_started":
+			status = "running"
+			startedAt = evt.Timestamp
+		case "target_completed":
+			status = "finished"
+			finishedAt = evt.Timestamp
+		case "subdomains_discovered":
+			for _, line := range strings.Split(evt.Output, "\n") {
+				target := strings.TrimSpace(line)
+				if target == "" {
+					continue
+				}
+				add(target, SubScanSummary{Target: target, Status: "pending"})
+			}
+			continue
+		default:
+			continue
+		}
+		summary := add(target, SubScanSummary{
+			ID:         evt.AgentID,
+			Target:     target,
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+			Status:     status,
+		})
+		_ = summary
+	}
+
+	if total < len(children) {
+		total = len(children)
+	}
+	if total == 0 {
+		return
+	}
+
+	summaries := make([]SubScanSummary, 0, len(order))
+	completed := 0
+	running := 0
+	for _, key := range order {
+		child := *children[key]
+		if isFinishedSubScanStatus(child.Status) {
+			completed++
+		} else if strings.EqualFold(child.Status, "running") {
+			running++
+		}
+		summaries = append(summaries, child)
+	}
+	sort.SliceStable(summaries, func(i, j int) bool {
+		if summaries[i].StartedAt == "" || summaries[j].StartedAt == "" {
+			return summaries[i].Target < summaries[j].Target
+		}
+		return summaries[i].StartedAt < summaries[j].StartedAt
+	})
+
+	remaining := total - completed - running
+	if remaining < 0 {
+		remaining = 0
+	}
+	rec.SubScans = summaries
+	rec.SubScanTotal = total
+	rec.SubScanCompleted = completed
+	rec.SubScanRunning = running
+	rec.SubScanRemaining = remaining
+}
+
 // rebuildInstancesFromDisk populates s.instances from all saved scan.json files on disk.
 // This ensures the dashboard shows historical scans immediately after server restart.
 // Skips subdomain scans (those with ParentTarget set) — those are shown under their parent.
@@ -4170,23 +4443,39 @@ func (s *Server) rebuildInstancesFromDisk() {
 // handleListScans returns a list of all saved scans (sorted newest first).
 func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	type scanInfo struct {
-		ID          string `json:"id"`
-		Target      string `json:"target"`
-		StartedAt   string `json:"started_at"`
-		Status      string `json:"status"`
-		VulnCount   int    `json:"vuln_count"`
-		TotalTokens int    `json:"total_tokens"`
+		ID               string `json:"id"`
+		Target           string `json:"target"`
+		StartedAt        string `json:"started_at"`
+		Status           string `json:"status"`
+		ScanMode         string `json:"scan_mode,omitempty"`
+		VulnCount        int    `json:"vuln_count"`
+		TotalTokens      int    `json:"total_tokens"`
+		SubScanTotal     int    `json:"sub_scan_total,omitempty"`
+		SubScanCompleted int    `json:"sub_scan_completed,omitempty"`
+		SubScanRunning   int    `json:"sub_scan_running,omitempty"`
+		SubScanRemaining int    `json:"sub_scan_remaining,omitempty"`
 	}
 
 	var scans []scanInfo
 	for _, entry := range s.findAllScans() {
+		if entry.rec.ParentTarget != "" {
+			continue
+		}
+		rec := entry.rec
+		s.applyInstanceSnapshot(&rec, false)
+		s.attachWildcardSubScans(&rec)
 		scans = append(scans, scanInfo{
-			ID:          entry.rec.ID,
-			Target:      entry.rec.Target,
-			StartedAt:   entry.rec.StartedAt,
-			Status:      entry.rec.Status,
-			VulnCount:   len(entry.rec.Vulns),
-			TotalTokens: entry.rec.TotalTokens,
+			ID:               rec.ID,
+			Target:           rec.Target,
+			StartedAt:        rec.StartedAt,
+			Status:           rec.Status,
+			ScanMode:         rec.ScanMode,
+			VulnCount:        len(rec.Vulns),
+			TotalTokens:      rec.TotalTokens,
+			SubScanTotal:     rec.SubScanTotal,
+			SubScanCompleted: rec.SubScanCompleted,
+			SubScanRunning:   rec.SubScanRunning,
+			SubScanRemaining: rec.SubScanRemaining,
 		})
 	}
 
@@ -4750,7 +5039,13 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	scanID := strings.TrimPrefix(r.URL.Path, "/api/scans/")
 	if scanID == "" || scanID == "latest" {
 		// Find latest scan by StartedAt timestamp
-		allScans := s.findAllScans()
+		allScans := []scanEntry{}
+		for _, entry := range s.findAllScans() {
+			if entry.rec.ParentTarget != "" {
+				continue
+			}
+			allScans = append(allScans, entry)
+		}
 		if len(allScans) == 0 {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`null`))
@@ -4760,6 +5055,8 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 			return allScans[i].rec.StartedAt > allScans[j].rec.StartedAt
 		})
 		rec := allScans[0].rec
+		s.applyInstanceSnapshot(&rec, true)
+		s.attachWildcardSubScans(&rec)
 		s.markDiscordWebhookConfigured(&rec)
 		data, _ := json.Marshal(rec)
 		w.Header().Set("Content-Type", "application/json")
@@ -4775,6 +5072,16 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		dir, rec := s.findScanByID(scanID)
 		if dir != "" {
 			os.RemoveAll(dir)
+		}
+		if rec != nil {
+			for _, entry := range s.findAllScans() {
+				if entry.dir == dir {
+					continue
+				}
+				if isChildOfScan(rec, &entry.rec) {
+					os.RemoveAll(entry.dir)
+				}
+			}
 		}
 		instanceIDs := []string{scanID}
 		if rec != nil {
@@ -4803,6 +5110,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		inst := s.instances[scanID]
 		s.instancesMu.RUnlock()
 		if rec := scanRecordFromInstance(inst); rec != nil {
+			s.attachWildcardSubScans(rec)
 			s.markDiscordWebhookConfigured(rec)
 			data, _ := json.Marshal(rec)
 			w.Header().Set("Content-Type", "application/json")
@@ -4823,6 +5131,8 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.applyInstanceSnapshot(rec, true)
+	s.attachWildcardSubScans(rec)
 	s.markDiscordWebhookConfigured(rec)
 	data, _ := json.Marshal(rec)
 	w.Header().Set("Content-Type", "application/json")

@@ -41,7 +41,7 @@ import {
   ArrowRight,
 } from "lucide-react"
 import { LiveFeed, type FeedFilter } from "@/components/live-feed"
-import type { VulnSummary } from "@/types/api"
+import type { SubScanSummary, VulnSummary } from "@/types/api"
 
 export default function ScanDetailPage() {
   const navigate = useNavigate()
@@ -228,6 +228,26 @@ export default function ScanDetailPage() {
             <RiskBreakdown vulns={scan.vulns ?? []} />
           </CardContent>
         </Card>
+
+        {!!scan.sub_scan_total && (
+          <Card className="lg:col-span-3">
+            <CardHeader>
+              <CardTitle className="text-sm">Wildcard coverage</CardTitle>
+              <CardDescription>
+                {scan.sub_scan_completed ?? 0} scanned · {scan.sub_scan_running ?? 0} running ·{" "}
+                {scan.sub_scan_remaining ?? 0} remaining
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SubdomainProgress
+                completed={scan.sub_scan_completed ?? 0}
+                running={scan.sub_scan_running ?? 0}
+                remaining={scan.sub_scan_remaining ?? 0}
+                total={scan.sub_scan_total ?? 0}
+              />
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <Tabs defaultValue="findings">
@@ -240,6 +260,12 @@ export default function ScanDetailPage() {
             <Terminal className="mr-1.5 h-3.5 w-3.5" />
             Events
           </TabsTrigger>
+          {!!scan.sub_scan_total && (
+            <TabsTrigger value="subdomains">
+              <ListChecks className="mr-1.5 h-3.5 w-3.5" />
+              Subdomains
+            </TabsTrigger>
+          )}
           <TabsTrigger value="config">
             <ListChecks className="mr-1.5 h-3.5 w-3.5" />
             Config
@@ -252,6 +278,11 @@ export default function ScanDetailPage() {
         <TabsContent value="events">
           <EventsTab events={mergedEvents} />
         </TabsContent>
+        {!!scan.sub_scan_total && (
+          <TabsContent value="subdomains">
+            <SubdomainsTab subScans={scan.sub_scans ?? []} />
+          </TabsContent>
+        )}
         <TabsContent value="config">
           <ConfigTab scan={scan} />
         </TabsContent>
@@ -264,6 +295,47 @@ function currentPhaseLabel(p?: number): string {
   if (!p) return "—"
   const found = PHASES.find((x) => x.id === p)
   return found ? `${p}. ${found.name}` : `Phase ${p}`
+}
+
+function SubdomainProgress({
+  completed,
+  running,
+  remaining,
+  total,
+}: {
+  completed: number
+  running: number
+  remaining: number
+  total: number
+}) {
+  const denominator = Math.max(total, 1)
+  const completedPct = (completed / denominator) * 100
+  const runningPct = (running / denominator) * 100
+  const remainingPct = Math.max(0, 100 - completedPct - runningPct)
+  return (
+    <div className="space-y-3">
+      <div className="flex h-2 overflow-hidden rounded-sm bg-muted">
+        <div className="bg-success" style={{ width: `${completedPct}%` }} />
+        <div className="bg-warning" style={{ width: `${runningPct}%` }} />
+        <div className="bg-muted-foreground/25" style={{ width: `${remainingPct}%` }} />
+      </div>
+      <div className="grid gap-2 text-xs sm:grid-cols-4">
+        <ProgressStat label="Total" value={total} />
+        <ProgressStat label="Scanned" value={completed} />
+        <ProgressStat label="Running" value={running} />
+        <ProgressStat label="Remaining" value={remaining} />
+      </div>
+    </div>
+  )
+}
+
+function ProgressStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mono mt-1 text-lg text-foreground">{value}</div>
+    </div>
+  )
 }
 
 function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
@@ -313,6 +385,77 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
       </div>
     </div>
   )
+}
+
+function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
+  if (subScans.length === 0) {
+    return (
+      <EmptyState
+        title="No subdomains recorded yet"
+        description="Discovered subdomains will appear here as the wildcard scan progresses."
+      />
+    )
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-border bg-muted/30 text-xs uppercase tracking-wider text-muted-foreground">
+              <tr>
+                <Th>Subdomain</Th>
+                <Th>Status</Th>
+                <Th>Findings</Th>
+                <Th>Tokens</Th>
+                <Th>Started</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {subScans.map((sub) => (
+                <tr key={sub.id || sub.target} className="border-b border-border/60 last:border-0">
+                  <Td>
+                    <div className="mono text-sm text-foreground">{sub.target}</div>
+                    <div className="mono text-xs text-muted-foreground">{sub.id}</div>
+                  </Td>
+                  <Td>
+                    <ScanStatusPill status={sub.status} />
+                  </Td>
+                  <Td className="mono text-xs">{sub.vuln_count ?? 0}</Td>
+                  <Td className="mono text-xs text-muted-foreground">
+                    {sub.total_tokens ? sub.total_tokens.toLocaleString() : "—"}
+                  </Td>
+                  <Td className="text-muted-foreground">
+                    {sub.started_at ? timeAgo(sub.started_at) : "—"}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function Th({
+  children,
+  className = "",
+}: {
+  children: ReactNode
+  className?: string
+}) {
+  return <th className={cn("px-4 py-3 text-left font-medium", className)}>{children}</th>
+}
+
+function Td({
+  children,
+  className = "",
+}: {
+  children: ReactNode
+  className?: string
+}) {
+  return <td className={cn("px-4 py-3 align-middle", className)}>{children}</td>
 }
 
 function FindingsTab({ vulns }: { vulns: VulnSummary[] }) {
