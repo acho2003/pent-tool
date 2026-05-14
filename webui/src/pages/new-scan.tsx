@@ -1,6 +1,14 @@
 import { useNavigate } from "react-router-dom";
 import { useMemo, useState, type FormEvent } from "react";
-import { ChevronLeft, ImageIcon, Loader2, Play, Upload, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ImageIcon,
+  Loader2,
+  Play,
+  Save,
+  Upload,
+  X,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -100,6 +108,10 @@ export default function NewScanPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    await submitScan(false);
+  }
+
+  async function submitScan(saveOnly: boolean) {
     setError(null);
     if (!targets.length) {
       setError("At least one target is required.");
@@ -116,6 +128,7 @@ export default function NewScanPage() {
         model: model.trim() || undefined,
         company_name: companyName.trim() || undefined,
         logo_path: logoPath || undefined,
+        save_only: saveOnly || undefined,
       });
       const id =
         (res as { id?: string; instance_id?: string })?.instance_id ||
@@ -123,12 +136,18 @@ export default function NewScanPage() {
       if (id) nav(`/scans/${id}`);
       else nav("/scans");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start scan");
+      setError(
+        err instanceof Error
+          ? err.message
+          : saveOnly
+            ? "Failed to save scan"
+            : "Failed to start scan",
+      );
     }
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-5">
       <div>
         <Button
           variant="ghost"
@@ -147,7 +166,7 @@ export default function NewScanPage() {
         </p>
       </div>
 
-      <form onSubmit={onSubmit} className="space-y-6">
+      <form onSubmit={onSubmit} className="space-y-5">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Targets</CardTitle>
@@ -442,9 +461,22 @@ export default function NewScanPage() {
           </div>
         )}
 
-        <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border bg-background/95 py-3 backdrop-blur">
+        <div className="flex flex-col-reverse gap-2 border-t border-border pt-3 sm:flex-row sm:items-center sm:justify-end">
           <Button type="button" variant="outline" onClick={() => nav(-1)}>
             Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!targets.length || startScan.isPending}
+            onClick={() => void submitScan(true)}
+          >
+            {startScan.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            Save for later
           </Button>
           <Button
             type="submit"

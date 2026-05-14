@@ -65,6 +65,16 @@ export interface ScanInstance {
   current_phase?: number;
 }
 
+export interface SubScanSummary {
+  id: string;
+  target: string;
+  started_at?: string;
+  finished_at?: string;
+  status: string;
+  vuln_count: number;
+  total_tokens: number;
+}
+
 export interface ScanRecord {
   id: string;
   instance_id?: string;
@@ -89,6 +99,11 @@ export interface ScanRecord {
   logo_path?: string;
   phases?: number[];
   current_phase?: number;
+  sub_scans?: SubScanSummary[];
+  sub_scan_total?: number;
+  sub_scan_completed?: number;
+  sub_scan_running?: number;
+  sub_scan_remaining?: number;
 }
 
 export interface ScanListItem {
@@ -96,8 +111,13 @@ export interface ScanListItem {
   target: string;
   started_at: string;
   status: string;
+  scan_mode?: string;
   vuln_count: number;
   total_tokens: number;
+  sub_scan_total?: number;
+  sub_scan_completed?: number;
+  sub_scan_running?: number;
+  sub_scan_remaining?: number;
 }
 
 export interface InstancesResponse {

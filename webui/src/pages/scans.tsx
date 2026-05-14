@@ -292,6 +292,21 @@ function ScanTable({
                       <div className="text-xs text-muted-foreground mono">
                         {shortId(s.id, 12)}
                       </div>
+                      {!!s.sub_scan_total && (
+                        <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                          <span>{s.sub_scan_total} subdomains</span>
+                          <span>·</span>
+                          <span>{s.sub_scan_completed ?? 0} scanned</span>
+                          {!!s.sub_scan_running && (
+                            <>
+                              <span>·</span>
+                              <span>{s.sub_scan_running} running</span>
+                            </>
+                          )}
+                          <span>·</span>
+                          <span>{s.sub_scan_remaining ?? 0} remaining</span>
+                        </div>
+                      )}
                     </Link>
                   </Td>
                   <Td>

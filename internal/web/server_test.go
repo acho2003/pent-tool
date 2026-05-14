@@ -784,11 +784,17 @@ func TestScanPersistence_ListLatestDeleteAndRebuild(t *testing.T) {
 		Vulns:     []VulnSummary{{ID: "v1", Severity: "high"}},
 	})
 	writeScanRecord(t, s.dataDir, "target-b/2026-05-02/scan-b", ScanRecord{
-		ID:        "scan-b",
-		Target:    "https://b.test",
-		StartedAt: "2026-05-02T10:00:00Z",
-		Status:    "running",
-		ScanMode:  "single",
+		ID:               "scan-b",
+		Target:           "https://b.test",
+		StartedAt:        "2026-05-02T10:00:00Z",
+		Status:           "running",
+		ScanMode:         "wildcard",
+		SubScanTotal:     2,
+		SubScanRemaining: 2,
+		SubScans: []SubScanSummary{
+			{Target: "https://sub.b.test", Status: "pending"},
+			{Target: "https://later.b.test", Status: "pending"},
+		},
 	})
 	writeScanRecord(t, s.dataDir, "target-b/2026-05-02/subdomain", ScanRecord{
 		ID:           "subdomain",
@@ -796,6 +802,7 @@ func TestScanPersistence_ListLatestDeleteAndRebuild(t *testing.T) {
 		ParentTarget: "https://b.test",
 		StartedAt:    "2026-05-02T11:00:00Z",
 		Status:       "running",
+		Vulns:        []VulnSummary{{ID: "v2", Severity: "medium"}},
 	})
 
 	rr := httptest.NewRecorder()
@@ -803,11 +810,31 @@ func TestScanPersistence_ListLatestDeleteAndRebuild(t *testing.T) {
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"id":"scan-b"`) {
 		t.Fatalf("list scans response: code=%d body=%s", rr.Code, rr.Body.String())
 	}
+	if strings.Contains(rr.Body.String(), `"id":"subdomain"`) {
+		t.Fatalf("subdomain scan leaked into top-level list: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"sub_scan_total":2`) ||
+		!strings.Contains(rr.Body.String(), `"sub_scan_remaining":1`) {
+		t.Fatalf("parent scan missing subdomain count: %s", rr.Body.String())
+	}
 
 	rr = httptest.NewRecorder()
 	s.handleGetScan(rr, httptest.NewRequest(http.MethodGet, "/api/scans/latest", nil))
-	if !strings.Contains(rr.Body.String(), `"id":"subdomain"`) {
-		t.Fatalf("latest scan did not return newest record: %s", rr.Body.String())
+	var latest ScanRecord
+	if err := json.Unmarshal(rr.Body.Bytes(), &latest); err != nil {
+		t.Fatalf("decode latest scan: %v body=%s", err, rr.Body.String())
+	}
+	if latest.ID != "scan-b" {
+		t.Fatalf("latest scan should return newest top-level parent: %#v", latest)
+	}
+
+	rr = httptest.NewRecorder()
+	s.handleGetScan(rr, httptest.NewRequest(http.MethodGet, "/api/scans/scan-b", nil))
+	if !strings.Contains(rr.Body.String(), `"sub_scans"`) ||
+		!strings.Contains(rr.Body.String(), `"target":"https://sub.b.test"`) ||
+		!strings.Contains(rr.Body.String(), `"target":"https://later.b.test"`) ||
+		!strings.Contains(rr.Body.String(), `"id":"v2"`) {
+		t.Fatalf("parent scan did not include child subdomain detail: %s", rr.Body.String())
 	}
 
 	s.rebuildInstancesFromDisk()
@@ -838,7 +865,10 @@ func TestScanPersistence_ListLatestDeleteAndRebuild(t *testing.T) {
 		t.Fatalf("decode list scans after rebuild: %v body=%s", err, rr.Body.String())
 	}
 	for _, got := range listed {
-		if (got.ID == "scan-b" || got.ID == "subdomain") && got.Status != "stopped" {
+		if got.ID == "subdomain" {
+			t.Fatalf("subdomain scan leaked into rebuilt list: %#v", got)
+		}
+		if got.ID == "scan-b" && got.Status != "stopped" {
 			t.Fatalf("list scans still returned stale status for %s: %#v", got.ID, got)
 		}
 	}
