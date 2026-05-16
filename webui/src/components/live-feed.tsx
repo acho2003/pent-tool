@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, useEffect } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronRight, Download, FileText, Pause, Play, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, menuContentClass, menuItemClass as menuItemBase } from "@/lib/utils";
 import { useWSStore, type FeedEvent } from "@/store/ws";
 import { exportFeedEvents, type FeedExportFormat } from "@/lib/feed-export";
 import { EmptyState } from "./states";
@@ -295,10 +295,8 @@ export function LiveFeed({
   );
 }
 
-const menuContentClass =
-  "z-50 min-w-44 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md";
 const menuItemClass =
-  "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+  cn(menuItemBase, "data-[disabled]:pointer-events-none data-[disabled]:opacity-50");
 
 function FeedExportMenu({
   disabled,

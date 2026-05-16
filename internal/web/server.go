@@ -961,12 +961,18 @@ type ScanRecord struct {
 
 // QueueState persists scan queue state for recovery after restart
 type QueueState struct {
-	Targets     []string `json:"targets"`
-	CurrentIdx  int      `json:"current_idx"`
-	Instruction string   `json:"instruction"`
-	ScanMode    string   `json:"scan_mode"`
-	StartedAt   string   `json:"started_at"`
-	Active      bool     `json:"active"`
+	Targets        []string `json:"targets"`
+	CurrentIdx     int      `json:"current_idx"`
+	Instruction    string   `json:"instruction"`
+	ScanMode       string   `json:"scan_mode"`
+	StartedAt      string   `json:"started_at"`
+	Active         bool     `json:"active"`
+	Name           string   `json:"name,omitempty"`
+	SeverityFilter []string `json:"severity_filter,omitempty"`
+	Phases         []int    `json:"phases,omitempty"`
+	CompanyName    string   `json:"company_name,omitempty"`
+	LogoPath       string   `json:"logo_path,omitempty"`
+	DiscordWebhook string   `json:"discord_webhook,omitempty"`
 }
 
 // ScanInstance represents a running or completed scan instance.
@@ -1007,14 +1013,20 @@ type ScanInstance struct {
 // admission via resources.CanAdmitScan(). See internal/resources/.
 
 // saveQueueState saves the current queue state to disk
-func (s *Server) saveQueueState(targets []string, idx int, instruction, scanMode string) {
+func (s *Server) saveQueueState(idx int, req ScanRequest) {
 	state := QueueState{
-		Targets:     targets,
-		CurrentIdx:  idx,
-		Instruction: instruction,
-		ScanMode:    scanMode,
-		StartedAt:   time.Now().Format(time.RFC3339),
-		Active:      true,
+		Targets:        req.Targets,
+		CurrentIdx:     idx,
+		Instruction:    req.Instruction,
+		ScanMode:       req.ScanMode,
+		StartedAt:      time.Now().Format(time.RFC3339),
+		Active:         true,
+		Name:           req.Name,
+		SeverityFilter: req.SeverityFilter,
+		Phases:         req.Phases,
+		CompanyName:    req.CompanyName,
+		LogoPath:       req.LogoPath,
+		DiscordWebhook: req.DiscordWebhook,
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -1211,7 +1223,13 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/scans", s.handleListScans)
-	mux.HandleFunc("/api/scans/", s.handleGetScan)
+	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/vulns/") && r.Method == http.MethodDelete {
+			s.handleDeleteVuln(w, r)
+			return
+		}
+		s.handleGetScan(w, r)
+	})
 	mux.HandleFunc("/api/upload-targets", s.handleUploadTargets)
 	mux.HandleFunc("/api/upload-instructions", s.handleUploadInstructions)
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
@@ -1309,10 +1327,16 @@ func (s *Server) Start() error {
 		remaining := state.Targets[state.CurrentIdx:]
 		log.Printf("[AUTO-RESUME] Resuming interrupted scan queue: %d targets from index %d", len(remaining), state.CurrentIdx)
 		req := ScanRequest{
-			Targets:     remaining,
-			Instruction: state.Instruction,
-			ScanMode:    state.ScanMode,
-			IsResume:    true,
+			Targets:        remaining,
+			Instruction:    state.Instruction,
+			ScanMode:       state.ScanMode,
+			IsResume:       true,
+			Name:           state.Name,
+			SeverityFilter: state.SeverityFilter,
+			Phases:         state.Phases,
+			CompanyName:    state.CompanyName,
+			LogoPath:       state.LogoPath,
+			DiscordWebhook: state.DiscordWebhook,
 		}
 		scanCfg := *s.cfg
 		s.runMultiScan(req, &scanCfg)
@@ -2894,7 +2918,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	totalTargets := len(req.Targets)
 
 	// Save queue state for persistence
-	s.saveQueueState(req.Targets, 0, req.Instruction, req.ScanMode)
+	s.saveQueueState(0, req)
 
 	s.broadcastToInstance(instanceID, WSEvent{
 		Type:         "queue_started",
@@ -2917,7 +2941,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		}
 
 		// Update queue state after each target
-		s.saveQueueState(req.Targets, i, req.Instruction, req.ScanMode)
+		s.saveQueueState(i, req)
 
 		// No per-target timeout — let scans run indefinitely; user uses stop button
 		ctx, cancel := context.WithCancel(context.Background())
@@ -2945,7 +2969,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		instStoppedAfterTarget := instance.Status == "stopped"
 		instance.mu.RUnlock()
 		if !s.stopReq.Load() && !instStoppedAfterTarget {
-			s.saveQueueState(req.Targets, i+1, req.Instruction, req.ScanMode)
+			s.saveQueueState(i+1, req)
 		}
 
 		cancel() // always cancel context after target is done
@@ -4979,13 +5003,18 @@ func (s *Server) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 
 	if state, _ := s.validQueueState(true); state != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"available":   true,
-			"targets":     state.Targets,
-			"current_idx": state.CurrentIdx,
-			"remaining":   len(state.Targets) - state.CurrentIdx,
-			"instruction": state.Instruction,
-			"scan_mode":   state.ScanMode,
-			"started_at":  state.StartedAt,
+			"available":       true,
+			"targets":         state.Targets,
+			"current_idx":     state.CurrentIdx,
+			"remaining":       len(state.Targets) - state.CurrentIdx,
+			"instruction":     state.Instruction,
+			"scan_mode":       state.ScanMode,
+			"started_at":      state.StartedAt,
+			"name":            state.Name,
+			"severity_filter": state.SeverityFilter,
+			"phases":          state.Phases,
+			"company_name":    state.CompanyName,
+			"logo_path":       state.LogoPath,
 		})
 	} else {
 		json.NewEncoder(w).Encode(map[string]any{"available": false})
@@ -5010,9 +5039,16 @@ func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 	// Resume from where we left off
 	remaining := state.Targets[state.CurrentIdx:]
 	req := ScanRequest{
-		Targets:     remaining,
-		Instruction: state.Instruction,
-		ScanMode:    state.ScanMode,
+		Targets:        remaining,
+		Instruction:    state.Instruction,
+		ScanMode:       state.ScanMode,
+		IsResume:       true,
+		Name:           state.Name,
+		SeverityFilter: state.SeverityFilter,
+		Phases:         state.Phases,
+		CompanyName:    state.CompanyName,
+		LogoPath:       state.LogoPath,
+		DiscordWebhook: state.DiscordWebhook,
 	}
 
 	// Start resume in background
@@ -5137,6 +5173,75 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	data, _ := json.Marshal(rec)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// handleDeleteVuln removes a single vulnerability from a scan record.
+// DELETE /api/scans/{scanId}/vulns/{vulnId}
+func (s *Server) handleDeleteVuln(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "DELETE only", http.StatusMethodNotAllowed)
+		return
+	}
+	// Parse: /api/scans/{scanId}/vulns/{vulnId}
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/scans/")
+	parts := strings.SplitN(trimmed, "/vulns/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		http.Error(w, "invalid path: expected /api/scans/{id}/vulns/{id}", http.StatusBadRequest)
+		return
+	}
+	scanID := parts[0]
+	vulnID, err := url.PathUnescape(parts[1])
+	if err != nil {
+		http.Error(w, "invalid vuln id encoding", http.StatusBadRequest)
+		return
+	}
+
+	dir, rec := s.findScanByID(scanID)
+	if rec == nil {
+		dir, rec = s.findRecentScanForShortAlias(scanID)
+	}
+	if rec == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"scan not found"}`))
+		return
+	}
+
+	// Remove matching vulns
+	filtered := make([]VulnSummary, 0, len(rec.Vulns))
+	removed := 0
+	for _, v := range rec.Vulns {
+		if v.ID == vulnID {
+			removed++
+			continue
+		}
+		filtered = append(filtered, v)
+	}
+	if removed == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"vulnerability not found"}`))
+		return
+	}
+	rec.Vulns = filtered
+
+	// Persist to disk
+	if dir != "" {
+		s.saveScanRecordTo(rec, dir)
+	}
+
+	// Update in-memory instance if present
+	s.instancesMu.Lock()
+	if inst := s.instances[scanID]; inst != nil {
+		inst.mu.Lock()
+		inst.Vulns = filtered
+		inst.VulnCount = len(filtered)
+		inst.mu.Unlock()
+	}
+	s.instancesMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "deleted", "removed": removed, "remaining": len(filtered)})
 }
 
 // logMemStats logs current memory usage and goroutine count.

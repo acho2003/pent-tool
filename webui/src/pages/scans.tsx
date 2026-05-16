@@ -15,7 +15,7 @@ import { ScanStatusPill } from "@/components/scan-status-pill";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeleteScan, useScansList } from "@/api/queries";
-import { cn, timeAgo, shortId } from "@/lib/utils";
+import { cn, timeAgo, shortId, menuContentClass, menuItemClass } from "@/lib/utils";
 import type { ScanListItem } from "@/types/api";
 import {
   ArrowUpDown,
@@ -398,11 +398,6 @@ function SelectCheckbox({
     />
   );
 }
-
-const menuContentClass =
-  "z-50 min-w-44 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md";
-const menuItemClass =
-  "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus:bg-accent";
 
 function BulkActionMenu({
   disabled,

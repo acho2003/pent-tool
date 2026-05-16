@@ -86,3 +86,11 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/** Shared Radix DropdownMenu content class (popover panel). */
+export const menuContentClass =
+  "z-50 min-w-44 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-md";
+
+/** Shared Radix DropdownMenu item class (single row). */
+export const menuItemClass =
+  "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus:bg-accent";
