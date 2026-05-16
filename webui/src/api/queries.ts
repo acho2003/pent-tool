@@ -178,6 +178,21 @@ export function useDeleteScan() {
   });
 }
 
+export function useDeleteVuln() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ scanId, vulnId }: { scanId: string; vulnId: string }) =>
+      api.deleteVuln(scanId, vulnId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.scans });
+      qc.invalidateQueries({ queryKey: qk.instances });
+    },
+    onError: (err) => {
+      console.error("Failed to delete vulnerability:", err);
+    },
+  });
+}
+
 export function useUpdateRateLimit() {
   const qc = useQueryClient();
   return useMutation({

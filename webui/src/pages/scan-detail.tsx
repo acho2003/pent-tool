@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
@@ -18,7 +19,7 @@ import { SeverityBadge } from "@/components/severity-badge"
 import { PhaseProgress, PHASES } from "@/components/phase-progress"
 import { CopyButton } from "@/components/copy-button"
 import { ErrorState, EmptyState } from "@/components/states"
-import { useScan, useStopInstance, useStartSavedInstance, useDeleteScan } from "@/api/queries"
+import { useScan, useStopInstance, useStartSavedInstance, useDeleteScan, useDeleteVuln } from "@/api/queries"
 import { api } from "@/api/client"
 import {
   filterEventsForInstance,
@@ -27,10 +28,12 @@ import {
   useWSStore,
   type FeedEvent,
 } from "@/store/ws"
-import { timeAgo, formatTime, formatDuration, severityRank, normalizeSeverity, cn } from "@/lib/utils"
+import { timeAgo, formatTime, formatDuration, severityRank, normalizeSeverity, cn, menuContentClass, menuItemClass } from "@/lib/utils"
 import {
   ChevronLeft,
   Download,
+  ExternalLink,
+  MoreHorizontal,
   X,
   Play,
   Trash2,
@@ -273,7 +276,7 @@ export default function ScanDetailPage() {
         </TabsList>
 
         <TabsContent value="findings" className="space-y-2">
-          <FindingsTab vulns={scan.vulns ?? []} />
+          <FindingsTab vulns={scan.vulns ?? []} scanId={scan.id} />
         </TabsContent>
         <TabsContent value="events">
           <EventsTab events={mergedEvents} scanId={scan.id} target={scan.target} />
@@ -458,12 +461,54 @@ function Td({
   return <td className={cn("px-4 py-3 align-middle", className)}>{children}</td>
 }
 
-function FindingsTab({ vulns }: { vulns: VulnSummary[] }) {
+function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }) {
+  const del = useDeleteVuln()
   const [selected, setSelected] = useState<VulnSummary | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const sorted = useMemo(
     () => [...vulns].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)),
     [vulns],
   )
+
+  const allSelected = sorted.length > 0 && selectedIds.size === sorted.length
+
+  useEffect(() => {
+    const allIds = new Set(sorted.map((v) => v.id))
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => allIds.has(id)))
+      return next.size === current.size ? current : next
+    })
+  }, [sorted])
+
+  function toggleSelect(id: string, checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  function selectAll() { setSelectedIds(new Set(sorted.map((v) => v.id))) }
+  function clearSelection() { setSelectedIds(new Set()) }
+
+  async function deleteVulns(ids: string[]) {
+    const unique = [...new Set(ids)].filter(Boolean)
+    if (!unique.length) return
+    const label = unique.length === 1
+      ? "Permanently delete this finding?"
+      : `Permanently delete ${unique.length} selected findings?`
+    if (!window.confirm(label)) return
+    for (const vulnId of unique) {
+      await del.mutateAsync({ scanId, vulnId })
+    }
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      for (const id of unique) next.delete(id)
+      return next
+    })
+  }
+
   if (sorted.length === 0)
     return (
       <EmptyState
@@ -474,50 +519,164 @@ function FindingsTab({ vulns }: { vulns: VulnSummary[] }) {
 
   return (
     <>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={allSelected ? clearSelection : selectAll}
+        >
+          {allSelected ? "Clear selection" : "Select all"}
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          {selectedIds.size} selected
+        </span>
+        <BulkActionMenu
+          disabled={selectedIds.size === 0 || del.isPending}
+          selectedCount={selectedIds.size}
+          onDelete={() => void deleteVulns([...selectedIds])}
+        />
+      </div>
       <div className="space-y-2">
         {sorted.map((f) => (
-          <Card key={f.id} id={`finding-${f.id}`} className="overflow-hidden">
-            <button
-              type="button"
-              className="group block w-full text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => setSelected(f)}
-              aria-label={`Open finding details for ${f.title}`}
-            >
-              <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 space-y-1 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <SeverityBadge severity={f.severity} />
-                    <h3 className="font-medium text-foreground">{f.title}</h3>
-                    {f.cve && (
-                      <Badge variant="outline" className="mono">{f.cve}</Badge>
+          <Card
+            key={f.id}
+            id={`finding-${f.id}`}
+            className={cn("overflow-hidden", selectedIds.has(f.id) && "ring-1 ring-primary/30")}
+          >
+            <div className="flex items-start gap-2 p-2 pl-4">
+              <input
+                type="checkbox"
+                checked={selectedIds.has(f.id)}
+                aria-label={`Select ${f.title}`}
+                onChange={(e) => toggleSelect(f.id, e.currentTarget.checked)}
+                className="mt-3 h-4 w-4 shrink-0 rounded border-border bg-input accent-primary"
+              />
+              <button
+                type="button"
+                className="group block w-full flex-1 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded"
+                onClick={() => setSelected(f)}
+                aria-label={`Open finding details for ${f.title}`}
+              >
+                <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <SeverityBadge severity={f.severity} />
+                      <h3 className="font-medium text-foreground">{f.title}</h3>
+                      {f.cve && (
+                        <Badge variant="outline" className="mono">{f.cve}</Badge>
+                      )}
+                    </div>
+                    {f.description && (
+                      <p className="text-sm leading-relaxed text-muted-foreground line-clamp-3">
+                        {f.description}
+                      </p>
                     )}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      {f.target && <span className="mono">{f.target}</span>}
+                      {f.endpoint && <span className="mono">{f.endpoint}</span>}
+                      {f.method && <span className="mono">{f.method}</span>}
+                    </div>
                   </div>
-                  {f.description && (
-                    <p className="text-sm leading-relaxed text-muted-foreground line-clamp-3">
-                      {f.description}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    {f.target && <span className="mono">{f.target}</span>}
-                    {f.endpoint && <span className="mono">{f.endpoint}</span>}
-                    {f.method && <span className="mono">{f.method}</span>}
+                  <div className="flex shrink-0 items-center gap-2">
+                    {f.cvss != null && f.cvss > 0 && (
+                      <Badge variant="outline" className="mono">CVSS {f.cvss.toFixed(1)}</Badge>
+                    )}
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
+                      Details <ArrowRight className="h-3.5 w-3.5" />
+                    </span>
                   </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {f.cvss != null && f.cvss > 0 && (
-                    <Badge variant="outline" className="mono">CVSS {f.cvss.toFixed(1)}</Badge>
-                  )}
-                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
-                    Details <ArrowRight className="h-3.5 w-3.5" />
-                  </span>
-                </div>
-              </CardContent>
-            </button>
+                </CardContent>
+              </button>
+              <FindingRowMenu
+                finding={f}
+                scanId={scanId}
+                deleting={del.isPending}
+                onDelete={() => void deleteVulns([f.id])}
+              />
+            </div>
           </Card>
         ))}
       </div>
       <FindingDetailsDialog finding={selected} onOpenChange={(open) => !open && setSelected(null)} />
     </>
+  )
+}
+
+function BulkActionMenu({
+  disabled,
+  selectedCount,
+  onDelete,
+}: {
+  disabled: boolean
+  selectedCount: number
+  onDelete: () => void
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button size="sm" variant="secondary" disabled={disabled}>
+          Actions
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="start" className={menuContentClass}>
+          <DropdownMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">
+            {selectedCount} selected
+          </DropdownMenu.Label>
+          <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+          <DropdownMenu.Item
+            className={cn(menuItemClass, "text-red-400 focus:text-red-300")}
+            onSelect={(event) => { event.preventDefault(); onDelete() }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete selected
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
+
+function FindingRowMenu({
+  finding,
+  scanId,
+  deleting,
+  onDelete,
+}: {
+  finding: VulnSummary
+  scanId: string
+  deleting: boolean
+  onDelete: () => void
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button size="icon" variant="ghost" aria-label={`Actions for ${finding.title}`} className="mt-1 shrink-0">
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="end" className={menuContentClass}>
+          <DropdownMenu.Item asChild className={menuItemClass}>
+            <Link to={`/scans/${scanId}`}>
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open scan
+            </Link>
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+          <DropdownMenu.Item
+            disabled={deleting}
+            className={cn(menuItemClass, "text-red-400 focus:text-red-300 data-[disabled]:pointer-events-none data-[disabled]:opacity-50")}
+            onSelect={(event) => { event.preventDefault(); onDelete() }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete finding
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   )
 }
 

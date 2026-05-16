@@ -167,6 +167,11 @@ export const api = {
   getScan: (id: string) => http<ScanRecord | null>(`/api/scans/${id}`),
   deleteScan: (id: string) =>
     http<{ status: string }>(`/api/scans/${id}`, { method: "DELETE" }),
+  deleteVuln: (scanId: string, vulnId: string) =>
+    http<{ status: string; removed: number; remaining: number }>(
+      `/api/scans/${scanId}/vulns/${vulnId}`,
+      { method: "DELETE" },
+    ),
 
   instances: () => http<InstancesResponse>("/api/instances"),
   instance: (id: string) => http<ScanInstance>(`/api/instances/${id}`),

@@ -689,7 +689,7 @@ func multipartBody(t *testing.T, field, name, content string) (*bytes.Buffer, st
 
 func TestQueueStateHandlers_StatusAndClear(t *testing.T) {
 	s := newTestServer(t, nil)
-	s.saveQueueState([]string{"https://a.test", "https://b.test"}, 1, "notes", "dast")
+	s.saveQueueState(1, ScanRequest{Targets: []string{"https://a.test", "https://b.test"}, Instruction: "notes", ScanMode: "dast"})
 
 	rr := httptest.NewRecorder()
 	s.handleQueueStatus(rr, httptest.NewRequest(http.MethodGet, "/api/queue/status", nil))
@@ -732,14 +732,14 @@ func TestQueueStateHandlers_ClearInvalidAndCompletedState(t *testing.T) {
 			name: "negative index",
 			write: func(t *testing.T, s *Server) {
 				t.Helper()
-				s.saveQueueState([]string{"https://a.test"}, -1, "", "single")
+				s.saveQueueState(-1, ScanRequest{Targets: []string{"https://a.test"}, ScanMode: "single"})
 			},
 		},
 		{
 			name: "completed index",
 			write: func(t *testing.T, s *Server) {
 				t.Helper()
-				s.saveQueueState([]string{"https://a.test"}, 1, "", "single")
+				s.saveQueueState(1, ScanRequest{Targets: []string{"https://a.test"}, ScanMode: "single"})
 			},
 		},
 	}
@@ -771,6 +771,137 @@ func TestQueueStateHandlers_ClearInvalidAndCompletedState(t *testing.T) {
 				t.Fatalf("unexpected resume response: %s", rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestQueueState_PreservesAllConfig(t *testing.T) {
+	s := newTestServer(t, nil)
+	req := ScanRequest{
+		Targets:        []string{"https://a.test", "https://b.test"},
+		Instruction:    "deep scan with custom rules",
+		ScanMode:       "wildcard",
+		Name:           "My Pentest",
+		SeverityFilter: []string{"critical", "high"},
+		Phases:         []int{1, 6, 8, 22},
+		CompanyName:    "ACME Corp",
+		LogoPath:       "/uploads/logos/acme.png",
+		DiscordWebhook: "https://discord.example/hook/abc123",
+	}
+	s.saveQueueState(0, req)
+
+	state := s.loadQueueState()
+	if state == nil {
+		t.Fatal("queue state not loaded")
+	}
+	if state.Name != "My Pentest" {
+		t.Errorf("Name = %q, want %q", state.Name, "My Pentest")
+	}
+	if state.Instruction != "deep scan with custom rules" {
+		t.Errorf("Instruction = %q", state.Instruction)
+	}
+	if state.ScanMode != "wildcard" {
+		t.Errorf("ScanMode = %q, want wildcard", state.ScanMode)
+	}
+	if len(state.SeverityFilter) != 2 || state.SeverityFilter[0] != "critical" {
+		t.Errorf("SeverityFilter = %v, want [critical high]", state.SeverityFilter)
+	}
+	if len(state.Phases) != 4 || state.Phases[0] != 1 || state.Phases[3] != 22 {
+		t.Errorf("Phases = %v, want [1 6 8 22]", state.Phases)
+	}
+	if state.CompanyName != "ACME Corp" {
+		t.Errorf("CompanyName = %q, want %q", state.CompanyName, "ACME Corp")
+	}
+	if state.LogoPath != "/uploads/logos/acme.png" {
+		t.Errorf("LogoPath = %q", state.LogoPath)
+	}
+	if state.DiscordWebhook != "https://discord.example/hook/abc123" {
+		t.Errorf("DiscordWebhook = %q", state.DiscordWebhook)
+	}
+	if len(state.Targets) != 2 || state.Targets[0] != "https://a.test" {
+		t.Errorf("Targets = %v", state.Targets)
+	}
+	if state.CurrentIdx != 0 {
+		t.Errorf("CurrentIdx = %d, want 0", state.CurrentIdx)
+	}
+	if !state.Active {
+		t.Error("Active should be true")
+	}
+}
+
+func TestQueueState_OldFileWithoutNewFields(t *testing.T) {
+	// Simulate an old queue_state.json that only has the original fields.
+	// New fields should deserialize as zero values.
+	s := newTestServer(t, nil)
+	oldJSON := `{
+		"targets": ["https://old.test"],
+		"current_idx": 0,
+		"instruction": "old instruction",
+		"scan_mode": "single",
+		"started_at": "2026-01-01T00:00:00Z",
+		"active": true
+	}`
+	if err := os.WriteFile(s.queueStatePath(), []byte(oldJSON), 0o644); err != nil {
+		t.Fatalf("write old queue state: %v", err)
+	}
+
+	state := s.loadQueueState()
+	if state == nil {
+		t.Fatal("old queue state not loaded")
+	}
+	if len(state.Targets) != 1 || state.Targets[0] != "https://old.test" {
+		t.Errorf("Targets = %v", state.Targets)
+	}
+	if state.Instruction != "old instruction" {
+		t.Errorf("Instruction = %q", state.Instruction)
+	}
+	// New fields should be zero values
+	if state.Name != "" {
+		t.Errorf("Name should be empty for old file, got %q", state.Name)
+	}
+	if len(state.SeverityFilter) != 0 {
+		t.Errorf("SeverityFilter should be empty for old file, got %v", state.SeverityFilter)
+	}
+	if len(state.Phases) != 0 {
+		t.Errorf("Phases should be empty for old file, got %v", state.Phases)
+	}
+	if state.CompanyName != "" {
+		t.Errorf("CompanyName should be empty for old file, got %q", state.CompanyName)
+	}
+}
+
+func TestQueueStatus_ReturnsNewFields(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.saveQueueState(0, ScanRequest{
+		Targets:        []string{"https://a.test"},
+		ScanMode:       "dast",
+		Name:           "Status Test",
+		SeverityFilter: []string{"high"},
+		Phases:         []int{1, 22},
+		CompanyName:    "TestCo",
+		LogoPath:       "/logos/test.png",
+	})
+
+	rr := httptest.NewRecorder()
+	s.handleQueueStatus(rr, httptest.NewRequest(http.MethodGet, "/api/queue/status", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d", rr.Code)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if status["name"] != "Status Test" {
+		t.Errorf("name = %v", status["name"])
+	}
+	if status["company_name"] != "TestCo" {
+		t.Errorf("company_name = %v", status["company_name"])
+	}
+	if status["logo_path"] != "/logos/test.png" {
+		t.Errorf("logo_path = %v", status["logo_path"])
+	}
+	// DiscordWebhook should NOT be exposed via the API
+	if _, ok := status["discord_webhook"]; ok {
+		t.Error("discord_webhook should not be exposed in queue status API")
 	}
 }
 

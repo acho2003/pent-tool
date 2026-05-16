@@ -333,9 +333,22 @@ func (s reconReportSummary) hasData() bool {
 
 var (
 	ipv4Re      = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-	dnsRecordRe = regexp.MustCompile(`(?im)\b([a-z0-9_.-]+)\s+(?:\d+\s+)?(?:in\s+)?(a|aaaa|cname|mx|ns|txt|soa)\s+([^\r\n]{1,160})`)
+	dnsRecordRe = regexp.MustCompile(`(?i)\b([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+\.?)\s+(?:\d+\s+)?(?:in\s+)?(a|aaaa|cname|mx|ns|txt|soa)\s+(\S[^\r\n]{0,159})`)
 	openPortRe  = regexp.MustCompile(`(?im)\b([0-9]{1,5})/(tcp|udp)\s+open\s+([^\s]+)?([^\r\n]{0,100})`)
 )
+
+// agentProseTypes are event types that contain natural language from the agent
+// rather than structured tool output. These are skipped during recon extraction
+// to avoid false positives (e.g., "the site uses WordPress" matching as a tech
+// detection, or "check the A record" matching as a DNS record).
+var agentProseTypes = map[string]bool{
+	"agent":    true,
+	"thought":  true,
+	"decision": true,
+	"message":  true,
+	"llm":      true,
+	"phase":    true,
+}
 
 func collectReconReportSummary(events []WSEvent) reconReportSummary {
 	var summary reconReportSummary
@@ -365,9 +378,20 @@ func collectReconReportSummary(events []WSEvent) reconReportSummary {
 	}
 
 	for _, evt := range events {
-		text := evt.Content + "\n" + evt.Output + "\n" + evt.Error
+		// Skip agent prose — only parse structured tool output to avoid
+		// false positives from natural language descriptions.
+		if agentProseTypes[evt.Type] {
+			continue
+		}
+
+		text := evt.Output + "\n" + evt.Error
 		for _, value := range evt.ToolArgs {
 			text += "\n" + value
+		}
+		// Include Content only for non-prose events (e.g., tool_call Content
+		// may contain a command summary). Agent messages are already filtered.
+		if evt.Content != "" {
+			text += "\n" + evt.Content
 		}
 		lower := strings.ToLower(text)
 
