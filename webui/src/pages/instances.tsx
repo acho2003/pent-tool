@@ -32,7 +32,7 @@ export default function InstancesPage() {
   const { data, isLoading, error, refetch } = useInstances()
 
   return (
-    <>
+    <div className="space-y-6">
       <header className="flex flex-col gap-1">
         <h1 className="font-sans text-2xl font-semibold tracking-tight">Instances</h1>
         <p className="text-sm text-muted-foreground">
@@ -69,7 +69,7 @@ export default function InstancesPage() {
           )}
         </>
       )}
-    </>
+    </div>
   )
 }
 
@@ -161,8 +161,8 @@ function InstanceCard({ instance }: { instance: ScanInstance }) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        <div className="flex items-start justify-between gap-3 overflow-hidden">
+          <div className="min-w-0 flex-1">
             <CardTitle className="truncate mono text-sm">
               {instance.name || instance.targets || shortId(instance.id)}
             </CardTitle>
@@ -171,7 +171,7 @@ function InstanceCard({ instance }: { instance: ScanInstance }) {
               {instance.scan_mode && <> · {instance.scan_mode}</>}
             </CardDescription>
           </div>
-          <ScanStatusPill status={instance.status} />
+          <ScanStatusPill status={instance.status} className="shrink-0" />
         </div>
       </CardHeader>
       <CardContent className="space-y-3">

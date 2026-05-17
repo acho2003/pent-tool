@@ -180,7 +180,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <>
+    <div className="space-y-6">
       <header className="space-y-1">
         <h1 className="font-sans text-2xl font-semibold tracking-tight">
           Settings
@@ -742,7 +742,7 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
       </Tabs>
-    </>
+    </div>
   );
 }
 

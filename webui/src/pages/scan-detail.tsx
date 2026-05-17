@@ -101,7 +101,7 @@ export default function ScanDetailPage() {
   const mergedEvents = mergeFeedEvents(persistedAsFeed, wsForScan)
 
   return (
-    <>
+    <div className="space-y-6">
       <div>
         <Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground">
           <ChevronLeft className="mr-1 h-3 w-3" />
@@ -290,7 +290,7 @@ export default function ScanDetailPage() {
           <ConfigTab scan={scan} />
         </TabsContent>
       </Tabs>
-    </>
+    </div>
   )
 }
 
