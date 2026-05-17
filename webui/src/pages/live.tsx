@@ -49,7 +49,7 @@ export default function LivePage() {
   }, [activeInstanceIds, clearedAt, events, historyQueries])
 
   return (
-    <>
+    <div className="space-y-6">
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="font-sans text-2xl font-semibold tracking-tight">Live feed</h1>
@@ -72,7 +72,7 @@ export default function LivePage() {
         emptyTitle="Quiet on the wire"
         emptyDescription="Events from any running instance will appear here in real time."
       />
-    </>
+    </div>
   )
 }
 

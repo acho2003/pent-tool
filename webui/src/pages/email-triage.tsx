@@ -62,7 +62,7 @@ export default function EmailTriagePage() {
   const configured = !!mail?.pod && !!mail?.hasApiKey;
 
   return (
-    <>
+    <div className="space-y-6">
       <header className="space-y-1">
         <h1 className="font-sans text-2xl font-semibold tracking-tight">
           Email triage
@@ -186,6 +186,6 @@ export default function EmailTriagePage() {
           )}
         </CardContent>
       </Card>
-    </>
+    </div>
   );
 }

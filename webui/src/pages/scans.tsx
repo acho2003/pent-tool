@@ -110,7 +110,7 @@ export default function ScansPage() {
   }
 
   return (
-    <>
+    <div className="space-y-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-sans text-2xl font-semibold tracking-tight">
@@ -219,7 +219,7 @@ export default function ScansPage() {
       )}
 
       <NewScanDialog open={newOpen} onOpenChange={setNewOpen} />
-    </>
+    </div>
   );
 }
 

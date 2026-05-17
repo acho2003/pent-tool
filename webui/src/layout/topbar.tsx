@@ -1,11 +1,11 @@
 import { Link } from "react-router-dom";
-import { Loader2, Plus, Search, StopCircle } from "lucide-react";
+import { Loader2, Menu, Plus, Search, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConnectionStatus } from "@/components/connection-status";
 import { useStatus, useInstances, useStopAll } from "@/api/queries";
 import { useCommandPalette } from "@/components/command-palette";
 
-export function Topbar() {
+export function Topbar({ onMenuToggle }: { onMenuToggle?: () => void }) {
   const { data: status } = useStatus();
   const { data: instances } = useInstances();
   const stopAll = useStopAll();
@@ -18,16 +18,25 @@ export function Topbar() {
   );
 
   return (
-    <header className="flex h-14 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header className="flex h-14 items-center gap-2 border-b border-border bg-background/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <button
+        type="button"
+        onClick={onMenuToggle}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground md:hidden"
+        aria-label="Toggle menu"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
       <button
         type="button"
         onClick={() => palette.setOpen(true)}
-        className="group inline-flex h-8 items-center gap-2 rounded-md border border-border bg-card px-2.5 text-xs text-muted-foreground hover:text-foreground transition-colors min-w-72"
+        className="group inline-flex h-8 flex-1 items-center gap-2 rounded-md border border-border bg-card px-2.5 text-xs text-muted-foreground hover:text-foreground transition-colors md:flex-none md:min-w-72"
         aria-label="Open command palette"
       >
-        <Search className="h-3.5 w-3.5" />
-        <span>Search scans, findings, actions…</span>
-        <kbd className="ml-auto rounded-sm border border-border bg-muted px-1 py-0.5 text-[10px] mono">
+        <Search className="h-3.5 w-3.5 shrink-0" />
+        <span className="hidden sm:inline truncate">Search scans, findings, actions…</span>
+        <span className="sm:hidden truncate">Search…</span>
+        <kbd className="ml-auto hidden sm:inline rounded-sm border border-border bg-muted px-1 py-0.5 text-[10px] mono">
           Ctrl K
         </kbd>
       </button>
@@ -59,7 +68,7 @@ export function Topbar() {
             size="sm"
             onClick={() => stopAll.mutate()}
             disabled={stopAll.isPending}
-            className="text-red-400 hover:text-red-300"
+            className="hidden sm:inline-flex text-red-400 hover:text-red-300"
           >
             <StopCircle className="h-3.5 w-3.5" />
             Stop all
@@ -67,7 +76,7 @@ export function Topbar() {
         )}
         <Button asChild size="sm">
           <Link to="/scans/new">
-            <Plus className="h-3.5 w-3.5" /> New Scan
+            <Plus className="h-3.5 w-3.5" /> <span className="hidden sm:inline">New Scan</span>
           </Link>
         </Button>
       </div>
