@@ -296,7 +296,7 @@ func TestDoChat_AnthropicAPIBaseWithoutProviderUsesAnthropicProtocol(t *testing.
 			t.Fatalf("Anthropic payload missing messages: %s", string(body))
 		}
 
-		return jsonResponse(http.StatusOK, `{"message":{"content":[{"type":"text","text":"anthropic ok"}],"usage":{"input_tokens":3,"output_tokens":4}}}`), nil
+		return jsonResponse(http.StatusOK, `{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"anthropic ok"}],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}`), nil
 	})}
 
 	got, err := c.doChat([]Message{
@@ -312,6 +312,98 @@ func TestDoChat_AnthropicAPIBaseWithoutProviderUsesAnthropicProtocol(t *testing.
 	_, _, total := c.GetTokens()
 	if total != 7 {
 		t.Fatalf("token total = %d, want 7", total)
+	}
+}
+
+func TestDoChat_AnthropicEmptyContentReturnsError(t *testing.T) {
+	c := NewClient(&config.Config{
+		LLM:           "anthropic/claude-sonnet-4-20250514",
+		APIKey:        "anthropic-key",
+		LLMMaxRetries: 1,
+	})
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":0}}`), nil
+	})}
+
+	_, err := c.doChat([]Message{{Role: "user", Content: "hello"}})
+	if err == nil {
+		t.Fatal("expected error for empty content, got nil")
+	}
+	if !strings.Contains(err.Error(), "no text content") {
+		t.Fatalf("expected 'no text content' error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "content_blocks: 0") {
+		t.Fatalf("expected content_blocks: 0 in error, got: %v", err)
+	}
+}
+
+func TestDoChat_AnthropicToolUseOnlyReturnsError(t *testing.T) {
+	c := NewClient(&config.Config{
+		LLM:           "anthropic/claude-sonnet-4-20250514",
+		APIKey:        "anthropic-key",
+		LLMMaxRetries: 1,
+	})
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_123","name":"bash","input":{"command":"ls"}}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`), nil
+	})}
+
+	_, err := c.doChat([]Message{{Role: "user", Content: "hello"}})
+	if err == nil {
+		t.Fatal("expected error for tool_use-only content, got nil")
+	}
+	if !strings.Contains(err.Error(), "no text content") {
+		t.Fatalf("expected 'no text content' error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stop_reason: tool_use") {
+		t.Fatalf("expected stop_reason: tool_use in error, got: %v", err)
+	}
+}
+
+func TestDoChat_AnthropicEmptyTextBlockReturnsError(t *testing.T) {
+	c := NewClient(&config.Config{
+		LLM:           "anthropic/claude-sonnet-4-20250514",
+		APIKey:        "anthropic-key",
+		LLMMaxRetries: 1,
+	})
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":""}],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":1}}`), nil
+	})}
+
+	_, err := c.doChat([]Message{{Role: "user", Content: "hello"}})
+	if err == nil {
+		t.Fatal("expected error for empty text block, got nil")
+	}
+	if !strings.Contains(err.Error(), "no text content") {
+		t.Fatalf("expected 'no text content' error, got: %v", err)
+	}
+}
+
+func TestDoChat_AnthropicTokenUsageTracked(t *testing.T) {
+	c := NewClient(&config.Config{
+		LLM:           "anthropic/claude-sonnet-4-20250514",
+		APIKey:        "anthropic-key",
+		LLMMaxRetries: 1,
+	})
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":50,"output_tokens":25}}`), nil
+	})}
+
+	got, err := c.doChat([]Message{{Role: "user", Content: "hello"}})
+	if err != nil {
+		t.Fatalf("doChat returned error: %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("doChat = %q, want ok", got)
+	}
+	in, out, total := c.GetTokens()
+	if in != 50 {
+		t.Errorf("input tokens = %d, want 50", in)
+	}
+	if out != 25 {
+		t.Errorf("output tokens = %d, want 25", out)
+	}
+	if total != 75 {
+		t.Errorf("total tokens = %d, want 75", total)
 	}
 }
 
