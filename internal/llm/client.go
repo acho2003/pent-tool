@@ -194,6 +194,11 @@ type anthropicResponse struct {
 		Text string `json:"text"`
 	} `json:"delta,omitempty"`
 	Index int `json:"index,omitempty"`
+	// Usage at the top level (message_delta events carry final output token count here).
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage,omitempty"`
 }
 
 // resolveEndpoint returns the full chat completions URL and clean model name.
@@ -545,7 +550,12 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 						ch <- StreamChunk{Content: anResp.Delta.Text}
 					}
 				case "message_delta":
-					// Final usage update if present
+					// Final usage update — output_tokens arrives at the top level here.
+					if anResp.Usage.OutputTokens > 0 {
+						c.mu.Lock()
+						c.totalOut += anResp.Usage.OutputTokens
+						c.mu.Unlock()
+					}
 				case "message_stop":
 					ch <- StreamChunk{Done: true}
 					return
@@ -714,22 +724,23 @@ func (c *Client) doChat(messages []Message) (string, error) {
 	}
 
 	if isAnthropic {
-		var anResp anthropicResponse
-		if err := json.Unmarshal(respBody, &anResp); err != nil {
+		var anMsg anthropicMessage
+		if err := json.Unmarshal(respBody, &anMsg); err != nil {
 			return "", fmt.Errorf("failed to parse Anthropic response: %w", err)
 		}
 		// Track token usage
 		c.mu.Lock()
-		c.totalIn += anResp.Message.Usage.InputTokens
-		c.totalOut += anResp.Message.Usage.OutputTokens
+		c.totalIn += anMsg.Usage.InputTokens
+		c.totalOut += anMsg.Usage.OutputTokens
 		c.mu.Unlock()
 		// Extract text from content blocks
-		for _, block := range anResp.Message.Content {
+		for _, block := range anMsg.Content {
 			if block.Type == "text" && block.Text != "" {
 				return block.Text, nil
 			}
 		}
-		return "", fmt.Errorf("no text content in Anthropic response")
+		log.Printf("[llm] Anthropic response with no text content (stop_reason: %s, content_blocks: %d): %s", anMsg.StopReason, len(anMsg.Content), string(respBody))
+		return "", fmt.Errorf("no text content in Anthropic response (stop_reason: %s, content_blocks: %d)", anMsg.StopReason, len(anMsg.Content))
 	}
 
 	var chatResp chatResponse
