@@ -13,6 +13,8 @@ export interface VulnSummary {
   impact?: string;
   method?: string;
   cve?: string;
+  cwe_id?: string;
+  owasp?: string;
   technical_analysis?: string;
   poc_description?: string;
   poc_script?: string;
@@ -230,4 +232,22 @@ export interface EnvironmentSettings {
   envFile: string;
   variables: EnvironmentVariableSetting[];
   restartRequired?: boolean;
+}
+
+export interface ScanSchedule {
+  id: string;
+  name: string;
+  interval: string;
+  next_run: string;
+  last_run?: string;
+  enabled: boolean;
+  targets: string[];
+  instruction?: string;
+  scan_mode: string;
+  severity_filter?: string[];
+  phases?: number[];
+  company_name?: string;
+  logo_path?: string;
+  discord_webhook?: string;
+  model?: string;
 }

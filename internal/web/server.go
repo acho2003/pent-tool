@@ -908,6 +908,8 @@ type VulnSummary struct {
 	Impact             string  `json:"impact,omitempty"`
 	Method             string  `json:"method,omitempty"`
 	CVE                string  `json:"cve,omitempty"`
+	CWE                string  `json:"cwe_id,omitempty"`
+	OWASP              string  `json:"owasp,omitempty"`
 	TechnicalAnalysis  string  `json:"technical_analysis,omitempty"`
 	PoCDescription     string  `json:"poc_description,omitempty"`
 	PoCScript          string  `json:"poc_script,omitempty"`
@@ -1125,6 +1127,9 @@ type Server struct {
 	instances          map[string]*ScanInstance // concurrent scan instances
 	instancesMu        sync.RWMutex
 	postScanChatFn     func(*config.Config, []llm.Message) (string, error)
+	schedulesMu        sync.RWMutex
+	schedules          map[string]*ScanSchedule
+	shutdownChan       chan struct{}
 }
 
 // NewServer creates a new web server.
@@ -1153,10 +1158,15 @@ func NewServer(cfg *config.Config, port int) *Server {
 			client.SetContext(context.Background())
 			return client.Chat(messages)
 		},
+		schedules:          make(map[string]*ScanSchedule),
+		shutdownChan:       make(chan struct{}),
 	}
 
 	// Rebuild instances map from disk so dashboard shows historical scans on startup
 	srv.rebuildInstancesFromDisk()
+
+	// Load schedules from disk
+	srv.loadSchedulesFromDisk()
 
 	return srv
 }
@@ -1164,6 +1174,9 @@ func NewServer(cfg *config.Config, port int) *Server {
 // Start launches the web server.
 func (s *Server) Start() error {
 	s.initDataDir()
+
+	// Start the background scheduler
+	go s.startScheduler()
 
 	// Reap expired session cookies in the background so the auth map cannot
 	// grow unbounded from abandoned logins.
@@ -1230,6 +1243,8 @@ func (s *Server) Start() error {
 		}
 		s.handleGetScan(w, r)
 	})
+	mux.HandleFunc("/api/schedules", s.handleSchedules)
+	mux.HandleFunc("/api/schedules/", s.handleScheduleDetail)
 	mux.HandleFunc("/api/upload-targets", s.handleUploadTargets)
 	mux.HandleFunc("/api/upload-instructions", s.handleUploadInstructions)
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
@@ -1354,6 +1369,9 @@ func (s *Server) Start() error {
 		sig := <-sigCh
 		log.Printf("[SHUTDOWN] Received signal %s — saving state and shutting down gracefully", sig)
 
+		// Stop the background scheduler
+		close(s.shutdownChan)
+
 		// Stop all running scans so they save queue state
 		s.stopReq.Store(true)
 		s.mu.Lock()
@@ -1424,6 +1442,10 @@ func (s *Server) initDataDir() {
 	cutoff := time.Now().AddDate(0, 0, -30)
 	for _, e := range entries {
 		if !e.IsDir() {
+			continue
+		}
+		// Explicitly skip folder names starting with '_' or named 'logos'
+		if strings.HasPrefix(e.Name(), "_") || e.Name() == "logos" {
 			continue
 		}
 		info, err := e.Info()
@@ -3966,6 +3988,8 @@ func vulnToSummary(v reporting.Vulnerability) VulnSummary {
 		Impact:             v.Impact,
 		Method:             v.Method,
 		CVE:                v.CVE,
+		CWE:                v.CWE,
+		OWASP:              v.OWASP,
 		TechnicalAnalysis:  v.TechnicalAnalysis,
 		PoCDescription:     v.PoCDescription,
 		PoCScript:          v.PoCScript,
@@ -5678,4 +5702,186 @@ func startCaidoProxy() {
 	}()
 
 	log.Printf("✅ Caido proxy started on port %d (PID: %d)", port, cmd.Process.Pid)
+}
+
+// scheduleIDPattern validates schedule IDs to prevent path traversal.
+var scheduleIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// handleSchedules handles GET /api/schedules and POST /api/schedules
+func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodGet {
+		s.schedulesMu.RLock()
+		defer s.schedulesMu.RUnlock()
+		list := make([]*ScanSchedule, 0, len(s.schedules))
+		for _, sch := range s.schedules {
+			list = append(list, sch)
+		}
+		// Sort by Name alphabetically
+		sort.Slice(list, func(i, j int) bool {
+			return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+		})
+		json.NewEncoder(w).Encode(list)
+		return
+	} else if r.Method == http.MethodPost {
+		var req ScanSchedule
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if len(req.Targets) == 0 {
+			http.Error(w, "targets are required", http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			req.Name = "Scheduled Scan " + strings.Join(req.Targets, ", ")
+		}
+		if req.Interval == "" {
+			req.Interval = "daily"
+		}
+		req.ID = randomSlug()
+		req.Enabled = true
+		req.NextRun = calculateNextRun(req.Interval, time.Now())
+		
+		s.schedulesMu.Lock()
+		s.schedules[req.ID] = &req
+		diskCopy := req // snapshot under lock for race-free disk write
+		s.schedulesMu.Unlock()
+		
+		if err := s.saveScheduleToDisk(&diskCopy); err != nil {
+			log.Printf("[SCHEDULER] Error saving schedule to disk: %v", err)
+			http.Error(w, "failed to save schedule: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(req)
+		return
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleScheduleDetail handles GET /api/schedules/{id}, PUT /api/schedules/{id}, DELETE /api/schedules/{id}, and POST /api/schedules/{id}/trigger
+func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	path := strings.TrimPrefix(r.URL.Path, "/api/schedules/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	id := parts[0]
+	if !scheduleIDPattern.MatchString(id) {
+		http.Error(w, "invalid schedule id", http.StatusBadRequest)
+		return
+	}
+	
+	s.schedulesMu.RLock()
+	sch, exists := s.schedules[id]
+	s.schedulesMu.RUnlock()
+	
+	if !exists {
+		http.Error(w, "schedule not found", http.StatusNotFound)
+		return
+	}
+	
+	// Handle trigger action
+	if len(parts) > 1 && parts[1] == "trigger" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		
+		// Manually trigger the scan
+		req := ScanRequest{
+			Targets:        sch.Targets,
+			Instruction:    sch.Instruction,
+			ScanMode:       sch.ScanMode,
+			SeverityFilter: sch.SeverityFilter,
+			Phases:         sch.Phases,
+			CompanyName:    sch.CompanyName,
+			LogoPath:       sch.LogoPath,
+			DiscordWebhook: sch.DiscordWebhook,
+			Name:           sch.Name + " (Scheduled)",
+			Model:          sch.Model,
+		}
+		
+		scanCfg := *s.cfg
+		if sch.Model != "" {
+			scanCfg.LLM = sch.Model
+		}
+		instanceID := randomSlug()
+		
+		go s.runMultiScan(req, &scanCfg, instanceID)
+		
+		s.schedulesMu.Lock()
+		sch.LastRun = time.Now()
+		diskCopy := *sch // snapshot under lock for race-free disk write
+		s.schedulesMu.Unlock()
+		s.saveScheduleToDisk(&diskCopy)
+
+		json.NewEncoder(w).Encode(map[string]string{"status": "triggered", "instance_id": instanceID})
+		return
+	}
+	
+	switch r.Method {
+	case http.MethodGet:
+		json.NewEncoder(w).Encode(sch)
+		return
+		
+	case http.MethodPut:
+		var req ScanSchedule
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if len(req.Targets) == 0 {
+			http.Error(w, "targets are required", http.StatusBadRequest)
+			return
+		}
+		
+		s.schedulesMu.Lock()
+		oldEnabled := sch.Enabled
+		oldInterval := sch.Interval
+		
+		sch.Name = req.Name
+		sch.Interval = req.Interval
+		sch.Enabled = req.Enabled
+		sch.Targets = req.Targets
+		sch.Instruction = req.Instruction
+		sch.ScanMode = req.ScanMode
+		sch.SeverityFilter = req.SeverityFilter
+		sch.Phases = req.Phases
+		sch.CompanyName = req.CompanyName
+		sch.LogoPath = req.LogoPath
+		sch.DiscordWebhook = req.DiscordWebhook
+		sch.Model = req.Model
+		
+		// If interval changed, or enabled transitioned false -> true, recalculate NextRun
+		if sch.Interval != oldInterval || (sch.Enabled && !oldEnabled) {
+			sch.NextRun = calculateNextRun(sch.Interval, time.Now())
+		}
+		
+		diskCopy := *sch // snapshot under lock for race-free disk write
+		s.schedulesMu.Unlock()
+		
+		if err := s.saveScheduleToDisk(&diskCopy); err != nil {
+			http.Error(w, "failed to save schedule: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(&diskCopy)
+		return
+		
+	case http.MethodDelete:
+		s.schedulesMu.Lock()
+		delete(s.schedules, id)
+		s.schedulesMu.Unlock()
+		
+		if err := s.deleteScheduleFromDisk(id); err != nil {
+			http.Error(w, "failed to delete schedule: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+		return
+	}
+	
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }

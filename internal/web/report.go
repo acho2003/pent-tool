@@ -51,6 +51,24 @@ func themeReportPalette() reportPalette {
 	}
 }
 
+// owaspCategories defines the OWASP Top 10 (2021) categories in order.
+// Package-level to avoid re-allocation per report generation.
+var owaspCategories = []struct {
+	ID   string
+	Name string
+}{
+	{"A01", "Broken Access Control"},
+	{"A02", "Cryptographic Failures"},
+	{"A03", "Injection"},
+	{"A04", "Insecure Design"},
+	{"A05", "Security Misconfiguration"},
+	{"A06", "Vulnerable and Outdated Components"},
+	{"A07", "Identification and Authentication Failures"},
+	{"A08", "Software and Data Integrity Failures"},
+	{"A09", "Security Logging and Monitoring Failures"},
+	{"A10", "Server-Side Request Forgery (SSRF)"},
+}
+
 func parseReportTime(value string) time.Time {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1035,17 +1053,134 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetFont("Helvetica", "B", 7)
 		setColor(gray)
 		titleStr := ts[0]
-		if len(titleStr) > 50 {
-			titleStr = titleStr[:47] + "..."
+		if titleRunes := []rune(titleStr); len(titleRunes) > 75 {
+			titleStr = string(titleRunes[:72]) + "..."
 		}
-		pdf.CellFormat(70, 7, "  "+titleStr, "", 0, "L", false, 0, "")
+		pdf.CellFormat(120, 7, "  "+titleStr, "", 0, "L", false, 0, "")
 		pdf.SetFont("Courier", "", 7)
 		setColor(teal)
-		pdf.CellFormat(120, 7, ts[1], "", 1, "L", false, 0, "")
+		pdf.CellFormat(70, 7, ts[1], "", 1, "L", false, 0, "")
 	}
 
-	// ─── VULNERABILITY DETAILS ─────────────────────────────
+	// Pre-compute all vuln mappings once for the entire report.
+	allMappings := make([]VulnMappings, len(scan.Vulns))
+	owaspCounts := make(map[string]int)
+	ptesCounts := make(map[string]int)
+	for i, v := range scan.Vulns {
+		allMappings[i] = InferVulnMappings(v)
+		if allMappings[i].OWASP != "" {
+			owaspCounts[allMappings[i].OWASP]++
+		}
+		if allMappings[i].PTES != "" {
+			ptesCounts[allMappings[i].PTES]++
+		}
+	}
+
+	// ─── FINDINGS SUMMARY TABLE ──────────────────────────
 	if len(scan.Vulns) > 0 {
+		pdf.AddPage()
+		drawRect(0, 0, 210, 297, darkBg)
+		drawRect(0, 0, 210, 1.5, coral)
+
+		pdf.SetY(15)
+		pdf.SetFont("Helvetica", "B", 22)
+		setColor(coral)
+		pdf.CellFormat(190, 12, "Findings Summary", "", 1, "L", false, 0, "")
+		drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
+		pdf.Ln(8)
+
+		pdf.SetFont("Helvetica", "", 8)
+		setColor(white)
+		pdf.SetX(10)
+		pdf.MultiCell(190, 4, "The following table summarises all findings with their security framework mappings (CWE, OWASP Top 10 2021). Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
+		pdf.Ln(4)
+
+		// Table header
+		thY := pdf.GetY()
+		drawRect(10, thY, 190, 8, sectionBg)
+		pdf.SetFont("Helvetica", "B", 7)
+		setColor(coral)
+		pdf.SetXY(12, thY+1)
+		pdf.CellFormat(10, 6, "ID", "", 0, "L", false, 0, "")
+		pdf.CellFormat(68, 6, "FINDING", "", 0, "L", false, 0, "")
+		pdf.CellFormat(20, 6, "SEVERITY", "", 0, "C", false, 0, "")
+		pdf.CellFormat(14, 6, "CVSS", "", 0, "C", false, 0, "")
+		pdf.CellFormat(40, 6, "CVE", "", 0, "L", false, 0, "")
+		pdf.CellFormat(18, 6, "CWE", "", 0, "L", false, 0, "")
+		pdf.CellFormat(20, 6, "OWASP", "", 0, "L", false, 0, "")
+		pdf.Ln(8)
+
+		// Table rows
+		for i, v := range scan.Vulns {
+			if pdf.GetY() > 268 {
+				pdf.AddPage()
+				drawRect(0, 0, 210, 297, darkBg)
+				drawRect(0, 0, 210, 1.5, coral)
+				pdf.SetY(15)
+			}
+
+			mappings := allMappings[i]
+			rowY := pdf.GetY()
+			rowBg := darkBg
+			if i%2 == 0 {
+				rowBg = sectionBg
+			}
+			drawRect(10, rowY, 190, 7, rowBg)
+
+			// Severity accent
+			sc := sevColor(v.Severity)
+			drawRect(10, rowY, 2, 7, sc)
+
+			pdf.SetXY(12, rowY)
+			pdf.SetFont("Helvetica", "B", 7)
+			setColor(gray)
+			pdf.CellFormat(10, 7, fmt.Sprintf("F-%02d", i+1), "", 0, "L", false, 0, "")
+
+			pdf.SetFont("Helvetica", "", 7)
+			setColor(white)
+			titleStr := v.Title
+			if titleRunes := []rune(titleStr); len(titleRunes) > 40 {
+				titleStr = string(titleRunes[:37]) + "..."
+			}
+			pdf.CellFormat(68, 7, titleStr, "", 0, "L", false, 0, "")
+
+			pdf.SetFont("Helvetica", "B", 7)
+			pdf.SetTextColor(sc[0], sc[1], sc[2])
+			pdf.CellFormat(20, 7, strings.ToUpper(v.Severity), "", 0, "C", false, 0, "")
+
+			setColor(white)
+			pdf.SetFont("Helvetica", "", 7)
+			cvssStr := "—"
+			if v.CVSS > 0 {
+				cvssStr = fmt.Sprintf("%.1f", v.CVSS)
+			}
+			pdf.CellFormat(14, 7, cvssStr, "", 0, "C", false, 0, "")
+
+			setColor(gray)
+			cveStr := v.CVE
+			if len(cveStr) > 22 {
+				cveStr = cveStr[:19] + "..."
+			}
+			if cveStr == "" {
+				cveStr = "—"
+			}
+			pdf.CellFormat(40, 7, cveStr, "", 0, "L", false, 0, "")
+
+			setColor(teal)
+			cweStr := mappings.CWEID
+			if cweStr == "" {
+				cweStr = "—"
+			}
+			pdf.CellFormat(18, 7, cweStr, "", 0, "L", false, 0, "")
+
+			owaspStr := mappings.OWASP
+			if owaspStr == "" {
+				owaspStr = "—"
+			}
+			pdf.CellFormat(20, 7, owaspStr, "", 1, "L", false, 0, "")
+		}
+
+		// ─── VULNERABILITY DETAILS ─────────────────────────────
 		pdf.AddPage()
 		drawRect(0, 0, 210, 297, darkBg)
 		drawRect(0, 0, 210, 1.5, coral)
@@ -1073,10 +1208,21 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			drawRect(10, headerY, 190, 10, sectionBg)
 			drawRect(10, headerY, 3, 10, sc)
 
-			pdf.SetXY(16, headerY+1)
+			// Truncate title to avoid overlapping with severity badge
+			vulnTitle := fmt.Sprintf("#%d  %s", idx+1, v.Title)
 			pdf.SetFont("Helvetica", "B", 10)
+			maxTitleW := 150.0 // badge starts at x=170, title starts at x=16, leave 4mm gap
+			for len(vulnTitle) > 0 && pdf.GetStringWidth(vulnTitle) > maxTitleW {
+				runes := []rune(vulnTitle)
+				vulnTitle = string(runes[:len(runes)-1])
+			}
+			if len(vulnTitle) < len(fmt.Sprintf("#%d  %s", idx+1, v.Title)) {
+				vulnTitle = strings.TrimSpace(vulnTitle) + "..."
+			}
+
+			pdf.SetXY(16, headerY+1)
 			setColor(white)
-			pdf.CellFormat(0, 8, fmt.Sprintf("#%d  %s", idx+1, v.Title), "", 0, "L", false, 0, "")
+			pdf.CellFormat(maxTitleW, 8, vulnTitle, "", 0, "L", false, 0, "")
 
 			// Severity badge
 			pdf.SetXY(170, headerY+2)
@@ -1095,38 +1241,87 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				pdf.CellFormat(0, 5, fmt.Sprintf("Verified via: %s", strings.ToUpper(v.VerificationMethod)), "", 1, "L", false, 0, "")
 			}
 
-			// Vuln meta row
-			metaY := pdf.GetY()
-			pdf.SetFont("Helvetica", "", 8)
+			// Vuln meta — row 1: CVSS + CVSS vector
 			if v.CVSS > 0 {
+				metaY := pdf.GetY()
+				pdf.SetFont("Helvetica", "", 8)
 				setColor(gray)
 				pdf.SetXY(14, metaY)
 				pdf.CellFormat(15, 5, "CVSS:", "", 0, "L", false, 0, "")
 				setColor(sc)
 				pdf.SetFont("Helvetica", "B", 8)
 				pdf.CellFormat(15, 5, fmt.Sprintf("%.1f", v.CVSS), "", 0, "L", false, 0, "")
-				// Show CVSS vector if available
 				if v.CVSSVector != "" {
 					setColor(gray)
 					pdf.SetFont("Helvetica", "", 7)
-					pdf.CellFormat(80, 5, v.CVSSVector, "", 0, "L", false, 0, "")
+					pdf.CellFormat(0, 5, v.CVSSVector, "", 0, "L", false, 0, "")
+				}
+				pdf.Ln(6)
+			}
+
+			// Vuln meta — row 2: CVE + Method
+			hasCVEOrMethod := v.CVE != "" || v.Method != ""
+			if hasCVEOrMethod {
+				meta2Y := pdf.GetY()
+				pdf.SetXY(14, meta2Y)
+				if v.CVE != "" {
+					setColor(gray)
+					pdf.SetFont("Helvetica", "", 8)
+					pdf.CellFormat(12, 5, "CVE:", "", 0, "L", false, 0, "")
+					setColor(white)
+					cveText := reportDisplayText(v.CVE, "", 80)
+					pdf.CellFormat(90, 5, cveText, "", 0, "L", false, 0, "")
+				}
+				if v.Method != "" {
+					setColor(gray)
+					pdf.SetFont("Helvetica", "", 8)
+					pdf.CellFormat(18, 5, "Method:", "", 0, "L", false, 0, "")
+					setColor(white)
+					pdf.CellFormat(20, 5, v.Method, "", 0, "L", false, 0, "")
+				}
+				pdf.Ln(6)
+			}
+
+			// Vuln meta — row 3: CWE + OWASP badges
+			vulnMappings := allMappings[idx]
+			hasMappings := vulnMappings.CWEID != "" || vulnMappings.OWASP != ""
+			if hasMappings {
+				meta3Y := pdf.GetY()
+				pdf.SetXY(14, meta3Y)
+				if vulnMappings.CWEID != "" {
+					// CWE badge
+					badgeW := pdf.GetStringWidth(vulnMappings.CWEID) + 6
+					pdf.SetFont("Helvetica", "B", 7)
+					drawRect(pdf.GetX(), meta3Y, badgeW, 5.5, palette.muted)
+					setColor(teal)
+					pdf.CellFormat(badgeW, 5.5, vulnMappings.CWEID, "", 0, "C", false, 0, "")
+					pdf.SetX(pdf.GetX() + 2)
+					if vulnMappings.CWEName != "" {
+						pdf.SetFont("Helvetica", "", 7)
+						setColor(gray)
+						nameStr := vulnMappings.CWEName
+						if nameRunes := []rune(nameStr); len(nameRunes) > 45 {
+							nameStr = string(nameRunes[:42]) + "..."
+						}
+						pdf.CellFormat(0, 5.5, nameStr, "", 0, "L", false, 0, "")
+					}
+				}
+				pdf.Ln(7)
+				if vulnMappings.OWASP != "" {
+					pdf.SetXY(14, pdf.GetY())
+					owaspLabel := vulnMappings.OWASP
+					if vulnMappings.OWASPName != "" {
+						owaspLabel = vulnMappings.OWASP + " — " + vulnMappings.OWASPName
+					}
+					badgeW := pdf.GetStringWidth(owaspLabel) + 6
+					pdf.SetFont("Helvetica", "B", 7)
+					drawRect(pdf.GetX(), pdf.GetY(), badgeW, 5.5, palette.muted)
+					setColor(coral)
+					pdf.CellFormat(badgeW, 5.5, owaspLabel, "", 0, "C", false, 0, "")
+					pdf.Ln(7)
 				}
 			}
-			if v.CVE != "" {
-				setColor(gray)
-				pdf.SetFont("Helvetica", "", 8)
-				pdf.CellFormat(10, 5, "CVE:", "", 0, "L", false, 0, "")
-				setColor(white)
-				pdf.CellFormat(30, 5, v.CVE, "", 0, "L", false, 0, "")
-			}
-			if v.Method != "" {
-				setColor(gray)
-				pdf.SetFont("Helvetica", "", 8)
-				pdf.CellFormat(15, 5, "Method:", "", 0, "L", false, 0, "")
-				setColor(white)
-				pdf.CellFormat(15, 5, v.Method, "", 0, "L", false, 0, "")
-			}
-			pdf.Ln(7)
+			pdf.Ln(1)
 
 			// Sections - only add if content exists
 			type section struct {
@@ -1325,6 +1520,251 @@ https://github.com/xalgord/xalgorix`
 	pdf.SetFont("Helvetica", "", 10)
 	setColor(white)
 	pdf.MultiCell(182, 5, disclaimer, "", "L", false)
+
+	// ─── REFERENCE INDEX APPENDIX ──────────────────────────
+	if len(scan.Vulns) > 0 {
+		pdf.AddPage()
+		drawRect(0, 0, 210, 297, darkBg)
+		drawRect(0, 0, 210, 1.5, teal)
+
+		pdf.SetY(15)
+		pdf.SetFont("Helvetica", "B", 22)
+		setColor(teal)
+		pdf.CellFormat(190, 12, "Reference Index", "", 1, "L", false, 0, "")
+		drawRect(10, pdf.GetY()+2, 50, 0.8, teal)
+		pdf.Ln(8)
+
+		pdf.SetFont("Helvetica", "", 8)
+		setColor(white)
+		pdf.SetX(10)
+		pdf.MultiCell(190, 4, "The mappings below are inferred from each finding's vulnerability class and are provided as a consolidated index for traceability and compliance reporting.", "", "L", false)
+		pdf.Ln(5)
+
+		// ── CWE Reference Table ──
+		pdf.SetFont("Helvetica", "B", 13)
+		setColor(teal)
+		pdf.CellFormat(190, 8, "CWE Reference Table", "", 1, "L", false, 0, "")
+		pdf.Ln(2)
+
+		// Table header
+		cweThY := pdf.GetY()
+		drawRect(10, cweThY, 190, 8, sectionBg)
+		pdf.SetFont("Helvetica", "B", 7)
+		setColor(teal)
+		pdf.SetXY(12, cweThY+1)
+		pdf.CellFormat(15, 6, "FINDING", "", 0, "L", false, 0, "")
+		pdf.CellFormat(22, 6, "CWE", "", 0, "L", false, 0, "")
+		pdf.CellFormat(80, 6, "CWE NAME", "", 0, "L", false, 0, "")
+		pdf.CellFormat(63, 6, "FINDING TITLE", "", 0, "L", false, 0, "")
+		pdf.Ln(8)
+
+		for i, v := range scan.Vulns {
+			if pdf.GetY() > 268 {
+				pdf.AddPage()
+				drawRect(0, 0, 210, 297, darkBg)
+				drawRect(0, 0, 210, 1.5, teal)
+				pdf.SetY(15)
+			}
+			mappings := allMappings[i]
+			rowY := pdf.GetY()
+			rowBg := darkBg
+			if i%2 == 0 {
+				rowBg = sectionBg
+			}
+			drawRect(10, rowY, 190, 7, rowBg)
+
+			pdf.SetXY(12, rowY)
+			pdf.SetFont("Helvetica", "B", 7)
+			setColor(gray)
+			pdf.CellFormat(15, 7, fmt.Sprintf("F-%02d", i+1), "", 0, "L", false, 0, "")
+
+			setColor(teal)
+			cweStr := mappings.CWEID
+			if cweStr == "" {
+				cweStr = "—"
+			}
+			pdf.CellFormat(22, 7, cweStr, "", 0, "L", false, 0, "")
+
+			setColor(white)
+			pdf.SetFont("Helvetica", "", 7)
+			cweName := mappings.CWEName
+			if cweName == "" {
+				cweName = "—"
+			}
+			if cweRunes := []rune(cweName); len(cweRunes) > 48 {
+				cweName = string(cweRunes[:45]) + "..."
+			}
+			pdf.CellFormat(80, 7, cweName, "", 0, "L", false, 0, "")
+
+			setColor(gray)
+			titleStr := v.Title
+			if titleRunes := []rune(titleStr); len(titleRunes) > 38 {
+				titleStr = string(titleRunes[:35]) + "..."
+			}
+			pdf.CellFormat(63, 7, titleStr, "", 1, "L", false, 0, "")
+		}
+
+		pdf.Ln(8)
+
+		// ── OWASP Top 10 Coverage Matrix ──
+		if pdf.GetY() > 200 {
+			pdf.AddPage()
+			drawRect(0, 0, 210, 297, darkBg)
+			drawRect(0, 0, 210, 1.5, teal)
+			pdf.SetY(15)
+		}
+
+		pdf.SetFont("Helvetica", "B", 13)
+		setColor(teal)
+		pdf.CellFormat(190, 8, "OWASP Top 10 (2021) Coverage", "", 1, "L", false, 0, "")
+		pdf.Ln(2)
+
+		// owaspCounts was pre-computed above
+
+		// Table header
+		owThY := pdf.GetY()
+		drawRect(10, owThY, 190, 8, sectionBg)
+		pdf.SetFont("Helvetica", "B", 7)
+		setColor(teal)
+		pdf.SetXY(12, owThY+1)
+		pdf.CellFormat(16, 6, "ID", "", 0, "L", false, 0, "")
+		pdf.CellFormat(120, 6, "OWASP CATEGORY", "", 0, "L", false, 0, "")
+		pdf.CellFormat(20, 6, "FINDINGS", "", 0, "C", false, 0, "")
+		pdf.CellFormat(24, 6, "STATUS", "", 0, "C", false, 0, "")
+		pdf.Ln(8)
+
+		for i, cat := range owaspCategories {
+			rowY := pdf.GetY()
+			rowBg := darkBg
+			if i%2 == 0 {
+				rowBg = sectionBg
+			}
+			drawRect(10, rowY, 190, 7, rowBg)
+
+			count := owaspCounts[cat.ID]
+			hasFindings := count > 0
+
+			// Status accent
+			if hasFindings {
+				drawRect(10, rowY, 2, 7, red)
+			} else {
+				drawRect(10, rowY, 2, 7, teal)
+			}
+
+			pdf.SetXY(12, rowY)
+			pdf.SetFont("Helvetica", "B", 7)
+			if hasFindings {
+				setColor(coral)
+			} else {
+				setColor(gray)
+			}
+			pdf.CellFormat(16, 7, cat.ID, "", 0, "L", false, 0, "")
+
+			pdf.SetFont("Helvetica", "", 7)
+			if hasFindings {
+				setColor(white)
+			} else {
+				setColor(gray)
+			}
+			pdf.CellFormat(120, 7, cat.Name, "", 0, "L", false, 0, "")
+
+			pdf.SetFont("Helvetica", "B", 7)
+			if hasFindings {
+				setColor(red)
+				pdf.CellFormat(20, 7, fmt.Sprintf("%d", count), "", 0, "C", false, 0, "")
+				pdf.SetFont("Helvetica", "B", 6)
+				drawRect(166, rowY+1, 22, 5, red)
+				pdf.SetTextColor(255, 255, 255)
+				pdf.SetXY(166, rowY+1)
+				pdf.CellFormat(22, 5, "FOUND", "", 0, "C", false, 0, "")
+			} else {
+				setColor(gray)
+				pdf.CellFormat(20, 7, "0", "", 0, "C", false, 0, "")
+				pdf.SetFont("Helvetica", "", 6)
+				setColor(teal)
+				pdf.SetXY(166, rowY+1)
+				pdf.CellFormat(22, 5, "CLEAR", "", 0, "C", false, 0, "")
+			}
+			pdf.Ln(7)
+		}
+
+		// ── PTES Phase Mapping ──
+		if len(ptesCounts) > 0 {
+			pdf.Ln(8)
+			if pdf.GetY() > 230 {
+				pdf.AddPage()
+				drawRect(0, 0, 210, 297, darkBg)
+				drawRect(0, 0, 210, 1.5, teal)
+				pdf.SetY(15)
+			}
+
+			pdf.SetFont("Helvetica", "B", 13)
+			setColor(teal)
+			pdf.CellFormat(190, 8, "PTES Phase Mapping", "", 1, "L", false, 0, "")
+			pdf.Ln(2)
+
+			ptesPhases := []string{
+				"Intelligence Gathering",
+				"Vulnerability Analysis",
+				"Exploitation",
+				"Post-Exploitation",
+				"Reporting",
+			}
+
+			// Table header
+			ptThY := pdf.GetY()
+			drawRect(10, ptThY, 190, 8, sectionBg)
+			pdf.SetFont("Helvetica", "B", 7)
+			setColor(teal)
+			pdf.SetXY(12, ptThY+1)
+			pdf.CellFormat(100, 6, "PTES PHASE", "", 0, "L", false, 0, "")
+			pdf.CellFormat(30, 6, "FINDINGS", "", 0, "C", false, 0, "")
+			pdf.CellFormat(50, 6, "STATUS", "", 0, "C", false, 0, "")
+			pdf.Ln(8)
+
+			for j, phase := range ptesPhases {
+				rowY := pdf.GetY()
+				rowBg := darkBg
+				if j%2 == 0 {
+					rowBg = sectionBg
+				}
+				drawRect(10, rowY, 190, 7, rowBg)
+
+				count := ptesCounts[phase]
+				hasFindings := count > 0
+
+				if hasFindings {
+					drawRect(10, rowY, 2, 7, coral)
+				} else {
+					drawRect(10, rowY, 2, 7, gray)
+				}
+
+				pdf.SetXY(12, rowY)
+				pdf.SetFont("Helvetica", "", 7)
+				if hasFindings {
+					setColor(white)
+				} else {
+					setColor(gray)
+				}
+				pdf.CellFormat(100, 7, phase, "", 0, "L", false, 0, "")
+
+				pdf.SetFont("Helvetica", "B", 7)
+				if hasFindings {
+					setColor(coral)
+					pdf.CellFormat(30, 7, fmt.Sprintf("%d", count), "", 0, "C", false, 0, "")
+					pdf.SetFont("Helvetica", "B", 6)
+					setColor(white)
+					pdf.CellFormat(50, 7, "TESTED", "", 0, "C", false, 0, "")
+				} else {
+					setColor(gray)
+					pdf.CellFormat(30, 7, "0", "", 0, "C", false, 0, "")
+					pdf.SetFont("Helvetica", "", 6)
+					pdf.CellFormat(50, 7, "—", "", 0, "C", false, 0, "")
+				}
+				pdf.Ln(7)
+			}
+		}
+	}
 
 	// Save PDF — use currentScanDir which is the actual scan directory
 	reportID := scan.ID
