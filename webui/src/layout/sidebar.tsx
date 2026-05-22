@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   Activity,
   AlertOctagon,
+  Clock,
   FileText,
   LayoutGrid,
   Mail,
@@ -20,6 +21,7 @@ const NAV: { to: string; label: string; icon: typeof LayoutGrid; end?: boolean }
   { to: "/", label: "Overview", icon: LayoutGrid, end: true },
   { to: "/scans/new", label: "New Scan", icon: Plus },
   { to: "/scans", label: "Scans", icon: Target },
+  { to: "/schedules", label: "Schedules", icon: Clock },
   { to: "/instances", label: "Instances", icon: Server },
   { to: "/findings", label: "Findings", icon: ShieldAlert },
   { to: "/live", label: "Live Feed", icon: Radio },

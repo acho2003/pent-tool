@@ -81,7 +81,9 @@ export default function FindingsPage() {
         (f.title || "").toLowerCase().includes(q) ||
         (f.endpoint || "").toLowerCase().includes(q) ||
         (f.scan_target || "").toLowerCase().includes(q) ||
-        (f.cve || "").toLowerCase().includes(q)
+        (f.cve || "").toLowerCase().includes(q) ||
+        (f.cwe_id || "").toLowerCase().includes(q) ||
+        (f.owasp || "").toLowerCase().includes(q)
       );
     });
   }, [findings, query, severity]);
@@ -290,6 +292,16 @@ export default function FindingsPage() {
                       {f.cve && (
                         <Badge variant="outline" className="mono text-[10px]">
                           {f.cve}
+                        </Badge>
+                      )}
+                      {f.cwe_id && (
+                        <Badge variant="outline" className="mono text-[10px] text-emerald-400 border-emerald-400/30">
+                          {f.cwe_id}
+                        </Badge>
+                      )}
+                      {f.owasp && (
+                        <Badge variant="outline" className="mono text-[10px] text-amber-400 border-amber-400/30">
+                          {f.owasp}
                         </Badge>
                       )}
                       {typeof f.cvss === "number" && f.cvss > 0 && (

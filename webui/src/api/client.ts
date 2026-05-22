@@ -10,6 +10,7 @@ import type {
   ScanListItem,
   ScanRecord,
   ScanRequest,
+  ScanSchedule,
   StatusResponse,
   VersionInfo,
   WSEvent,
@@ -250,5 +251,23 @@ export const api = {
     http<{ reply?: string; error?: string }>("/api/chat", {
       method: "POST",
       json: { message, instance_id: instanceId },
+    }),
+
+  listSchedules: () => http<ScanSchedule[]>("/api/schedules"),
+  createSchedule: (schedule: Omit<ScanSchedule, "id" | "next_run">) =>
+    http<ScanSchedule>("/api/schedules", {
+      method: "POST",
+      json: schedule,
+    }),
+  updateSchedule: (id: string, schedule: Partial<ScanSchedule>) =>
+    http<ScanSchedule>(`/api/schedules/${id}`, {
+      method: "PUT",
+      json: schedule,
+    }),
+  deleteSchedule: (id: string) =>
+    http<{ status: string }>(`/api/schedules/${id}`, { method: "DELETE" }),
+  triggerSchedule: (id: string) =>
+    http<{ status: string; instance_id: string }>(`/api/schedules/${id}/trigger`, {
+      method: "POST",
     }),
 };

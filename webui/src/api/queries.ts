@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { ScanRequest } from "@/types/api";
+import type { ScanRequest, ScanSchedule } from "@/types/api";
 
 export const qk = {
   authStatus: ["auth", "status"] as const,
@@ -16,6 +16,7 @@ export const qk = {
   agentMail: ["settings", "agentmail"] as const,
   llmSettings: ["settings", "llm"] as const,
   environmentSettings: ["settings", "environment"] as const,
+  schedules: ["schedules"] as const,
 };
 
 export function useAuthStatus() {
@@ -258,5 +259,55 @@ export function useQueueClear() {
   return useMutation({
     mutationFn: api.queueClear,
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.queue }),
+  });
+}
+
+export function useSchedulesList() {
+  return useQuery({
+    queryKey: qk.schedules,
+    queryFn: api.listSchedules,
+    refetchInterval: 15000,
+  });
+}
+
+export function useCreateSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.createSchedule,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.schedules });
+    },
+  });
+}
+
+export function useUpdateSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, schedule }: { id: string; schedule: Partial<ScanSchedule> }) =>
+      api.updateSchedule(id, schedule),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.schedules });
+    },
+  });
+}
+
+export function useDeleteSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.deleteSchedule,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.schedules });
+    },
+  });
+}
+
+export function useTriggerSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.triggerSchedule,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.schedules });
+      qc.invalidateQueries({ queryKey: qk.instances });
+    },
   });
 }

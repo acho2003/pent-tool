@@ -51,6 +51,8 @@ type Vulnerability struct {
 	Endpoint           string  `json:"endpoint"`
 	Method             string  `json:"method"`
 	CVE                string  `json:"cve"`
+	CWE                string  `json:"cwe_id,omitempty"`         // e.g. "CWE-79"
+	OWASP              string  `json:"owasp,omitempty"`          // e.g. "A03"
 	CVSS               float64 `json:"cvss"`
 	CVSSVector         string  `json:"cvss_vector,omitempty"` // CVSS 3.1 vector string
 	TechnicalAnalysis  string  `json:"technical_analysis"`
@@ -158,6 +160,8 @@ func Register(r *tools.Registry) {
 			{Name: "poc_description", Description: "Step-by-step PoC description", Required: false},
 			{Name: "poc_script_code", Description: "Reproducible PoC code (curl, python, etc.)", Required: false},
 			{Name: "remediation_steps", Description: "Remediation recommendations", Required: false},
+			{Name: "cwe_id", Description: "CWE identifier if known, e.g. CWE-79 for XSS, CWE-89 for SQLi, CWE-78 for command injection", Required: false},
+			{Name: "owasp", Description: "OWASP Top 10 (2021) category if known, e.g. A03 for Injection, A01 for Broken Access Control", Required: false},
 		},
 		Execute: func(args map[string]string) (tools.Result, error) {
 			return reportVulnForRegistry(r, args)
@@ -308,6 +312,8 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		Endpoint:           endpoint,
 		Method:             args["method"],
 		CVE:                args["cve"],
+		CWE:                strings.TrimSpace(args["cwe_id"]),
+		OWASP:              strings.TrimSpace(args["owasp"]),
 		CVSS:               cvss,
 		CVSSVector:         cvssVector,
 		TechnicalAnalysis:  args["technical_analysis"],

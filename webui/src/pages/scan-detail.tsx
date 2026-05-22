@@ -566,6 +566,12 @@ function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }
                       {f.cve && (
                         <Badge variant="outline" className="mono">{f.cve}</Badge>
                       )}
+                      {f.cwe_id && (
+                        <Badge variant="outline" className="mono text-emerald-400 border-emerald-400/30">{f.cwe_id}</Badge>
+                      )}
+                      {f.owasp && (
+                        <Badge variant="outline" className="mono text-amber-400 border-amber-400/30">{f.owasp}</Badge>
+                      )}
                     </div>
                     {f.description && (
                       <p className="text-sm leading-relaxed text-muted-foreground line-clamp-3">
@@ -699,6 +705,12 @@ function FindingDetailsDialog({
                 {finding.cvss != null && finding.cvss > 0 && (
                   <Badge variant="outline" className="mono">CVSS {finding.cvss.toFixed(1)}</Badge>
                 )}
+                {finding.cwe_id && (
+                  <Badge variant="outline" className="mono text-emerald-400 border-emerald-400/30">{finding.cwe_id}</Badge>
+                )}
+                {finding.owasp && (
+                  <Badge variant="outline" className="mono text-amber-400 border-amber-400/30">{finding.owasp}</Badge>
+                )}
               </div>
               <DialogTitle className="pr-8 text-lg">{finding.title}</DialogTitle>
               <DialogDescription>
@@ -711,6 +723,8 @@ function FindingDetailsDialog({
               <DetailRow label="Endpoint" value={finding.endpoint} mono />
               <DetailRow label="Method" value={finding.method} mono />
               <DetailRow label="CVSS vector" value={finding.cvss_vector} mono />
+              <DetailRow label="CWE" value={finding.cwe_id} mono />
+              <DetailRow label="OWASP" value={finding.owasp} mono />
               <DetailRow label="Finding ID" value={finding.id} mono />
               <DetailRow label="Verification" value={finding.verification_method} />
             </div>
