@@ -151,6 +151,7 @@ func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 	}
 
 	manualMaxInstances = 0
+	stats.MemAvailableMB = 500
 	got, _ = effectiveMaxInstancesForStats(stats, LevelCritical, "RAM critical")
 	if got != 0 {
 		t.Fatalf("critical dynamic instances = %d, want 0", got)
@@ -182,8 +183,8 @@ func TestToolCapacityHonorsCPUAndMemoryHeadroom(t *testing.T) {
 
 	stats.LoadAvg1m = 0.95
 	capacity = toolCapacityForStats(stats, LevelCritical, "CPU critical", 0, 0)
-	if capacity.HeavyToolSlots != 0 || capacity.LightToolSlots != 1 {
-		t.Fatalf("critical CPU slots = heavy %d light %d, want 0/1", capacity.HeavyToolSlots, capacity.LightToolSlots)
+	if capacity.HeavyToolSlots != 1 || capacity.LightToolSlots != 1 {
+		t.Fatalf("critical CPU slots = heavy %d light %d, want 1/1", capacity.HeavyToolSlots, capacity.LightToolSlots)
 	}
 
 	stats = SystemStats{CPUCores: 4, LoadAvg1m: 0.1, MemTotalMB: 8192, MemAvailableMB: 1800}
@@ -193,30 +194,30 @@ func TestToolCapacityHonorsCPUAndMemoryHeadroom(t *testing.T) {
 	}
 }
 
-func TestCriticalPressureKeepsLightToolPressureSlot(t *testing.T) {
+func TestCPUPressureScalesButDoesNotZeroToolCapacity(t *testing.T) {
 	oldCriticalRAM := ramCriticalMB
 	t.Cleanup(func() {
 		ramCriticalMB = oldCriticalRAM
 	})
 
 	ramCriticalMB = 1985
-	stats := SystemStats{CPUCores: 4, LoadAvg1m: 4.6, MemTotalMB: 7938, MemAvailableMB: 1946}
+	stats := SystemStats{CPUCores: 4, LoadAvg1m: 4.6, MemTotalMB: 7938, MemAvailableMB: 2500}
 	capacity := toolCapacityForStats(stats, LevelCritical, "critical", 0, 0)
-	if capacity.HeavyToolSlots != 0 {
-		t.Fatalf("critical heavy slots = %d, want 0", capacity.HeavyToolSlots)
+	if capacity.HeavyToolSlots < 1 {
+		t.Fatalf("critical CPU heavy slots = %d, want at least one when RAM headroom exists", capacity.HeavyToolSlots)
 	}
-	if capacity.LightToolSlots != 1 {
-		t.Fatalf("critical light slots = %d, want one pressure slot", capacity.LightToolSlots)
+	if capacity.LightToolSlots < capacity.HeavyToolSlots {
+		t.Fatalf("light slots = %d, want >= heavy slots %d", capacity.LightToolSlots, capacity.HeavyToolSlots)
 	}
 	if ok, reason := toolSlotAdmission(false, capacity, 0, 0); !ok {
-		t.Fatalf("light tool should be admitted in pressure mode: %s", reason)
+		t.Fatalf("light tool should be admitted with RAM headroom: %s", reason)
 	}
-	if ok, reason := toolSlotAdmission(true, capacity, 0, 0); ok {
-		t.Fatalf("heavy tool should wait in critical pressure mode: %s", reason)
+	if ok, reason := toolSlotAdmission(true, capacity, 0, 0); !ok {
+		t.Fatalf("heavy tool should be admitted with RAM headroom: %s", reason)
 	}
 }
 
-func TestAcquireToolLeaseContextAllowsLightToolUnderCriticalPressure(t *testing.T) {
+func TestAcquireToolLeaseContextAllowsLightToolUnderHighCPUPressure(t *testing.T) {
 	oldCPUCritical := cpuCriticalPct
 	oldTotal := activeToolLeases
 	oldHeavy := activeHeavyToolLeases
@@ -256,10 +257,9 @@ func TestAcquireToolLeaseContextCancelsInsteadOfRefusing(t *testing.T) {
 		resourceMu.Unlock()
 	})
 
-	cpuCriticalPct = 0
 	resourceMu.Lock()
-	activeToolLeases = 0
-	activeHeavyToolLeases = 0
+	activeToolLeases = 1 << 20
+	activeHeavyToolLeases = 1 << 20
 	resourceMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
@@ -274,6 +274,22 @@ func TestAcquireToolLeaseContextCancelsInsteadOfRefusing(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(err.Error()), "refus") {
 		t.Fatalf("resource wait should cancel, not refuse: %v", err)
+	}
+}
+
+func TestHardToolMemoryLimitDisabledWhenUnset(t *testing.T) {
+	oldLimit := HeavyToolMemLimitBytes
+	t.Cleanup(func() {
+		HeavyToolMemLimitBytes = oldLimit
+	})
+
+	HeavyToolMemLimitBytes = 0
+	stats := SystemStats{CPUCores: 4, MemTotalMB: 8192, MemAvailableMB: 4096}
+	if got := toolMemoryLimitMBForStats(stats, true, 1, 1, LevelOK); got != 0 {
+		t.Fatalf("default hard tool memory limit = %dMB, want disabled", got)
+	}
+	if got := toolMemoryLimitLabel(); got != "disabled" {
+		t.Fatalf("toolMemoryLimitLabel = %q, want disabled", got)
 	}
 }
 
