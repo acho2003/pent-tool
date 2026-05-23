@@ -22,6 +22,7 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
@@ -33,14 +34,16 @@ var (
 )
 
 type browserStore struct {
-	mu            sync.Mutex
-	browser       *rod.Browser
-	page          *rod.Page
-	pages         map[string]*rod.Page
-	nextTab       int
-	currentTab    string
-	savedSessions map[string][]*proto.NetworkCookie // keyed by session name
-	sessionDir    string                            // base directory for session files
+	mu              sync.Mutex
+	browser         *rod.Browser
+	browserLauncher *launcher.Launcher
+	lease           *resources.ToolLease
+	page            *rod.Page
+	pages           map[string]*rod.Page
+	nextTab         int
+	currentTab      string
+	savedSessions   map[string][]*proto.NetworkCookie // keyed by session name
+	sessionDir      string                            // base directory for session files
 }
 
 // getBrowserStoreByID returns the browser store for a specific context ID.
@@ -151,26 +154,7 @@ func CleanupContext(contextID string) {
 	defer browserStoresMu.Unlock()
 	if s, ok := browserStores[contextID]; ok {
 		s.mu.Lock()
-		if s.browser != nil {
-			func() {
-				// Rod's MustClose panics if the underlying CDP connection is
-				// already dead. That's the normal path during cleanup of a
-				// session whose browser process has already exited, so we
-				// suppress the panic without logging — only an unexpected
-				// panic type would be a real bug, and the surrounding
-				// state-clearing must complete regardless.
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("[browser] CleanupContext: MustClose recovered (likely already dead): %v", r)
-					}
-				}()
-				s.browser.MustClose()
-			}()
-			s.browser = nil
-			s.page = nil
-			s.pages = make(map[string]*rod.Page)
-			s.savedSessions = make(map[string][]*proto.NetworkCookie)
-		}
+		cleanupBrowserLocked(s)
 		s.mu.Unlock()
 		delete(browserStores, contextID)
 	}
@@ -253,6 +237,7 @@ func detectCaidoPort() int {
 }
 
 // Embedded extension files extracted at launch time.
+//
 //go:embed extension/*
 var extensionFS embed.FS
 
@@ -399,8 +384,8 @@ func ensureBrowser(ctxID, proxy string) error {
 	// Load extension if extracted successfully
 	if extDir != "" {
 		ln = ln.
-			Delete("headless").                    // Remove --headless set by Headless(true)
-			Set("headless", "new").                // Chrome 112+ new headless supports extensions
+			Delete("headless").     // Remove --headless set by Headless(true)
+			Set("headless", "new"). // Chrome 112+ new headless supports extensions
 			Set("load-extension", extDir).
 			Set("disable-extensions-except", extDir)
 	}
@@ -414,9 +399,32 @@ func ensureBrowser(ctxID, proxy string) error {
 			Set("ignore-certificate-errors", "true")
 	}
 
-	u := ln.MustLaunch()
+	lease, ok := resources.AcquireToolLease(true, 2*time.Minute, "browser_action launch")
+	if !ok {
+		return fmt.Errorf("resource throttle: refused to launch browser because heavy tool capacity is exhausted")
+	}
+	leaseAttached := false
+	defer func() {
+		if !leaseAttached {
+			lease.Release()
+		}
+	}()
 
-	s.browser = rod.New().ControlURL(u).MustConnect()
+	u, err := ln.Launch()
+	if err != nil {
+		return fmt.Errorf("launch browser: %w", err)
+	}
+
+	br := rod.New().ControlURL(u)
+	if err := br.Connect(); err != nil {
+		ln.Kill()
+		return fmt.Errorf("connect browser: %w", err)
+	}
+
+	s.browser = br
+	s.browserLauncher = ln
+	s.lease = lease
+	leaseAttached = true
 	log.Printf("[browser] Standalone browser launched (extension=%v)", extDir != "")
 	return nil
 }
@@ -765,7 +773,7 @@ func saveSession(ctxID, sessionName string) (tools.Result, error) {
 	}
 
 	return tools.Result{
-		Output: fmt.Sprintf("✅ Session '%s' saved: %d cookies stored (memory + disk). Use load_session session_name=%s to restore.", sessionName, len(cookies), sessionName),
+		Output:   fmt.Sprintf("✅ Session '%s' saved: %d cookies stored (memory + disk). Use load_session session_name=%s to restore.", sessionName, len(cookies), sessionName),
 		Metadata: map[string]any{"cookies_saved": len(cookies), "session_name": sessionName},
 	}, nil
 }
@@ -1424,6 +1432,7 @@ func closeBrowser(ctxID string) (tools.Result, error) {
 
 // cleanupBrowserLocked closes browser resources (must hold s.mu).
 func cleanupBrowserLocked(s *browserStore) {
+	closed := false
 	s.savedSessions = make(map[string][]*proto.NetworkCookie)
 	if s.browser != nil {
 		func() {
@@ -1433,10 +1442,19 @@ func cleanupBrowserLocked(s *browserStore) {
 				}
 			}()
 			s.browser.MustClose()
+			closed = true
 		}()
 		s.browser = nil
 		s.page = nil
 		s.pages = make(map[string]*rod.Page)
+	}
+	if !closed && s.browserLauncher != nil {
+		s.browserLauncher.Kill()
+	}
+	s.browserLauncher = nil
+	if s.lease != nil {
+		s.lease.Release()
+		s.lease = nil
 	}
 }
 
@@ -1446,21 +1464,7 @@ func CleanupBrowser() {
 	s := getBrowserStore()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.browser != nil {
-		// Use recover to handle panics from already-dead browser processes.
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[browser] Close: MustClose recovered (likely already dead): %v", r)
-				}
-			}()
-			s.browser.MustClose()
-		}()
-		s.browser = nil
-		s.page = nil
-		s.pages = make(map[string]*rod.Page)
-		s.savedSessions = make(map[string][]*proto.NetworkCookie)
-	}
+	cleanupBrowserLocked(s)
 }
 
 func pageState(ctxID, action, tabID string) (tools.Result, error) {

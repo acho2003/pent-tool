@@ -5,7 +5,9 @@ import {
   ImageIcon,
   Loader2,
   Play,
+  Radar,
   Save,
+  ShieldCheck,
   Upload,
   X,
 } from "lucide-react";
@@ -47,6 +49,24 @@ const SCAN_MODES = [
 ];
 
 const SEVERITIES = ["info", "low", "medium", "high", "critical"];
+type ActivityMode = "active" | "passive";
+
+const ACTIVITY_OPTIONS: Array<{
+  value: ActivityMode;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "passive",
+    label: "Passive only",
+    hint: "Public sources and existing evidence. No direct target requests.",
+  },
+  {
+    value: "active",
+    label: "Active allowed",
+    hint: "Direct in-scope probes and verification are allowed.",
+  },
+];
 
 export default function NewScanPage() {
   const nav = useNavigate();
@@ -55,6 +75,8 @@ export default function NewScanPage() {
   const [targetsText, setTargetsText] = useState("");
   const [name, setName] = useState("");
   const [scanMode, setScanMode] = useState("single");
+  const [reconMode, setReconMode] = useState<ActivityMode>("active");
+  const [scanIntensity, setScanIntensity] = useState<ActivityMode>("active");
   const [instruction, setInstruction] = useState("");
   const [selectedPhases, setSelectedPhases] = useState<number[]>([]);
   const [severityFilter, setSeverityFilter] = useState<string[]>([]);
@@ -85,6 +107,10 @@ export default function NewScanPage() {
     setSeverityFilter((cur) =>
       cur.includes(s) ? cur.filter((p) => p !== s) : [...cur, s],
     );
+  }
+  function updateScanIntensity(value: ActivityMode) {
+    setScanIntensity(value);
+    if (value === "passive") setReconMode("passive");
   }
 
   async function uploadReportLogo(file?: File) {
@@ -124,6 +150,8 @@ export default function NewScanPage() {
         scan_mode: scanMode,
         instruction: instruction.trim() || undefined,
         phases: selectedPhases.length ? selectedPhases : undefined,
+        recon_mode: reconMode,
+        scan_intensity: scanIntensity,
         severity_filter: severityFilter.length ? severityFilter : undefined,
         model: model.trim() || undefined,
         company_name: companyName.trim() || undefined,
@@ -208,6 +236,75 @@ export default function NewScanPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Target access</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <Radar className="h-3.5 w-3.5 text-muted-foreground" />
+                Recon phase
+              </Label>
+              <div className="grid gap-2">
+                {ACTIVITY_OPTIONS.map((option) => {
+                  const active = reconMode === option.value;
+                  const disabled =
+                    scanIntensity === "passive" && option.value === "active";
+                  return (
+                    <button
+                      type="button"
+                      key={option.value}
+                      disabled={disabled}
+                      onClick={() => setReconMode(option.value)}
+                      className={cn(
+                        "rounded-md border border-border bg-card p-3 text-left transition-colors",
+                        "hover:border-foreground/30 disabled:cursor-not-allowed disabled:opacity-50",
+                        active &&
+                          "border-primary/70 bg-primary/5 ring-1 ring-primary/30",
+                      )}
+                    >
+                      <div className="text-sm font-medium">{option.label}</div>
+                      <p className="mt-1 text-[11px] text-muted-foreground text-pretty">
+                        {option.hint}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
+                Testing phases
+              </Label>
+              <div className="grid gap-2">
+                {ACTIVITY_OPTIONS.map((option) => {
+                  const active = scanIntensity === option.value;
+                  return (
+                    <button
+                      type="button"
+                      key={option.value}
+                      onClick={() => updateScanIntensity(option.value)}
+                      className={cn(
+                        "rounded-md border border-border bg-card p-3 text-left transition-colors",
+                        "hover:border-foreground/30",
+                        active &&
+                          "border-primary/70 bg-primary/5 ring-1 ring-primary/30",
+                      )}
+                    >
+                      <div className="text-sm font-medium">{option.label}</div>
+                      <p className="mt-1 text-[11px] text-muted-foreground text-pretty">
+                        {option.hint}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </CardContent>
         </Card>

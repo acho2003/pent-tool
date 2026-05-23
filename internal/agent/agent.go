@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os/exec"
 	"regexp"
 	"runtime/debug"
@@ -54,26 +55,34 @@ type toolExecResult struct {
 
 // Agent runs the LLM agent loop.
 type Agent struct {
-	ID            string
-	Name          string
-	cfg           *config.Config
-	client        *llm.Client
-	registry      *tools.Registry
-	scanCtx       *scanctx.ScanContext // per-session state (vulns, notes, terminal, browser)
-	messages      []llm.Message
-	msgMu         sync.Mutex
-	events        chan Event
-	maxIter       int
-	stopped       atomic.Bool
-	ctx           context.Context
-	cancel        context.CancelFunc
-	lastActivity  time.Time
-	activityMu    sync.Mutex
-	scanStart     time.Time     // when Run() was called
-	discoveryMode bool          // When true, allow finish at any iteration (for Phase 1 enumeration)
-	allowedPhases []int         // selected methodology phases, empty means all
-	hooks         *HookRegistry // extensible lifecycle hooks
-	state         *ScanState    // shared mutable scan state for hooks
+	ID                         string
+	Name                       string
+	cfg                        *config.Config
+	client                     *llm.Client
+	registry                   *tools.Registry
+	scanCtx                    *scanctx.ScanContext // per-session state (vulns, notes, terminal, browser)
+	messages                   []llm.Message
+	msgMu                      sync.Mutex
+	events                     chan Event
+	maxIter                    int
+	stopped                    atomic.Bool
+	ctx                        context.Context
+	cancel                     context.CancelFunc
+	lastActivity               time.Time
+	activityMu                 sync.Mutex
+	scanStart                  time.Time // when Run() was called
+	discoveryMode              bool      // When true, allow finish at any iteration (for Phase 1 enumeration)
+	allowedPhases              []int     // selected methodology phases, empty means all
+	reconMode                  string    // active or passive reconnaissance
+	scanIntensity              string    // active or passive testing/scanning
+	activityHosts              []string  // normalized target hosts used by passive policy
+	passiveReconGuardActive    bool      // full scans with passive recon block direct access until passive evidence is collected
+	passiveReconGuardDone      bool
+	passiveReconPassiveLookups int
+	passiveReconBlockedActive  int
+	passiveReconSourceKeys     map[string]bool
+	hooks                      *HookRegistry // extensible lifecycle hooks
+	state                      *ScanState    // shared mutable scan state for hooks
 }
 
 // NewAgent creates a new agent.
@@ -134,6 +143,11 @@ func NewAgent(cfg *config.Config, name string, events chan Event, sc ...*scanctx
 	agentsgraph.Register(reg, func(subName string, targets []string, task string) (string, error) {
 		subEvents := make(chan Event, 256)
 		subAgent := NewAgent(cfg, subName, subEvents, sctx)
+		subAgent.SetPhaseRestrictions(a.allowedPhases)
+		subAgent.SetActivityPolicy(a.reconMode, a.scanIntensity, a.activityHosts)
+		if a.discoveryMode {
+			subAgent.SetDiscoveryMode(true)
+		}
 		var results strings.Builder
 		done := make(chan struct{})
 		go func() {
@@ -172,12 +186,215 @@ func NewAgent(cfg *config.Config, name string, events chan Event, sc ...*scanctx
 // Used for Phase 1 subdomain enumeration where we want the agent to exit immediately.
 func (a *Agent) SetDiscoveryMode(enabled bool) {
 	a.discoveryMode = enabled
+	a.refreshPassiveReconGuard()
 }
 
 // SetPhaseRestrictions configures the selected methodology phases for policy hooks.
 // An empty slice means the full methodology is allowed.
 func (a *Agent) SetPhaseRestrictions(phases []int) {
 	a.allowedPhases = append([]int(nil), phases...)
+	a.refreshPassiveReconGuard()
+}
+
+const (
+	activityModeActive  = "active"
+	activityModePassive = "passive"
+
+	passiveReconMinLookups      = 2
+	passiveReconMinSourceKinds  = 2
+	passiveReconFallbackLookups = 3
+)
+
+// SetActivityPolicy configures passive/active access controls for recon and testing.
+func (a *Agent) SetActivityPolicy(reconMode, scanIntensity string, targets []string) {
+	a.reconMode = normalizeActivityMode(reconMode)
+	a.scanIntensity = normalizeActivityMode(scanIntensity)
+	if a.scanIntensity == activityModePassive {
+		a.reconMode = activityModePassive
+	}
+	a.activityHosts = normalizeActivityHosts(targets)
+	a.refreshPassiveReconGuard()
+}
+
+func (a *Agent) shouldUsePassiveReconGuard() bool {
+	return normalizeActivityMode(a.reconMode) == activityModePassive &&
+		normalizeActivityMode(a.scanIntensity) == activityModeActive &&
+		!a.discoveryMode &&
+		!isReconReportOnlyPhaseSelection(a.allowedPhases)
+}
+
+func (a *Agent) refreshPassiveReconGuard() {
+	if a.shouldUsePassiveReconGuard() {
+		a.passiveReconGuardActive = !a.passiveReconGuardDone
+	} else {
+		a.passiveReconGuardActive = false
+	}
+	a.syncPassiveReconGuardState()
+}
+
+func (a *Agent) resetPassiveReconGuardForRun() {
+	a.passiveReconGuardDone = false
+	a.passiveReconPassiveLookups = 0
+	a.passiveReconBlockedActive = 0
+	a.passiveReconSourceKeys = make(map[string]bool)
+	a.refreshPassiveReconGuard()
+}
+
+func (a *Agent) syncPassiveReconGuardState() {
+	if a.state == nil {
+		return
+	}
+	a.state.PassiveReconGuardActive = a.passiveReconGuardActive
+	a.state.PassiveReconPassiveLookups = a.passiveReconPassiveLookups
+	a.state.PassiveReconBlockedActive = a.passiveReconBlockedActive
+}
+
+func (a *Agent) recordPassiveReconLookup(toolName string, toolArgs map[string]string) {
+	if !a.passiveReconGuardActive {
+		return
+	}
+	if a.passiveReconSourceKeys == nil {
+		a.passiveReconSourceKeys = make(map[string]bool)
+	}
+	a.passiveReconPassiveLookups++
+	a.passiveReconSourceKeys[classifyPassiveReconSource(toolName, toolArgs)] = true
+	a.syncPassiveReconGuardState()
+}
+
+func (a *Agent) recordPassiveReconBlock() {
+	if !a.passiveReconGuardActive {
+		return
+	}
+	a.passiveReconBlockedActive++
+	a.syncPassiveReconGuardState()
+}
+
+func (a *Agent) finishPassiveReconGuard() {
+	a.passiveReconGuardActive = false
+	a.passiveReconGuardDone = true
+	a.syncPassiveReconGuardState()
+}
+
+func (a *Agent) maybeCompletePassiveReconGuardAtIterationStart(iter int) string {
+	if !a.passiveReconGuardActive || !a.shouldUsePassiveReconGuard() || iter == 0 || !a.passiveReconGuardSatisfied() {
+		return ""
+	}
+	a.finishPassiveReconGuard()
+	return "Passive reconnaissance guard complete: passive evidence has been collected. Active testing is now allowed because scan intensity is active."
+}
+
+func (a *Agent) passiveReconGuardSatisfied() bool {
+	if a.passiveReconPassiveLookups < passiveReconMinLookups {
+		return false
+	}
+	if len(a.passiveReconSourceKeys) >= passiveReconMinSourceKinds {
+		return true
+	}
+	return a.passiveReconPassiveLookups >= passiveReconFallbackLookups
+}
+
+func classifyPassiveReconSource(toolName string, toolArgs map[string]string) string {
+	combined := strings.ToLower(toolName)
+	for _, value := range toolArgs {
+		combined += " " + strings.ToLower(value)
+	}
+	switch {
+	case isAllowedLocalArtifactAnalysis(strings.ToLower(toolName), toolArgs):
+		return "local_artifact"
+	case strings.Contains(combined, "crt.sh") ||
+		strings.Contains(combined, "certspotter") ||
+		strings.Contains(combined, "certificate transparency") ||
+		strings.Contains(combined, "ct log") ||
+		strings.Contains(combined, "certstream"):
+		return "certificate_transparency"
+	case strings.Contains(combined, "web.archive.org") ||
+		strings.Contains(combined, "wayback") ||
+		strings.Contains(combined, "urlscan") ||
+		strings.Contains(combined, "commoncrawl"):
+		return "public_archive"
+	case strings.Contains(combined, "shodan") ||
+		strings.Contains(combined, "censys") ||
+		strings.Contains(combined, "securitytrails") ||
+		strings.Contains(combined, "virustotal") ||
+		strings.Contains(combined, "alienvault") ||
+		strings.Contains(combined, "binaryedge") ||
+		strings.Contains(combined, "fofa") ||
+		strings.Contains(combined, "zoomeye"):
+		return "third_party_intel"
+	case strings.Contains(combined, "whois") || strings.Contains(combined, "rdap"):
+		return "registry"
+	case strings.Contains(combined, "dig ") ||
+		strings.Contains(combined, "nslookup") ||
+		strings.Contains(combined, "dnsdumpster") ||
+		strings.Contains(combined, "dnsx"):
+		return "dns_records"
+	case strings.Contains(combined, "github.com") ||
+		strings.Contains(combined, "gitlab.com") ||
+		strings.Contains(combined, "sourcegraph") ||
+		strings.Contains(combined, "grep.app"):
+		return "source_code"
+	case strings.EqualFold(toolName, "web_search"):
+		return "web_search"
+	default:
+		return "passive_lookup"
+	}
+}
+
+func normalizeActivityMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case activityModePassive:
+		return activityModePassive
+	default:
+		return activityModeActive
+	}
+}
+
+func normalizeActivityHosts(targets []string) []string {
+	seen := make(map[string]bool)
+	var hosts []string
+	var add func(string)
+	add = func(host string) {
+		host = strings.ToLower(strings.TrimSpace(host))
+		host = strings.TrimPrefix(host, "*.")
+		host = strings.TrimPrefix(host, ".")
+		host = strings.TrimSuffix(host, ".")
+		if host == "" || seen[host] {
+			return
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+		if strings.HasPrefix(host, "www.") {
+			add(strings.TrimPrefix(host, "www."))
+		}
+		parts := strings.Split(host, ".")
+		if len(parts) >= 2 {
+			add(strings.Join(parts[len(parts)-2:], "."))
+		}
+	}
+	for _, target := range targets {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		if strings.Contains(target, "://") {
+			if parsed, err := url.Parse(target); err == nil && parsed.Hostname() != "" {
+				add(parsed.Hostname())
+				continue
+			}
+		}
+		raw := strings.TrimPrefix(target, "http://")
+		raw = strings.TrimPrefix(raw, "https://")
+		raw = strings.Split(raw, "/")[0]
+		raw = strings.Split(raw, "?")[0]
+		raw = strings.Split(raw, "#")[0]
+		if strings.Contains(raw, ":") {
+			if parsed, err := url.Parse("//" + raw); err == nil && parsed.Hostname() != "" {
+				raw = parsed.Hostname()
+			}
+		}
+		add(raw)
+	}
+	return hosts
 }
 
 func isReconReportOnlyPhaseSelection(phases []int) bool {
@@ -442,6 +659,193 @@ func (a *Agent) shouldBlockForPhaseRestriction(toolName string, toolArgs map[str
 	return false, ""
 }
 
+func (a *Agent) shouldBlockForActivityPolicy(toolName string, toolArgs map[string]string) (bool, string) {
+	passiveScan := normalizeActivityMode(a.scanIntensity) == activityModePassive
+	passiveReconGuard := a.passiveReconGuardActive && a.shouldUsePassiveReconGuard()
+	passiveRecon := normalizeActivityMode(a.reconMode) == activityModePassive && (a.discoveryMode || isReconReportOnlyPhaseSelection(a.allowedPhases) || passiveReconGuard)
+	if !passiveScan && !passiveRecon {
+		return false, ""
+	}
+
+	lowerTool := strings.ToLower(toolName)
+	if lowerTool == "web_search" {
+		if passiveReconGuard {
+			a.recordPassiveReconLookup(toolName, toolArgs)
+		}
+		return false, ""
+	}
+	switch lowerTool {
+	case "add_note", "read_notes", "finish", "list_skills", "read_skill", "report_vulnerability", "agentmail":
+		return false, ""
+	case "browser_action", "page_agent":
+		if passiveReconGuard {
+			a.recordPassiveReconBlock()
+		}
+		return true, passivePolicyBlockReason(passiveScan)
+	}
+
+	combined := lowerTool
+	for _, value := range toolArgs {
+		combined += " " + strings.ToLower(value)
+	}
+	if isAllowedPassiveLookup(combined, a.activityHosts) {
+		if passiveReconGuard {
+			a.recordPassiveReconLookup(toolName, toolArgs)
+		}
+		return false, ""
+	}
+	if containsActiveAccessPattern(combined) {
+		if passiveReconGuard {
+			a.recordPassiveReconBlock()
+		}
+		return true, passivePolicyBlockReason(passiveScan)
+	}
+	if referencesActivityTarget(combined, a.activityHosts) {
+		if isAllowedLocalArtifactAnalysis(lowerTool, toolArgs) {
+			if passiveReconGuard {
+				a.recordPassiveReconLookup(toolName, toolArgs)
+			}
+			return false, ""
+		}
+		if passiveReconGuard {
+			a.recordPassiveReconBlock()
+		}
+		return true, passivePolicyBlockReason(passiveScan)
+	}
+	return false, ""
+}
+
+func passivePolicyBlockReason(passiveScan bool) string {
+	if passiveScan {
+		return "Passive scanning is enabled, so direct target access and active probes are blocked. Use web_search, public passive datasets, existing notes, or already collected artifacts instead."
+	}
+	return "Passive reconnaissance is enabled for this phase, so direct target access and active recon probes are blocked. Use web_search, public passive datasets, existing notes, or already collected artifacts instead."
+}
+
+func referencesActivityTarget(text string, hosts []string) bool {
+	for _, host := range hosts {
+		if host == "" {
+			continue
+		}
+		if strings.Contains(text, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAllowedLocalArtifactAnalysis(toolName string, toolArgs map[string]string) bool {
+	switch toolName {
+	case "terminal_execute":
+		cmd := strings.TrimSpace(strings.ToLower(toolArgs["command"]))
+		if cmd == "" {
+			return false
+		}
+		if containsActiveAccessPattern(cmd) || containsPassiveLookupBreaker(cmd) {
+			return false
+		}
+		readOnlyPrefixes := []string{
+			"cat ", "grep ", "egrep ", "fgrep ", "rg ", "jq ", "sed ", "awk ",
+			"sort ", "uniq ", "wc ", "head ", "tail ", "cut ", "tr ", "find ",
+			"ls ", "stat ", "file ",
+		}
+		for _, prefix := range readOnlyPrefixes {
+			if strings.HasPrefix(cmd, prefix) {
+				return true
+			}
+		}
+		return false
+	case "python_action":
+		code := strings.ToLower(toolArgs["code"] + " " + toolArgs["script"])
+		if code == "" || containsActiveAccessPattern(code) {
+			return false
+		}
+		networkMarkers := []string{"requests", "urllib", "http.client", "socket", "subprocess", "os.system", "popen("}
+		for _, marker := range networkMarkers {
+			if strings.Contains(code, marker) {
+				return false
+			}
+		}
+		return strings.Contains(code, "open(") || strings.Contains(code, "pathlib") || strings.Contains(code, "json.load")
+	default:
+		return false
+	}
+}
+
+func isAllowedPassiveLookup(text string, hosts []string) bool {
+	passiveSources := []string{
+		"crt.sh", "web.archive.org", "dns.bufferover.run", "urlscan.io",
+		"otx.alienvault.com", "alienvault.com", "censys.io", "shodan.io",
+		"rapiddns.io", "certspotter.com", "securitytrails.com", "virustotal.com",
+		"github.com", "google.com/search", "bing.com/search",
+	}
+	for _, source := range passiveSources {
+		if strings.Contains(text, source) && !containsDirectTargetURL(text, hosts) && !containsPassiveLookupBreaker(text) {
+			return true
+		}
+	}
+	if strings.Contains(text, "subfinder ") || strings.Contains(text, " subfinder") ||
+		strings.Contains(text, "assetfinder ") || strings.Contains(text, " assetfinder") ||
+		strings.Contains(text, "findomain ") || strings.Contains(text, " findomain") ||
+		strings.Contains(text, "amass enum -passive") {
+		blockers := []string{" -active", " dnsx", " httpx", " nmap", " naabu", " masscan", " puredns", " shuffledns"}
+		for _, blocker := range blockers {
+			if strings.Contains(text, blocker) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func containsPassiveLookupBreaker(text string) bool {
+	breakers := []string{
+		"nmap", "masscan", "naabu", "httpx", "ffuf", "gobuster", "feroxbuster",
+		"dirsearch", "katana", "gospider", "nuclei", "sqlmap", "dalfox", "nikto",
+		"wpscan", "whatweb", "dnsx", "massdns", "puredns", "shuffledns",
+	}
+	for _, breaker := range breakers {
+		if strings.Contains(text, breaker) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDirectTargetURL(text string, hosts []string) bool {
+	for _, host := range hosts {
+		if host == "" {
+			continue
+		}
+		if strings.Contains(text, "http://"+host) || strings.Contains(text, "https://"+host) ||
+			strings.Contains(text, "http://www."+host) || strings.Contains(text, "https://www."+host) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsActiveAccessPattern(text string) bool {
+	patterns := []string{
+		"browser_action", "page_agent",
+		"curl ", " wget ", "httpx", "nmap", "masscan", "naabu",
+		"ffuf", "gobuster", "feroxbuster", "dirsearch", "katana", "gospider", "hakrawler",
+		"nuclei", "sqlmap", "dalfox", "nikto", "wpscan", "joomscan", "whatweb", "wafw00f",
+		"dnsx", "massdns", "puredns", "shuffledns", " dig ", " host ", "nslookup",
+		"ping ", "traceroute", "openssl s_client", " nc ", "netcat", "telnet ",
+		"<script", "alert(", "sleep(", "pg_sleep", "waitfor delay", "../etc/passwd", "/etc/passwd",
+		"169.254.169.254", "burp collaborator",
+	}
+	padded := " " + text + " "
+	for _, pattern := range patterns {
+		if strings.Contains(padded, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // Run starts the agent loop with the given targets and instructions.
 func (a *Agent) Run(targets []string, instruction string) {
 	a.scanStart = time.Now()
@@ -466,6 +870,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 	if a.state.ReconOnlyMode {
 		a.state.DiscoveryMode = true
 	}
+	a.resetPassiveReconGuardForRun()
 
 	// Helper to get current token count
 	tokenCount := func() int {
@@ -477,6 +882,12 @@ func (a *Agent) Run(targets []string, instruction string) {
 		// Reset activity watchdog on each iteration — IMMEDIATELY, no delay
 		a.touchActivity()
 		a.state.Iteration = iter
+		if guardMsg := a.maybeCompletePassiveReconGuardAtIterationStart(iter); guardMsg != "" {
+			a.msgMu.Lock()
+			a.messages = append(a.messages, llm.Message{Role: "user", Content: guardMsg})
+			a.msgMu.Unlock()
+			a.emit(Event{Type: "message", Content: guardMsg, TotalTokens: tokenCount()})
+		}
 
 		if a.maxIter > 0 {
 			a.emit(Event{Type: "thinking", Content: fmt.Sprintf("Iteration %d/%d", iter+1, a.maxIter), TotalTokens: tokenCount()})
@@ -625,6 +1036,16 @@ func (a *Agent) Run(targets []string, instruction string) {
 			}
 			for k, v := range tc.Args {
 				toolArgs[k] = v
+			}
+
+			if blocked, reason := a.shouldBlockForActivityPolicy(tc.Name, tc.Args); blocked {
+				blockMsg := "⛔ ACTIVITY POLICY BLOCKED TOOL — " + reason
+				a.emit(Event{Type: "tool_call", ToolName: tc.Name, ToolArgs: tc.Args})
+				a.emit(Event{Type: "tool_result", ToolName: tc.Name, ToolResult: tools.Result{Output: blockMsg}, TotalTokens: tokenCount()})
+				a.msgMu.Lock()
+				a.messages = append(a.messages, llm.Message{Role: "user", Content: blockMsg})
+				a.msgMu.Unlock()
+				continue
 			}
 
 			if blocked, reason := a.shouldBlockForPhaseRestriction(tc.Name, tc.Args); blocked {

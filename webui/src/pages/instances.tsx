@@ -79,11 +79,15 @@ function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof 
   const ramUsed = ramTotal - resources.ram_available_mb
   const ramPct = Math.min(100, Math.max(0, Math.round((ramUsed / ramTotal) * 100)))
   const diskFreeGb = (resources.disk_free_mb / 1024).toFixed(1)
+  const heavyActive = resources.active_heavy_tool_leases ?? 0
+  const heavySlots = resources.heavy_tool_slots ?? 0
+  const toolMem = resources.tool_mem_limit_mb ?? 0
+  const scanMem = resources.scan_memory_budget_mb ?? 0
   const level = (resources.level || "").toLowerCase()
   const levelColor =
     level === "critical"
       ? "bg-red-500/10 border-red-500/30 text-red-300"
-      : level === "warning" || level === "warn"
+      : level === "caution" || level === "warning" || level === "warn"
         ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
         : "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
 
@@ -94,19 +98,19 @@ function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof 
           icon={<Cpu className="h-3 w-3" />}
           label="CPU LOAD"
           value={`${cpu}%`}
-          sub={`${resources.cpu_load_1m.toFixed(2)} / ${resources.cpu_cores} cores`}
+          sub={`${resources.cpu_load_1m.toFixed(2)} / ${resources.cpu_cores} cores · heavy ${heavyActive}/${heavySlots}`}
         />
         <ResourceStat
           icon={<MemoryStick className="h-3 w-3" />}
           label="MEMORY"
           value={`${ramPct}%`}
-          sub={`${Math.round(ramUsed)}MB used`}
+          sub={toolMem > 0 ? `${Math.round(ramUsed)}MB used · tool ${toolMem}MB` : `${Math.round(ramUsed)}MB used`}
         />
         <ResourceStat
           icon={<HardDrive className="h-3 w-3" />}
           label="DISK FREE"
           value={`${diskFreeGb}GB`}
-          sub={`Max ${resources.effective_max_instances} instances`}
+          sub={scanMem > 0 ? `Max ${resources.effective_max_instances} · scan ${scanMem}MB` : `Max ${resources.effective_max_instances} instances`}
         />
         <div className={`rounded-md border px-3 py-2 text-xs ${levelColor}`}>
           <div className="uppercase tracking-wide opacity-70">Resource level</div>

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
@@ -91,10 +92,16 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
+	lease, ok := resources.AcquireToolLease(false, 30*time.Second, "python_action")
+	if !ok {
+		return tools.Result{Error: "Refused to launch python_action: system CPU/RAM resources exhausted after 30s wait"}, nil
+	}
+	defer lease.Release()
+
 	if err := cmd.Start(); err != nil {
 		return tools.Result{Error: fmt.Sprintf("Failed to start python process: %v", err)}, nil
 	}
-	terminal.ApplyProcessLimits(cmd, true)
+	terminal.ApplyProcessLimitsWithLimit(cmd, true, lease.MemoryLimitBytes())
 
 	// Register with terminal so watchdog knows we are active
 	cleanCode := code

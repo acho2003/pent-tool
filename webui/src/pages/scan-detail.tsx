@@ -1,34 +1,55 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
-import { Link, useNavigate, useParams } from "react-router-dom"
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"
-import { Separator } from "@/components/ui/separator"
-import { ScanStatusPill } from "@/components/scan-status-pill"
-import { SeverityBadge } from "@/components/severity-badge"
-import { PhaseProgress, PHASES } from "@/components/phase-progress"
-import { CopyButton } from "@/components/copy-button"
-import { ErrorState, EmptyState } from "@/components/states"
-import { useScan, useStopInstance, useStartSavedInstance, useDeleteScan, useDeleteVuln } from "@/api/queries"
-import { api } from "@/api/client"
+} from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
+import { ScanStatusPill } from "@/components/scan-status-pill";
+import { SeverityBadge } from "@/components/severity-badge";
+import { PhaseProgress, PHASES } from "@/components/phase-progress";
+import { CopyButton } from "@/components/copy-button";
+import { ErrorState, EmptyState } from "@/components/states";
+import {
+  useScan,
+  useStopInstance,
+  useStartSavedInstance,
+  useDeleteScan,
+  useDeleteVuln,
+} from "@/api/queries";
+import { api } from "@/api/client";
 import {
   filterEventsForInstance,
   mergeFeedEvents,
   toFeedEvent,
   useWSStore,
   type FeedEvent,
-} from "@/store/ws"
-import { timeAgo, formatTime, formatDuration, severityRank, normalizeSeverity, cn, menuContentClass, menuItemClass } from "@/lib/utils"
+} from "@/store/ws";
+import {
+  timeAgo,
+  formatTime,
+  formatDuration,
+  severityRank,
+  normalizeSeverity,
+  cn,
+  menuContentClass,
+  menuItemClass,
+} from "@/lib/utils";
 import {
   ChevronLeft,
   Download,
@@ -42,38 +63,42 @@ import {
   Sparkles,
   ListChecks,
   ArrowRight,
-} from "lucide-react"
-import { LiveFeed, type FeedFilter } from "@/components/live-feed"
-import type { SubScanSummary, VulnSummary } from "@/types/api"
+} from "lucide-react";
+import { LiveFeed, type FeedFilter } from "@/components/live-feed";
+import type { SubScanSummary, VulnSummary } from "@/types/api";
 
 export default function ScanDetailPage() {
-  const navigate = useNavigate()
-  const { scanId } = useParams<{ scanId: string }>()
-  const id = scanId ?? ""
-  const { data: scan, isLoading, isFetching, error, refetch } = useScan(id)
-  const stop = useStopInstance()
-  const start = useStartSavedInstance()
-  const del = useDeleteScan()
-  const subscribe = useWSStore((s) => s.subscribe)
-  const unsubscribe = useWSStore((s) => s.unsubscribe)
-  const liveEvents = useWSStore((s) => s.events)
-  const subscriptionId = scan?.instance_id || scan?.id || id
+  const navigate = useNavigate();
+  const { scanId } = useParams<{ scanId: string }>();
+  const id = scanId ?? "";
+  const { data: scan, isLoading, isFetching, error, refetch } = useScan(id);
+  const stop = useStopInstance();
+  const start = useStartSavedInstance();
+  const del = useDeleteScan();
+  const subscribe = useWSStore((s) => s.subscribe);
+  const unsubscribe = useWSStore((s) => s.unsubscribe);
+  const liveEvents = useWSStore((s) => s.events);
+  const subscriptionId = scan?.instance_id || scan?.id || id;
 
   useEffect(() => {
-    if (!subscriptionId) return
-    subscribe(subscriptionId)
-    return () => unsubscribe()
-  }, [subscriptionId, subscribe, unsubscribe])
+    if (!subscriptionId) return;
+    subscribe(subscriptionId);
+    return () => unsubscribe();
+  }, [subscriptionId, subscribe, unsubscribe]);
 
   if (error)
     return (
       <ErrorState
         title="Could not load scan"
         description={error instanceof Error ? error.message : "Unknown error"}
-        action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
+        action={
+          <Button size="sm" variant="outline" onClick={() => refetch()}>
+            Retry
+          </Button>
+        }
       />
-    )
-  if (isLoading) return <ScanDetailSkeleton />
+    );
+  if (isLoading) return <ScanDetailSkeleton />;
   if (!scan)
     return (
       <ErrorState
@@ -83,27 +108,38 @@ export default function ScanDetailPage() {
             ? "Waiting for the running scan record to become available."
             : "The scan route is open, but the backend has not returned the scan record yet."
         }
-        action={<Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button>}
+        action={
+          <Button size="sm" variant="outline" onClick={() => refetch()}>
+            Retry
+          </Button>
+        }
       />
-    )
+    );
 
-  const status = (scan.status || "").toLowerCase()
-  const canStop = status === "running" || status === "paused"
-  const canStart = status === "saved" || status === "stopped" || status === "failed" || status === "finished"
+  const status = (scan.status || "").toLowerCase();
+  const canStop = status === "running" || status === "paused";
+  const canStart =
+    status === "saved" ||
+    status === "stopped" ||
+    status === "failed" ||
+    status === "finished";
 
   // Combine persisted events from the scan record with the live websocket
   // feed for this instance, deduped by content.
-  const eventInstanceId = scan.instance_id || scan.id || id
-  const wsForScan = filterEventsForInstance(liveEvents, eventInstanceId)
+  const eventInstanceId = scan.instance_id || scan.id || id;
+  const wsForScan = filterEventsForInstance(liveEvents, eventInstanceId);
   const persistedAsFeed: FeedEvent[] = (scan.events ?? []).map((e, i) =>
     toFeedEvent(e, `scan:${eventInstanceId}`, i),
-  )
-  const mergedEvents = mergeFeedEvents(persistedAsFeed, wsForScan)
+  );
+  const mergedEvents = mergeFeedEvents(persistedAsFeed, wsForScan);
 
   return (
     <div className="space-y-6">
       <div>
-        <Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground">
+        <Link
+          to="/scans"
+          className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"
+        >
           <ChevronLeft className="mr-1 h-3 w-3" />
           All scans
         </Link>
@@ -122,11 +158,15 @@ export default function ScanDetailPage() {
             <span>·</span>
             <span>Started {timeAgo(scan.started_at)}</span>
             <span>·</span>
-            <span>Duration {formatDuration(scan.started_at, scan.finished_at)}</span>
+            <span>
+              Duration {formatDuration(scan.started_at, scan.finished_at)}
+            </span>
             {scan.scan_mode && (
               <>
                 <span>·</span>
-                <Badge variant="outline" className="font-normal capitalize">{scan.scan_mode}</Badge>
+                <Badge variant="outline" className="font-normal capitalize">
+                  {scan.scan_mode}
+                </Badge>
               </>
             )}
           </div>
@@ -147,9 +187,9 @@ export default function ScanDetailPage() {
                 start.mutate(scan.id, {
                   onSuccess: (res) => {
                     if (res.instance_id) {
-                      navigate(`/scans/${res.instance_id}`)
+                      navigate(`/scans/${res.instance_id}`);
                     } else {
-                      void refetch()
+                      void refetch();
                     }
                   },
                 })
@@ -173,12 +213,16 @@ export default function ScanDetailPage() {
             variant="ghost"
             size="sm"
             onClick={() => {
-              if (window.confirm("Permanently delete this scan and all its events?")) {
+              if (
+                window.confirm(
+                  "Permanently delete this scan and all its events?",
+                )
+              ) {
                 del.mutate(scan.id, {
                   onSuccess: () => {
-                    navigate("/scans", { replace: true })
+                    navigate("/scans", { replace: true });
                   },
-                })
+                });
               }
             }}
             disabled={del.isPending}
@@ -193,7 +237,8 @@ export default function ScanDetailPage() {
           <CardHeader>
             <CardTitle className="text-sm">Phase progress</CardTitle>
             <CardDescription>
-              Xalgorix runs a 10-phase autonomous methodology. Currently:{" "}
+              Xalgorix runs a {PHASES.length}-phase autonomous methodology.
+              Currently:{" "}
               <span className="text-foreground">
                 {currentPhaseLabel(scan.current_phase)}
               </span>
@@ -211,10 +256,13 @@ export default function ScanDetailPage() {
                   key={p.id}
                   className={cn(
                     "rounded-md border border-border bg-muted/20 px-2 py-1.5 text-[11px]",
-                    scan.current_phase === p.id && "border-amber-400/50 text-amber-300",
+                    scan.current_phase === p.id &&
+                      "border-amber-400/50 text-amber-300",
                   )}
                 >
-                  <span className="text-muted-foreground mono mr-1.5">{p.id}</span>
+                  <span className="text-muted-foreground mono mr-1.5">
+                    {p.id}
+                  </span>
                   {p.name}
                 </div>
               ))}
@@ -225,7 +273,9 @@ export default function ScanDetailPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-sm">Risk overview</CardTitle>
-            <CardDescription>{(scan.vulns ?? []).length} findings</CardDescription>
+            <CardDescription>
+              {(scan.vulns ?? []).length} findings
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <RiskBreakdown vulns={scan.vulns ?? []} />
@@ -237,7 +287,8 @@ export default function ScanDetailPage() {
             <CardHeader>
               <CardTitle className="text-sm">Wildcard coverage</CardTitle>
               <CardDescription>
-                {scan.sub_scan_completed ?? 0} scanned · {scan.sub_scan_running ?? 0} running ·{" "}
+                {scan.sub_scan_completed ?? 0} scanned ·{" "}
+                {scan.sub_scan_running ?? 0} running ·{" "}
                 {scan.sub_scan_remaining ?? 0} remaining
               </CardDescription>
             </CardHeader>
@@ -279,7 +330,11 @@ export default function ScanDetailPage() {
           <FindingsTab vulns={scan.vulns ?? []} scanId={scan.id} />
         </TabsContent>
         <TabsContent value="events">
-          <EventsTab events={mergedEvents} scanId={scan.id} target={scan.target} />
+          <EventsTab
+            events={mergedEvents}
+            scanId={scan.id}
+            target={scan.target}
+          />
         </TabsContent>
         {!!scan.sub_scan_total && (
           <TabsContent value="subdomains">
@@ -291,13 +346,13 @@ export default function ScanDetailPage() {
         </TabsContent>
       </Tabs>
     </div>
-  )
+  );
 }
 
 function currentPhaseLabel(p?: number): string {
-  if (!p) return "—"
-  const found = PHASES.find((x) => x.id === p)
-  return found ? `${p}. ${found.name}` : `Phase ${p}`
+  if (!p) return "—";
+  const found = PHASES.find((x) => x.id === p);
+  return found ? `${p}. ${found.name}` : `Phase ${p}`;
 }
 
 function SubdomainProgress({
@@ -306,21 +361,24 @@ function SubdomainProgress({
   remaining,
   total,
 }: {
-  completed: number
-  running: number
-  remaining: number
-  total: number
+  completed: number;
+  running: number;
+  remaining: number;
+  total: number;
 }) {
-  const denominator = Math.max(total, 1)
-  const completedPct = (completed / denominator) * 100
-  const runningPct = (running / denominator) * 100
-  const remainingPct = Math.max(0, 100 - completedPct - runningPct)
+  const denominator = Math.max(total, 1);
+  const completedPct = (completed / denominator) * 100;
+  const runningPct = (running / denominator) * 100;
+  const remainingPct = Math.max(0, 100 - completedPct - runningPct);
   return (
     <div className="space-y-3">
       <div className="flex h-2 overflow-hidden rounded-sm bg-muted">
         <div className="bg-success" style={{ width: `${completedPct}%` }} />
         <div className="bg-warning" style={{ width: `${runningPct}%` }} />
-        <div className="bg-muted-foreground/25" style={{ width: `${remainingPct}%` }} />
+        <div
+          className="bg-muted-foreground/25"
+          style={{ width: `${remainingPct}%` }}
+        />
       </div>
       <div className="grid gap-2 text-xs sm:grid-cols-4">
         <ProgressStat label="Total" value={total} />
@@ -329,35 +387,49 @@ function SubdomainProgress({
         <ProgressStat label="Remaining" value={remaining} />
       </div>
     </div>
-  )
+  );
 }
 
 function ProgressStat({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
       <div className="mono mt-1 text-lg text-foreground">{value}</div>
     </div>
-  )
+  );
 }
 
 function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
   const counts = useMemo(() => {
-    const c: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+    const c: Record<string, number> = {
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      info: 0,
+    };
     for (const v of vulns) {
-      c[normalizeSeverity(v.severity)] += 1
+      c[normalizeSeverity(v.severity)] += 1;
     }
-    return c
-  }, [vulns])
-  const total = vulns.length || 1
-  const order: Array<keyof typeof counts> = ["critical", "high", "medium", "low", "info"]
+    return c;
+  }, [vulns]);
+  const total = vulns.length || 1;
+  const order: Array<keyof typeof counts> = [
+    "critical",
+    "high",
+    "medium",
+    "low",
+    "info",
+  ];
   return (
     <div className="space-y-3">
       <div className="flex items-end gap-1">
         {order.map((sev) => {
-          const n = counts[sev as string]
-          if (!n) return null
-          const pct = Math.max(4, Math.round((n / total) * 100))
+          const n = counts[sev as string];
+          if (!n) return null;
+          const pct = Math.max(4, Math.round((n / total) * 100));
           return (
             <div
               key={sev}
@@ -372,7 +444,7 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
               style={{ width: `${pct}%` }}
               title={`${sev}: ${n}`}
             />
-          )
+          );
         })}
         {vulns.length === 0 && (
           <div className="h-12 w-full rounded-sm border border-dashed border-border" />
@@ -380,14 +452,21 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
       </div>
       <div className="grid grid-cols-5 gap-1.5 text-[11px]">
         {order.map((sev) => (
-          <div key={sev} className="rounded-md border border-border bg-muted/20 px-2 py-1.5">
-            <div className="text-muted-foreground uppercase tracking-wide">{sev}</div>
-            <div className="mono text-base text-foreground">{counts[sev as string]}</div>
+          <div
+            key={sev}
+            className="rounded-md border border-border bg-muted/20 px-2 py-1.5"
+          >
+            <div className="text-muted-foreground uppercase tracking-wide">
+              {sev}
+            </div>
+            <div className="mono text-base text-foreground">
+              {counts[sev as string]}
+            </div>
           </div>
         ))}
       </div>
     </div>
-  )
+  );
 }
 
 function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
@@ -397,7 +476,7 @@ function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
         title="No subdomains recorded yet"
         description="Discovered subdomains will appear here as the wildcard scan progresses."
       />
-    )
+    );
   }
 
   return (
@@ -416,10 +495,17 @@ function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
             </thead>
             <tbody>
               {subScans.map((sub) => (
-                <tr key={sub.id || sub.target} className="border-b border-border/60 last:border-0">
+                <tr
+                  key={sub.id || sub.target}
+                  className="border-b border-border/60 last:border-0"
+                >
                   <Td>
-                    <div className="mono text-sm text-foreground">{sub.target}</div>
-                    <div className="mono text-xs text-muted-foreground">{sub.id}</div>
+                    <div className="mono text-sm text-foreground">
+                      {sub.target}
+                    </div>
+                    <div className="mono text-xs text-muted-foreground">
+                      {sub.id}
+                    </div>
                   </Td>
                   <Td>
                     <ScanStatusPill status={sub.status} />
@@ -438,75 +524,95 @@ function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function Th({
   children,
   className = "",
 }: {
-  children: ReactNode
-  className?: string
+  children: ReactNode;
+  className?: string;
 }) {
-  return <th className={cn("px-4 py-3 text-left font-medium", className)}>{children}</th>
+  return (
+    <th className={cn("px-4 py-3 text-left font-medium", className)}>
+      {children}
+    </th>
+  );
 }
 
 function Td({
   children,
   className = "",
 }: {
-  children: ReactNode
-  className?: string
+  children: ReactNode;
+  className?: string;
 }) {
-  return <td className={cn("px-4 py-3 align-middle", className)}>{children}</td>
+  return (
+    <td className={cn("px-4 py-3 align-middle", className)}>{children}</td>
+  );
 }
 
-function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }) {
-  const del = useDeleteVuln()
-  const [selected, setSelected] = useState<VulnSummary | null>(null)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+function FindingsTab({
+  vulns,
+  scanId,
+}: {
+  vulns: VulnSummary[];
+  scanId: string;
+}) {
+  const del = useDeleteVuln();
+  const [selected, setSelected] = useState<VulnSummary | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const sorted = useMemo(
-    () => [...vulns].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)),
+    () =>
+      [...vulns].sort(
+        (a, b) => severityRank(b.severity) - severityRank(a.severity),
+      ),
     [vulns],
-  )
+  );
 
-  const allSelected = sorted.length > 0 && selectedIds.size === sorted.length
+  const allSelected = sorted.length > 0 && selectedIds.size === sorted.length;
 
   useEffect(() => {
-    const allIds = new Set(sorted.map((v) => v.id))
+    const allIds = new Set(sorted.map((v) => v.id));
     setSelectedIds((current) => {
-      const next = new Set([...current].filter((id) => allIds.has(id)))
-      return next.size === current.size ? current : next
-    })
-  }, [sorted])
+      const next = new Set([...current].filter((id) => allIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [sorted]);
 
   function toggleSelect(id: string, checked: boolean) {
     setSelectedIds((current) => {
-      const next = new Set(current)
-      if (checked) next.add(id)
-      else next.delete(id)
-      return next
-    })
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   }
 
-  function selectAll() { setSelectedIds(new Set(sorted.map((v) => v.id))) }
-  function clearSelection() { setSelectedIds(new Set()) }
+  function selectAll() {
+    setSelectedIds(new Set(sorted.map((v) => v.id)));
+  }
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
 
   async function deleteVulns(ids: string[]) {
-    const unique = [...new Set(ids)].filter(Boolean)
-    if (!unique.length) return
-    const label = unique.length === 1
-      ? "Permanently delete this finding?"
-      : `Permanently delete ${unique.length} selected findings?`
-    if (!window.confirm(label)) return
+    const unique = [...new Set(ids)].filter(Boolean);
+    if (!unique.length) return;
+    const label =
+      unique.length === 1
+        ? "Permanently delete this finding?"
+        : `Permanently delete ${unique.length} selected findings?`;
+    if (!window.confirm(label)) return;
     for (const vulnId of unique) {
-      await del.mutateAsync({ scanId, vulnId })
+      await del.mutateAsync({ scanId, vulnId });
     }
     setSelectedIds((current) => {
-      const next = new Set(current)
-      for (const id of unique) next.delete(id)
-      return next
-    })
+      const next = new Set(current);
+      for (const id of unique) next.delete(id);
+      return next;
+    });
   }
 
   if (sorted.length === 0)
@@ -515,7 +621,7 @@ function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }
         title="No findings yet"
         description="Vulnerabilities will appear here as the engagement progresses."
       />
-    )
+    );
 
   return (
     <>
@@ -542,7 +648,10 @@ function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }
           <Card
             key={f.id}
             id={`finding-${f.id}`}
-            className={cn("overflow-hidden", selectedIds.has(f.id) && "ring-1 ring-primary/30")}
+            className={cn(
+              "overflow-hidden",
+              selectedIds.has(f.id) && "ring-1 ring-primary/30",
+            )}
           >
             <div className="flex items-start gap-2 p-2 pl-4">
               <input
@@ -564,13 +673,25 @@ function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }
                       <SeverityBadge severity={f.severity} />
                       <h3 className="font-medium text-foreground">{f.title}</h3>
                       {f.cve && (
-                        <Badge variant="outline" className="mono">{f.cve}</Badge>
+                        <Badge variant="outline" className="mono">
+                          {f.cve}
+                        </Badge>
                       )}
                       {f.cwe_id && (
-                        <Badge variant="outline" className="mono text-emerald-400 border-emerald-400/30">{f.cwe_id}</Badge>
+                        <Badge
+                          variant="outline"
+                          className="mono text-emerald-400 border-emerald-400/30"
+                        >
+                          {f.cwe_id}
+                        </Badge>
                       )}
                       {f.owasp && (
-                        <Badge variant="outline" className="mono text-amber-400 border-amber-400/30">{f.owasp}</Badge>
+                        <Badge
+                          variant="outline"
+                          className="mono text-amber-400 border-amber-400/30"
+                        >
+                          {f.owasp}
+                        </Badge>
                       )}
                     </div>
                     {f.description && (
@@ -586,7 +707,9 @@ function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {f.cvss != null && f.cvss > 0 && (
-                      <Badge variant="outline" className="mono">CVSS {f.cvss.toFixed(1)}</Badge>
+                      <Badge variant="outline" className="mono">
+                        CVSS {f.cvss.toFixed(1)}
+                      </Badge>
                     )}
                     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
                       Details <ArrowRight className="h-3.5 w-3.5" />
@@ -604,9 +727,12 @@ function FindingsTab({ vulns, scanId }: { vulns: VulnSummary[]; scanId: string }
           </Card>
         ))}
       </div>
-      <FindingDetailsDialog finding={selected} onOpenChange={(open) => !open && setSelected(null)} />
+      <FindingDetailsDialog
+        finding={selected}
+        onOpenChange={(open) => !open && setSelected(null)}
+      />
     </>
-  )
+  );
 }
 
 function BulkActionMenu({
@@ -614,9 +740,9 @@ function BulkActionMenu({
   selectedCount,
   onDelete,
 }: {
-  disabled: boolean
-  selectedCount: number
-  onDelete: () => void
+  disabled: boolean;
+  selectedCount: number;
+  onDelete: () => void;
 }) {
   return (
     <DropdownMenu.Root>
@@ -634,7 +760,10 @@ function BulkActionMenu({
           <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
           <DropdownMenu.Item
             className={cn(menuItemClass, "text-red-400 focus:text-red-300")}
-            onSelect={(event) => { event.preventDefault(); onDelete() }}
+            onSelect={(event) => {
+              event.preventDefault();
+              onDelete();
+            }}
           >
             <Trash2 className="h-3.5 w-3.5" />
             Delete selected
@@ -642,7 +771,7 @@ function BulkActionMenu({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
-  )
+  );
 }
 
 function FindingRowMenu({
@@ -651,15 +780,20 @@ function FindingRowMenu({
   deleting,
   onDelete,
 }: {
-  finding: VulnSummary
-  scanId: string
-  deleting: boolean
-  onDelete: () => void
+  finding: VulnSummary;
+  scanId: string;
+  deleting: boolean;
+  onDelete: () => void;
 }) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button size="icon" variant="ghost" aria-label={`Actions for ${finding.title}`} className="mt-1 shrink-0">
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label={`Actions for ${finding.title}`}
+          className="mt-1 shrink-0"
+        >
           <MoreHorizontal className="h-4 w-4" />
         </Button>
       </DropdownMenu.Trigger>
@@ -674,8 +808,14 @@ function FindingRowMenu({
           <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
           <DropdownMenu.Item
             disabled={deleting}
-            className={cn(menuItemClass, "text-red-400 focus:text-red-300 data-[disabled]:pointer-events-none data-[disabled]:opacity-50")}
-            onSelect={(event) => { event.preventDefault(); onDelete() }}
+            className={cn(
+              menuItemClass,
+              "text-red-400 focus:text-red-300 data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+            )}
+            onSelect={(event) => {
+              event.preventDefault();
+              onDelete();
+            }}
           >
             <Trash2 className="h-3.5 w-3.5" />
             Delete finding
@@ -683,15 +823,15 @@ function FindingRowMenu({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
-  )
+  );
 }
 
 function FindingDetailsDialog({
   finding,
   onOpenChange,
 }: {
-  finding: VulnSummary | null
-  onOpenChange: (open: boolean) => void
+  finding: VulnSummary | null;
+  onOpenChange: (open: boolean) => void;
 }) {
   return (
     <Dialog open={!!finding} onOpenChange={onOpenChange}>
@@ -701,20 +841,39 @@ function FindingDetailsDialog({
             <DialogHeader>
               <div className="flex flex-wrap items-center gap-2 pr-8">
                 <SeverityBadge severity={finding.severity} />
-                {finding.cve && <Badge variant="outline" className="mono">{finding.cve}</Badge>}
+                {finding.cve && (
+                  <Badge variant="outline" className="mono">
+                    {finding.cve}
+                  </Badge>
+                )}
                 {finding.cvss != null && finding.cvss > 0 && (
-                  <Badge variant="outline" className="mono">CVSS {finding.cvss.toFixed(1)}</Badge>
+                  <Badge variant="outline" className="mono">
+                    CVSS {finding.cvss.toFixed(1)}
+                  </Badge>
                 )}
                 {finding.cwe_id && (
-                  <Badge variant="outline" className="mono text-emerald-400 border-emerald-400/30">{finding.cwe_id}</Badge>
+                  <Badge
+                    variant="outline"
+                    className="mono text-emerald-400 border-emerald-400/30"
+                  >
+                    {finding.cwe_id}
+                  </Badge>
                 )}
                 {finding.owasp && (
-                  <Badge variant="outline" className="mono text-amber-400 border-amber-400/30">{finding.owasp}</Badge>
+                  <Badge
+                    variant="outline"
+                    className="mono text-amber-400 border-amber-400/30"
+                  >
+                    {finding.owasp}
+                  </Badge>
                 )}
               </div>
-              <DialogTitle className="pr-8 text-lg">{finding.title}</DialogTitle>
+              <DialogTitle className="pr-8 text-lg">
+                {finding.title}
+              </DialogTitle>
               <DialogDescription>
-                {finding.description || "Detailed vulnerability record from this scan."}
+                {finding.description ||
+                  "Detailed vulnerability record from this scan."}
               </DialogDescription>
             </DialogHeader>
 
@@ -726,20 +885,37 @@ function FindingDetailsDialog({
               <DetailRow label="CWE" value={finding.cwe_id} mono />
               <DetailRow label="OWASP" value={finding.owasp} mono />
               <DetailRow label="Finding ID" value={finding.id} mono />
-              <DetailRow label="Verification" value={finding.verification_method} />
+              <DetailRow
+                label="Verification"
+                value={finding.verification_method}
+              />
             </div>
 
             <Separator />
 
             <div className="space-y-4">
               <DetailSection title="Impact" value={finding.impact} />
-              <DetailSection title="Technical analysis" value={finding.technical_analysis} />
-              <DetailSection title="Proof of concept" value={finding.poc_description} />
+              <DetailSection
+                title="Technical analysis"
+                value={finding.technical_analysis}
+              />
+              <DetailSection
+                title="Proof of concept"
+                value={finding.poc_description}
+              />
               {finding.poc_script && (
-                <DetailSection title="PoC script" value={finding.poc_script} code />
+                <DetailSection
+                  title="PoC script"
+                  value={finding.poc_script}
+                  code
+                />
               )}
               {finding.exploitation_proof && (
-                <DetailSection title="Exploitation proof" value={finding.exploitation_proof} code />
+                <DetailSection
+                  title="Exploitation proof"
+                  value={finding.exploitation_proof}
+                  code
+                />
               )}
               <DetailSection title="Remediation" value={finding.remediation} />
             </div>
@@ -747,7 +923,7 @@ function FindingDetailsDialog({
         )}
       </DialogContent>
     </Dialog>
-  )
+  );
 }
 
 function DetailRow({
@@ -755,18 +931,25 @@ function DetailRow({
   value,
   mono,
 }: {
-  label: string
-  value?: string
-  mono?: boolean
+  label: string;
+  value?: string;
+  mono?: boolean;
 }) {
   return (
     <div className="min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={cn("mt-1 break-words text-foreground", mono && "mono text-xs")}>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-1 break-words text-foreground",
+          mono && "mono text-xs",
+        )}
+      >
         {value || "—"}
       </div>
     </div>
-  )
+  );
 }
 
 function DetailSection({
@@ -774,11 +957,11 @@ function DetailSection({
   value,
   code,
 }: {
-  title: string
-  value?: string
-  code?: boolean
+  title: string;
+  value?: string;
+  code?: boolean;
 }) {
-  if (!value) return null
+  if (!value) return null;
   return (
     <section className="space-y-2">
       <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -794,7 +977,7 @@ function DetailSection({
         </p>
       )}
     </section>
-  )
+  );
 }
 
 function EventsTab({
@@ -802,11 +985,11 @@ function EventsTab({
   scanId,
   target,
 }: {
-  events: FeedEvent[]
-  scanId: string
-  target: string
+  events: FeedEvent[];
+  scanId: string;
+  target: string;
 }) {
-  const [filter, setFilter] = useState<FeedFilter>("all")
+  const [filter, setFilter] = useState<FeedFilter>("all");
   return (
     <LiveFeed
       events={events}
@@ -817,28 +1000,57 @@ function EventsTab({
       emptyTitle="No events yet"
       emptyDescription="Once the scan starts producing output it will stream here."
     />
-  )
+  );
 }
 
-function ConfigTab({ scan }: { scan: NonNullable<ReturnType<typeof useScan>["data"]> }) {
+function ConfigTab({
+  scan,
+}: {
+  scan: NonNullable<ReturnType<typeof useScan>["data"]>;
+}) {
   const items: Array<{ k: string; v: ReactNode }> = [
     { k: "Scan mode", v: scan.scan_mode || "—" },
-    { k: "Severity filter", v: (scan.severity_filter ?? []).join(", ") || "all" },
+    {
+      k: "Recon access",
+      v: scan.recon_mode === "passive" ? "passive only" : "active allowed",
+    },
+    {
+      k: "Testing access",
+      v: scan.scan_intensity === "passive" ? "passive only" : "active allowed",
+    },
+    {
+      k: "Severity filter",
+      v: (scan.severity_filter ?? []).join(", ") || "all",
+    },
     { k: "Phases", v: (scan.phases ?? []).join(", ") || "all" },
     { k: "Iterations", v: <span className="mono">{scan.iterations}</span> },
     { k: "Tool calls", v: <span className="mono">{scan.tool_calls}</span> },
-    { k: "Tokens", v: <span className="mono">{scan.total_tokens?.toLocaleString() ?? 0}</span> },
+    {
+      k: "Tokens",
+      v: (
+        <span className="mono">{scan.total_tokens?.toLocaleString() ?? 0}</span>
+      ),
+    },
     { k: "Stop reason", v: scan.stop_reason || "—" },
     { k: "Started", v: formatTime(scan.started_at) },
     { k: "Finished", v: scan.finished_at ? formatTime(scan.finished_at) : "—" },
-    { k: "Discord webhook", v: scan.discord_webhook_configured || scan.discord_webhook ? "configured" : "none" },
-  ]
+    {
+      k: "Discord webhook",
+      v:
+        scan.discord_webhook_configured || scan.discord_webhook
+          ? "configured"
+          : "none",
+    },
+  ];
   return (
     <Card>
       <CardContent className="p-0">
         <dl className="divide-y divide-border/60">
           {items.map((it) => (
-            <div key={it.k} className="grid grid-cols-3 gap-2 px-4 py-3 text-sm">
+            <div
+              key={it.k}
+              className="grid grid-cols-3 gap-2 px-4 py-3 text-sm"
+            >
               <dt className="text-muted-foreground">{it.k}</dt>
               <dd className="col-span-2 text-foreground">{it.v}</dd>
             </div>
@@ -856,7 +1068,7 @@ function ConfigTab({ scan }: { scan: NonNullable<ReturnType<typeof useScan>["dat
         </dl>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function ScanDetailSkeleton() {
@@ -871,5 +1083,5 @@ function ScanDetailSkeleton() {
       <Skeleton className="h-10 w-72" />
       <Skeleton className="h-96 w-full" />
     </>
-  )
+  );
 }

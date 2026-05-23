@@ -49,6 +49,7 @@ import {
 import { api } from "@/api/client";
 
 const SEVERITIES = ["info", "low", "medium", "high", "critical"];
+type ActivityMode = "active" | "passive";
 
 export default function SchedulesPage() {
   const { data, isLoading, error, refetch } = useSchedulesList();
@@ -59,13 +60,17 @@ export default function SchedulesPage() {
 
   const [q, setQ] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingSchedule, setEditingSchedule] = useState<ScanSchedule | null>(null);
+  const [editingSchedule, setEditingSchedule] = useState<ScanSchedule | null>(
+    null,
+  );
 
   // Form State
   const [name, setName] = useState("");
   const [interval, setInterval] = useState("daily");
   const [targetsText, setTargetsText] = useState("");
   const [scanMode, setScanMode] = useState("single");
+  const [reconMode, setReconMode] = useState<ActivityMode>("active");
+  const [scanIntensity, setScanIntensity] = useState<ActivityMode>("active");
   const [instruction, setInstruction] = useState("");
   const [model, setModel] = useState("");
   const [companyName, setCompanyName] = useState("");
@@ -96,6 +101,8 @@ export default function SchedulesPage() {
     setInterval("daily");
     setTargetsText("");
     setScanMode("single");
+    setReconMode("active");
+    setScanIntensity("active");
     setInstruction("");
     setModel("");
     setCompanyName("");
@@ -114,6 +121,11 @@ export default function SchedulesPage() {
     setInterval(sch.interval);
     setTargetsText(sch.targets.join("\n"));
     setScanMode(sch.scan_mode || "single");
+    const nextScanIntensity = sch.scan_intensity || "active";
+    setScanIntensity(nextScanIntensity);
+    setReconMode(
+      nextScanIntensity === "passive" ? "passive" : sch.recon_mode || "active",
+    );
     setInstruction(sch.instruction || "");
     setModel(sch.model || "");
     setCompanyName(sch.company_name || "");
@@ -150,7 +162,12 @@ export default function SchedulesPage() {
 
   // Delete schedule
   async function handleDelete(sch: ScanSchedule) {
-    if (!window.confirm(`Are you sure you want to delete the schedule "${sch.name}"?`)) return;
+    if (
+      !window.confirm(
+        `Are you sure you want to delete the schedule "${sch.name}"?`,
+      )
+    )
+      return;
     try {
       await deleteMutation.mutateAsync(sch.id);
     } catch (err) {
@@ -172,7 +189,9 @@ export default function SchedulesPage() {
       setLogoPath(res.path);
       setLogoFileName(res.filename || file.name);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to upload logo");
+      setFormError(
+        err instanceof Error ? err.message : "Failed to upload logo",
+      );
     } finally {
       setLogoUploading(false);
     }
@@ -198,6 +217,8 @@ export default function SchedulesPage() {
       interval,
       targets,
       scan_mode: scanMode,
+      recon_mode: reconMode,
+      scan_intensity: scanIntensity,
       instruction: instruction.trim() || undefined,
       model: model || undefined,
       company_name: companyName.trim() || undefined,
@@ -218,7 +239,9 @@ export default function SchedulesPage() {
       }
       setDialogOpen(false);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to save schedule");
+      setFormError(
+        err instanceof Error ? err.message : "Failed to save schedule",
+      );
     }
   }
 
@@ -232,7 +255,9 @@ export default function SchedulesPage() {
     <div className="space-y-6">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="font-sans text-2xl font-semibold tracking-tight">Schedules</h1>
+          <h1 className="font-sans text-2xl font-semibold tracking-tight">
+            Schedules
+          </h1>
           <p className="text-sm text-muted-foreground">
             Manage automated recurring scans running on configured intervals.
           </p>
@@ -288,12 +313,20 @@ export default function SchedulesPage() {
                 <thead className="border-b border-border bg-muted/30 text-xs uppercase tracking-wider text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium">Name</th>
-                    <th className="px-4 py-3 text-left font-medium">Interval</th>
+                    <th className="px-4 py-3 text-left font-medium">
+                      Interval
+                    </th>
                     <th className="px-4 py-3 text-left font-medium">Targets</th>
-                    <th className="px-4 py-3 text-left font-medium">Last Run</th>
-                    <th className="px-4 py-3 text-left font-medium">Next Run</th>
+                    <th className="px-4 py-3 text-left font-medium">
+                      Last Run
+                    </th>
+                    <th className="px-4 py-3 text-left font-medium">
+                      Next Run
+                    </th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -314,15 +347,21 @@ export default function SchedulesPage() {
                         {s.targets.join(", ")}
                       </td>
                       <td className="px-4 py-3 align-middle text-xs text-muted-foreground">
-                        {s.last_run ? new Date(s.last_run).toLocaleString() : "Never"}
+                        {s.last_run
+                          ? new Date(s.last_run).toLocaleString()
+                          : "Never"}
                       </td>
                       <td className="px-4 py-3 align-middle text-xs font-medium text-foreground">
-                        {s.enabled ? new Date(s.next_run).toLocaleString() : "Paused"}
+                        {s.enabled
+                          ? new Date(s.next_run).toLocaleString()
+                          : "Paused"}
                       </td>
                       <td className="px-4 py-3 align-middle">
                         <Switch
                           checked={s.enabled}
-                          onCheckedChange={(checked) => void handleToggleEnabled(s, checked)}
+                          onCheckedChange={(checked) =>
+                            void handleToggleEnabled(s, checked)
+                          }
                         />
                       </td>
                       <td className="px-4 py-3 align-middle text-right">
@@ -346,9 +385,12 @@ export default function SchedulesPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingSchedule ? "Edit Schedule" : "New Scan Schedule"}</DialogTitle>
+            <DialogTitle>
+              {editingSchedule ? "Edit Schedule" : "New Scan Schedule"}
+            </DialogTitle>
             <DialogDescription>
-              Configure the schedule frequency, target list, and scanning preferences.
+              Configure the schedule frequency, target list, and scanning
+              preferences.
             </DialogDescription>
           </DialogHeader>
 
@@ -392,7 +434,8 @@ export default function SchedulesPage() {
                 className="mono text-xs"
               />
               <p className="text-[11px] text-muted-foreground">
-                One target per line, or comma-separated. Only targets you are authorized to audit.
+                One target per line, or comma-separated. Only targets you are
+                authorized to audit.
               </p>
             </div>
 
@@ -422,16 +465,62 @@ export default function SchedulesPage() {
                   <SelectContent>
                     <SelectItem value="default">Server default</SelectItem>
                     <SelectItem value="openai/gpt-5">openai/gpt-5</SelectItem>
-                    <SelectItem value="openai/gpt-5-mini">openai/gpt-5-mini</SelectItem>
-                    <SelectItem value="anthropic/claude-opus-4.6">anthropic/claude-opus-4.6</SelectItem>
-                    <SelectItem value="google/gemini-3-flash">google/gemini-3-flash</SelectItem>
+                    <SelectItem value="openai/gpt-5-mini">
+                      openai/gpt-5-mini
+                    </SelectItem>
+                    <SelectItem value="anthropic/claude-opus-4.6">
+                      anthropic/claude-opus-4.6
+                    </SelectItem>
+                    <SelectItem value="google/gemini-3-flash">
+                      google/gemini-3-flash
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Recon Access</Label>
+                <Select
+                  value={reconMode}
+                  onValueChange={(v) => setReconMode(v as ActivityMode)}
+                  disabled={scanIntensity === "passive"}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active allowed</SelectItem>
+                    <SelectItem value="passive">Passive only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Testing Access</Label>
+                <Select
+                  value={scanIntensity}
+                  onValueChange={(v) => {
+                    const next = v as ActivityMode;
+                    setScanIntensity(next);
+                    if (next === "passive") setReconMode("passive");
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active allowed</SelectItem>
+                    <SelectItem value="passive">Passive only</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="sched-instruction">Custom instruction (optional)</Label>
+              <Label htmlFor="sched-instruction">
+                Custom instruction (optional)
+              </Label>
               <Input
                 id="sched-instruction"
                 placeholder="e.g. Skip noisy subdomain enumeration, focus on api testing"
@@ -465,7 +554,8 @@ export default function SchedulesPage() {
                 })}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Report only findings at or above selected severities. Leave blank for all.
+                Report only findings at or above selected severities. Leave
+                blank for all.
               </p>
             </div>
 
@@ -482,7 +572,9 @@ export default function SchedulesPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="sched-webhook">Discord Webhook Notification</Label>
+                <Label htmlFor="sched-webhook">
+                  Discord Webhook Notification
+                </Label>
                 <Input
                   id="sched-webhook"
                   placeholder="https://discord.com/api/webhooks/..."
@@ -497,7 +589,11 @@ export default function SchedulesPage() {
               <div className="flex items-center gap-3">
                 <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted">
                   {logoPath ? (
-                    <img src={logoPath} alt="" className="h-full w-full object-contain" />
+                    <img
+                      src={logoPath}
+                      alt=""
+                      className="h-full w-full object-contain"
+                    />
                   ) : (
                     <ImageIcon className="h-5 w-5 text-muted-foreground" />
                   )}
@@ -545,7 +641,9 @@ export default function SchedulesPage() {
                     )}
                   </div>
                   {logoFileName && (
-                    <p className="truncate text-[11px] text-muted-foreground">{logoFileName}</p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {logoFileName}
+                    </p>
                   )}
                 </div>
               </div>
@@ -558,16 +656,24 @@ export default function SchedulesPage() {
             )}
 
             <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => setDialogOpen(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setDialogOpen(false)}
+              >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 disabled={
-                  createMutation.isPending || updateMutation.isPending || !targetsText.trim()
+                  createMutation.isPending ||
+                  updateMutation.isPending ||
+                  !targetsText.trim()
                 }
               >
-                {createMutation.isPending || updateMutation.isPending ? "Saving…" : "Save schedule"}
+                {createMutation.isPending || updateMutation.isPending
+                  ? "Saving…"
+                  : "Save schedule"}
               </Button>
             </DialogFooter>
           </form>
@@ -625,7 +731,11 @@ function ScheduleActionMenu({
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button size="icon" variant="ghost" aria-label={`Actions for schedule ${schedule.name}`}>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label={`Actions for schedule ${schedule.name}`}
+        >
           <MoreHorizontal className="h-4 w-4" />
         </Button>
       </DropdownMenu.Trigger>

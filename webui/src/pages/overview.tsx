@@ -156,7 +156,7 @@ export default function OverviewPage() {
   }, [aggregateVulns]);
 
   const resources = instances?.resources;
-  const queueCount = queue?.available ? queue.remaining || 0 : 0;
+  const queueCount = queue?.available ? queue.total_remaining ?? queue.remaining ?? 0 : 0;
   const latestScan = recentScans[0];
   const completedCount = allInstances.filter((i) => i.status === "finished").length;
   const stoppedCount = allInstances.filter((i) => i.status === "stopped").length;
@@ -242,7 +242,7 @@ export default function OverviewPage() {
           value={queueCount}
           hint={
             queue?.available
-              ? `${queue.targets?.length || 0} total · resumable`
+              ? `${queue.queue_count ?? 1} queue${(queue.queue_count ?? 1) === 1 ? "" : "s"} · ${queue.paused ? "paused" : "resumable"}`
               : "Empty"
           }
           to={queue?.available ? "/scans" : undefined}
@@ -469,11 +469,13 @@ export default function OverviewPage() {
               <Row
                 icon={<Radio className="h-3.5 w-3.5" />}
                 label="Queue"
-                value={
-                  queue?.available
-                    ? `${queueCount} remaining`
-                    : "empty"
-                }
+	                value={
+	                  queue?.available
+	                    ? queue.paused
+	                      ? `${queueCount} paused`
+	                      : `${queueCount} remaining`
+	                    : "empty"
+	                }
               />
               <Row
                 icon={<Layers className="h-3.5 w-3.5" />}

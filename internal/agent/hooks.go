@@ -29,19 +29,22 @@ const (
 // ScanState holds all mutable state that hooks can read and write.
 // It replaces the loose local variables previously scattered in Run().
 type ScanState struct {
-	Iteration           int
-	TerminalCalls       int
-	SkillsLoaded        int
-	UniqueToolsUsed     map[string]bool
-	ReconDone           bool
-	InjectionTested     bool
-	DirBustingDone      bool
-	AccessControlTested bool
-	ScannerUsed         bool
-	FinishAttempts      int
-	DiscoveryMode       bool
-	ReconOnlyMode       bool
-	AllowedPhases       []int
+	Iteration                  int
+	TerminalCalls              int
+	SkillsLoaded               int
+	UniqueToolsUsed            map[string]bool
+	ReconDone                  bool
+	InjectionTested            bool
+	DirBustingDone             bool
+	AccessControlTested        bool
+	ScannerUsed                bool
+	FinishAttempts             int
+	DiscoveryMode              bool
+	ReconOnlyMode              bool
+	AllowedPhases              []int
+	PassiveReconGuardActive    bool
+	PassiveReconPassiveLookups int
+	PassiveReconBlockedActive  int
 
 	// Stuck-loop detection
 	StuckDomain        string

@@ -827,6 +827,7 @@ func (c *wsClient) readPump() {
 		if len(in.Targets) == 0 {
 			continue
 		}
+		normalizeScanRequestActivity(&in.ScanRequest)
 
 		// Only authenticated (or loopback-when-auth-off) clients may override
 		// LLM provider settings — otherwise an attacker could repoint the
@@ -863,14 +864,27 @@ type ScanRequest struct {
 	Name           string   `json:"name"`            // user-defined scan name
 	SaveOnly       bool     `json:"save_only"`       // if true, save scan config without starting
 	Phases         []int    `json:"phases"`          // selected methodology phases (empty = all)
+	ReconMode      string   `json:"recon_mode"`      // active or passive reconnaissance
+	ScanIntensity  string   `json:"scan_intensity"`  // active or passive testing/scanning
 	CompanyName    string   `json:"company_name"`    // report branding: company name
 	LogoPath       string   `json:"logo_path"`       // report branding: logo file path
 	// Internal fields — `json:"-"` makes them un-settable from the wire.
 	// Critical: a client must not be able to set InstanceID to spoof
 	// broadcasts to another scan, or set IsResume to bypass the resume
 	// codepath's safety checks.
-	InstanceID string `json:"-"` // parent instance ID, threaded server-side
-	IsResume   bool   `json:"-"` // true when auto-resuming after restart
+	InstanceID           string   `json:"-"` // parent instance ID, threaded server-side
+	IsResume             bool     `json:"-"` // true when auto-resuming after restart
+	ResumeQueueStatePath string   `json:"-"`
+	ResumeActiveTarget   string   `json:"-"`
+	ResumeScanDir        string   `json:"-"`
+	ResumeScanID         string   `json:"-"`
+	ResumeSubScanTarget  string   `json:"-"`
+	ResumeSubScanDir     string   `json:"-"`
+	ResumeSubScanID      string   `json:"-"`
+	ResumeSubdomains     []string `json:"-"`
+	ResumeSubIndex       int      `json:"-"`
+	ResumeDiscoveryDone  bool     `json:"-"`
+	ResumeOriginalTarget int      `json:"-"`
 }
 
 // WSEvent is a WebSocket message sent to clients.
@@ -945,6 +959,8 @@ type ScanRecord struct {
 	SeverityFilter           []string         `json:"severity_filter,omitempty"`            // severity filter for scan
 	DiscordWebhook           string           `json:"discord_webhook,omitempty"`            // discord notification webhook
 	DiscordWebhookConfigured bool             `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
+	ReconMode                string           `json:"recon_mode,omitempty"`                 // active or passive reconnaissance
+	ScanIntensity            string           `json:"scan_intensity,omitempty"`             // active or passive testing/scanning
 	Events                   []WSEvent        `json:"events"`
 	Vulns                    []VulnSummary    `json:"vulns"`
 	TotalTokens              int              `json:"total_tokens"`
@@ -963,18 +979,31 @@ type ScanRecord struct {
 
 // QueueState persists scan queue state for recovery after restart
 type QueueState struct {
-	Targets        []string `json:"targets"`
-	CurrentIdx     int      `json:"current_idx"`
-	Instruction    string   `json:"instruction"`
-	ScanMode       string   `json:"scan_mode"`
-	StartedAt      string   `json:"started_at"`
-	Active         bool     `json:"active"`
-	Name           string   `json:"name,omitempty"`
-	SeverityFilter []string `json:"severity_filter,omitempty"`
-	Phases         []int    `json:"phases,omitempty"`
-	CompanyName    string   `json:"company_name,omitempty"`
-	LogoPath       string   `json:"logo_path,omitempty"`
-	DiscordWebhook string   `json:"discord_webhook,omitempty"`
+	InstanceID            string   `json:"instance_id,omitempty"`
+	Targets               []string `json:"targets"`
+	CurrentIdx            int      `json:"current_idx"`
+	Instruction           string   `json:"instruction"`
+	ScanMode              string   `json:"scan_mode"`
+	StartedAt             string   `json:"started_at"`
+	Active                bool     `json:"active"`
+	Name                  string   `json:"name,omitempty"`
+	SeverityFilter        []string `json:"severity_filter,omitempty"`
+	Phases                []int    `json:"phases,omitempty"`
+	ReconMode             string   `json:"recon_mode,omitempty"`
+	ScanIntensity         string   `json:"scan_intensity,omitempty"`
+	CompanyName           string   `json:"company_name,omitempty"`
+	LogoPath              string   `json:"logo_path,omitempty"`
+	DiscordWebhook        string   `json:"discord_webhook,omitempty"`
+	Paused                bool     `json:"paused,omitempty"`
+	ActiveTarget          string   `json:"active_target,omitempty"`
+	ActiveScanDir         string   `json:"active_scan_dir,omitempty"`
+	ActiveScanID          string   `json:"active_scan_id,omitempty"`
+	WildcardActiveTarget  string   `json:"wildcard_active_target,omitempty"`
+	WildcardActiveScanDir string   `json:"wildcard_active_scan_dir,omitempty"`
+	WildcardActiveScanID  string   `json:"wildcard_active_scan_id,omitempty"`
+	WildcardDiscoveryDone bool     `json:"wildcard_discovery_done,omitempty"`
+	WildcardSubdomains    []string `json:"wildcard_subdomains,omitempty"`
+	WildcardSubIndex      int      `json:"wildcard_sub_index,omitempty"`
 }
 
 // ScanInstance represents a running or completed scan instance.
@@ -995,6 +1024,8 @@ type ScanInstance struct {
 	Instruction       string        `json:"instruction,omitempty"`     // custom scan instructions for restart
 	SeverityFilter    []string      `json:"severity_filter,omitempty"` // severity filter for restart
 	Phases            []int         `json:"phases,omitempty"`          // selected methodology phases (empty = all)
+	ReconMode         string        `json:"recon_mode,omitempty"`      // active or passive reconnaissance
+	ScanIntensity     string        `json:"scan_intensity,omitempty"`  // active or passive testing/scanning
 	CompanyName       string        `json:"company_name,omitempty"`    // report branding: company name
 	LogoPath          string        `json:"logo_path,omitempty"`       // report branding: logo path
 	DiscordWebhook    string        `json:"-"`                         // discord webhook (not exposed to API)
@@ -1014,9 +1045,23 @@ type ScanInstance struct {
 // maxConcurrentInstances removed — replaced by dynamic resource-aware
 // admission via resources.CanAdmitScan(). See internal/resources/.
 
-// saveQueueState saves the current queue state to disk
-func (s *Server) saveQueueState(idx int, req ScanRequest) {
+type queueProgress struct {
+	ActiveTarget          string
+	ActiveScanDir         string
+	ActiveScanID          string
+	WildcardActiveTarget  string
+	WildcardActiveScanDir string
+	WildcardActiveScanID  string
+	WildcardDiscoveryDone bool
+	WildcardSubdomains    []string
+	WildcardSubIndex      int
+}
+
+// saveQueueState saves the current queue state to disk.
+func (s *Server) saveQueueState(idx int, req ScanRequest, progress ...queueProgress) {
+	normalizeScanRequestActivity(&req)
 	state := QueueState{
+		InstanceID:     req.InstanceID,
 		Targets:        req.Targets,
 		CurrentIdx:     idx,
 		Instruction:    req.Instruction,
@@ -1026,16 +1071,41 @@ func (s *Server) saveQueueState(idx int, req ScanRequest) {
 		Name:           req.Name,
 		SeverityFilter: req.SeverityFilter,
 		Phases:         req.Phases,
+		ReconMode:      req.ReconMode,
+		ScanIntensity:  req.ScanIntensity,
 		CompanyName:    req.CompanyName,
 		LogoPath:       req.LogoPath,
 		DiscordWebhook: req.DiscordWebhook,
+	}
+	if len(progress) > 0 {
+		p := progress[0]
+		state.ActiveTarget = p.ActiveTarget
+		state.ActiveScanDir = p.ActiveScanDir
+		state.ActiveScanID = p.ActiveScanID
+		state.WildcardActiveTarget = p.WildcardActiveTarget
+		state.WildcardActiveScanDir = p.WildcardActiveScanDir
+		state.WildcardActiveScanID = p.WildcardActiveScanID
+		state.WildcardDiscoveryDone = p.WildcardDiscoveryDone
+		state.WildcardSubdomains = append([]string(nil), p.WildcardSubdomains...)
+		state.WildcardSubIndex = p.WildcardSubIndex
+	} else if req.ResumeScanDir != "" || len(req.ResumeSubdomains) > 0 {
+		state.ActiveTarget = req.ResumeActiveTarget
+		state.ActiveScanDir = req.ResumeScanDir
+		state.ActiveScanID = req.ResumeScanID
+		state.WildcardActiveTarget = req.ResumeSubScanTarget
+		state.WildcardActiveScanDir = req.ResumeSubScanDir
+		state.WildcardActiveScanID = req.ResumeSubScanID
+		state.WildcardDiscoveryDone = req.ResumeDiscoveryDone
+		state.WildcardSubdomains = append([]string(nil), req.ResumeSubdomains...)
+		state.WildcardSubIndex = req.ResumeSubIndex
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		log.Printf("Error: failed to marshal queue state: %v", err)
 		return
 	}
-	if err := os.WriteFile(s.queueStatePath(), data, 0644); err != nil {
+	path := s.queueStatePathForInstance(req.InstanceID)
+	if err := os.WriteFile(path, data, 0644); err != nil {
 		log.Printf("Error: failed to save queue state: %v", err)
 	}
 }
@@ -1044,92 +1114,421 @@ func (s *Server) queueStatePath() string {
 	return filepath.Join(s.dataDir, "queue_state.json")
 }
 
-func (s *Server) loadQueueStateWithError() (*QueueState, error) {
-	data, err := os.ReadFile(s.queueStatePath())
+func (s *Server) queueStatePathForInstance(instanceID string) string {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return s.queueStatePath()
+	}
+	return filepath.Join(s.dataDir, fmt.Sprintf("queue_state_%s.json", sanitizeQueueStateID(instanceID)))
+}
+
+func sanitizeQueueStateID(instanceID string) string {
+	clean := sanitizeTarget(instanceID)
+	if clean == "" {
+		return "unknown"
+	}
+	return clean
+}
+
+type queueStateEntry struct {
+	state   *QueueState
+	path    string
+	modTime time.Time
+}
+
+func (s *Server) queueStatePaths() []string {
+	var paths []string
+	legacy := s.queueStatePath()
+	if _, err := os.Stat(legacy); err == nil {
+		paths = append(paths, legacy)
+	}
+	matches, _ := filepath.Glob(filepath.Join(s.dataDir, "queue_state_*.json"))
+	paths = append(paths, matches...)
+	sort.Strings(paths)
+	return compactStrings(paths)
+}
+
+func compactStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := values[:0]
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func queueStateInstanceIDFromPath(path string) string {
+	base := filepath.Base(path)
+	if base == "queue_state.json" {
+		return ""
+	}
+	if !strings.HasPrefix(base, "queue_state_") || !strings.HasSuffix(base, ".json") {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(base, "queue_state_"), ".json")
+}
+
+func (s *Server) loadQueueStateEntry(path string) (queueStateEntry, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return queueStateEntry{}, err
 	}
 	var state QueueState
 	if err := json.Unmarshal(data, &state); err != nil {
+		return queueStateEntry{}, err
+	}
+	if state.InstanceID == "" {
+		state.InstanceID = queueStateInstanceIDFromPath(path)
+	}
+	info, _ := os.Stat(path)
+	modTime := time.Time{}
+	if info != nil {
+		modTime = info.ModTime()
+	}
+	return queueStateEntry{state: &state, path: path, modTime: modTime}, nil
+}
+
+func (s *Server) loadQueueStateWithError() (*QueueState, error) {
+	paths := s.queueStatePaths()
+	if len(paths) == 0 {
+		return nil, fs.ErrNotExist
+	}
+	entry, err := s.loadQueueStateEntry(paths[0])
+	if err != nil {
 		return nil, err
 	}
-	return &state, nil
+	return entry.state, nil
 }
 
 // loadQueueState loads queue state from disk if exists
 func (s *Server) loadQueueState() *QueueState {
-	state, err := s.loadQueueStateWithError()
-	if err != nil {
+	entries := s.validQueueStateEntries(false)
+	if len(entries) == 0 {
 		return nil
 	}
-	return state
+	return entries[0].state
 }
 
 func (s *Server) validQueueState(clearInvalid bool) (*QueueState, string) {
-	state, err := s.loadQueueStateWithError()
-	if err != nil {
-		if clearInvalid && !os.IsNotExist(err) {
-			log.Printf("[queue] Invalid queue state, clearing: %v", err)
-			s.clearQueueState()
-		}
+	entries := s.validQueueStateEntries(clearInvalid)
+	if len(entries) == 0 {
 		return nil, "missing_or_invalid"
 	}
-	if state == nil || !state.Active {
-		return nil, "inactive"
-	}
-	if len(state.Targets) == 0 {
-		if clearInvalid {
-			s.clearQueueState()
-		}
-		return nil, "empty"
-	}
-	if state.CurrentIdx < 0 {
-		if clearInvalid {
-			log.Printf("[queue] Corrupt queue state (idx=%d), clearing.", state.CurrentIdx)
-			s.clearQueueState()
-		}
-		return nil, "corrupt_index"
-	}
-	if state.CurrentIdx >= len(state.Targets) {
-		if clearInvalid {
-			log.Printf("[queue] Completed queue state (idx=%d, targets=%d), clearing.", state.CurrentIdx, len(state.Targets))
-			s.clearQueueState()
-		}
-		return nil, "completed"
-	}
-	return state, ""
+	return entries[0].state, ""
 }
 
-// clearQueueState removes the queue state file
-func (s *Server) clearQueueState() {
-	if err := os.Remove(s.queueStatePath()); err != nil && !os.IsNotExist(err) {
-		log.Printf("Warning: failed to remove queue state file: %v", err)
+func (s *Server) validQueueStateEntries(clearInvalid bool) []queueStateEntry {
+	paths := s.queueStatePaths()
+	if len(paths) == 0 {
+		return nil
+	}
+	var valid []queueStateEntry
+	for _, path := range paths {
+		entry, err := s.loadQueueStateEntry(path)
+		if err != nil {
+			if clearInvalid {
+				log.Printf("[queue] Invalid queue state %s, clearing: %v", path, err)
+				s.clearQueueStatePath(path)
+			}
+			continue
+		}
+		if reason := invalidQueueStateReason(entry.state); reason != "" {
+			if clearInvalid && reason != "inactive" {
+				log.Printf("[queue] Invalid queue state %s (%s), clearing.", path, reason)
+				s.clearQueueStatePath(path)
+			}
+			continue
+		}
+		valid = append(valid, entry)
+	}
+	sort.SliceStable(valid, func(i, j int) bool {
+		if !valid[i].modTime.Equal(valid[j].modTime) {
+			return valid[i].modTime.After(valid[j].modTime)
+		}
+		return valid[i].state.StartedAt > valid[j].state.StartedAt
+	})
+	return valid
+}
+
+func invalidQueueStateReason(state *QueueState) string {
+	if state == nil || !state.Active {
+		return "inactive"
+	}
+	if len(state.Targets) == 0 {
+		return "empty"
+	}
+	if state.CurrentIdx < 0 {
+		return "corrupt_index"
+	}
+	if state.CurrentIdx >= len(state.Targets) {
+		return "completed"
+	}
+	return ""
+}
+
+func scanRequestFromQueueState(state *QueueState, sourcePath string) ScanRequest {
+	if state == nil {
+		return ScanRequest{}
+	}
+	currentIdx := clampInt(state.CurrentIdx, 0, len(state.Targets))
+	return ScanRequest{
+		Targets:              append([]string(nil), state.Targets[currentIdx:]...),
+		Instruction:          state.Instruction,
+		ScanMode:             state.ScanMode,
+		IsResume:             true,
+		ResumeQueueStatePath: sourcePath,
+		Name:                 state.Name,
+		SeverityFilter:       append([]string(nil), state.SeverityFilter...),
+		Phases:               append([]int(nil), state.Phases...),
+		ReconMode:            state.ReconMode,
+		ScanIntensity:        state.ScanIntensity,
+		CompanyName:          state.CompanyName,
+		LogoPath:             state.LogoPath,
+		DiscordWebhook:       state.DiscordWebhook,
+		ResumeActiveTarget:   state.ActiveTarget,
+		ResumeScanDir:        state.ActiveScanDir,
+		ResumeScanID:         state.ActiveScanID,
+		ResumeSubScanTarget:  state.WildcardActiveTarget,
+		ResumeSubScanDir:     state.WildcardActiveScanDir,
+		ResumeSubScanID:      state.WildcardActiveScanID,
+		ResumeSubdomains:     append([]string(nil), state.WildcardSubdomains...),
+		ResumeSubIndex:       state.WildcardSubIndex,
+		ResumeDiscoveryDone:  state.WildcardDiscoveryDone,
+		ResumeOriginalTarget: state.CurrentIdx,
+	}
+}
+
+func autoResumeQueueEntries(entries []queueStateEntry) []queueStateEntry {
+	out := entries[:0]
+	for _, entry := range entries {
+		if entry.state != nil && entry.state.Paused {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func splitInstanceTargets(targets string) []string {
+	var out []string
+	for _, part := range strings.Split(targets, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func fillResumeRequestDefaults(req *ScanRequest, defaults ScanRequest) {
+	if req == nil {
+		return
+	}
+	if len(req.Targets) == 0 {
+		req.Targets = append([]string(nil), defaults.Targets...)
+	}
+	if req.Instruction == "" {
+		req.Instruction = defaults.Instruction
+	}
+	if req.ScanMode == "" {
+		req.ScanMode = defaults.ScanMode
+	}
+	if req.Name == "" {
+		req.Name = defaults.Name
+	}
+	if len(req.SeverityFilter) == 0 {
+		req.SeverityFilter = append([]string(nil), defaults.SeverityFilter...)
+	}
+	if len(req.Phases) == 0 {
+		req.Phases = append([]int(nil), defaults.Phases...)
+	}
+	if req.ReconMode == "" {
+		req.ReconMode = defaults.ReconMode
+	}
+	if req.ScanIntensity == "" {
+		req.ScanIntensity = defaults.ScanIntensity
+	}
+	if req.CompanyName == "" {
+		req.CompanyName = defaults.CompanyName
+	}
+	if req.LogoPath == "" {
+		req.LogoPath = defaults.LogoPath
+	}
+	if req.DiscordWebhook == "" {
+		req.DiscordWebhook = defaults.DiscordWebhook
+	}
+}
+
+func (s *Server) scanRequestForPausedInstance(instanceID string, inst *ScanInstance) (ScanRequest, bool, string) {
+	if inst == nil {
+		return ScanRequest{}, false, "instance not found"
+	}
+
+	inst.mu.RLock()
+	defaultReq := ScanRequest{
+		Targets:        splitInstanceTargets(inst.Targets),
+		Instruction:    inst.Instruction,
+		ScanMode:       inst.ScanMode,
+		SeverityFilter: append([]string(nil), inst.SeverityFilter...),
+		DiscordWebhook: inst.DiscordWebhook,
+		Name:           inst.Name,
+		Phases:         append([]int(nil), inst.Phases...),
+		ReconMode:      inst.ReconMode,
+		ScanIntensity:  inst.ScanIntensity,
+		CompanyName:    inst.CompanyName,
+		LogoPath:       inst.LogoPath,
+		IsResume:       true,
+	}
+	scanDir := inst.scanDir
+	inst.mu.RUnlock()
+
+	queuePath := s.queueStatePathForInstance(instanceID)
+	if entry, err := s.loadQueueStateEntry(queuePath); err == nil {
+		if reason := invalidQueueStateReason(entry.state); reason == "" {
+			req := scanRequestFromQueueState(entry.state, entry.path)
+			fillResumeRequestDefaults(&req, defaultReq)
+			req.IsResume = true
+			return req, true, ""
+		}
+	}
+
+	if scanDir == "" {
+		return ScanRequest{}, false, "no persisted scan state found"
+	}
+	if strings.EqualFold(defaultReq.ScanMode, "wildcard") {
+		return ScanRequest{}, false, "wildcard resume requires saved queue state"
+	}
+
+	defaultReq.ResumeScanDir = scanDir
+	defaultReq.ResumeScanID = filepath.Base(scanDir)
+	if rec, ok := loadScanRecordFromDir(scanDir); ok && rec.Target != "" {
+		defaultReq.ResumeActiveTarget = rec.Target
+	} else if len(defaultReq.Targets) > 0 {
+		defaultReq.ResumeActiveTarget = defaultReq.Targets[0]
+	}
+	return defaultReq, true, ""
+}
+
+func shouldPreserveQueueStateOnExit(status, stopReason string, panicRecovered bool) bool {
+	if panicRecovered {
+		return true
+	}
+	if status == "paused" || stopReason == "user_paused" {
+		return true
+	}
+	return strings.HasPrefix(stopReason, "signal_")
+}
+
+func shouldAdvanceQueueAfterTarget(stopRequested bool, status string) bool {
+	if stopRequested {
+		return false
+	}
+	switch status {
+	case "paused", "stopped":
+		return false
+	default:
+		return true
+	}
+}
+
+func isInterruptedInstanceStatus(status string) bool {
+	return status == "paused" || status == "stopped"
+}
+
+func (s *Server) instanceRunStatus(instanceID string) (string, string) {
+	if instanceID == "" {
+		return "", ""
+	}
+	s.instancesMu.RLock()
+	inst := s.instances[instanceID]
+	s.instancesMu.RUnlock()
+	if inst == nil {
+		return "", ""
+	}
+	inst.mu.RLock()
+	status := inst.Status
+	stopReason := inst.StopReason
+	inst.mu.RUnlock()
+	return status, stopReason
+}
+
+func (s *Server) instanceInterrupted(instanceID string) bool {
+	status, _ := s.instanceRunStatus(instanceID)
+	return isInterruptedInstanceStatus(status)
+}
+
+func (s *Server) markQueueStatePaused(instanceID string) {
+	entry, err := s.loadQueueStateEntry(s.queueStatePathForInstance(instanceID))
+	if err != nil || entry.state == nil {
+		return
+	}
+	entry.state.Paused = true
+	data, err := json.MarshalIndent(entry.state, "", "  ")
+	if err != nil {
+		log.Printf("Error: failed to marshal paused queue state: %v", err)
+		return
+	}
+	if err := os.WriteFile(entry.path, data, 0644); err != nil {
+		log.Printf("Error: failed to mark queue state paused: %v", err)
+	}
+}
+
+// clearQueueState removes queue state. With an instance ID it clears only that
+// scan's resume file; with no ID it clears every resumable queue.
+func (s *Server) clearQueueState(instanceIDs ...string) {
+	if len(instanceIDs) > 0 {
+		for _, instanceID := range instanceIDs {
+			if strings.TrimSpace(instanceID) == "" {
+				s.clearQueueStatePath(s.queueStatePath())
+				continue
+			}
+			s.clearQueueStatePath(s.queueStatePathForInstance(instanceID))
+		}
+		return
+	}
+	for _, path := range s.queueStatePaths() {
+		s.clearQueueStatePath(path)
+	}
+}
+
+func (s *Server) clearQueueStatePath(path string) {
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: failed to remove queue state file %s: %v", path, err)
 	}
 }
 
 // Server is the web UI server.
 type Server struct {
-	cfg                *config.Config
-	port               int
-	clients            map[*wsClient]bool
-	mu                 sync.RWMutex
-	currentAgents      map[string]*agent.Agent // scanID → agent (replaces singleton currentAgent)
-	cancelScan         context.CancelFunc      // cancels the current scan session context
-	running            atomic.Bool
-	stopReq            atomic.Bool
-	dataDir            string
-	currentScanDir     string
-	currentScanID      string
-	discordWebhook     string
-	discordMinSeverity string // minimum severity to send to Discord ("info", "low", "medium", "high", "critical")
-	rateLimiter        *RateLimiter
-	settingsMu         sync.Mutex
-	instances          map[string]*ScanInstance // concurrent scan instances
-	instancesMu        sync.RWMutex
-	postScanChatFn     func(*config.Config, []llm.Message) (string, error)
-	schedulesMu        sync.RWMutex
-	schedules          map[string]*ScanSchedule
-	shutdownChan       chan struct{}
+	cfg                  *config.Config
+	port                 int
+	clients              map[*wsClient]bool
+	mu                   sync.RWMutex
+	currentAgents        map[string]*agent.Agent // scanID → agent (replaces singleton currentAgent)
+	cancelScan           context.CancelFunc      // cancels the current scan session context
+	running              atomic.Bool
+	stopReq              atomic.Bool
+	dataDir              string
+	currentScanDir       string
+	currentScanID        string
+	discordWebhook       string
+	discordMinSeverity   string // minimum severity to send to Discord ("info", "low", "medium", "high", "critical")
+	rateLimiter          *RateLimiter
+	settingsMu           sync.Mutex
+	instances            map[string]*ScanInstance // concurrent scan instances
+	instancesMu          sync.RWMutex
+	queueResumeMu        sync.Mutex
+	queueResumeLaunching map[string]bool
+	postScanChatFn       func(*config.Config, []llm.Message) (string, error)
+	schedulesMu          sync.RWMutex
+	schedules            map[string]*ScanSchedule
+	shutdownChan         chan struct{}
 }
 
 // NewServer creates a new web server.
@@ -1144,22 +1543,23 @@ func NewServer(cfg *config.Config, port int) *Server {
 	rl := NewRateLimiter(cfg.RateLimitRequests, time.Duration(cfg.RateLimitWindow)*time.Second)
 
 	srv := &Server{
-		cfg:                cfg,
-		port:               port,
-		clients:            make(map[*wsClient]bool),
-		currentAgents:      make(map[string]*agent.Agent),
-		dataDir:            dataDir,
-		discordWebhook:     cfg.DiscordWebhook,
-		discordMinSeverity: strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
-		rateLimiter:        rl,
-		instances:          make(map[string]*ScanInstance),
+		cfg:                  cfg,
+		port:                 port,
+		clients:              make(map[*wsClient]bool),
+		currentAgents:        make(map[string]*agent.Agent),
+		dataDir:              dataDir,
+		discordWebhook:       cfg.DiscordWebhook,
+		discordMinSeverity:   strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
+		rateLimiter:          rl,
+		instances:            make(map[string]*ScanInstance),
+		queueResumeLaunching: make(map[string]bool),
 		postScanChatFn: func(cfg *config.Config, messages []llm.Message) (string, error) {
 			client := llm.NewClient(cfg)
 			client.SetContext(context.Background())
 			return client.Chat(messages)
 		},
-		schedules:          make(map[string]*ScanSchedule),
-		shutdownChan:       make(chan struct{}),
+		schedules:    make(map[string]*ScanSchedule),
+		shutdownChan: make(chan struct{}),
 	}
 
 	// Rebuild instances map from disk so dashboard shows historical scans on startup
@@ -1169,6 +1569,55 @@ func NewServer(cfg *config.Config, port int) *Server {
 	srv.loadSchedulesFromDisk()
 
 	return srv
+}
+
+func (s *Server) hasPendingOrRunningInstance() bool {
+	s.instancesMu.RLock()
+	defer s.instancesMu.RUnlock()
+	for _, inst := range s.instances {
+		inst.mu.RLock()
+		active := inst.Status == "pending" || inst.Status == "running"
+		inst.mu.RUnlock()
+		if active {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) hasQueueResumeLaunchingLocked() bool {
+	return len(s.queueResumeLaunching) > 0
+}
+
+func (s *Server) markQueueResumeLaunchingLocked(key string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "legacy"
+	}
+	if s.queueResumeLaunching == nil {
+		s.queueResumeLaunching = make(map[string]bool)
+	}
+	s.queueResumeLaunching[key] = true
+}
+
+func (s *Server) clearQueueResumeLaunching(key string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "legacy"
+	}
+	s.queueResumeMu.Lock()
+	delete(s.queueResumeLaunching, key)
+	s.queueResumeMu.Unlock()
+}
+
+func queueResumeEntryKey(entry queueStateEntry) string {
+	if entry.state != nil && strings.TrimSpace(entry.state.InstanceID) != "" {
+		return strings.TrimSpace(entry.state.InstanceID)
+	}
+	if entry.path != "" {
+		return filepath.Clean(entry.path)
+	}
+	return "legacy"
 }
 
 // Start launches the web server.
@@ -1318,43 +1767,32 @@ func (s *Server) Start() error {
 	// on the same cancelScan field.
 	go func() {
 		time.Sleep(5 * time.Second) // let HTTP server fully initialize
-		if s.running.Load() {
-			log.Printf("[AUTO-RESUME] Skipping — a scan is already running.")
+		s.queueResumeMu.Lock()
+		defer s.queueResumeMu.Unlock()
+		if s.running.Load() || s.hasPendingOrRunningInstance() || s.hasQueueResumeLaunchingLocked() {
+			log.Printf("[AUTO-RESUME] Skipping — a scan is already pending or running.")
 			return
 		}
-		s.instancesMu.RLock()
-		hasActive := false
-		for _, inst := range s.instances {
-			if inst.Status == "running" {
-				hasActive = true
-				break
+		entries := autoResumeQueueEntries(s.validQueueStateEntries(true))
+		if len(entries) == 0 {
+			return
+		}
+		log.Printf("[AUTO-RESUME] Resuming %d interrupted scan queue(s)", len(entries))
+		for _, entry := range entries {
+			req := scanRequestFromQueueState(entry.state, entry.path)
+			if len(req.Targets) == 0 {
+				continue
 			}
+			instanceID := entry.state.InstanceID
+			log.Printf("[AUTO-RESUME] Resuming interrupted scan queue %s: %d targets from index %d", instanceID, len(req.Targets), entry.state.CurrentIdx)
+			scanCfg := *s.cfg
+			resumeKey := queueResumeEntryKey(entry)
+			s.markQueueResumeLaunchingLocked(resumeKey)
+			go func(req ScanRequest, scanCfg config.Config, instanceID, resumeKey string) {
+				defer s.clearQueueResumeLaunching(resumeKey)
+				s.runMultiScan(req, &scanCfg, instanceID)
+			}(req, scanCfg, instanceID, resumeKey)
 		}
-		s.instancesMu.RUnlock()
-		if hasActive {
-			log.Printf("[AUTO-RESUME] Skipping — an instance is already running.")
-			return
-		}
-		state, _ := s.validQueueState(true)
-		if state == nil {
-			return
-		}
-		remaining := state.Targets[state.CurrentIdx:]
-		log.Printf("[AUTO-RESUME] Resuming interrupted scan queue: %d targets from index %d", len(remaining), state.CurrentIdx)
-		req := ScanRequest{
-			Targets:        remaining,
-			Instruction:    state.Instruction,
-			ScanMode:       state.ScanMode,
-			IsResume:       true,
-			Name:           state.Name,
-			SeverityFilter: state.SeverityFilter,
-			Phases:         state.Phases,
-			CompanyName:    state.CompanyName,
-			LogoPath:       state.LogoPath,
-			DiscordWebhook: state.DiscordWebhook,
-		}
-		scanCfg := *s.cfg
-		s.runMultiScan(req, &scanCfg)
 	}()
 
 	// ── Graceful shutdown on SIGTERM/SIGINT ──
@@ -1458,10 +1896,13 @@ func (s *Server) initDataDir() {
 		}
 	}
 
-	// Check for interrupted queue — will auto-resume after server starts
-	if state, _ := s.validQueueState(true); state != nil {
-		log.Printf("Found interrupted scan queue: %d targets remaining from index %d (will auto-resume in 5s)",
-			len(state.Targets)-state.CurrentIdx, state.CurrentIdx)
+	// Check for interrupted queues — will auto-resume after server starts
+	if entries := s.validQueueStateEntries(true); len(entries) > 0 {
+		remaining := 0
+		for _, entry := range entries {
+			remaining += len(entry.state.Targets) - entry.state.CurrentIdx
+		}
+		log.Printf("Found %d interrupted scan queue(s): %d targets remaining (will auto-resume in 5s)", len(entries), remaining)
 	}
 }
 
@@ -1540,6 +1981,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "targets required", http.StatusBadRequest)
 		return
 	}
+	normalizeScanRequestActivity(&req)
 
 	// Apply LLM provider settings from web UI securely using a copy
 	scanCfg := *s.cfg // shallow copy
@@ -1567,6 +2009,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			Instruction:    req.Instruction,
 			SeverityFilter: req.SeverityFilter,
 			Phases:         req.Phases,
+			ReconMode:      req.ReconMode,
+			ScanIntensity:  req.ScanIntensity,
 			CurrentPhase:   firstSelectedPhase(req.Phases),
 			CompanyName:    req.CompanyName,
 			LogoPath:       req.LogoPath,
@@ -1594,6 +2038,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 				Instruction:              req.Instruction,
 				SeverityFilter:           req.SeverityFilter,
 				Phases:                   req.Phases,
+				ReconMode:                req.ReconMode,
+				ScanIntensity:            req.ScanIntensity,
 				CurrentPhase:             firstSelectedPhase(req.Phases),
 				CompanyName:              req.CompanyName,
 				LogoPath:                 req.LogoPath,
@@ -1740,6 +2186,8 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 			Instruction:    inst.Instruction,
 			SeverityFilter: append([]string(nil), inst.SeverityFilter...),
 			Phases:         inst.Phases,
+			ReconMode:      inst.ReconMode,
+			ScanIntensity:  inst.ScanIntensity,
 			CompanyName:    inst.CompanyName,
 			LogoPath:       inst.LogoPath,
 			CurrentPhase:   inst.CurrentPhase,
@@ -1763,19 +2211,33 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	stats := resources.GetStats()
 	level, _ := resources.CurrentLevel()
 	effectiveMax, reason := resources.EffectiveMaxInstances()
+	capacity := resources.Capacity()
 	response := map[string]any{
 		"instances": instances,
 		"resources": map[string]any{
-			"cpu_cores":               stats.CPUCores,
-			"cpu_load_1m":             stats.LoadAvg1m,
-			"ram_total_mb":            stats.MemTotalMB,
-			"ram_available_mb":        stats.MemAvailableMB,
-			"disk_free_mb":            stats.DiskFreeMB,
-			"level":                   level.String(),
-			"reason":                  reason,
-			"max_instances":           effectiveMax,
-			"manual_max_instances":    resources.MaxInstances(),
-			"effective_max_instances": effectiveMax,
+			"cpu_cores":                stats.CPUCores,
+			"cpu_load_1m":              stats.LoadAvg1m,
+			"ram_total_mb":             stats.MemTotalMB,
+			"ram_available_mb":         stats.MemAvailableMB,
+			"disk_free_mb":             stats.DiskFreeMB,
+			"process_rss_mb":           stats.ProcessRSSMB,
+			"go_heap_alloc_mb":         stats.GoHeapAllocMB,
+			"go_heap_sys_mb":           stats.GoHeapSysMB,
+			"goroutines":               stats.Goroutines,
+			"level":                    level.String(),
+			"reason":                   reason,
+			"max_instances":            effectiveMax,
+			"manual_max_instances":     resources.MaxInstances(),
+			"effective_max_instances":  effectiveMax,
+			"active_tool_leases":       capacity.ActiveToolLeases,
+			"active_heavy_tool_leases": capacity.ActiveHeavyToolLeases,
+			"heavy_tool_slots":         capacity.HeavyToolSlots,
+			"light_tool_slots":         capacity.LightToolSlots,
+			"tool_mem_limit_mb":        capacity.ToolMemLimitMB,
+			"scan_memory_budget_mb":    capacity.ScanMemoryBudgetMB,
+			"scan_cpu_load":            capacity.ScanCPULoad,
+			"heavy_tool_cpu_load":      capacity.HeavyToolCPULoad,
+			"go_memory_limit_mb":       capacity.GoMemoryLimitMB,
 		},
 	}
 	json.NewEncoder(w).Encode(response)
@@ -1811,8 +2273,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	// POST /api/instances/{id}/stop — stop specific instance
 	if len(parts) >= 2 && parts[1] == "stop" && r.Method == http.MethodPost {
 		inst.mu.Lock()
-		// BUG FIX: Also handle "pending" instances, not just "running".
-		// Without this, queued scans cannot be stopped from the UI.
+		// Queued scans are stoppable too, even before they acquire resources.
 		if inst.Status == "running" || inst.Status == "pending" || inst.Status == "paused" {
 			inst.Status = "stopped"
 			inst.StopReason = "user_stopped"
@@ -1837,9 +2298,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 	// POST /api/instances/{id}/restart — restart scan with same config
 	if len(parts) >= 2 && parts[1] == "restart" && r.Method == http.MethodPost {
-		// BUG FIX: Validate that the instance is NOT still active before restarting.
-		// Without this guard, restarting a running/pending instance creates a
-		// duplicate scan, doubling resource usage against the same targets.
+		// Avoid creating a duplicate scan against the same targets while this
+		// instance is still active.
 		inst.mu.RLock()
 		currentStatus := inst.Status
 		inst.mu.RUnlock()
@@ -1859,6 +2319,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		severityFilter := inst.SeverityFilter
 		discordWebhook := inst.DiscordWebhook
 		phases := inst.Phases
+		reconMode := inst.ReconMode
+		scanIntensity := inst.ScanIntensity
 		companyName := inst.CompanyName
 		logoPath := inst.LogoPath
 		instName := inst.Name
@@ -1877,6 +2339,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			DiscordWebhook: discordWebhook,
 			Name:           instName,
 			Phases:         phases,
+			ReconMode:      reconMode,
+			ScanIntensity:  scanIntensity,
 			CompanyName:    companyName,
 			LogoPath:       logoPath,
 		}
@@ -1912,6 +2376,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			DiscordWebhook: inst.DiscordWebhook,
 			Name:           inst.Name,
 			Phases:         inst.Phases,
+			ReconMode:      inst.ReconMode,
+			ScanIntensity:  inst.ScanIntensity,
 			CompanyName:    inst.CompanyName,
 			LogoPath:       inst.LogoPath,
 		}
@@ -1979,21 +2445,14 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inst.mu.RLock()
-		targets := strings.Split(inst.Targets, ", ")
-		req := ScanRequest{
-			Targets:        targets,
-			Instruction:    inst.Instruction,
-			ScanMode:       inst.ScanMode,
-			SeverityFilter: inst.SeverityFilter,
-			DiscordWebhook: inst.DiscordWebhook,
-			Name:           inst.Name,
-			Phases:         inst.Phases,
-			CompanyName:    inst.CompanyName,
-			LogoPath:       inst.LogoPath,
-			IsResume:       true, // preserve existing state (vulns, notes, recon)
+		req, ok, reason := s.scanRequestForPausedInstance(instanceID, inst)
+		if !ok {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "cannot resume: " + reason,
+			})
+			return
 		}
-		inst.mu.RUnlock()
 
 		// Remove the paused instance — a new one will be created by runMultiScan
 		s.instancesMu.Lock()
@@ -2031,29 +2490,32 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 // scanSession isolates all per-scan state. Crashes in one session
 // cannot corrupt server-level state or leak into subsequent scans.
 type scanSession struct {
-	id              string
-	target          string
-	parentTarget    string // parent domain for subdomain scans (wildcard mode)
-	scanDir         string
-	cfg             *config.Config
-	agent           *agent.Agent
-	events          chan agent.Event
-	record          *ScanRecord
-	server          *Server
-	instruction     string
-	name            string
-	userInstruction string
-	severityFilter  []string
-	discordWebhook  string
-	discoveryMode   bool
-	genReport       bool
-	resetState      bool
-	instanceID      string               // parent instance ID for multi-instance tracking
-	scanMode        string               // single, wildcard, dast — persisted so dashboard shows correct mode
-	sctx            *scanctx.ScanContext // per-session isolated state
-	companyName     string               // report branding: company name
-	logoPath        string               // report branding: logo path
-	phases          []int                // selected methodology phases
+	id                string
+	target            string
+	parentTarget      string // parent domain for subdomain scans (wildcard mode)
+	scanDir           string
+	cfg               *config.Config
+	agent             *agent.Agent
+	events            chan agent.Event
+	record            *ScanRecord
+	recordTokenOffset int
+	server            *Server
+	instruction       string
+	name              string
+	userInstruction   string
+	severityFilter    []string
+	discordWebhook    string
+	discoveryMode     bool
+	genReport         bool
+	resetState        bool
+	instanceID        string               // parent instance ID for multi-instance tracking
+	scanMode          string               // single, wildcard, dast — persisted so dashboard shows correct mode
+	sctx              *scanctx.ScanContext // per-session isolated state
+	companyName       string               // report branding: company name
+	logoPath          string               // report branding: logo path
+	phases            []int                // selected methodology phases
+	reconMode         string               // active or passive reconnaissance
+	scanIntensity     string               // active or passive testing/scanning
 
 	// Wildcard lifecycle flags
 	skipNotesCleanup     bool   // when true, don't delete notes store on cleanup (discovery phase)
@@ -2133,8 +2595,6 @@ func (sess *scanSession) cleanup() {
 	sess.server.instancesMu.RLock()
 	runningCount := 0
 	for _, inst := range sess.server.instances {
-		// BUG FIX: Must hold inst.mu.RLock() when reading inst.Status
-		// to avoid data race with goroutines mutating it under inst.mu.Lock().
 		inst.mu.RLock()
 		if inst.Status == "running" {
 			runningCount++
@@ -2163,6 +2623,168 @@ func (sess *scanSession) cleanup() {
 	sess.server.mu.Lock()
 	delete(sess.server.currentAgents, sess.id)
 	sess.server.mu.Unlock()
+}
+
+func (s *Server) scanRecordForSession(sess *scanSession) *ScanRecord {
+	startedAt := time.Now().Format(time.RFC3339)
+	rec := s.freshScanRecordForSession(sess, startedAt)
+	sess.recordTokenOffset = 0
+
+	if sess.resetState {
+		return rec
+	}
+
+	existing, ok := loadScanRecordFromDir(sess.scanDir)
+	if !ok || existing == nil {
+		return rec
+	}
+	if existing.ID != "" && existing.ID != sess.id {
+		log.Printf("[AUTO-RESUME] Ignoring scan record %s in %s while resuming %s", existing.ID, sess.scanDir, sess.id)
+		return rec
+	}
+
+	rec = existing
+	s.refreshResumedScanRecord(rec, sess, startedAt)
+	sess.recordTokenOffset = rec.TotalTokens
+	return rec
+}
+
+func (s *Server) freshScanRecordForSession(sess *scanSession, startedAt string) *ScanRecord {
+	return &ScanRecord{
+		ID:                       sess.id,
+		InstanceID:               sess.instanceID,
+		Name:                     sess.name,
+		Target:                   sess.target,
+		ParentTarget:             sess.parentTarget,
+		ScanMode:                 sess.scanMode,
+		Instruction:              sess.userInstruction,
+		SeverityFilter:           append([]string(nil), sess.severityFilter...),
+		DiscordWebhook:           sess.discordWebhook,
+		DiscordWebhookConfigured: sess.discordWebhook != "" || s.discordWebhook != "",
+		ReconMode:                normalizeActivityMode(sess.reconMode),
+		ScanIntensity:            normalizeActivityMode(sess.scanIntensity),
+		StartedAt:                startedAt,
+		Status:                   "running",
+		Events:                   []WSEvent{},
+		Vulns:                    []VulnSummary{},
+		CompanyName:              sess.companyName,
+		LogoPath:                 sess.logoPath,
+		Phases:                   append([]int(nil), sess.phases...),
+		CurrentPhase:             firstSelectedPhase(sess.phases),
+	}
+}
+
+func (s *Server) refreshResumedScanRecord(rec *ScanRecord, sess *scanSession, fallbackStartedAt string) {
+	if rec.ID == "" {
+		rec.ID = sess.id
+	}
+	rec.InstanceID = sess.instanceID
+	if sess.name != "" || rec.Name == "" {
+		rec.Name = sess.name
+	}
+	rec.Target = sess.target
+	rec.ParentTarget = sess.parentTarget
+	rec.ScanMode = sess.scanMode
+	if sess.userInstruction != "" || rec.Instruction == "" {
+		rec.Instruction = sess.userInstruction
+	}
+	rec.SeverityFilter = append([]string(nil), sess.severityFilter...)
+	rec.DiscordWebhook = sess.discordWebhook
+	rec.DiscordWebhookConfigured = sess.discordWebhook != "" || s.discordWebhook != ""
+	rec.ReconMode = normalizeActivityMode(sess.reconMode)
+	rec.ScanIntensity = normalizeActivityMode(sess.scanIntensity)
+	if rec.StartedAt == "" {
+		rec.StartedAt = fallbackStartedAt
+	}
+	rec.Status = "running"
+	rec.FinishedAt = ""
+	rec.StopReason = ""
+	if rec.Events == nil {
+		rec.Events = []WSEvent{}
+	}
+	if rec.Vulns == nil {
+		rec.Vulns = []VulnSummary{}
+	}
+	if sess.companyName != "" || rec.CompanyName == "" {
+		rec.CompanyName = sess.companyName
+	}
+	if sess.logoPath != "" || rec.LogoPath == "" {
+		rec.LogoPath = sess.logoPath
+	}
+	rec.Phases = append([]int(nil), sess.phases...)
+	if rec.CurrentPhase == 0 || !phaseAllowed(sess.phases, rec.CurrentPhase) {
+		rec.CurrentPhase = firstSelectedPhase(sess.phases)
+	}
+}
+
+func mergeReportedVulnerabilitiesIntoRecord(rec *ScanRecord, reported []reporting.Vulnerability) {
+	if rec == nil {
+		return
+	}
+	existing := append([]VulnSummary(nil), rec.Vulns...)
+	rec.Vulns = make([]VulnSummary, 0, len(existing)+len(reported))
+	for _, vuln := range existing {
+		appendVulnSummaryUnique(&rec.Vulns, vuln)
+	}
+	for _, vuln := range reported {
+		appendVulnSummaryUnique(&rec.Vulns, vulnToSummary(vuln))
+	}
+}
+
+func (s *Server) seedResumeInstanceFromRecord(inst *ScanInstance, req ScanRequest) {
+	if inst == nil || !req.IsResume || req.ResumeScanDir == "" {
+		return
+	}
+	rec, ok := loadScanRecordFromDir(req.ResumeScanDir)
+	if !ok || rec == nil {
+		return
+	}
+	if rec.StartedAt != "" {
+		inst.StartedAt = rec.StartedAt
+	}
+	if rec.Name != "" {
+		inst.Name = rec.Name
+	}
+	if rec.Target != "" && strings.TrimSpace(inst.Targets) == "" {
+		inst.Targets = rec.Target
+	}
+	if rec.ScanMode != "" {
+		inst.ScanMode = rec.ScanMode
+	}
+	if rec.Instruction != "" {
+		inst.Instruction = rec.Instruction
+	}
+	if len(rec.SeverityFilter) > 0 {
+		inst.SeverityFilter = append([]string(nil), rec.SeverityFilter...)
+	}
+	if len(rec.Phases) > 0 {
+		inst.Phases = append([]int(nil), rec.Phases...)
+	}
+	if rec.ReconMode != "" {
+		inst.ReconMode = rec.ReconMode
+	}
+	if rec.ScanIntensity != "" {
+		inst.ScanIntensity = rec.ScanIntensity
+	}
+	if rec.CompanyName != "" {
+		inst.CompanyName = rec.CompanyName
+	}
+	if rec.LogoPath != "" {
+		inst.LogoPath = rec.LogoPath
+	}
+	inst.Iterations = rec.Iterations
+	inst.ToolCalls = rec.ToolCalls
+	inst.TotalTokens = rec.TotalTokens
+	inst.Vulns = append([]VulnSummary(nil), rec.Vulns...)
+	inst.VulnCount = len(inst.Vulns)
+	if rec.CurrentPhase > 0 {
+		inst.CurrentPhase = rec.CurrentPhase
+	}
+	events := rec.Events
+	if len(events) > 500 {
+		events = events[len(events)-500:]
+	}
+	inst.events = append([]WSEvent(nil), events...)
 }
 
 // executeScanSession runs a single scan in complete isolation.
@@ -2225,6 +2847,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	sess.events = events
 	agnt := agent.NewAgent(sess.cfg, "XalgorixAgent", events, sctx)
 	agnt.SetPhaseRestrictions(sess.phases)
+	agnt.SetActivityPolicy(sess.reconMode, sess.scanIntensity, []string{sess.target, sess.parentTarget})
 	if sess.discoveryMode || isReconReportOnlyPhaseSelection(sess.phases) {
 		agnt.SetDiscoveryMode(true)
 	}
@@ -2250,27 +2873,9 @@ func (s *Server) executeScanSession(sess *scanSession) {
 		s.instancesMu.RUnlock()
 	}
 
-	// 4. Initialize scan record
-	sess.record = &ScanRecord{
-		ID:                       sess.id,
-		InstanceID:               sess.instanceID,
-		Name:                     sess.name,
-		Target:                   sess.target,
-		ParentTarget:             sess.parentTarget,
-		ScanMode:                 sess.scanMode,
-		Instruction:              sess.userInstruction,
-		SeverityFilter:           append([]string(nil), sess.severityFilter...),
-		DiscordWebhook:           sess.discordWebhook,
-		DiscordWebhookConfigured: sess.discordWebhook != "" || s.discordWebhook != "",
-		StartedAt:                time.Now().Format(time.RFC3339),
-		Status:                   "running",
-		Events:                   []WSEvent{},
-		Vulns:                    []VulnSummary{},
-		CompanyName:              sess.companyName,
-		LogoPath:                 sess.logoPath,
-		Phases:                   append([]int(nil), sess.phases...),
-		CurrentPhase:             firstSelectedPhase(sess.phases),
-	}
+	// 4. Initialize scan record. Resume paths preserve previously persisted
+	// events, vulnerabilities, counters, and sub-scan progress.
+	sess.record = s.scanRecordForSession(sess)
 	s.saveScanRecordTo(sess.record, sess.scanDir)
 
 	// 5. Event processing goroutine — drains events and broadcasts to WebSocket
@@ -2300,15 +2905,20 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	close(events)
 	<-done
 
+	if status, stopReason := s.instanceRunStatus(sess.instanceID); isInterruptedInstanceStatus(status) {
+		sess.record.Status = status
+		sess.record.StopReason = stopReason
+		sess.record.FinishedAt = time.Now().Format(time.RFC3339)
+		mergeReportedVulnerabilitiesIntoRecord(sess.record, reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
+		s.saveScanRecordTo(sess.record, sess.scanDir)
+		return
+	}
+
 	// 9. Finalize record
 	sess.record.Status = "finished"
 	sess.record.FinishedAt = time.Now().Format(time.RFC3339)
 
-	// Refresh vulns from reporting module
-	sess.record.Vulns = nil
-	for _, v := range reporting.GetVulnerabilitiesForContext(sess.sctx.ID) {
-		sess.record.Vulns = append(sess.record.Vulns, vulnToSummary(v))
-	}
+	mergeReportedVulnerabilitiesIntoRecord(sess.record, reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
 
 	s.saveScanRecordTo(sess.record, sess.scanDir)
 
@@ -2499,7 +3109,7 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 		sess.record.ToolCalls++
 	}
 	if evt.TotalTokens > 0 {
-		sess.record.TotalTokens = evt.TotalTokens
+		sess.record.TotalTokens = sess.recordTokenOffset + evt.TotalTokens
 	}
 
 	// Update parent instance stats — ACCUMULATE across sessions (phases/subdomains),
@@ -2704,6 +3314,13 @@ func mapValues(values map[string]string) []string {
 	return out
 }
 
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // ────────────────────────────────────────────────────────
 // runMultiScan — orchestrates scanning across all targets
 // ────────────────────────────────────────────────────────
@@ -2711,6 +3328,8 @@ func mapValues(values map[string]string) []string {
 // runMultiScan processes targets sequentially, one at a time.
 // Each target is scanned in a fully isolated scanSession.
 func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceIDs ...string) {
+	normalizeScanRequestActivity(&req)
+
 	// Defensively flatten req.Targets in case the frontend or API sent them as a comma-separated mega string
 	var cleanTargets []string
 	for _, raw := range req.Targets {
@@ -2757,11 +3376,14 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		Instruction:    req.Instruction,
 		SeverityFilter: req.SeverityFilter,
 		Phases:         req.Phases,
+		ReconMode:      req.ReconMode,
+		ScanIntensity:  req.ScanIntensity,
 		CurrentPhase:   firstSelectedPhase(req.Phases),
 		CompanyName:    req.CompanyName,
 		LogoPath:       req.LogoPath,
 		DiscordWebhook: req.DiscordWebhook,
 	}
+	s.seedResumeInstanceFromRecord(instance, req)
 	chatCfg := *scanCfg
 	instance.chatCfg = &chatCfg
 	s.instancesMu.Lock()
@@ -2771,17 +3393,13 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Broadcast to dashboard
 	s.broadcastDashboard(WSEvent{Type: "instance_started", Content: instanceID})
 
-	// BUG 1 FIX (CRITICAL): The defer cleanup MUST be registered BEFORE the queue
-	// wait loop. Previously, early returns from the loop (stopped-while-pending)
-	// bypassed cleanup entirely, leaking the instance in s.instances forever and
-	// leaving stale state in currentAgents, s.running, etc.
-	//
-	// The `ranScan` flag distinguishes between:
-	//   false → instance was stopped while pending (lightweight cleanup only)
-	//   true  → instance ran and needs full post-scan cleanup
+	// Register cleanup before the queue wait loop so pending instances that
+	// are stopped early still release server-side references.
 	ranScan := false
+	panicRecovered := false
 	defer func() {
 		if r := recover(); r != nil {
+			panicRecovered = true
 			log.Printf("[CRITICAL] runMultiScan goroutine panicked: %v\n%s", r, debug.Stack())
 			s.broadcastToInstance(instanceID, WSEvent{Type: "error", Content: fmt.Sprintf("⛔ Scan goroutine crashed: %v — cleaning up", r)})
 		}
@@ -2789,7 +3407,12 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		// Mark instance as finished (if still running)
 		instance.mu.Lock()
 		if instance.Status == "running" {
-			instance.Status = "finished"
+			if panicRecovered {
+				instance.Status = "stopped"
+				instance.StopReason = "panic_recovered"
+			} else {
+				instance.Status = "finished"
+			}
 		}
 		instance.FinishedAt = time.Now().Format(time.RFC3339)
 		instance.agent = nil
@@ -2801,18 +3424,16 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		// Pending→stopped instances skip queue/agent teardown since
 		// they never acquired resources.
 		if ranScan {
-			// Only clear queue state if scan finished normally (not from signal).
-			// Signal-stopped scans preserve queue state so auto-resume works on restart.
+			// Only clear queue state when the scan really finished. Paused,
+			// panicked, and signal-stopped scans keep it for resume.
 			preserveQueue := false
 			instance.mu.RLock()
-			if strings.HasPrefix(instance.StopReason, "signal_") {
-				preserveQueue = true
-			}
+			preserveQueue = shouldPreserveQueueStateOnExit(instance.Status, instance.StopReason, panicRecovered)
 			instance.mu.RUnlock()
 			if !preserveQueue {
-				s.clearQueueState()
+				s.clearQueueState(instanceID)
 			} else {
-				log.Printf("[SHUTDOWN] Preserving queue state for auto-resume after signal stop")
+				log.Printf("[AUTO-RESUME] Preserving queue state after interrupted scan")
 			}
 		}
 
@@ -2824,9 +3445,27 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		}
 		s.mu.Unlock()
 
+		instance.mu.RLock()
+		finalStatus := instance.Status
+		finalStopReason := instance.StopReason
+		instance.mu.RUnlock()
+		if finalStatus == "paused" {
+			s.markQueueStatePaused(instanceID)
+		}
 		queueDoneEvt := WSEvent{Type: "queue_finished", Content: "Scan queue ended"}
-		if phaseAllowed(req.Phases, 22) {
-			queueDoneEvt.CurrentPhase = 22
+		switch finalStatus {
+		case "paused":
+			queueDoneEvt = WSEvent{Type: "paused", Content: "Scan queue paused"}
+		case "stopped":
+			if strings.HasPrefix(finalStopReason, "signal_") || finalStopReason == "panic_recovered" {
+				queueDoneEvt = WSEvent{Type: "stopped", Content: "Scan queue interrupted; resume state saved"}
+			} else {
+				queueDoneEvt = WSEvent{Type: "stopped", Content: "Scan queue stopped"}
+			}
+		default:
+			if phaseAllowed(req.Phases, 22) {
+				queueDoneEvt.CurrentPhase = 22
+			}
 		}
 		s.broadcastToInstance(instanceID, queueDoneEvt)
 		s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
@@ -2911,13 +3550,12 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
 
 	// ── PRE-SESSION CLEANUP ──
-	// IMPORTANT: This runs AFTER the queue wait, so we only clean up global
-	// state once this instance has acquired a slot. This prevents a queued
-	// scan from destroying a running scan's processes and state.
-	s.clearQueueState()
-	s.running.Store(true)
-	s.stopReq.Store(false)      // clear global stop so this scan isn't immediately aborted
+	// IMPORTANT: This runs AFTER the queue wait. Do not clear the queue file
+	// before the refreshed state is written; resumed scans rely on it if the
+	// process exits during admission/startup.
 	req.InstanceID = instanceID // thread instance ID to all target handlers
+	s.running.Store(true)
+	s.stopReq.Store(false) // clear global stop so this scan isn't immediately aborted
 	if req.DiscordWebhook != "" {
 		s.discordWebhook = req.DiscordWebhook
 	}
@@ -2941,6 +3579,9 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 
 	// Save queue state for persistence
 	s.saveQueueState(0, req)
+	if req.ResumeQueueStatePath != "" && filepath.Clean(req.ResumeQueueStatePath) != filepath.Clean(s.queueStatePathForInstance(instanceID)) {
+		s.clearQueueStatePath(req.ResumeQueueStatePath)
+	}
 
 	s.broadcastToInstance(instanceID, WSEvent{
 		Type:         "queue_started",
@@ -2952,13 +3593,19 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Discord: scan started
 	s.sendDiscord(0x00ff88, "🚀 Scan Started", fmt.Sprintf("**Targets:** %s\n**Mode:** %s\n**Total:** %d target(s)", strings.Join(req.Targets, ", "), req.ScanMode, totalTargets))
 
+	interruptedQueue := false
 	for i, target := range req.Targets {
 		// Check both global stop and per-instance stop
 		instance.mu.RLock()
-		instStopped := instance.Status == "stopped"
+		instStatus := instance.Status
 		instance.mu.RUnlock()
-		if s.stopReq.Load() || instStopped {
-			s.broadcastToInstance(instanceID, WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
+		if s.stopReq.Load() || instStatus == "stopped" || instStatus == "paused" {
+			interruptedQueue = true
+			if instStatus == "paused" {
+				s.broadcastToInstance(instanceID, WSEvent{Type: "paused", Content: "Scan queue paused"})
+			} else {
+				s.broadcastToInstance(instanceID, WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
+			}
 			break
 		}
 
@@ -2988,17 +3635,21 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		}
 
 		instance.mu.RLock()
-		instStoppedAfterTarget := instance.Status == "stopped"
+		instStatusAfterTarget := instance.Status
 		instance.mu.RUnlock()
-		if !s.stopReq.Load() && !instStoppedAfterTarget {
+		if shouldAdvanceQueueAfterTarget(s.stopReq.Load(), instStatusAfterTarget) {
 			s.saveQueueState(i+1, req)
+		} else {
+			interruptedQueue = true
 		}
 
 		cancel() // always cancel context after target is done
 	}
 
-	// Clear queue state when done
-	s.clearQueueState()
+	if interruptedQueue {
+		log.Printf("[INFO] runMultiScan queue interrupted before completion")
+		return
+	}
 
 	// Discord: scan finished — use instance's accumulated vuln count
 	// (don't read from inst.sctx.ID — it may point to a cleaned-up session context)
@@ -3035,14 +3686,93 @@ func (s *Server) makeScanDir(target string) string {
 	return scanDir
 }
 
+func (s *Server) scanDirForResume(req ScanRequest, target string) (string, bool) {
+	if !req.IsResume || req.ResumeScanDir == "" {
+		return s.makeScanDir(target), false
+	}
+	if req.ResumeActiveTarget != "" && req.ResumeActiveTarget != target {
+		return s.makeScanDir(target), false
+	}
+	return s.resumeScanDirOrNew(req.ResumeScanDir, target)
+}
+
+func (s *Server) scanDirForWildcardSubdomainResume(req ScanRequest, subdomain string, subIndex int) (string, bool) {
+	if !req.IsResume || req.ResumeSubScanDir == "" {
+		return s.makeScanDir(subdomain), false
+	}
+	if req.ResumeSubIndex != subIndex {
+		return s.makeScanDir(subdomain), false
+	}
+	if req.ResumeSubScanTarget != "" && req.ResumeSubScanTarget != subdomain {
+		return s.makeScanDir(subdomain), false
+	}
+	return s.resumeScanDirOrNew(req.ResumeSubScanDir, subdomain)
+}
+
+func (s *Server) resumeScanDirOrNew(scanDir, target string) (string, bool) {
+	cleanDir := filepath.Clean(scanDir)
+	dataDir := filepath.Clean(s.dataDir)
+	rel, err := filepath.Rel(dataDir, cleanDir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		log.Printf("[AUTO-RESUME] Ignoring unsafe resume scan dir %q", scanDir)
+		return s.makeScanDir(target), false
+	}
+	if err := os.MkdirAll(cleanDir, 0755); err != nil {
+		log.Printf("[AUTO-RESUME] Failed to reuse scan dir %s: %v", cleanDir, err)
+		return s.makeScanDir(target), false
+	}
+	return cleanDir, true
+}
+
+func loadScanRecordFromDir(scanDir string) (*ScanRecord, bool) {
+	if scanDir == "" {
+		return nil, false
+	}
+	data, err := os.ReadFile(filepath.Join(scanDir, "scan.json"))
+	if err != nil {
+		return nil, false
+	}
+	var rec ScanRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return nil, false
+	}
+	return &rec, true
+}
+
+func subdomainTargetsFromRecord(rec *ScanRecord) []string {
+	if rec == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	targets := make([]string, 0, len(rec.SubScans))
+	for _, child := range rec.SubScans {
+		target := strings.TrimSpace(child.Target)
+		if target == "" || seen[target] {
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
+	return targets
+}
+
 // runSingleTarget handles a single-site mode scan for one target.
 func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
-	scanDir := s.makeScanDir(target)
+	scanDir, resumed := s.scanDirForResume(req, target)
+	s.saveQueueState(idx, req, queueProgress{
+		ActiveTarget:  target,
+		ActiveScanDir: scanDir,
+		ActiveScanID:  filepath.Base(scanDir),
+	})
 
 	instruction := "This is a SINGLE TARGET scan. Do NOT enumerate subdomains or perform wildcard discovery. Only test the exact target URL provided. Focus on the main domain/IP only. " + req.Instruction
+	if resumed {
+		instruction += " This is an AUTO-RESUMED scan. Before doing new work, read existing notes and files in the current workspace, then continue from the last saved evidence instead of starting discovery from scratch."
+	}
 
 	// Inject phase filter if the user selected specific phases
 	instruction += buildPhaseFilterInstruction(req.Phases)
+	instruction += buildActivityPolicyInstruction(req.ReconMode, req.ScanIntensity)
 
 	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_started",
@@ -3067,14 +3797,19 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 		discordWebhook:  req.DiscordWebhook,
 		discoveryMode:   false,
 		genReport:       true,
-		resetState:      true,
+		resetState:      !resumed,
 		instanceID:      req.InstanceID,
 		scanMode:        "single",
 		companyName:     req.CompanyName,
 		logoPath:        req.LogoPath,
 		phases:          req.Phases,
+		reconMode:       req.ReconMode,
+		scanIntensity:   req.ScanIntensity,
 	}
 	s.executeScanSession(sess)
+	if s.instanceInterrupted(req.InstanceID) {
+		return
+	}
 
 	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_completed",
@@ -3087,13 +3822,22 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 
 // runDASTTarget handles a DAST mode scan for one target URL.
 func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
-	scanDir := s.makeScanDir(target)
+	scanDir, resumed := s.scanDirForResume(req, target)
+	s.saveQueueState(idx, req, queueProgress{
+		ActiveTarget:  target,
+		ActiveScanDir: scanDir,
+		ActiveScanID:  filepath.Base(scanDir),
+	})
 
 	dastInstruction := buildDASTInstruction(target)
 	if req.Instruction != "" {
 		dastInstruction += "\n\n" + req.Instruction
 	}
+	if resumed {
+		dastInstruction += "\n\n## AUTO-RESUME\nRead existing notes and files in the current workspace first, then continue from the last saved evidence instead of starting from scratch."
+	}
 	dastInstruction += buildPhaseFilterInstruction(req.Phases)
+	dastInstruction += buildActivityPolicyInstruction(req.ReconMode, req.ScanIntensity)
 
 	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_started",
@@ -3118,14 +3862,19 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 		discordWebhook:  req.DiscordWebhook,
 		discoveryMode:   false,
 		genReport:       true,
-		resetState:      true,
+		resetState:      !resumed,
 		instanceID:      req.InstanceID,
 		scanMode:        "dast",
 		companyName:     req.CompanyName,
 		logoPath:        req.LogoPath,
 		phases:          req.Phases,
+		reconMode:       req.ReconMode,
+		scanIntensity:   req.ScanIntensity,
 	}
 	s.executeScanSession(sess)
+	if s.instanceInterrupted(req.InstanceID) {
+		return
+	}
 
 	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:         "target_completed",
@@ -3150,60 +3899,103 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 	}()
 
 	// ── PHASE 1: Subdomain Discovery ──
-	scanDir := s.makeScanDir(target)
+	scanDir, resumed := s.scanDirForResume(req, target)
+	subdomains := append([]string(nil), req.ResumeSubdomains...)
+	resumeFromSubIndex := 0
+	var parentRecord *ScanRecord
+	if resumed && req.ResumeDiscoveryDone {
+		resumeFromSubIndex = req.ResumeSubIndex
+		if len(subdomains) == 0 {
+			if rec, ok := loadScanRecordFromDir(scanDir); ok {
+				parentRecord = rec
+				subdomains = subdomainTargetsFromRecord(rec)
+			}
+		}
+		if len(subdomains) == 0 {
+			subdomains = s.collectSubdomains(scanDir, target, "")
+		}
+		log.Printf("[AUTO-RESUME] Resuming wildcard scan for %s at subdomain index %d/%d (scanDir=%s)", target, resumeFromSubIndex, len(subdomains), scanDir)
+		s.broadcastToInstance(req.InstanceID, WSEvent{
+			Type:           "target_started",
+			Content:        fmt.Sprintf("[AUTO-RESUME] Resuming wildcard scan for %s at subdomain %d/%d", target, minInt(resumeFromSubIndex+1, len(subdomains)), len(subdomains)),
+			Target:         target,
+			AgentID:        filepath.Base(scanDir),
+			TargetIndex:    idx + 1,
+			TotalTargets:   total,
+			SubTargetTotal: len(subdomains),
+			ParentTarget:   target,
+			CurrentPhase:   firstSelectedPhase(req.Phases),
+		})
+	} else {
+		s.saveQueueState(idx, req, queueProgress{
+			ActiveTarget:  target,
+			ActiveScanDir: scanDir,
+			ActiveScanID:  filepath.Base(scanDir),
+		})
 
-	discoveryInstruction := buildDiscoveryInstruction(target)
-	if req.Instruction != "" {
-		discoveryInstruction += "\n\n" + req.Instruction
-	}
+		discoveryInstruction := buildDiscoveryInstruction(target, req.ReconMode)
+		if req.Instruction != "" {
+			discoveryInstruction += "\n\n" + req.Instruction
+		}
+		discoveryInstruction += buildActivityPolicyInstruction(req.ReconMode, req.ScanIntensity)
 
-	s.broadcastToInstance(req.InstanceID, WSEvent{
-		Type:         "target_started",
-		Content:      fmt.Sprintf("[PHASE 1] Discovering subdomains for: %s", target),
-		Target:       target,
-		AgentID:      filepath.Base(scanDir),
-		TargetIndex:  idx + 1,
-		TotalTargets: total,
-		CurrentPhase: 1,
-	})
+		s.broadcastToInstance(req.InstanceID, WSEvent{
+			Type:         "target_started",
+			Content:      fmt.Sprintf("[PHASE 1] Discovering subdomains for: %s", target),
+			Target:       target,
+			AgentID:      filepath.Base(scanDir),
+			TargetIndex:  idx + 1,
+			TotalTargets: total,
+			CurrentPhase: 1,
+		})
 
-	// Save the discovery session's context ID so we can read notes after cleanup.
-	// skipNotesCleanup=true prevents cleanup() from deleting the notes store,
-	// keeping them available for collectSubdomains' Layer 3 (notes fallback).
-	discoverySess := &scanSession{
-		id:               filepath.Base(scanDir),
-		target:           target,
-		scanDir:          scanDir,
-		cfg:              scanCfg,
-		server:           s,
-		instruction:      discoveryInstruction,
-		name:             req.Name,
-		userInstruction:  req.Instruction,
-		severityFilter:   req.SeverityFilter,
-		discordWebhook:   req.DiscordWebhook,
-		discoveryMode:    true,
-		genReport:        false,
-		resetState:       true,
-		instanceID:       req.InstanceID,
-		scanMode:         "wildcard",
-		skipNotesCleanup: true, // preserve notes for subdomain collection
-	}
-	s.executeScanSession(discoverySess)
+		// Save the discovery session's context ID so we can read notes after cleanup.
+		// skipNotesCleanup=true prevents cleanup() from deleting the notes store,
+		// keeping them available for collectSubdomains' Layer 3 (notes fallback).
+		discoverySess := &scanSession{
+			id:               filepath.Base(scanDir),
+			target:           target,
+			scanDir:          scanDir,
+			cfg:              scanCfg,
+			server:           s,
+			instruction:      discoveryInstruction,
+			name:             req.Name,
+			userInstruction:  req.Instruction,
+			severityFilter:   req.SeverityFilter,
+			discordWebhook:   req.DiscordWebhook,
+			discoveryMode:    true,
+			genReport:        false,
+			resetState:       true,
+			instanceID:       req.InstanceID,
+			scanMode:         "wildcard",
+			skipNotesCleanup: true, // preserve notes for subdomain collection
+			companyName:      req.CompanyName,
+			logoPath:         req.LogoPath,
+			phases:           req.Phases,
+			reconMode:        req.ReconMode,
+			scanIntensity:    req.ScanIntensity,
+		}
+		s.executeScanSession(discoverySess)
+		if s.instanceInterrupted(req.InstanceID) {
+			return
+		}
+		parentRecord = discoverySess.record
 
-	// Capture the discovery session's context ID for notes lookup.
-	// The sctx was set during executeScanSession and its notes were preserved.
-	discoveryCtxID := ""
-	if discoverySess.sctx != nil {
-		discoveryCtxID = discoverySess.sctx.ID
-	}
+		// Capture the discovery session's context ID for notes lookup.
+		// The sctx was set during executeScanSession and its notes were preserved.
+		discoveryCtxID := ""
+		if discoverySess.sctx != nil {
+			discoveryCtxID = discoverySess.sctx.ID
+		}
 
-	// Read discovered subdomains — use discovery context ID for notes fallback
-	subdomains := s.collectSubdomains(scanDir, target, discoveryCtxID)
+		// Read discovered subdomains — use discovery context ID for notes fallback
+		subdomains = s.collectSubdomains(scanDir, target, discoveryCtxID)
 
-	// Now clean up the discovery notes (deferred from skipNotesCleanup)
-	if discoveryCtxID != "" {
-		notes.CleanupContext(discoveryCtxID)
-		log.Printf("[wildcard] Cleaned up discovery notes context: %s", discoveryCtxID)
+		// Now clean up the discovery notes (deferred from skipNotesCleanup)
+		if discoveryCtxID != "" {
+			notes.CleanupContext(discoveryCtxID)
+			log.Printf("[wildcard] Cleaned up discovery notes context: %s", discoveryCtxID)
+		}
 	}
 
 	log.Printf("[INFO] Total subdomains found for %s: %d", target, len(subdomains))
@@ -3229,18 +4021,37 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		})
 	}
 	pendingSubScans := make([]SubScanSummary, 0, len(subdomains))
-	for _, subdomain := range subdomains {
+	resumeFromSubIndex = clampInt(resumeFromSubIndex, 0, len(subdomains))
+	for i, subdomain := range subdomains {
+		status := "pending"
+		if i < resumeFromSubIndex {
+			status = "finished"
+		}
 		pendingSubScans = append(pendingSubScans, SubScanSummary{
 			Target: subdomain,
-			Status: "pending",
+			Status: status,
 		})
 	}
-	if discoverySess.record != nil {
-		discoverySess.record.SubScans = pendingSubScans
-		discoverySess.record.SubScanTotal = len(subdomains)
-		discoverySess.record.SubScanRemaining = len(subdomains)
-		s.saveScanRecordTo(discoverySess.record, scanDir)
+	if parentRecord == nil {
+		parentRecord, _ = loadScanRecordFromDir(scanDir)
 	}
+	if parentRecord != nil {
+		parentRecord.SubScans = pendingSubScans
+		parentRecord.SubScanTotal = len(subdomains)
+		parentRecord.SubScanCompleted = resumeFromSubIndex
+		parentRecord.SubScanRunning = 0
+		parentRecord.SubScanRemaining = len(subdomains) - resumeFromSubIndex
+		parentRecord.Status = "running"
+		s.saveScanRecordTo(parentRecord, scanDir)
+	}
+	s.saveQueueState(idx, req, queueProgress{
+		ActiveTarget:          target,
+		ActiveScanDir:         scanDir,
+		ActiveScanID:          filepath.Base(scanDir),
+		WildcardDiscoveryDone: true,
+		WildcardSubdomains:    subdomains,
+		WildcardSubIndex:      resumeFromSubIndex,
+	})
 	s.broadcastToInstance(req.InstanceID, WSEvent{
 		Type:           "subdomains_discovered",
 		Content:        fmt.Sprintf("Discovered %d subdomains for %s", len(subdomains), target),
@@ -3253,20 +4064,81 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		CurrentPhase:   firstSelectedPhase(req.Phases),
 	})
 
-	// ── PHASE 2: Scan each subdomain individually ──
-	for j, subdomain := range subdomains {
-		// Check both global stop and per-instance stop
-		var instStopped bool
-		s.instancesMu.RLock()
-		if inst, ok := s.instances[req.InstanceID]; ok {
-			inst.mu.RLock()
-			instStopped = inst.Status == "stopped"
-			inst.mu.RUnlock()
+	saveWildcardProgress := func(nextIndex, runningIndex int, activeSubTarget, activeSubScanDir string) {
+		nextIndex = clampInt(nextIndex, 0, len(subdomains))
+		if parentRecord == nil {
+			parentRecord, _ = loadScanRecordFromDir(scanDir)
 		}
-		s.instancesMu.RUnlock()
-		if s.stopReq.Load() || instStopped {
+		if parentRecord != nil {
+			existing := make(map[string]SubScanSummary)
+			for _, child := range parentRecord.SubScans {
+				existing[child.Target] = child
+			}
+			children := make([]SubScanSummary, 0, len(subdomains))
+			completed := 0
+			running := 0
+			for i, childTarget := range subdomains {
+				child := existing[childTarget]
+				child.Target = childTarget
+				switch {
+				case i == runningIndex:
+					child.Status = "running"
+					if activeSubScanDir != "" && childTarget == activeSubTarget {
+						child.ID = filepath.Base(activeSubScanDir)
+						if child.StartedAt == "" {
+							child.StartedAt = time.Now().Format(time.RFC3339)
+						}
+					}
+					running++
+				case i < nextIndex:
+					if child.Status == "" || child.Status == "pending" || child.Status == "running" {
+						child.Status = "finished"
+					}
+					if child.FinishedAt == "" {
+						child.FinishedAt = time.Now().Format(time.RFC3339)
+					}
+					completed++
+				default:
+					if child.Status == "" || child.Status == "running" {
+						child.Status = "pending"
+					}
+				}
+				children = append(children, child)
+			}
+			parentRecord.SubScans = children
+			parentRecord.SubScanTotal = len(subdomains)
+			parentRecord.SubScanCompleted = completed
+			parentRecord.SubScanRunning = running
+			parentRecord.SubScanRemaining = len(subdomains) - completed - running
+			parentRecord.Status = "running"
+			s.saveScanRecordTo(parentRecord, scanDir)
+		}
+		activeSubScanID := ""
+		if activeSubScanDir != "" {
+			activeSubScanID = filepath.Base(activeSubScanDir)
+		}
+		s.saveQueueState(idx, req, queueProgress{
+			ActiveTarget:          target,
+			ActiveScanDir:         scanDir,
+			ActiveScanID:          filepath.Base(scanDir),
+			WildcardActiveTarget:  activeSubTarget,
+			WildcardActiveScanDir: activeSubScanDir,
+			WildcardActiveScanID:  activeSubScanID,
+			WildcardDiscoveryDone: true,
+			WildcardSubdomains:    subdomains,
+			WildcardSubIndex:      nextIndex,
+		})
+	}
+
+	// ── PHASE 2: Scan each subdomain individually ──
+	wildcardStopped := false
+	for j := resumeFromSubIndex; j < len(subdomains); j++ {
+		subdomain := subdomains[j]
+		// Check both global stop and per-instance stop
+		if s.stopReq.Load() || s.instanceInterrupted(req.InstanceID) {
 			log.Printf("[INFO] Subdomain loop stopped by user at %d/%d for %s", j+1, len(subdomains), target)
 			s.broadcastToInstance(req.InstanceID, WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
+			wildcardStopped = true
 			break
 		}
 
@@ -3280,7 +4152,12 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 		runtime.GC()
 		debug.FreeOSMemory()
 
+		subScanDir, subResumed := s.scanDirForWildcardSubdomainResume(req, subdomain, j)
+		if subResumed {
+			log.Printf("[AUTO-RESUME] Reusing interrupted subdomain scan dir for %s: %s", subdomain, subScanDir)
+		}
 		log.Printf("[INFO] Starting subdomain %d/%d: %s (parent: %s)", j+1, len(subdomains), subdomain, target)
+		saveWildcardProgress(j, j, subdomain, subScanDir)
 
 		// Each subdomain gets its own isolated session wrapped in a panic guard
 		func() {
@@ -3291,9 +4168,12 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				}
 			}()
 
-			subScanDir := s.makeScanDir(subdomain)
 			scanInstruction := buildSubdomainScanInstruction(subdomain, target, req.Instruction)
+			if subResumed {
+				scanInstruction += "\n\n## AUTO-RESUME\nRead existing notes and files in the current workspace first, then continue this subdomain scan from the last saved evidence instead of starting from scratch."
+			}
 			scanInstruction += buildPhaseFilterInstruction(req.Phases)
+			scanInstruction += buildActivityPolicyInstruction(req.ReconMode, req.ScanIntensity)
 
 			s.broadcastToInstance(req.InstanceID, WSEvent{
 				Type:           "target_started",
@@ -3332,8 +4212,14 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				companyName:          req.CompanyName,
 				logoPath:             req.LogoPath,
 				phases:               req.Phases,
+				reconMode:            req.ReconMode,
+				scanIntensity:        req.ScanIntensity,
 			}
 			s.executeScanSession(subSess)
+			if s.instanceInterrupted(req.InstanceID) {
+				wildcardStopped = true
+				return
+			}
 
 			// Generate PDF for this subdomain if NEW vulnerabilities found
 			// Read from the stable parent context — guaranteed to have all accumulated vulns
@@ -3352,6 +4238,8 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 						SeverityFilter:           append([]string(nil), req.SeverityFilter...),
 						DiscordWebhook:           req.DiscordWebhook,
 						DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
+						ReconMode:                req.ReconMode,
+						ScanIntensity:            req.ScanIntensity,
 						StartedAt:                time.Now().Format(time.RFC3339),
 						Status:                   "finished",
 						FinishedAt:               time.Now().Format(time.RFC3339),
@@ -3383,13 +4271,35 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				ParentTarget:   target,
 			})
 		}()
+		if wildcardStopped {
+			break
+		}
+		saveWildcardProgress(j+1, -1, "", "")
 
 		// ── Cooldown between subdomain scans ──
 		// Prevents LLM API rate-limiting and gives GC time to reclaim memory
-		if j < len(subdomains)-1 && !s.stopReq.Load() && !instStopped {
+		if j < len(subdomains)-1 && !s.stopReq.Load() && !s.instanceInterrupted(req.InstanceID) {
 			log.Printf("[INFO] Cooldown: 10s pause before next subdomain (memory recovery + rate limit prevention)")
 			time.Sleep(10 * time.Second)
 		}
+	}
+	if parentRecord == nil {
+		parentRecord, _ = loadScanRecordFromDir(scanDir)
+	}
+	if parentRecord != nil {
+		if wildcardStopped || s.stopReq.Load() {
+			if status, stopReason := s.instanceRunStatus(req.InstanceID); isInterruptedInstanceStatus(status) {
+				parentRecord.Status = status
+				parentRecord.StopReason = stopReason
+			} else {
+				parentRecord.Status = "stopped"
+				parentRecord.StopReason = "user_stopped"
+			}
+		} else {
+			parentRecord.Status = "finished"
+		}
+		parentRecord.FinishedAt = time.Now().Format(time.RFC3339)
+		s.saveScanRecordTo(parentRecord, scanDir)
 	}
 
 	log.Printf("[INFO] Wildcard scan complete for %s: scanned %d subdomains", target, len(subdomains))
@@ -3412,7 +4322,11 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 }
 
 // buildDiscoveryInstruction creates the Phase 1 subdomain enumeration instruction.
-func buildDiscoveryInstruction(target string) string {
+func buildDiscoveryInstruction(target, reconMode string) string {
+	if normalizeActivityMode(reconMode) == activityModePassive {
+		return buildPassiveDiscoveryInstruction(target)
+	}
+
 	instruction := `# PHASE 1: SUBDOMAIN ENUMERATION ONLY
 
 ## YOUR TASK: Find ALL subdomains of TARGET — NOTHING ELSE.
@@ -3470,6 +4384,49 @@ wc -l ./live_subdomains.txt
 DO NOT continue past this point. DO NOT scan for vulnerabilities. Call finish NOW.`
 
 	// Replace TARGET placeholder with actual target
+	instruction = strings.ReplaceAll(instruction, "TARGET", target)
+	return instruction
+}
+
+func buildPassiveDiscoveryInstruction(target string) string {
+	instruction := `# PHASE 1: PASSIVE SUBDOMAIN ENUMERATION ONLY
+
+## YOUR TASK: Find subdomains of TARGET without direct target contact.
+
+## STRICT PASSIVE RULES:
+- Do NOT send HTTP requests, browser traffic, port scans, DNS brute force, crawlers, fingerprinting probes, or payloads to TARGET or discovered subdomains.
+- Do NOT run dnsx, httpx, nmap, naabu, masscan, ffuf, gobuster, dirsearch, feroxbuster, katana, gospider, nuclei, sqlmap, dalfox, nikto, wpscan, whatweb, ping, dig, host, or nslookup against the target.
+- Use passive sources only: web_search, certificate transparency, public archives, search engines, third-party intel datasets, existing notes, and already collected files.
+- After collecting passive names, call finish IMMEDIATELY. The system will handle the selected scanning policy separately.
+
+## SAVE ALL FILES IN THE CURRENT DIRECTORY
+Save all output files directly in the current working directory.
+
+## PASSIVE ENUMERATION COMMANDS:
+
+# 1. Passive provider tools when available
+subfinder -d TARGET -recursive -silent -o ./passive_subfinder.txt 2>/dev/null || true
+subfinder -d TARGET -all -recursive -silent -o ./passive_subfinder2.txt 2>/dev/null || true
+findomain -t TARGET --unique-output ./passive_findomain.txt 2>/dev/null || true
+assetfinder --subs-only TARGET | tee ./passive_assetfinder.txt 2>/dev/null || true
+
+# 2. Public third-party datasets
+curl -s "https://crt.sh/?q=%.TARGET&output=json" | jq -r '.[].name_value' 2>/dev/null | sort -u > ./passive_crt.txt || true
+curl -s "https://dns.bufferover.run/dns?q=.TARGET" | jq -r '.FDNS_A[]?' 2>/dev/null | cut -d',' -f2 | sort -u > ./passive_dnsbufferover.txt || true
+curl -s "https://dns.bufferover.run/dns?q=.TARGET" | jq -r '.RDNS[]?' 2>/dev/null | cut -d',' -f1 | sort -u >> ./passive_dnsbufferover.txt || true
+curl -s "https://web.archive.org/cdx/search/cdx?url=*.TARGET/*&output=json&fl=original&filter=statuscode:200" | jq -r '.[].original' 2>/dev/null | cut -d'/' -f3 | sort -u > ./archive_subdomains.txt || true
+
+# 3. Merge passive names only. Do not resolve or probe them.
+cat ./passive_*.txt ./archive_subdomains.txt 2>/dev/null | grep -v '*' | grep -v '@' | sort -u > ./all_subdomains.txt
+echo "Total passive subdomains found:"
+wc -l ./all_subdomains.txt
+
+## FINAL STEP (MANDATORY):
+1. Call add_note with the complete passive subdomain list from ./all_subdomains.txt.
+2. Call finish IMMEDIATELY after.
+
+DO NOT resolve hosts. DO NOT verify liveness. DO NOT scan for vulnerabilities. Call finish NOW.`
+
 	instruction = strings.ReplaceAll(instruction, "TARGET", target)
 	return instruction
 }
@@ -4203,6 +5160,8 @@ func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 		SeverityFilter:           severityFilter,
 		DiscordWebhook:           inst.DiscordWebhook,
 		DiscordWebhookConfigured: inst.DiscordWebhook != "",
+		ReconMode:                inst.ReconMode,
+		ScanIntensity:            inst.ScanIntensity,
 		Events:                   events,
 		Vulns:                    vulns,
 		TotalTokens:              inst.TotalTokens,
@@ -4271,12 +5230,22 @@ func (s *Server) applyInstanceSnapshot(rec *ScanRecord, includeEvents bool) {
 	rec.Status = snapshot.Status
 	rec.FinishedAt = snapshot.FinishedAt
 	rec.StopReason = snapshot.StopReason
-	rec.Iterations = snapshot.Iterations
-	rec.ToolCalls = snapshot.ToolCalls
-	rec.TotalTokens = snapshot.TotalTokens
-	rec.Vulns = snapshot.Vulns
-	rec.CurrentPhase = snapshot.CurrentPhase
-	if includeEvents {
+	if snapshot.Iterations > rec.Iterations {
+		rec.Iterations = snapshot.Iterations
+	}
+	if snapshot.ToolCalls > rec.ToolCalls {
+		rec.ToolCalls = snapshot.ToolCalls
+	}
+	if snapshot.TotalTokens > rec.TotalTokens {
+		rec.TotalTokens = snapshot.TotalTokens
+	}
+	for _, vuln := range snapshot.Vulns {
+		appendVulnSummaryUnique(&rec.Vulns, vuln)
+	}
+	if snapshot.CurrentPhase > 0 {
+		rec.CurrentPhase = snapshot.CurrentPhase
+	}
+	if includeEvents && len(snapshot.Events) >= len(rec.Events) {
 		rec.Events = snapshot.Events
 	}
 }
@@ -4472,6 +5441,8 @@ func (s *Server) rebuildInstancesFromDisk() {
 			Instruction:    entry.rec.Instruction,
 			SeverityFilter: entry.rec.SeverityFilter,
 			Phases:         entry.rec.Phases,
+			ReconMode:      entry.rec.ReconMode,
+			ScanIntensity:  entry.rec.ScanIntensity,
 			CompanyName:    entry.rec.CompanyName,
 			LogoPath:       entry.rec.LogoPath,
 			DiscordWebhook: entry.rec.DiscordWebhook,
@@ -4482,6 +5453,8 @@ func (s *Server) rebuildInstancesFromDisk() {
 		if inst.CurrentPhase == 0 {
 			inst.CurrentPhase = firstSelectedPhase(inst.Phases)
 		}
+		inst.ReconMode = normalizeActivityMode(inst.ReconMode)
+		inst.ScanIntensity = normalizeActivityMode(inst.ScanIntensity)
 		chatCfg := *s.cfg
 		inst.chatCfg = &chatCfg
 		s.instances[entry.rec.ID] = inst
@@ -4749,7 +5722,7 @@ func (s *Server) handleStopNotify(w http.ResponseWriter, r *http.Request) {
 // handleChat allows users to send messages to the agent during a scan
 type ChatRequest struct {
 	Message    string `json:"message"`
-	InstanceID string `json:"instance_id,omitempty"` // BUG FIX: Allow targeting a specific scan instance
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -5025,20 +5998,38 @@ func truncStr(s string, max int) string {
 func (s *Server) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if state, _ := s.validQueueState(true); state != nil {
+	entries := s.validQueueStateEntries(true)
+	if len(entries) > 0 {
+		state := entries[0].state
+		totalRemaining := 0
+		for _, entry := range entries {
+			totalRemaining += len(entry.state.Targets) - entry.state.CurrentIdx
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"available":       true,
-			"targets":         state.Targets,
-			"current_idx":     state.CurrentIdx,
-			"remaining":       len(state.Targets) - state.CurrentIdx,
-			"instruction":     state.Instruction,
-			"scan_mode":       state.ScanMode,
-			"started_at":      state.StartedAt,
-			"name":            state.Name,
-			"severity_filter": state.SeverityFilter,
-			"phases":          state.Phases,
-			"company_name":    state.CompanyName,
-			"logo_path":       state.LogoPath,
+			"available":                 true,
+			"queue_count":               len(entries),
+			"total_remaining":           totalRemaining,
+			"instance_id":               state.InstanceID,
+			"targets":                   state.Targets,
+			"current_idx":               state.CurrentIdx,
+			"remaining":                 len(state.Targets) - state.CurrentIdx,
+			"instruction":               state.Instruction,
+			"scan_mode":                 state.ScanMode,
+			"started_at":                state.StartedAt,
+			"paused":                    state.Paused,
+			"name":                      state.Name,
+			"severity_filter":           state.SeverityFilter,
+			"phases":                    state.Phases,
+			"recon_mode":                normalizeActivityMode(state.ReconMode),
+			"scan_intensity":            normalizeActivityMode(state.ScanIntensity),
+			"company_name":              state.CompanyName,
+			"logo_path":                 state.LogoPath,
+			"active_target":             state.ActiveTarget,
+			"active_scan_id":            state.ActiveScanID,
+			"wildcard_active_target":    state.WildcardActiveTarget,
+			"wildcard_active_scan_id":   state.WildcardActiveScanID,
+			"wildcard_sub_index":        state.WildcardSubIndex,
+			"wildcard_subdomains_total": len(state.WildcardSubdomains),
 		})
 	} else {
 		json.NewEncoder(w).Encode(map[string]any{"available": false})
@@ -5049,40 +6040,43 @@ func (s *Server) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if s.running.Load() {
-		json.NewEncoder(w).Encode(map[string]string{"error": "A scan is already running"})
+	s.queueResumeMu.Lock()
+	defer s.queueResumeMu.Unlock()
+
+	if s.running.Load() || s.hasPendingOrRunningInstance() || s.hasQueueResumeLaunchingLocked() {
+		json.NewEncoder(w).Encode(map[string]string{"error": "A scan is already pending or running"})
 		return
 	}
 
-	state, _ := s.validQueueState(true)
-	if state == nil {
+	entries := s.validQueueStateEntries(true)
+	if len(entries) == 0 {
 		json.NewEncoder(w).Encode(map[string]string{"error": "No interrupted queue found"})
 		return
 	}
 
-	// Resume from where we left off
-	remaining := state.Targets[state.CurrentIdx:]
-	req := ScanRequest{
-		Targets:        remaining,
-		Instruction:    state.Instruction,
-		ScanMode:       state.ScanMode,
-		IsResume:       true,
-		Name:           state.Name,
-		SeverityFilter: state.SeverityFilter,
-		Phases:         state.Phases,
-		CompanyName:    state.CompanyName,
-		LogoPath:       state.LogoPath,
-		DiscordWebhook: state.DiscordWebhook,
+	totalRemaining := 0
+	firstIdx := entries[0].state.CurrentIdx
+	for _, entry := range entries {
+		req := scanRequestFromQueueState(entry.state, entry.path)
+		if len(req.Targets) == 0 {
+			continue
+		}
+		totalRemaining += len(req.Targets)
+		scanCfg := *s.cfg
+		instanceID := entry.state.InstanceID
+		resumeKey := queueResumeEntryKey(entry)
+		s.markQueueResumeLaunchingLocked(resumeKey)
+		go func(req ScanRequest, scanCfg config.Config, instanceID, resumeKey string) {
+			defer s.clearQueueResumeLaunching(resumeKey)
+			s.runMultiScan(req, &scanCfg, instanceID)
+		}(req, scanCfg, instanceID, resumeKey)
 	}
 
-	// Start resume in background
-	scanCfg := *s.cfg
-	go s.runMultiScan(req, &scanCfg)
-
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "resumed",
-		"from_index":   state.CurrentIdx,
-		"targets_left": len(remaining),
+		"status":         "resumed",
+		"resumed_queues": len(entries),
+		"from_index":     firstIdx,
+		"targets_left":   totalRemaining,
 	})
 }
 
@@ -5739,15 +6733,16 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 		if req.Interval == "" {
 			req.Interval = "daily"
 		}
+		normalizeScheduleActivity(&req)
 		req.ID = randomSlug()
 		req.Enabled = true
 		req.NextRun = calculateNextRun(req.Interval, time.Now())
-		
+
 		s.schedulesMu.Lock()
 		s.schedules[req.ID] = &req
 		diskCopy := req // snapshot under lock for race-free disk write
 		s.schedulesMu.Unlock()
-		
+
 		if err := s.saveScheduleToDisk(&diskCopy); err != nil {
 			log.Printf("[SCHEDULER] Error saving schedule to disk: %v", err)
 			http.Error(w, "failed to save schedule: "+err.Error(), http.StatusInternalServerError)
@@ -5773,23 +6768,23 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid schedule id", http.StatusBadRequest)
 		return
 	}
-	
+
 	s.schedulesMu.RLock()
 	sch, exists := s.schedules[id]
 	s.schedulesMu.RUnlock()
-	
+
 	if !exists {
 		http.Error(w, "schedule not found", http.StatusNotFound)
 		return
 	}
-	
+
 	// Handle trigger action
 	if len(parts) > 1 && parts[1] == "trigger" {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		
+
 		// Manually trigger the scan
 		req := ScanRequest{
 			Targets:        sch.Targets,
@@ -5797,21 +6792,23 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			ScanMode:       sch.ScanMode,
 			SeverityFilter: sch.SeverityFilter,
 			Phases:         sch.Phases,
+			ReconMode:      sch.ReconMode,
+			ScanIntensity:  sch.ScanIntensity,
 			CompanyName:    sch.CompanyName,
 			LogoPath:       sch.LogoPath,
 			DiscordWebhook: sch.DiscordWebhook,
 			Name:           sch.Name + " (Scheduled)",
 			Model:          sch.Model,
 		}
-		
+
 		scanCfg := *s.cfg
 		if sch.Model != "" {
 			scanCfg.LLM = sch.Model
 		}
 		instanceID := randomSlug()
-		
+
 		go s.runMultiScan(req, &scanCfg, instanceID)
-		
+
 		s.schedulesMu.Lock()
 		sch.LastRun = time.Now()
 		diskCopy := *sch // snapshot under lock for race-free disk write
@@ -5821,12 +6818,12 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "triggered", "instance_id": instanceID})
 		return
 	}
-	
+
 	switch r.Method {
 	case http.MethodGet:
 		json.NewEncoder(w).Encode(sch)
 		return
-		
+
 	case http.MethodPut:
 		var req ScanSchedule
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -5837,11 +6834,12 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "targets are required", http.StatusBadRequest)
 			return
 		}
-		
+		normalizeScheduleActivity(&req)
+
 		s.schedulesMu.Lock()
 		oldEnabled := sch.Enabled
 		oldInterval := sch.Interval
-		
+
 		sch.Name = req.Name
 		sch.Interval = req.Interval
 		sch.Enabled = req.Enabled
@@ -5850,31 +6848,33 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		sch.ScanMode = req.ScanMode
 		sch.SeverityFilter = req.SeverityFilter
 		sch.Phases = req.Phases
+		sch.ReconMode = req.ReconMode
+		sch.ScanIntensity = req.ScanIntensity
 		sch.CompanyName = req.CompanyName
 		sch.LogoPath = req.LogoPath
 		sch.DiscordWebhook = req.DiscordWebhook
 		sch.Model = req.Model
-		
+
 		// If interval changed, or enabled transitioned false -> true, recalculate NextRun
 		if sch.Interval != oldInterval || (sch.Enabled && !oldEnabled) {
 			sch.NextRun = calculateNextRun(sch.Interval, time.Now())
 		}
-		
+
 		diskCopy := *sch // snapshot under lock for race-free disk write
 		s.schedulesMu.Unlock()
-		
+
 		if err := s.saveScheduleToDisk(&diskCopy); err != nil {
 			http.Error(w, "failed to save schedule: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		json.NewEncoder(w).Encode(&diskCopy)
 		return
-		
+
 	case http.MethodDelete:
 		s.schedulesMu.Lock()
 		delete(s.schedules, id)
 		s.schedulesMu.Unlock()
-		
+
 		if err := s.deleteScheduleFromDisk(id); err != nil {
 			http.Error(w, "failed to delete schedule: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -5882,6 +6882,6 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 		return
 	}
-	
+
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
