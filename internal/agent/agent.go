@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -849,12 +850,16 @@ func containsActiveAccessPattern(text string) bool {
 // Run starts the agent loop with the given targets and instructions.
 func (a *Agent) Run(targets []string, instruction string) {
 	a.scanStart = time.Now()
+	ratePolicy := EffectiveRequestRatePolicy(a.cfg, instruction)
+	if a.scanCtx != nil {
+		a.scanCtx.SetRequestRatePolicy(ratePolicy)
+	}
 
 	// Start watchdog
 	stopWatchdog := a.startWatchdog()
 	defer stopWatchdog()
 
-	systemPrompt := a.buildSystemPrompt(targets, instruction)
+	systemPrompt := a.buildSystemPrompt(targets, instruction, ratePolicy)
 	a.messages = []llm.Message{
 		{Role: "system", Content: systemPrompt},
 	}
@@ -1028,6 +1033,26 @@ func (a *Agent) Run(targets []string, instruction string) {
 		for _, tc := range toolCalls {
 			if a.stopped.Load() {
 				break
+			}
+			if tc.Name == "terminal_execute" {
+				if command, ok := tc.Args["command"]; ok {
+					contextID := ""
+					if a.scanCtx != nil {
+						contextID = a.scanCtx.ID
+					}
+					normalized, note := terminal.NormalizeCommandForRequestRatePolicy(contextID, command)
+					if normalized != command {
+						updatedArgs := make(map[string]string, len(tc.Args))
+						for k, v := range tc.Args {
+							updatedArgs[k] = v
+						}
+						updatedArgs["command"] = normalized
+						tc.Args = updatedArgs
+						if note != "" {
+							a.emit(Event{Type: "message", Content: note, TotalTokens: tokenCount()})
+						}
+					}
+				}
 			}
 
 			// ── Hook: OnToolCall (work tracking + stuck tracking) ──
@@ -1536,15 +1561,119 @@ func safeSend(ch chan Event, evt Event, timeout time.Duration) (sent bool) {
 	}
 }
 
-func (a *Agent) buildSystemPrompt(targets []string, instruction string) string {
-	toolSchema := a.registry.SchemaXML()
+var requestRatePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bmax(?:imum)?\s+(?:of\s+)?([0-9]+(?:\.[0-9]+)?)\s*(?:requests?|reqs?)\s*(?:/|per)?\s*(?:second|sec|s)\b`),
+	regexp.MustCompile(`(?i)\b(?:limit|cap|throttle)\s+(?:to|at)?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:requests?|reqs?|rps)\s*(?:/|per)?\s*(?:second|sec|s)?\b`),
+	regexp.MustCompile(`(?i)\b([0-9]+(?:\.[0-9]+)?)\s*(?:rps|req/s|reqs/s|requests?/s|requests?\s*/\s*(?:sec|second))\b`),
+	regexp.MustCompile(`(?i)\b([0-9]+(?:\.[0-9]+)?)\s*(?:requests?|reqs?)\s+per\s+(?:second|sec)\b`),
+}
 
-	checklist := defaultChecklist
+func instructionRequestRatePolicy(instruction string) scanctx.RequestRatePolicy {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return scanctx.RequestRatePolicy{}
+	}
+	for _, pattern := range requestRatePatterns {
+		match := pattern.FindStringSubmatch(instruction)
+		if len(match) < 2 {
+			continue
+		}
+		value, err := strconv.ParseFloat(match[1], 64)
+		if err != nil || value <= 0 {
+			continue
+		}
+		return scanctx.RequestRatePolicy{MaxRPS: value, Source: "custom instructions"}
+	}
+	return scanctx.RequestRatePolicy{}
+}
+
+// EffectiveRequestRatePolicy resolves the scan's outbound request budget. The
+// most restrictive non-zero policy wins, so a user instruction such as
+// "max 3 requests/sec" lowers the configured XALGORIX_RATE_RPS budget.
+func EffectiveRequestRatePolicy(cfg *config.Config, instruction string) scanctx.RequestRatePolicy {
+	var policy scanctx.RequestRatePolicy
+	if cfg != nil && cfg.RateLimitRPS > 0 {
+		policy = scanctx.RequestRatePolicy{MaxRPS: cfg.RateLimitRPS, Source: "XALGORIX_RATE_RPS"}
+	}
+	custom := instructionRequestRatePolicy(instruction)
+	if custom.Enabled() && (!policy.Enabled() || custom.MaxRPS <= policy.MaxRPS) {
+		policy = custom
+	}
+	return scanctx.NormalizeRequestRatePolicy(policy)
+}
+
+func buildRequestRatePolicySection(policy scanctx.RequestRatePolicy) string {
+	if !policy.Enabled() {
+		return ""
+	}
+	rate := formatRatePolicyValue(policy.MaxRPS)
+	delay := formatRatePolicyDelay(policy)
+	threads := policy.CommandRPS()
+	return fmt.Sprintf(`### Request Rate Policy
+- Effective outbound target-touching request budget: **max %s requests/second** (%s).
+- This overrides every methodology example and every tool default. Never choose a higher rate, timing template, thread count, or crawler concurrency.
+- For nuclei/httpx/dnsx/subfinder/katana/naabu/feroxbuster, use rate flags at or below %d and keep concurrency at or below %d.
+- For nmap, do not use -T4/-T5 or --min-rate. Use -T2, --max-rate %d, and --scan-delay %s or slower.
+- For ffuf, use -rate %d and -t %d or lower. For gobuster, use --delay %s and a single worker because it has no reliable global RPS limiter.
+- For custom loops, xargs, parallel, or scripts, add sleeps/delays so aggregate traffic stays under %s requests/second.`, rate, policy.Source, threads, threads, threads, delay, threads, threads, delay, rate)
+}
+
+func rateLimitedChecklist(checklist string, policy scanctx.RequestRatePolicy) string {
+	if !policy.Enabled() {
+		if cfg := config.Get(); cfg != nil && cfg.RateLimitRPS > 0 {
+			policy = scanctx.RequestRatePolicy{MaxRPS: cfg.RateLimitRPS, Source: "XALGORIX_RATE_RPS"}
+		}
+	}
+	if !policy.Enabled() {
+		policy = scanctx.RequestRatePolicy{MaxRPS: 1, Source: "safe fallback"}
+	}
+	rate := strconv.Itoa(policy.CommandRPS())
+	delay := formatRatePolicyDelay(policy)
+	checklist = strings.ReplaceAll(checklist, "RATE_LIMIT", rate)
+	checklist = strings.ReplaceAll(checklist, "RATE_DELAY", delay)
+	return checklist
+}
+
+func formatRatePolicyValue(value float64) string {
+	if value == float64(int64(value)) {
+		return strconv.FormatInt(int64(value), 10)
+	}
+	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(value, 'f', 3, 64), "0"), ".")
+}
+
+func formatRatePolicyDelay(policy scanctx.RequestRatePolicy) string {
+	delay := policy.Delay()
+	if delay <= 0 {
+		return "0ms"
+	}
+	if delay%time.Second == 0 {
+		return strconv.Itoa(int(delay/time.Second)) + "s"
+	}
+	return strconv.Itoa(int(delay/time.Millisecond)) + "ms"
+}
+
+func (a *Agent) buildSystemPrompt(targets []string, instruction string, ratePolicy scanctx.RequestRatePolicy) string {
+	toolSchema := a.registry.SchemaXML()
+	if !ratePolicy.Enabled() {
+		ratePolicy = EffectiveRequestRatePolicy(a.cfg, instruction)
+	}
+	if !ratePolicy.Enabled() {
+		ratePolicy = EffectiveRequestRatePolicy(config.Get(), instruction)
+	}
+	promptPolicy := ratePolicy
+	if !promptPolicy.Enabled() {
+		promptPolicy = scanctx.RequestRatePolicy{MaxRPS: 1, Source: "safe prompt fallback"}
+	}
+	rateInt := promptPolicy.CommandRPS()
+	rateDelay := formatRatePolicyDelay(promptPolicy)
+	ratePolicySection := buildRequestRatePolicySection(ratePolicy)
+
+	checklist := rateLimitedChecklist(defaultChecklist, ratePolicy)
 	if instruction != "" {
 		if a.discoveryMode {
 			// Discovery mode: use ONLY the discovery instruction.
 			// The default checklist contradicts discovery (it says "don't finish after recon")
-			checklist = instruction
+			checklist = rateLimitedChecklist(instruction, ratePolicy)
 		} else {
 			checklist = instruction + "\n\n" + checklist
 		}
@@ -1593,16 +1722,19 @@ func (a *Agent) buildSystemPrompt(targets []string, instruction string) string {
 1. You MUST call tools using the XML format below. NEVER describe what you would do — DO IT.
 2. Every response MUST contain at least one tool call. NO EXCEPTIONS.
 3. **Use bounded, resource-safe concurrency with comprehensive flags.** Examples:
-   - subfinder -d TARGET -all -recursive -t 50
-   - dnsx -silent -a -resp -threads 50
-   - nuclei -u TARGET -severity critical,high,medium -rl 50
-   - ffuf -u TARGET/FUZZ -w wordlist.txt -t 40 -mc 200,301,302,403
+   - subfinder -d TARGET -all -recursive -rl %d -t %d
+   - dnsx -silent -a -resp -rl %d -threads %d
+   - nuclei -u TARGET -severity critical,high,medium -rl %d -c %d
+   - ffuf -u TARGET/FUZZ -w wordlist.txt -rate %d -t %d -mc 200,301,302,403
+   - nmap -sV -sC -T2 --max-rate %d --scan-delay %s --top-ports 200 --open TARGET
    - NEVER run unbounded/max-thread scans that can OOM the service.
 4. **LARGE TARGET LISTS**: If you are testing multiple targets at once (e.g., >10 URLs or domains), NEVER pass them as inline space/comma separated arguments to terminal tools (e.g. 'nmap a b c d e f g h...'). This causes OS "file name too long" argument crashes! ALWAYS save the targets to a text file first (e.g. 'echo -e "t1\nt2\n..." > targets.txt') and pass the file to the tool using input list flags (e.g. 'subfinder -dL targets.txt', 'httpx -l targets.txt', 'nmap -iL targets.txt', 'findomain -f targets.txt').
 5. If a tool or command fails, try alternatives. NEVER give up after one failure.
 6. Minimum 50 iterations for a thorough assessment. Don't rush to finish.
 7. Use notes (add_note) to track discovered endpoints, parameters, and findings. Read notes before each phase.
 8. **WORKSPACE**: You are ALREADY executing inside a dedicated, isolated workspace directory perfectly prepared for this target. NEVER use 'cd' to escape or change directories (e.g. do not run 'cd /root && mkdir pentest'). Write your outputs directly to your current working directory (e.g. 'nmap -oN scan.txt').
+
+%s
 
 ### Safety Rules — NEVER VIOLATE
 - NEVER run destructive commands: rm -rf, DROP TABLE, DELETE FROM, TRUNCATE, UPDATE, mkfs, dd, format, shutdown, reboot.
@@ -1715,7 +1847,7 @@ If you cannot exploit it, mark it as INFO in your notes, NOT as a vulnerability.
 
 Example — running a command:
 <function=terminal_execute>
-<parameter=command>nmap -sV -sC -T4 --top-ports 200 --open TARGET</parameter>
+<parameter=command>nmap -sV -sC -T2 --max-rate %d --scan-delay %s --top-ports 200 --open TARGET</parameter>
 </function>
 
 ## IMPORTANT: Command Timeouts
@@ -1727,7 +1859,7 @@ For long-running tasks, use spawn_agent to run them in PARALLEL (max 3 at once):
 
 <function=spawn_agent>
 <parameter=name>Port Scanner</parameter>
-<parameter=task>Run nmap -sV -sC -T4 --top-ports 200 --open TARGET and report all open ports and services</parameter>
+<parameter=task>Run nmap -sV -sC -T2 --max-rate %d --scan-delay %s --top-ports 200 --open TARGET and report all open ports and services</parameter>
 <parameter=target>TARGET</parameter>
 </function>
 
@@ -1775,7 +1907,16 @@ You have access to **expert-level vulnerability skills** via the read_skill and 
 ## Assessment Methodology
 %s
 
-%s`, toolSchema, strings.Join(targets, "\n"), checklist, a.buildClosingInstruction(instruction))
+%s`,
+		rateInt, rateInt,
+		rateInt, rateInt,
+		rateInt, rateInt,
+		rateInt, rateInt,
+		rateInt, rateDelay,
+		ratePolicySection,
+		rateInt, rateDelay,
+		rateInt, rateDelay,
+		toolSchema, strings.Join(targets, "\n"), checklist, a.buildClosingInstruction(instruction))
 }
 
 const defaultChecklist = `
@@ -1900,8 +2041,8 @@ cat ./live_hosts.txt | grep -E "^\[.*\]" | cut -d' ' -f1 > ./live_urls.txt
 wc -l ./live_hosts.txt
 
 # Port Scanning - comprehensive
-nmap -sV -sC -T4 --top-ports 200 --open -oN ./nmap_full.txt --script=http-title,http-headers,http-methods,http-robots.txt TARGET
-nmap -sU -T4 --top-ports 50 -oN ./nmap_udp.txt TARGET
+nmap -sV -sC -T2 --max-rate RATE_LIMIT --scan-delay RATE_DELAY --top-ports 200 --open -oN ./nmap_full.txt --script=http-title,http-headers,http-methods,http-robots.txt TARGET
+nmap -sU -T2 --max-rate RATE_LIMIT --scan-delay RATE_DELAY --top-ports 50 -oN ./nmap_udp.txt TARGET
 
 # Technology fingerprinting
 whatweb -v -a 3 https://TARGET 2>/dev/null
@@ -1919,7 +2060,7 @@ katana -u https://TARGET -d 5 -jc -kf -ef css,png,jpg,gif,svg,woff,ttf -o ./kata
 hakrawler -url https://TARGET -depth 3 -plain -linkfinder 2>/dev/null | tee ./hakrawler.txt
 
 # URL & archive mining (use ALL tools, merge results)
-gau TARGET --threads 5 --o ./gau_urls.txt
+gau TARGET --threads RATE_LIMIT --o ./gau_urls.txt
 waymore -i TARGET -mode U -oU ./waymore_urls.txt 2>/dev/null
 waybackurls TARGET | sort -u | tee ./wayback_urls.txt
 curl -s "https://web.archive.org/cdx/search/cdx?url=*.TARGET/*&output=json&fl=original" | jq -r '.[].original' 2>/dev/null | sort -u >> ./wayback_urls.txt
@@ -2037,7 +2178,7 @@ curl -sk "https://TARGET/endpoint?param={{7*7}}" | grep "49"
 **AFTER MANUAL TESTING**: You may optionally run nuclei as a SUPPLEMENT (not replacement):
 ` + "`" + `bash` + "`" + `
 # Nuclei — run ONLY after manual testing, treat results as leads to verify manually
-nuclei -u https://TARGET -severity critical,high,medium -rl 50 -o ./nuclei_results.txt -stats
+nuclei -u https://TARGET -severity critical,high,medium -rl RATE_LIMIT -c RATE_LIMIT -o ./nuclei_results.txt -stats
 ` + "`" + `
 
 **CRITICAL: DO NOT trust scanner results blindly.**
@@ -2054,8 +2195,8 @@ nuclei -u https://TARGET -severity critical,high,medium -rl 50 -o ./nuclei_resul
 
 ` + "`" + `bash` + "`" + `
 # Directory brute-forcing with multiple wordlists
-gobuster dir -u https://TARGET -w /usr/share/wordlists/dirb/common.txt -t 50 -x php,html,js,txt,bak,old,zip,sql,xml,json,conf,env,log,yml,yaml,toml,ini,cfg,asp,aspx,jsp -o ./dirs.txt --no-error -b 404
-ffuf -u https://TARGET/FUZZ -w /usr/share/wordlists/dirb/big.txt -mc 200,201,301,302,307,403 -t 50 -recursion -recursion-depth 2 -o ./ffuf.json -of json
+gobuster dir -u https://TARGET -w /usr/share/wordlists/dirb/common.txt -t 1 --delay RATE_DELAY -x php,html,js,txt,bak,old,zip,sql,xml,json,conf,env,log,yml,yaml,toml,ini,cfg,asp,aspx,jsp -o ./dirs.txt --no-error -b 404
+ffuf -u https://TARGET/FUZZ -w /usr/share/wordlists/dirb/big.txt -mc 200,201,301,302,307,403 -rate RATE_LIMIT -t RATE_LIMIT -recursion -recursion-depth 2 -o ./ffuf.json -of json
 
 # Sensitive file probing (CRITICAL — test ALL of these)
 ` + "`" + `
@@ -2506,7 +2647,7 @@ cat ./all_subdomains.txt | while read sub; do
 done
 
 # Or use subjack/subzy
-subjack -w ./all_subdomains.txt -t 50 -timeout 30 -ssl -o ./takeovers.txt 2>/dev/null
+subjack -w ./all_subdomains.txt -t RATE_LIMIT -timeout 30 -ssl -o ./takeovers.txt 2>/dev/null
 ` + "`" + `
 
 ### PHASE 14: Open Redirect Testing

@@ -377,7 +377,7 @@ If you determine this is a duplicate/parking/redirect subdomain, call finish wit
 
 ### Step 1: QUICK TECH FINGERPRINT
 - whatweb ` + subdomain + ` — identify technologies
-- nmap -sV --top-ports 100 ` + subdomain + ` — find open ports (keep it fast)
+- nmap -sV -T2 --top-ports 100 ` + subdomain + ` — find open ports while respecting the active request-rate policy
 - curl -sI https://` + subdomain + ` — check headers
 
 ### Step 2: DISCOVER CONTENT  

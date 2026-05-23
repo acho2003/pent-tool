@@ -40,6 +40,47 @@ func TestNew(t *testing.T) {
 	sc.Close()
 }
 
+func TestRequestRatePolicy(t *testing.T) {
+	sc := New("policy-1", "")
+	policy := RequestRatePolicy{MaxRPS: 3.5, Source: "test"}
+	sc.SetRequestRatePolicy(policy)
+
+	got := sc.RequestRatePolicy()
+	if got != policy {
+		t.Fatalf("RequestRatePolicy = %+v, want %+v", got, policy)
+	}
+	if got.CommandRPS() != 3 {
+		t.Fatalf("CommandRPS = %d, want 3", got.CommandRPS())
+	}
+	if got.Delay().String() != "286ms" {
+		t.Fatalf("Delay = %s, want 286ms", got.Delay())
+	}
+
+	sc.SetRequestRatePolicy(RequestRatePolicy{MaxRPS: 10, Source: "weaker"})
+	if got := sc.RequestRatePolicy(); got != policy {
+		t.Fatalf("weaker policy replaced stricter policy: %+v", got)
+	}
+
+	stricter := RequestRatePolicy{MaxRPS: 2, Source: "stricter"}
+	sc.SetRequestRatePolicy(stricter)
+	if got := sc.RequestRatePolicy(); got != stricter {
+		t.Fatalf("stricter policy not applied: %+v", got)
+	}
+}
+
+func TestRequestRatePolicyNormalizesSubOneRPS(t *testing.T) {
+	sc := New("policy-sub-one", "")
+	sc.SetRequestRatePolicy(RequestRatePolicy{MaxRPS: 0.5, Source: "custom instructions"})
+
+	got := sc.RequestRatePolicy()
+	if got.MaxRPS != 1 {
+		t.Fatalf("MaxRPS = %v, want minimum supported 1", got.MaxRPS)
+	}
+	if !strings.Contains(got.Source, "minimum supported 1 rps") {
+		t.Fatalf("Source = %q, want minimum note", got.Source)
+	}
+}
+
 func TestActivateDeactivate(t *testing.T) {
 	resetRegistry(t)
 	defer resetRegistry(t)
@@ -412,7 +453,7 @@ func TestNoteStore_SetPersistPathEmpty(t *testing.T) {
 	ns := NewNoteStore()
 	ns.SetPersistPath("/tmp/test")
 	ns.SetPersistPath("") // clear it
-	ns.Set("k", "v")     // should not panic or write anywhere
+	ns.Set("k", "v")      // should not panic or write anywhere
 }
 
 // ══════════════════════════════════════════════════════════

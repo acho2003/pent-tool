@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -108,6 +109,458 @@ func computeTimeout(command string) time.Duration {
 		return heavyCmdTimeout
 	}
 	return defaultCmdTimeout
+}
+
+// NormalizeCommandForRequestRatePolicy rewrites known scanner flags so terminal
+// commands honor the effective per-scan request-rate policy. It is exported so
+// callers can normalize before broadcasting the tool event, while runShellInternal
+// calls it again as a defense in depth for direct terminal execution paths.
+func NormalizeCommandForRequestRatePolicy(contextID string, command string) (string, string) {
+	policy := requestRatePolicyForContext(contextID)
+	if !policy.Enabled() {
+		return command, ""
+	}
+	rewritten := rewriteCommandForRequestRatePolicy(command, policy)
+	if rewritten == command {
+		return command, ""
+	}
+	return rewritten, fmt.Sprintf("[RATE POLICY] Adjusted terminal command to honor max %s requests/sec (%s).\n", formatPolicyRPS(policy.MaxRPS), policy.Source)
+}
+
+func requestRatePolicyForContext(contextID string) scanctx.RequestRatePolicy {
+	contextID = normalizeContextID(contextID)
+	if sc := scanctx.Get(contextID); sc != nil {
+		if policy := sc.RequestRatePolicy(); policy.Enabled() {
+			return policy
+		}
+	}
+	if cfg := config.Get(); cfg != nil && cfg.RateLimitRPS > 0 {
+		return scanctx.NormalizeRequestRatePolicy(scanctx.RequestRatePolicy{MaxRPS: cfg.RateLimitRPS, Source: "XALGORIX_RATE_RPS"})
+	}
+	return scanctx.RequestRatePolicy{}
+}
+
+func rewriteCommandForRequestRatePolicy(command string, policy scanctx.RequestRatePolicy) string {
+	return rewriteShellSegments(command, func(segment string) string {
+		return rewriteCommandSegmentForRequestRatePolicy(segment, policy)
+	})
+}
+
+func rewriteShellSegments(command string, rewrite func(string) string) string {
+	var b strings.Builder
+	start := 0
+	var quote rune
+	escaped := false
+	for i, r := range command {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		delimiterLen := 0
+		if r == ';' || r == '|' {
+			delimiterLen = 1
+			if r == '|' && i+1 < len(command) && command[i+1] == '|' {
+				delimiterLen = 2
+			}
+		} else if r == '&' && i+1 < len(command) && command[i+1] == '&' {
+			delimiterLen = 2
+		}
+		if delimiterLen == 0 {
+			continue
+		}
+		b.WriteString(rewrite(command[start:i]))
+		b.WriteString(command[i : i+delimiterLen])
+		start = i + delimiterLen
+	}
+	b.WriteString(rewrite(command[start:]))
+	return b.String()
+}
+
+func rewriteCommandSegmentForRequestRatePolicy(segment string, policy scanctx.RequestRatePolicy) string {
+	rps := policy.CommandRPS()
+	if rps <= 0 {
+		return segment
+	}
+	rate := strconv.Itoa(rps)
+	delay := formatPolicyDelay(policy)
+	rewritten := segment
+
+	if hasToolCommand(rewritten, "nuclei") {
+		rewritten = setFlagValue(rewritten, []string{"-rl", "-rate-limit"}, rate)
+		rewritten = capFlagValue(rewritten, []string{"-c"}, rate)
+	}
+	if hasToolCommand(rewritten, "nmap") {
+		rewritten = removeFlagWithValue(rewritten, []string{"--min-rate", "--min-parallelism"})
+		rewritten = replaceNmapTiming(rewritten)
+		rewritten = ensureNmapTiming(rewritten)
+		rewritten = setFlagValue(rewritten, []string{"--max-rate"}, rate)
+		rewritten = setFlagValue(rewritten, []string{"--scan-delay"}, delay)
+	}
+	if hasToolCommand(rewritten, "masscan") {
+		rewritten = setFlagValue(rewritten, []string{"--rate"}, rate)
+	}
+	if hasToolCommand(rewritten, "naabu") {
+		rewritten = setFlagValue(rewritten, []string{"-rate"}, rate)
+		rewritten = capFlagValue(rewritten, []string{"-c"}, rate)
+	}
+	for _, tool := range []string{"httpx", "dnsx"} {
+		if hasToolCommand(rewritten, tool) {
+			rewritten = setFlagValue(rewritten, []string{"-rl", "-rate-limit"}, rate)
+			rewritten = capFlagValue(rewritten, []string{"-threads", "-t"}, rate)
+		}
+	}
+	if hasToolCommand(rewritten, "subfinder") {
+		rewritten = setFlagValue(rewritten, []string{"-rl", "-rate-limit"}, rate)
+		rewritten = capFlagValue(rewritten, []string{"-t"}, rate)
+	}
+	if hasToolCommand(rewritten, "katana") {
+		rewritten = setFlagValue(rewritten, []string{"-rl", "-rate-limit"}, rate)
+		rewritten = capFlagValue(rewritten, []string{"-c"}, rate)
+	}
+	if hasToolCommand(rewritten, "ffuf") {
+		rewritten = setFlagValue(rewritten, []string{"-rate"}, rate)
+		rewritten = capFlagValue(rewritten, []string{"-t"}, rate)
+	}
+	if hasToolCommand(rewritten, "feroxbuster") {
+		rewritten = setFlagValue(rewritten, []string{"--rate-limit"}, rate)
+		rewritten = capFlagValue(rewritten, []string{"-t"}, rate)
+	}
+	if hasToolCommand(rewritten, "gobuster") {
+		rewritten = setFlagValue(rewritten, []string{"--delay"}, delay)
+		rewritten = setFlagValue(rewritten, []string{"-t"}, "1")
+	}
+	if hasToolCommand(rewritten, "xargs") {
+		rewritten = setExistingShortFlagValue(rewritten, "-P", "1")
+	}
+	if hasToolCommand(rewritten, "parallel") {
+		rewritten = setParallelJobs(rewritten, "1")
+	}
+	for _, tool := range []string{"gau", "hakrawler", "gospider", "arjun", "subjack"} {
+		if hasToolCommand(rewritten, tool) {
+			rewritten = capFlagValue(rewritten, []string{"--threads", "-threads", "-t", "--concurrent"}, rate)
+		}
+	}
+
+	return rewritten
+}
+
+func hasToolCommand(segment, tool string) bool {
+	re := regexp.MustCompile(`(?i)(^|[\s(])(?:sudo\s+)?` + regexp.QuoteMeta(tool) + `($|[\s])`)
+	return re.FindStringIndex(segment) != nil
+}
+
+func replaceNmapTiming(command string) string {
+	re := regexp.MustCompile(`(?i)(^|\s)-T[3-5]($|\s)`)
+	return re.ReplaceAllString(command, "${1}-T2${2}")
+}
+
+func ensureNmapTiming(command string) string {
+	re := regexp.MustCompile(`(?i)(^|\s)-T[0-5]($|\s)`)
+	if re.FindStringIndex(command) != nil {
+		return command
+	}
+	return appendCommandArg(command, "-T2")
+}
+
+func setFlagValue(command string, flags []string, value string) string {
+	for _, flag := range flags {
+		re := flagValueRegexp(flag)
+		if re.FindStringIndex(command) != nil {
+			return re.ReplaceAllString(command, "${1}"+flag+" "+value)
+		}
+	}
+	return appendCommandArg(command, flags[0]+" "+value)
+}
+
+func setShortFlagValue(command string, flag string, value string) string {
+	sticky := regexp.MustCompile(`(?i)(^|\s)` + regexp.QuoteMeta(flag) + `[0-9]+($|\s)`)
+	if sticky.FindStringIndex(command) != nil {
+		return sticky.ReplaceAllString(command, "${1}"+flag+" "+value+"${2}")
+	}
+	return setFlagValue(command, []string{flag}, value)
+}
+
+func setExistingShortFlagValue(command string, flag string, value string) string {
+	sticky := regexp.MustCompile(`(?i)(^|\s)` + regexp.QuoteMeta(flag) + `[0-9]+($|\s)`)
+	if sticky.FindStringIndex(command) != nil {
+		return sticky.ReplaceAllString(command, "${1}"+flag+" "+value+"${2}")
+	}
+	re := flagValueRegexp(flag)
+	if re.FindStringIndex(command) != nil {
+		return re.ReplaceAllString(command, "${1}"+flag+" "+value)
+	}
+	return command
+}
+
+func setParallelJobs(command string, value string) string {
+	if flagValueRegexp("--jobs").FindStringIndex(command) != nil {
+		return setFlagValue(command, []string{"--jobs"}, value)
+	}
+	if regexp.MustCompile(`(?i)(^|\s)-j(?:[0-9]+|\s+[0-9]+)($|\s)`).FindStringIndex(command) != nil {
+		return setShortFlagValue(command, "-j", value)
+	}
+	option := "--jobs " + value
+	if idx := strings.Index(command, " :::"); idx >= 0 {
+		head := strings.TrimRight(command[:idx], " \t")
+		return head + " " + option + command[idx:]
+	}
+	return appendCommandArg(command, option)
+}
+
+func capFlagValue(command string, flags []string, maxValue string) string {
+	maxInt, err := strconv.Atoi(maxValue)
+	if err != nil || maxInt <= 0 {
+		return setFlagValue(command, flags, maxValue)
+	}
+	for _, flag := range flags {
+		re := flagValueRegexp(flag)
+		match := re.FindStringSubmatch(command)
+		if len(match) < 3 {
+			continue
+		}
+		current, err := strconv.Atoi(match[2])
+		if err == nil && current > 0 && current <= maxInt {
+			return command
+		}
+		return re.ReplaceAllString(command, "${1}"+flag+" "+maxValue)
+	}
+	return appendCommandArg(command, flags[0]+" "+maxValue)
+}
+
+func removeFlagWithValue(command string, flags []string) string {
+	for _, flag := range flags {
+		re := flagValueRegexp(flag)
+		command = re.ReplaceAllString(command, "$1")
+	}
+	return collapseCommandSpaces(command)
+}
+
+func flagValueRegexp(flag string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)(^|\s)` + regexp.QuoteMeta(flag) + `(?:=|\s+)([^\s;&|]+)`)
+}
+
+func appendCommandArg(command string, arg string) string {
+	trimmed := strings.TrimRight(command, " \t")
+	trailing := command[len(trimmed):]
+	if strings.TrimSpace(trimmed) == "" {
+		return command
+	}
+	return trimmed + " " + arg + trailing
+}
+
+func collapseCommandSpaces(command string) string {
+	return regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(command, " ")
+}
+
+func formatPolicyRPS(value float64) string {
+	if value == float64(int64(value)) {
+		return strconv.FormatInt(int64(value), 10)
+	}
+	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(value, 'f', 3, 64), "0"), ".")
+}
+
+func formatPolicyDelay(policy scanctx.RequestRatePolicy) string {
+	delay := policy.Delay()
+	if delay <= 0 {
+		return "0ms"
+	}
+	if delay%time.Second == 0 {
+		return strconv.Itoa(int(delay/time.Second)) + "s"
+	}
+	return strconv.Itoa(int(delay/time.Millisecond)) + "ms"
+}
+
+type requestRateRuntime struct {
+	BinDir     string
+	PythonPath string
+	LockDir    string
+	DelayMS    int
+}
+
+func prepareRequestRateRuntime(workDir string, policy scanctx.RequestRatePolicy) (requestRateRuntime, error) {
+	policy = scanctx.NormalizeRequestRatePolicy(policy)
+	if !policy.Enabled() {
+		return requestRateRuntime{}, nil
+	}
+	delayMS := int(policy.Delay() / time.Millisecond)
+	if delayMS <= 0 {
+		return requestRateRuntime{}, nil
+	}
+
+	root := filepath.Join(workDir, ".xalgorix-rate")
+	rt := requestRateRuntime{
+		BinDir:     filepath.Join(root, "bin"),
+		PythonPath: filepath.Join(root, "python"),
+		LockDir:    filepath.Join(root, "locks"),
+		DelayMS:    delayMS,
+	}
+	for _, dir := range []string{rt.BinDir, rt.PythonPath, rt.LockDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return requestRateRuntime{}, err
+		}
+	}
+
+	if err := writeRateLimitedBinaryWrapper(rt.BinDir, "curl"); err != nil {
+		return requestRateRuntime{}, err
+	}
+	if err := writeRateLimitedBinaryWrapper(rt.BinDir, "wget"); err != nil {
+		return requestRateRuntime{}, err
+	}
+	if err := writePythonRateLimiter(rt.PythonPath); err != nil {
+		return requestRateRuntime{}, err
+	}
+	return rt, nil
+}
+
+func writeRateLimitedBinaryWrapper(binDir, name string) error {
+	realPath, err := exec.LookPath(name)
+	if err != nil || strings.HasPrefix(realPath, binDir+string(os.PathSeparator)) {
+		return nil
+	}
+	wrapperPath := filepath.Join(binDir, name)
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+lock_dir="${XALGORIX_RATE_LOCK_DIR:-/tmp/xalgorix-rate}"
+delay_ms="${XALGORIX_RATE_DELAY_MS:-0}"
+mkdir -p "$lock_dir"
+stamp="$lock_dir/last_request_ms"
+lock="$lock_dir/request.lock"
+rate_wait() {
+  if [[ "$delay_ms" =~ ^[0-9]+$ ]] && (( delay_ms > 0 )); then
+    now=$(date +%%s%%3N)
+    last=0
+    if [[ -r "$stamp" ]]; then
+      read -r last < "$stamp" || last=0
+    fi
+    wait_ms=$(( last + delay_ms - now ))
+    if (( wait_ms > 0 )); then
+      sleep "$(awk "BEGIN { printf \"%%.3f\", $wait_ms / 1000 }")"
+    fi
+    date +%%s%%3N > "$stamp"
+  fi
+}
+if command -v flock >/dev/null 2>&1; then
+  { flock 9; rate_wait; } 9>"$lock"
+else
+  rate_wait
+fi
+exec %s "$@"
+`, shellQuote(realPath))
+	return os.WriteFile(wrapperPath, []byte(script), 0o755)
+}
+
+func writePythonRateLimiter(pythonPath string) error {
+	siteCustomize := filepath.Join(pythonPath, "sitecustomize.py")
+	source := `import functools
+import os
+import time
+
+try:
+    import fcntl
+except Exception:
+    fcntl = None
+
+_delay_ms = int(os.environ.get("XALGORIX_RATE_DELAY_MS", "0") or "0")
+_lock_dir = os.environ.get("XALGORIX_RATE_LOCK_DIR", "/tmp/xalgorix-rate")
+_patched = {}
+
+
+def _wait():
+    if _delay_ms <= 0:
+        return
+    os.makedirs(_lock_dir, exist_ok=True)
+    lock_path = os.path.join(_lock_dir, "request.lock")
+    stamp_path = os.path.join(_lock_dir, "last_request_ms")
+    with open(lock_path, "a+") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            now = int(time.time() * 1000)
+            last = 0
+            try:
+                with open(stamp_path, "r") as stamp:
+                    last = int((stamp.read() or "0").strip() or "0")
+            except Exception:
+                last = 0
+            wait_ms = last + _delay_ms - now
+            if wait_ms > 0:
+                time.sleep(wait_ms / 1000.0)
+            with open(stamp_path, "w") as stamp:
+                stamp.write(str(int(time.time() * 1000)))
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _patch(obj, attr, async_func=False):
+    key = (id(obj), attr)
+    if key in _patched:
+        return
+    original = getattr(obj, attr, None)
+    if original is None:
+        return
+    if async_func:
+        @functools.wraps(original)
+        async def async_wrapper(*args, **kwargs):
+            _wait()
+            return await original(*args, **kwargs)
+        setattr(obj, attr, async_wrapper)
+    else:
+        @functools.wraps(original)
+        def wrapper(*args, **kwargs):
+            _wait()
+            return original(*args, **kwargs)
+        setattr(obj, attr, wrapper)
+    _patched[key] = True
+
+
+try:
+    import http.client
+    _patch(http.client.HTTPConnection, "request")
+    _patch(http.client.HTTPSConnection, "request")
+except Exception:
+    pass
+
+try:
+    import urllib.request
+    _patch(urllib.request, "urlopen")
+except Exception:
+    pass
+
+try:
+    import requests
+    _patch(requests.sessions.Session, "request")
+except Exception:
+    pass
+
+try:
+    import httpx
+    _patch(httpx.Client, "request")
+    _patch(httpx.AsyncClient, "request", async_func=True)
+except Exception:
+    pass
+
+try:
+    import aiohttp
+    _patch(aiohttp.ClientSession, "_request", async_func=True)
+except Exception:
+    pass
+`
+	return os.WriteFile(siteCustomize, []byte(source), 0o644)
 }
 
 // setProcessLimits applies resource constraints to a child process:
@@ -689,22 +1142,29 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
-func commandEnv(homeDir, goPath, workDir string) []string {
+func commandEnv(homeDir, goPath, workDir string, rateRuntime requestRateRuntime) []string {
 	dynamicPath := goPath + "/bin:" + homeDir + "/go/bin:" + homeDir + "/.local/bin"
 	dynamicPath += ":" + homeDir + "/.cargo/bin"
 	dynamicPath += ":/usr/local/bin:/snap/bin"
+	if rateRuntime.BinDir != "" {
+		dynamicPath = rateRuntime.BinDir + ":" + dynamicPath
+	}
 
 	replace := map[string]bool{
-		"PATH":               true,
-		"GOPATH":             true,
-		"HOME":               true,
-		"TMPDIR":             true,
-		"XDG_CACHE_HOME":     true,
-		"XDG_CONFIG_HOME":    true,
-		"XDG_DATA_HOME":      true,
-		"XALGORIX_WORKSPACE": true,
+		"PATH":                   true,
+		"GOPATH":                 true,
+		"HOME":                   true,
+		"TMPDIR":                 true,
+		"XDG_CACHE_HOME":         true,
+		"XDG_CONFIG_HOME":        true,
+		"XDG_DATA_HOME":          true,
+		"XALGORIX_WORKSPACE":     true,
+		"PYTHONPATH":             true,
+		"XALGORIX_RATE_LOCK_DIR": true,
+		"XALGORIX_RATE_DELAY_MS": true,
 	}
 	env := make([]string, 0, len(os.Environ())+8)
+	existingPythonPath := os.Getenv("PYTHONPATH")
 	for _, kv := range os.Environ() {
 		key, _, ok := strings.Cut(kv, "=")
 		if ok && replace[key] {
@@ -713,7 +1173,7 @@ func commandEnv(homeDir, goPath, workDir string) []string {
 		env = append(env, kv)
 	}
 
-	return append(env,
+	env = append(env,
 		"PATH="+dynamicPath+":"+os.Getenv("PATH"),
 		"GOPATH="+goPath,
 		"HOME="+workDir,
@@ -723,6 +1183,20 @@ func commandEnv(homeDir, goPath, workDir string) []string {
 		"XDG_DATA_HOME="+filepath.Join(workDir, ".local", "share"),
 		"XALGORIX_WORKSPACE="+workDir,
 	)
+	if rateRuntime.PythonPath != "" {
+		pythonPath := rateRuntime.PythonPath
+		if existingPythonPath != "" {
+			pythonPath += ":" + existingPythonPath
+		}
+		env = append(env,
+			"PYTHONPATH="+pythonPath,
+			"XALGORIX_RATE_LOCK_DIR="+rateRuntime.LockDir,
+			"XALGORIX_RATE_DELAY_MS="+strconv.Itoa(rateRuntime.DelayMS),
+		)
+	} else if existingPythonPath != "" {
+		env = append(env, "PYTHONPATH="+existingPythonPath)
+	}
+	return env
 }
 
 func shellPrelude(homeDir, workDir string, memLimitBytes int64) string {
@@ -786,7 +1260,7 @@ func runShellInternal(contextID string, command string) (string, int) {
 	}
 
 	// Compute timeout based on command type
-	cleanCmd := command
+	cleanCmd, ratePolicyNotice := NormalizeCommandForRequestRatePolicy(contextID, command)
 	timeout := computeTimeout(cleanCmd)
 	if timeout > hardMaxTimeout {
 		timeout = hardMaxTimeout
@@ -796,6 +1270,10 @@ func runShellInternal(contextID string, command string) (string, int) {
 	workDir := effectiveWorkDirForContext(contextID, cfg)
 	if err := prepareCommandWorkspace(workDir); err != nil {
 		return fmt.Sprintf("Failed to prepare command workspace %s: %v", workDir, err), -1
+	}
+	rateRuntime, err := prepareRequestRateRuntime(workDir, requestRatePolicyForContext(contextID))
+	if err != nil {
+		return fmt.Sprintf("Failed to prepare request-rate runtime %s: %v", workDir, err), -1
 	}
 
 	// Set PATH to include common tool locations (dynamic - works for any user)
@@ -825,7 +1303,7 @@ func runShellInternal(contextID string, command string) (string, int) {
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = workDir
-	cmd.Env = commandEnv(homeDir, goPath, workDir)
+	cmd.Env = commandEnv(homeDir, goPath, workDir, rateRuntime)
 
 	// Create new process group for this command
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -935,16 +1413,16 @@ func runShellInternal(contextID string, command string) (string, int) {
 			exitCode = exitErr.ExitCode()
 		} else if ctx.Err() == context.DeadlineExceeded {
 			// Command was killed by timeout
-			return fmt.Sprintf("[TIMEOUT] Command killed after %s. Use more targeted scans (fewer ports, specific paths, smaller scope) to stay within the time limit.\nPartial stdout:\n%s\nPartial stderr:\n%s",
+			return ratePolicyNotice + fmt.Sprintf("[TIMEOUT] Command killed after %s. Use more targeted scans (fewer ports, specific paths, smaller scope) to stay within the time limit.\nPartial stdout:\n%s\nPartial stderr:\n%s",
 				timeout.Round(time.Second), truncate(stdout.String()), truncate(stderr.String())), -1
 		} else if ctx.Err() == context.Canceled {
 			// Context was cancelled (Stop or watchdog kill)
-			return fmt.Sprintf("Command cancelled.\nPartial stdout:\n%s\nPartial stderr:\n%s",
+			return ratePolicyNotice + fmt.Sprintf("Command cancelled.\nPartial stdout:\n%s\nPartial stderr:\n%s",
 				truncate(stdout.String()), truncate(stderr.String())), -1
 		}
 	}
 
-	return formatOutput(stdout.String(), stderr.String(), exitCode), exitCode
+	return ratePolicyNotice + formatOutput(stdout.String(), stderr.String(), exitCode), exitCode
 }
 
 func isCommandNotFound(output string) bool {
