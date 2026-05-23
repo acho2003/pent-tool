@@ -85,6 +85,107 @@ func TestCommandHelpers_ClassifyHeavyToolsAndPackages(t *testing.T) {
 	}
 }
 
+func TestNormalizeCommandForRequestRatePolicy_RewritesScannerFlags(t *testing.T) {
+	sc := scanctx.New("term-rate", t.TempDir())
+	sc.SetRequestRatePolicy(scanctx.RequestRatePolicy{MaxRPS: 3, Source: "custom instructions"})
+	scanctx.Activate(sc)
+	defer func() {
+		CleanupContext(sc.ID)
+		scanctx.Deactivate(sc.ID)
+	}()
+
+	cases := []struct {
+		name string
+		cmd  string
+		want []string
+		bad  []string
+	}{
+		{
+			name: "nuclei",
+			cmd:  "nuclei -u https://example.test -rl 20 -c 50 -o nuclei.txt",
+			want: []string{"-rl 3", "-c 3"},
+			bad:  []string{"-rl 20", "-c 50"},
+		},
+		{
+			name: "nmap",
+			cmd:  "nmap -sV -sC -T4 --min-rate 100 --top-ports 200 example.test",
+			want: []string{"-T2", "--max-rate 3", "--scan-delay 334ms"},
+			bad:  []string{"-T4", "--min-rate"},
+		},
+		{
+			name: "httpx pipeline",
+			cmd:  "cat urls.txt | httpx -silent -threads 50 -rl 20 | tee live.txt",
+			want: []string{"httpx -silent -threads 3 -rl 3"},
+			bad:  []string{"-threads 50", "-rl 20"},
+		},
+		{
+			name: "gobuster delay",
+			cmd:  "gobuster dir -u https://example.test -w words.txt -t 50",
+			want: []string{"-t 1", "--delay 334ms"},
+			bad:  []string{"-t 50"},
+		},
+		{
+			name: "xargs fanout",
+			cmd:  "cat urls.txt | xargs -P20 -I{} curl -s {}",
+			want: []string{"xargs -P 1", "curl -s"},
+			bad:  []string{"-P20"},
+		},
+		{
+			name: "parallel fanout",
+			cmd:  "parallel -j20 curl -s ::: https://a.test https://b.test",
+			want: []string{"parallel -j 1"},
+			bad:  []string{"-j20"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, note := NormalizeCommandForRequestRatePolicy(sc.ID, tc.cmd)
+			if note == "" {
+				t.Fatal("expected normalization note")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("normalized command %q missing %q", got, want)
+				}
+			}
+			for _, bad := range tc.bad {
+				if strings.Contains(got, bad) {
+					t.Fatalf("normalized command %q still contains %q", got, bad)
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareRequestRateRuntimeCreatesWrappersAndPythonHook(t *testing.T) {
+	rt, err := prepareRequestRateRuntime(t.TempDir(), scanctx.RequestRatePolicy{MaxRPS: 3, Source: "test"})
+	if err != nil {
+		t.Fatalf("prepareRequestRateRuntime: %v", err)
+	}
+	if rt.DelayMS != 334 {
+		t.Fatalf("DelayMS = %d, want 334", rt.DelayMS)
+	}
+	if rt.BinDir == "" || rt.PythonPath == "" || rt.LockDir == "" {
+		t.Fatalf("runtime paths were not set: %+v", rt)
+	}
+	if _, err := os.Stat(filepath.Join(rt.PythonPath, "sitecustomize.py")); err != nil {
+		t.Fatalf("sitecustomize.py missing: %v", err)
+	}
+
+	env := commandEnv("/home/tester", "/home/tester/go", "/tmp/work", rt)
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "PATH="+rt.BinDir+":") {
+		t.Fatalf("PATH does not start with rate wrapper dir: %s", joined)
+	}
+	if !strings.Contains(joined, "PYTHONPATH="+rt.PythonPath) {
+		t.Fatalf("PYTHONPATH missing rate hook: %s", joined)
+	}
+	if !strings.Contains(joined, "XALGORIX_RATE_DELAY_MS=334") {
+		t.Fatalf("rate delay env missing: %s", joined)
+	}
+}
+
 func TestExtractCommandAndMissingCommandParsing(t *testing.T) {
 	cmds := extractCommands("curl -s https://example.test | jq . && nuclei -u https://example.test")
 	joined := strings.Join(cmds, ",")

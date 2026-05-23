@@ -3933,7 +3933,8 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 			ActiveScanID:  filepath.Base(scanDir),
 		})
 
-		discoveryInstruction := buildDiscoveryInstruction(target, req.ReconMode)
+		discoveryRatePolicy := agent.EffectiveRequestRatePolicy(scanCfg, req.Instruction)
+		discoveryInstruction := buildDiscoveryInstruction(target, req.ReconMode, discoveryRatePolicy)
 		if req.Instruction != "" {
 			discoveryInstruction += "\n\n" + req.Instruction
 		}
@@ -4321,11 +4322,41 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 	s.instancesMu.RUnlock()
 }
 
+func commandRateForPolicy(policy scanctx.RequestRatePolicy) int {
+	if !policy.Enabled() {
+		if cfg := config.Get(); cfg != nil && cfg.RateLimitRPS > 0 {
+			policy = scanctx.RequestRatePolicy{MaxRPS: cfg.RateLimitRPS}
+		}
+	}
+	if rate := policy.CommandRPS(); rate > 0 {
+		return rate
+	}
+	return 1
+}
+
+func commandDelayForPolicy(policy scanctx.RequestRatePolicy) string {
+	if !policy.Enabled() {
+		if cfg := config.Get(); cfg != nil && cfg.RateLimitRPS > 0 {
+			policy = scanctx.RequestRatePolicy{MaxRPS: cfg.RateLimitRPS}
+		}
+	}
+	delay := policy.Delay()
+	if delay <= 0 {
+		return "1s"
+	}
+	if delay%time.Second == 0 {
+		return strconv.Itoa(int(delay/time.Second)) + "s"
+	}
+	return strconv.Itoa(int(delay/time.Millisecond)) + "ms"
+}
+
 // buildDiscoveryInstruction creates the Phase 1 subdomain enumeration instruction.
-func buildDiscoveryInstruction(target, reconMode string) string {
+func buildDiscoveryInstruction(target, reconMode string, ratePolicy scanctx.RequestRatePolicy) string {
 	if normalizeActivityMode(reconMode) == activityModePassive {
 		return buildPassiveDiscoveryInstruction(target)
 	}
+	rate := commandRateForPolicy(ratePolicy)
+	delay := commandDelayForPolicy(ratePolicy)
 
 	instruction := `# PHASE 1: SUBDOMAIN ENUMERATION ONLY
 
@@ -4342,6 +4373,9 @@ func buildDiscoveryInstruction(target, reconMode string) string {
 Save all output files directly in the current working directory (not subdirectories).
 
 ## SUBDOMAIN ENUMERATION COMMANDS - RUN ALL:
+
+## REQUEST RATE LIMIT
+All target-touching commands must stay at or below RATE_LIMIT requests/sec. Use RATE_DELAY or slower when a tool needs an explicit delay.
 
 # 1. subfinder (passive)
 subfinder -d TARGET -recursive -silent -o ./passive_subfinder.txt
@@ -4364,7 +4398,7 @@ curl -s "https://dns.bufferover.run/dns?q=.TARGET" | jq -r '.RDNS[]' 2>/dev/null
 curl -s "https://web.archive.org/cdx/search/cdx?url=*.TARGET/*&output=json&fl=original&filter=statuscode:200" | jq -r '.[].original' 2>/dev/null | cut -d'/' -f3 | sort -u > ./archive_subdomains.txt
 
 # 7. Active enumeration
-subfinder -d TARGET -all -recursive -t 50 -o ./active_subfinder.txt
+subfinder -d TARGET -all -recursive -rl RATE_LIMIT -t RATE_LIMIT -o ./active_subfinder.txt
 
 # 8. MERGE ALL RESULTS
 cat ./passive_*.txt ./active_*.txt ./archive_subdomains.txt 2>/dev/null | grep -v '*' | grep -v '@' | sort -u > ./all_subdomains.txt
@@ -4372,7 +4406,7 @@ echo "Total unique subdomains found:"
 wc -l ./all_subdomains.txt
 
 # 9. RESOLVE TO FIND LIVE HOSTS
-cat ./all_subdomains.txt | dnsx -silent -a -resp -threads 50 -o ./live_resolved.txt 2>/dev/null || true
+cat ./all_subdomains.txt | dnsx -silent -a -resp -rl RATE_LIMIT -threads RATE_LIMIT -o ./live_resolved.txt 2>/dev/null || true
 cat ./live_resolved.txt | cut -d' ' -f1 | grep -v '^$' | sort -u > ./live_subdomains.txt
 echo "Live subdomains:"
 wc -l ./live_subdomains.txt
@@ -4385,6 +4419,8 @@ DO NOT continue past this point. DO NOT scan for vulnerabilities. Call finish NO
 
 	// Replace TARGET placeholder with actual target
 	instruction = strings.ReplaceAll(instruction, "TARGET", target)
+	instruction = strings.ReplaceAll(instruction, "RATE_LIMIT", strconv.Itoa(rate))
+	instruction = strings.ReplaceAll(instruction, "RATE_DELAY", delay)
 	return instruction
 }
 

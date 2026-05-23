@@ -9,10 +9,65 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
+
+// RequestRatePolicy is the per-scan outbound request budget. MaxRPS is kept as
+// a float so operator settings like 2.5 rps can be represented, while command
+// adapters can derive conservative integer flags from it.
+type RequestRatePolicy struct {
+	MaxRPS float64
+	Source string
+}
+
+// NormalizeRequestRatePolicy applies the minimum enforceable request policy.
+// Scanner CLIs generally accept whole-number rates, so sub-1 RPS instructions
+// are raised to the lowest supported cap instead of being silently represented
+// as a fractional policy that most tools cannot honor.
+func NormalizeRequestRatePolicy(policy RequestRatePolicy) RequestRatePolicy {
+	if policy.MaxRPS > 0 && policy.MaxRPS < 1 {
+		policy.MaxRPS = 1
+		if policy.Source != "" {
+			policy.Source += "; minimum supported 1 rps"
+		} else {
+			policy.Source = "minimum supported 1 rps"
+		}
+	}
+	return policy
+}
+
+// Enabled reports whether a request-rate policy should be enforced.
+func (p RequestRatePolicy) Enabled() bool {
+	return p.MaxRPS > 0
+}
+
+// CommandRPS returns the highest whole-number rate that does not exceed MaxRPS.
+func (p RequestRatePolicy) CommandRPS() int {
+	if p.MaxRPS <= 0 {
+		return 0
+	}
+	n := int(math.Floor(p.MaxRPS))
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// Delay returns the minimum gap between requests needed to stay under MaxRPS.
+func (p RequestRatePolicy) Delay() time.Duration {
+	if p.MaxRPS <= 0 {
+		return 0
+	}
+	ms := int(math.Ceil(1000 / p.MaxRPS))
+	if ms < 1 {
+		ms = 1
+	}
+	return time.Duration(ms) * time.Millisecond
+}
 
 // ScanContext holds all mutable state for a single scan session.
 // Create one per scan instance via New(), and thread it through
@@ -29,6 +84,9 @@ type ScanContext struct {
 	// ctx/cancel for the scan's lifecycle
 	Ctx    context.Context
 	Cancel context.CancelFunc
+
+	policyMu          sync.RWMutex
+	requestRatePolicy RequestRatePolicy
 }
 
 // New creates a fresh ScanContext for an isolated scan session.
@@ -58,6 +116,26 @@ func (sc *ScanContext) Close() {
 	if sc.Browser != nil {
 		sc.Browser.Close()
 	}
+}
+
+// SetRequestRatePolicy stores the scan-specific outbound request budget.
+func (sc *ScanContext) SetRequestRatePolicy(policy RequestRatePolicy) {
+	policy = NormalizeRequestRatePolicy(policy)
+	sc.policyMu.Lock()
+	defer sc.policyMu.Unlock()
+	if current := sc.requestRatePolicy; current.Enabled() {
+		if !policy.Enabled() || current.MaxRPS <= policy.MaxRPS {
+			return
+		}
+	}
+	sc.requestRatePolicy = policy
+}
+
+// RequestRatePolicy returns the current scan-specific outbound request budget.
+func (sc *ScanContext) RequestRatePolicy() RequestRatePolicy {
+	sc.policyMu.RLock()
+	defer sc.policyMu.RUnlock()
+	return sc.requestRatePolicy
 }
 
 // ──────────────────────────────────────────────────────────
@@ -156,8 +234,6 @@ func ActiveCount() int {
 	return len(activeCtxs)
 }
 
-
-
 // ──────────────────────────────────────────────────────────
 // Summary / debug
 // ──────────────────────────────────────────────────────────
@@ -190,4 +266,3 @@ func ResetAll() {
 	activeCtxs = make(map[string]*ScanContext)
 	defaultCtx = nil
 }
-
