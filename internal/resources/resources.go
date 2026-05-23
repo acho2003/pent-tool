@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -172,10 +173,13 @@ func init() {
 		scanOverheadMB = 128
 	}
 
-	// ── Per-tool memory limit ──
-	// Default: fit one heavy tool inside the per-instance scan budget, leaving
-	// scanOverheadMB for the agent, browser, buffers, and helper processes.
-	toolMemLimitMB := autoHeavyToolMemLimitMB(totalMB)
+	// ── Per-tool hard memory limit ──
+	// Disabled by default. Many scanners are Go/Rust/Chromium binaries that
+	// reserve virtual address space well above resident RAM; RLIMIT_AS/ulimit
+	// causes false ENOMEM/SIGSEGV failures and hurts scan quality. Admission
+	// control still uses a dynamic memory estimate, but hard limiting is only
+	// applied when the operator explicitly configures it.
+	var toolMemLimitMB int64
 	if override, ok := envOptionalInt64("XALGORIX_HEAVY_TOOL_MEM_LIMIT_MB"); ok {
 		toolMemLimitMB = override
 	}
@@ -188,10 +192,10 @@ func init() {
 		manualCap = strconv.Itoa(manualMaxInstances)
 	}
 	log.Printf("[RESOURCES] Auto-scaled for %d cores, %d MB RAM: manual_instance_cap=%s, "+
-		"ram_caution=%dMB, ram_critical=%dMB, tool_mem_limit=%dMB, scan_budget=%dMB, "+
+		"ram_caution=%dMB, ram_critical=%dMB, tool_mem_limit=%s, scan_budget=%dMB, "+
 		"scan_cpu_budget=%.2f, heavy_tool_cpu_budget=%.2f, go_mem_limit=%dMB",
 		cores, totalMB, manualCap, ramCautionMB, ramCriticalMB,
-		HeavyToolMemLimitBytes/(1024*1024), perInstanceMemoryBudgetMB(),
+		toolMemoryLimitLabel(), perInstanceMemoryBudgetMB(),
 		perScanCPULoad, heavyToolCPULoad, goMemoryLimitMB)
 }
 
@@ -290,15 +294,8 @@ func effectiveMaxInstancesForStats(stats SystemStats, level Level, reason string
 	ramCap := memoryInstanceCapacity(stats)
 	cpuCap := cpuInstanceCapacity(stats)
 	effective := minInt(ramCap, cpuCap)
-
-	switch level {
-	case LevelCritical:
+	if diskInstanceCapacity(stats) == 0 {
 		effective = 0
-	case LevelCaution:
-		effective = effective / 2
-		if effective == 0 && ramCap > 0 && cpuCap > 0 {
-			effective = 1
-		}
 	}
 
 	if manualMaxInstances > 0 && effective > manualMaxInstances {
@@ -330,16 +327,23 @@ func cpuInstanceCapacity(stats SystemStats) int {
 	if budget <= 0 {
 		budget = 1
 	}
-	criticalLoad := float64(stats.CPUCores) * cpuCriticalPct / 100
-	headroom := criticalLoad - stats.LoadAvg1m
-	if headroom <= 0 {
-		return 0
+	cores := maxInt(1, stats.CPUCores)
+	loadPerCore := stats.LoadAvg1m / float64(cores)
+	if loadPerCore < 1 {
+		loadPerCore = 1
 	}
-	capacity := int(headroom / budget)
+	capacity := int(math.Floor(float64(cores) / (budget * loadPerCore)))
 	if capacity < 1 {
 		return 1
 	}
 	return capacity
+}
+
+func diskInstanceCapacity(stats SystemStats) int {
+	if stats.DiskFreeMB > 0 && stats.DiskFreeMB < diskCriticalMB {
+		return 0
+	}
+	return 1
 }
 
 func perInstanceMemoryBudgetMB() int64 {
@@ -510,6 +514,13 @@ func CanExecTool(isHeavy bool) (bool, string) {
 	resourceMu.Unlock()
 	capacity := toolCapacityForStats(stats, level, reason, activeTotal, activeHeavy)
 	return toolSlotAdmission(isHeavy, capacity, activeTotal, activeHeavy)
+}
+
+func toolMemoryLimitLabel() string {
+	if HeavyToolMemLimitBytes <= 0 {
+		return "disabled"
+	}
+	return fmt.Sprintf("%dMB", HeavyToolMemLimitBytes/(1024*1024))
 }
 
 // AcquireToolLease reserves live CPU/RAM headroom for one subprocess. The
@@ -739,60 +750,50 @@ type toolCapacity struct {
 
 func toolCapacityForStats(stats SystemStats, level Level, reason string, activeTotal, activeHeavy int) toolCapacity {
 	spareMB := stats.MemAvailableMB - ramCriticalMB
-	if level >= LevelCritical {
-		lightSlots := criticalLightToolSlots(stats)
-		detail := fmt.Sprintf("%s; pressure_mode=true, tool_slots: heavy=%d/%d light=%d/%d, active_tools=%d, active_heavy=%d",
-			reason, activeHeavy, 0, activeTotal, lightSlots, activeTotal, activeHeavy)
-		return toolCapacity{HeavyToolSlots: 0, LightToolSlots: lightSlots, Reason: detail}
-	}
 	if spareMB <= 0 {
 		return toolCapacity{Reason: reason}
 	}
 
-	memUnitMB := HeavyToolMemLimitBytes / (1024 * 1024)
-	if memUnitMB <= 0 {
-		memUnitMB = autoHeavyToolMemLimitMB(stats.MemTotalMB)
-	}
-	if memUnitMB < minimumHeavyToolMemMB() {
-		memUnitMB = minimumHeavyToolMemMB()
-	}
-	memSlots := int(spareMB / memUnitMB)
-	if memSlots < 1 && spareMB >= minimumHeavyToolMemMB() {
+	heavyMemUnitMB := toolMemoryEstimateMB(stats, true)
+	memSlots := int(spareMB / heavyMemUnitMB)
+	if memSlots < 1 && spareMB > 0 {
 		memSlots = 1
 	}
 
 	cpuHeavySlots := heavyToolCPUCapacity(stats)
 	parallelCap := heavyToolParallelCap(stats.CPUCores)
 	heavySlots := minInt(memSlots, minInt(cpuHeavySlots, parallelCap))
-	if level == LevelCaution && heavySlots > 1 {
-		heavySlots = 1
-	}
 
-	lightMemSlots := int(spareMB / 128)
-	if lightMemSlots < 1 && spareMB >= 128 {
+	lightMemUnitMB := toolMemoryEstimateMB(stats, false)
+	lightMemSlots := int(spareMB / lightMemUnitMB)
+	if lightMemSlots < 1 && spareMB > 0 {
 		lightMemSlots = 1
 	}
 	lightSlots := minInt(lightMemSlots, lightToolCPUCapacity(stats))
 	if lightSlots < heavySlots {
 		lightSlots = heavySlots
 	}
-	if level == LevelCaution && lightSlots > maxInt(1, stats.CPUCores) {
-		lightSlots = maxInt(1, stats.CPUCores)
-	}
 
-	detail := fmt.Sprintf("%s; tool_slots: heavy=%d/%d light=%d/%d, active_tools=%d, active_heavy=%d, mem_unit=%dMB, cpu_budget=%.2f",
-		reason, activeHeavy, heavySlots, activeTotal, lightSlots, activeTotal, activeHeavy, memUnitMB, heavyToolCPULoad)
+	detail := fmt.Sprintf("%s; tool_slots: heavy=%d/%d light=%d/%d, active_tools=%d, active_heavy=%d, heavy_mem_est=%dMB, light_mem_est=%dMB, cpu_budget=%.2f, hard_mem_limit=%s",
+		reason, activeHeavy, heavySlots, activeTotal, lightSlots, activeTotal, activeHeavy,
+		heavyMemUnitMB, lightMemUnitMB, heavyToolCPULoad, toolMemoryLimitLabel())
 	return toolCapacity{HeavyToolSlots: heavySlots, LightToolSlots: lightSlots, Reason: detail}
 }
 
-func criticalLightToolSlots(stats SystemStats) int {
-	if stats.MemAvailableMB < 128 {
-		return 0
+func toolMemoryEstimateMB(stats SystemStats, isHeavy bool) int64 {
+	heavyEstimate := autoHeavyToolMemLimitMB(stats.MemTotalMB)
+	if heavyEstimate < 1 {
+		heavyEstimate = 1
 	}
-	// Keep one low-footprint command moving under pressure so quality does not
-	// collapse just because loadavg lags behind a finished tool. Heavy commands
-	// remain blocked until normal headroom returns.
-	return 1
+	if isHeavy {
+		return heavyEstimate
+	}
+	cores := int64(maxInt(1, stats.CPUCores))
+	lightEstimate := heavyEstimate / cores
+	if lightEstimate < 1 {
+		return 1
+	}
+	return lightEstimate
 }
 
 func toolMemoryLimitMBForStats(stats SystemStats, isHeavy bool, projectedTotal, projectedHeavy int, level Level) int64 {
@@ -837,12 +838,12 @@ func heavyToolCPUCapacity(stats SystemStats) int {
 	if budget <= 0 {
 		budget = autoHeavyToolCPULoad(stats.CPUCores)
 	}
-	criticalLoad := float64(stats.CPUCores) * cpuCriticalPct / 100
-	headroom := criticalLoad - stats.LoadAvg1m
-	if headroom <= 0 {
-		return 0
+	cores := maxInt(1, stats.CPUCores)
+	loadPerCore := stats.LoadAvg1m / float64(cores)
+	if loadPerCore < 1 {
+		loadPerCore = 1
 	}
-	capacity := int(headroom / budget)
+	capacity := int(math.Floor(float64(cores) / (budget * loadPerCore)))
 	if capacity < 1 {
 		return 1
 	}
@@ -850,18 +851,14 @@ func heavyToolCPUCapacity(stats SystemStats) int {
 }
 
 func lightToolCPUCapacity(stats SystemStats) int {
-	criticalLoad := float64(stats.CPUCores) * cpuCriticalPct / 100
-	headroom := criticalLoad - stats.LoadAvg1m
-	if headroom <= 0 {
-		return 0
+	cores := maxInt(1, stats.CPUCores)
+	loadPerCore := stats.LoadAvg1m / float64(cores)
+	if loadPerCore < 1 {
+		loadPerCore = 1
 	}
-	capacity := int(headroom / 0.25)
+	capacity := int(math.Ceil(float64(cores*cores) / loadPerCore))
 	if capacity < 1 {
 		return 1
-	}
-	cap := maxInt(2, stats.CPUCores*4)
-	if capacity > cap {
-		return cap
 	}
 	return capacity
 }

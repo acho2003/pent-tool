@@ -83,6 +83,7 @@ function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof 
   const heavySlots = resources.heavy_tool_slots ?? 0
   const toolMem = resources.tool_mem_limit_mb ?? 0
   const scanMem = resources.scan_memory_budget_mb ?? 0
+  const toolLimitText = toolMem > 0 ? ` · tool cap ${toolMem}MB` : " · tool cap off"
   const rss = resources.process_rss_mb ?? 0
   const heap = resources.go_heap_alloc_mb ?? 0
   const level = (resources.level || "").toLowerCase()
@@ -112,7 +113,7 @@ function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof 
           icon={<HardDrive className="h-3 w-3" />}
           label="DISK FREE"
           value={`${diskFreeGb}GB`}
-          sub={scanMem > 0 ? `Max ${resources.effective_max_instances} · scan ${scanMem}MB · tool ${toolMem}MB` : `Max ${resources.effective_max_instances} instances`}
+          sub={scanMem > 0 ? `Max ${resources.effective_max_instances} · scan ${scanMem}MB${toolLimitText}` : `Max ${resources.effective_max_instances} instances`}
         />
         <div className={`rounded-md border px-3 py-2 text-xs ${levelColor}`}>
           <div className="uppercase tracking-wide opacity-70">Host resource level</div>
