@@ -20,6 +20,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
+	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 )
 
 func newTestServer(t *testing.T, cfg *config.Config) *Server {
@@ -774,6 +775,44 @@ func TestQueueStateHandlers_ClearInvalidAndCompletedState(t *testing.T) {
 	}
 }
 
+func TestHandleQueueResumeRejectsPendingInstance(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.saveQueueState(0, ScanRequest{
+		Targets:  []string{"https://a.test"},
+		ScanMode: "single",
+	})
+
+	inst := &ScanInstance{ID: "pending-1", Status: "pending"}
+	s.instancesMu.Lock()
+	s.instances[inst.ID] = inst
+	s.instancesMu.Unlock()
+
+	rr := httptest.NewRecorder()
+	s.handleQueueResume(rr, httptest.NewRequest(http.MethodPost, "/api/queue/resume", nil))
+	if !strings.Contains(rr.Body.String(), "pending or running") {
+		t.Fatalf("unexpected resume response: %s", rr.Body.String())
+	}
+}
+
+func TestHandleQueueResumeRejectsLaunchInProgress(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.saveQueueState(0, ScanRequest{
+		Targets:  []string{"https://a.test"},
+		ScanMode: "single",
+	})
+
+	s.queueResumeMu.Lock()
+	s.markQueueResumeLaunchingLocked("resume-1")
+	s.queueResumeMu.Unlock()
+	t.Cleanup(func() { s.clearQueueResumeLaunching("resume-1") })
+
+	rr := httptest.NewRecorder()
+	s.handleQueueResume(rr, httptest.NewRequest(http.MethodPost, "/api/queue/resume", nil))
+	if !strings.Contains(rr.Body.String(), "pending or running") {
+		t.Fatalf("unexpected resume response: %s", rr.Body.String())
+	}
+}
+
 func TestQueueState_PreservesAllConfig(t *testing.T) {
 	s := newTestServer(t, nil)
 	req := ScanRequest{
@@ -783,11 +822,25 @@ func TestQueueState_PreservesAllConfig(t *testing.T) {
 		Name:           "My Pentest",
 		SeverityFilter: []string{"critical", "high"},
 		Phases:         []int{1, 6, 8, 22},
+		ReconMode:      "passive",
+		ScanIntensity:  "passive",
 		CompanyName:    "ACME Corp",
 		LogoPath:       "/uploads/logos/acme.png",
 		DiscordWebhook: "https://discord.example/hook/abc123",
 	}
-	s.saveQueueState(0, req)
+	activeDir := filepath.Join(s.dataDir, "a.test", "2026-05-23", "scan-active")
+	activeSubDir := filepath.Join(s.dataDir, "api.a.test", "2026-05-23", "scan-child")
+	s.saveQueueState(0, req, queueProgress{
+		ActiveTarget:          "https://a.test",
+		ActiveScanDir:         activeDir,
+		ActiveScanID:          "scan-active",
+		WildcardActiveTarget:  "api.a.test",
+		WildcardActiveScanDir: activeSubDir,
+		WildcardActiveScanID:  "scan-child",
+		WildcardDiscoveryDone: true,
+		WildcardSubdomains:    []string{"app.a.test", "api.a.test"},
+		WildcardSubIndex:      1,
+	})
 
 	state := s.loadQueueState()
 	if state == nil {
@@ -808,6 +861,12 @@ func TestQueueState_PreservesAllConfig(t *testing.T) {
 	if len(state.Phases) != 4 || state.Phases[0] != 1 || state.Phases[3] != 22 {
 		t.Errorf("Phases = %v, want [1 6 8 22]", state.Phases)
 	}
+	if state.ReconMode != "passive" {
+		t.Errorf("ReconMode = %q, want passive", state.ReconMode)
+	}
+	if state.ScanIntensity != "passive" {
+		t.Errorf("ScanIntensity = %q, want passive", state.ScanIntensity)
+	}
 	if state.CompanyName != "ACME Corp" {
 		t.Errorf("CompanyName = %q, want %q", state.CompanyName, "ACME Corp")
 	}
@@ -817,6 +876,15 @@ func TestQueueState_PreservesAllConfig(t *testing.T) {
 	if state.DiscordWebhook != "https://discord.example/hook/abc123" {
 		t.Errorf("DiscordWebhook = %q", state.DiscordWebhook)
 	}
+	if state.ActiveTarget != "https://a.test" || state.ActiveScanDir != activeDir || state.ActiveScanID != "scan-active" {
+		t.Errorf("active scan progress not preserved: %#v", state)
+	}
+	if state.WildcardActiveTarget != "api.a.test" || state.WildcardActiveScanDir != activeSubDir || state.WildcardActiveScanID != "scan-child" {
+		t.Errorf("active wildcard child progress not preserved: %#v", state)
+	}
+	if !state.WildcardDiscoveryDone || state.WildcardSubIndex != 1 || len(state.WildcardSubdomains) != 2 {
+		t.Errorf("wildcard progress not preserved: %#v", state)
+	}
 	if len(state.Targets) != 2 || state.Targets[0] != "https://a.test" {
 		t.Errorf("Targets = %v", state.Targets)
 	}
@@ -825,6 +893,450 @@ func TestQueueState_PreservesAllConfig(t *testing.T) {
 	}
 	if !state.Active {
 		t.Error("Active should be true")
+	}
+}
+
+func TestQueueState_PerInstanceIsolation(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	s.saveQueueState(0, ScanRequest{
+		InstanceID: "inst-a",
+		Targets:    []string{"https://a.test"},
+		ScanMode:   "single",
+	})
+	s.saveQueueState(0, ScanRequest{
+		InstanceID: "inst-b",
+		Targets:    []string{"https://b.test"},
+		ScanMode:   "single",
+	})
+
+	if _, err := os.Stat(s.queueStatePathForInstance("inst-a")); err != nil {
+		t.Fatalf("missing queue state for inst-a: %v", err)
+	}
+	if _, err := os.Stat(s.queueStatePathForInstance("inst-b")); err != nil {
+		t.Fatalf("missing queue state for inst-b: %v", err)
+	}
+
+	s.clearQueueState("inst-a")
+	if _, err := os.Stat(s.queueStatePathForInstance("inst-a")); !os.IsNotExist(err) {
+		t.Fatalf("inst-a queue state still exists after targeted clear: %v", err)
+	}
+	if _, err := os.Stat(s.queueStatePathForInstance("inst-b")); err != nil {
+		t.Fatalf("targeted clear removed inst-b queue state: %v", err)
+	}
+
+	entries := s.validQueueStateEntries(false)
+	if len(entries) != 1 || entries[0].state.InstanceID != "inst-b" {
+		t.Fatalf("valid queue entries = %#v, want only inst-b", entries)
+	}
+}
+
+func TestScanDirForResumeReusesSafeDir(t *testing.T) {
+	s := newTestServer(t, nil)
+	resumeDir := filepath.Join(s.dataDir, "example.com", "2026-05-23", "scan-1")
+	req := ScanRequest{
+		IsResume:           true,
+		ResumeActiveTarget: "example.com",
+		ResumeScanDir:      resumeDir,
+	}
+	got, resumed := s.scanDirForResume(req, "example.com")
+	if !resumed {
+		t.Fatal("expected safe resume dir to be reused")
+	}
+	if got != resumeDir {
+		t.Fatalf("resume dir = %q, want %q", got, resumeDir)
+	}
+
+	req.ResumeScanDir = filepath.Join(s.dataDir, "..", "outside")
+	got, resumed = s.scanDirForResume(req, "example.com")
+	if resumed {
+		t.Fatalf("unsafe resume dir was reused: %s", got)
+	}
+}
+
+func TestScanDirForWildcardSubdomainResumeReusesSafeChildDir(t *testing.T) {
+	s := newTestServer(t, nil)
+	resumeDir := filepath.Join(s.dataDir, "api.example.com", "2026-05-23", "scan-child")
+	req := ScanRequest{
+		IsResume:            true,
+		ResumeSubIndex:      2,
+		ResumeSubScanTarget: "api.example.com",
+		ResumeSubScanDir:    resumeDir,
+	}
+
+	got, resumed := s.scanDirForWildcardSubdomainResume(req, "api.example.com", 2)
+	if !resumed {
+		t.Fatal("expected active wildcard child dir to be reused")
+	}
+	if got != resumeDir {
+		t.Fatalf("child resume dir = %q, want %q", got, resumeDir)
+	}
+
+	got, resumed = s.scanDirForWildcardSubdomainResume(req, "api.example.com", 3)
+	if resumed {
+		t.Fatalf("resume dir was reused for the wrong subdomain index: %s", got)
+	}
+
+	req.ResumeSubScanDir = filepath.Join(s.dataDir, "..", "outside")
+	got, resumed = s.scanDirForWildcardSubdomainResume(req, "api.example.com", 2)
+	if resumed {
+		t.Fatalf("unsafe child resume dir was reused: %s", got)
+	}
+}
+
+func TestScanRequestForPausedInstanceUsesSavedQueueState(t *testing.T) {
+	s := newTestServer(t, nil)
+	resumeDir := filepath.Join(s.dataDir, "b.test", "2026-05-23", "scan-b")
+	s.saveQueueState(1, ScanRequest{
+		InstanceID:    "inst-1",
+		Targets:       []string{"https://a.test", "https://b.test"},
+		ScanMode:      "single",
+		Instruction:   "queued instruction",
+		ReconMode:     "passive",
+		ScanIntensity: "active",
+	}, queueProgress{
+		ActiveTarget:  "https://b.test",
+		ActiveScanDir: resumeDir,
+		ActiveScanID:  "scan-b",
+	})
+	inst := &ScanInstance{
+		ID:            "inst-1",
+		Targets:       "https://a.test, https://b.test",
+		Status:        "paused",
+		ScanMode:      "single",
+		Instruction:   "fallback instruction",
+		ReconMode:     "active",
+		ScanIntensity: "active",
+		scanDir:       filepath.Join(s.dataDir, "old"),
+	}
+
+	req, ok, reason := s.scanRequestForPausedInstance("inst-1", inst)
+	if !ok {
+		t.Fatalf("resume request was rejected: %s", reason)
+	}
+	if len(req.Targets) != 1 || req.Targets[0] != "https://b.test" {
+		t.Fatalf("resume targets = %#v, want only queued active target", req.Targets)
+	}
+	if req.ResumeActiveTarget != "https://b.test" || req.ResumeScanDir != resumeDir || req.ResumeScanID != "scan-b" {
+		t.Fatalf("resume progress not restored from queue: %#v", req)
+	}
+	if req.ResumeQueueStatePath != s.queueStatePathForInstance("inst-1") {
+		t.Fatalf("resume queue source path = %q", req.ResumeQueueStatePath)
+	}
+	if req.Instruction != "queued instruction" || req.ReconMode != "passive" {
+		t.Fatalf("queued request metadata not used: %#v", req)
+	}
+}
+
+func TestScanRequestForPausedInstanceFallsBackToScanDir(t *testing.T) {
+	s := newTestServer(t, nil)
+	scanDir := filepath.Join(s.dataDir, "a.test", "2026-05-23", "scan-a")
+	if err := os.MkdirAll(scanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.saveScanRecordTo(&ScanRecord{
+		ID:     "scan-a",
+		Target: "https://a.test",
+		Status: "paused",
+	}, scanDir)
+	inst := &ScanInstance{
+		ID:            "inst-1",
+		Targets:       "https://a.test",
+		Status:        "paused",
+		ScanMode:      "single",
+		Instruction:   "resume instruction",
+		ReconMode:     "passive",
+		ScanIntensity: "passive",
+		scanDir:       scanDir,
+	}
+
+	req, ok, reason := s.scanRequestForPausedInstance("inst-1", inst)
+	if !ok {
+		t.Fatalf("resume request was rejected: %s", reason)
+	}
+	if !req.IsResume || req.ResumeScanDir != scanDir || req.ResumeScanID != "scan-a" {
+		t.Fatalf("scan-dir resume fields not set: %#v", req)
+	}
+	if req.ResumeActiveTarget != "https://a.test" {
+		t.Fatalf("ResumeActiveTarget = %q", req.ResumeActiveTarget)
+	}
+}
+
+func TestScanRequestForPausedWildcardRequiresQueueState(t *testing.T) {
+	s := newTestServer(t, nil)
+	inst := &ScanInstance{
+		ID:       "inst-1",
+		Targets:  "example.com",
+		Status:   "paused",
+		ScanMode: "wildcard",
+		scanDir:  filepath.Join(s.dataDir, "example.com", "2026-05-23", "scan-parent"),
+	}
+
+	_, ok, reason := s.scanRequestForPausedInstance("inst-1", inst)
+	if ok {
+		t.Fatal("wildcard resume without queue state should be rejected")
+	}
+	if !strings.Contains(reason, "queue state") {
+		t.Fatalf("unexpected rejection reason: %q", reason)
+	}
+}
+
+func TestQueueStateExitAndAdvancePolicies(t *testing.T) {
+	if !shouldPreserveQueueStateOnExit("paused", "user_paused", false) {
+		t.Fatal("paused scans should preserve queue state")
+	}
+	if !shouldPreserveQueueStateOnExit("stopped", "signal_terminated", false) {
+		t.Fatal("signal-stopped scans should preserve queue state")
+	}
+	if !shouldPreserveQueueStateOnExit("running", "", true) {
+		t.Fatal("panic recovery should preserve queue state")
+	}
+	if shouldPreserveQueueStateOnExit("stopped", "user_stopped", false) {
+		t.Fatal("user-stopped scans should clear queue state")
+	}
+	if shouldAdvanceQueueAfterTarget(false, "paused") {
+		t.Fatal("paused scans should not advance queue index")
+	}
+	if shouldAdvanceQueueAfterTarget(true, "running") {
+		t.Fatal("global stop should not advance queue index")
+	}
+	if !shouldAdvanceQueueAfterTarget(false, "running") {
+		t.Fatal("running scans should advance queue after successful target completion")
+	}
+}
+
+func TestPausedQueueStateIsManualResumeOnly(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.saveQueueState(0, ScanRequest{
+		InstanceID: "inst-paused",
+		Targets:    []string{"https://paused.test"},
+		ScanMode:   "single",
+	})
+	s.saveQueueState(0, ScanRequest{
+		InstanceID: "inst-crashed",
+		Targets:    []string{"https://crashed.test"},
+		ScanMode:   "single",
+	})
+
+	s.markQueueStatePaused("inst-paused")
+	entries := s.validQueueStateEntries(false)
+	if len(entries) != 2 {
+		t.Fatalf("valid queue entries = %d, want 2", len(entries))
+	}
+
+	var pausedSeen bool
+	for _, entry := range entries {
+		if entry.state.InstanceID == "inst-paused" {
+			pausedSeen = entry.state.Paused
+		}
+	}
+	if !pausedSeen {
+		t.Fatal("paused queue state was not marked paused")
+	}
+
+	autoEntries := autoResumeQueueEntries(entries)
+	if len(autoEntries) != 1 || autoEntries[0].state.InstanceID != "inst-crashed" {
+		t.Fatalf("auto-resume entries = %#v, want only inst-crashed", autoEntries)
+	}
+}
+
+func TestScanRecordForSessionResumePreservesPersistedState(t *testing.T) {
+	s := newTestServer(t, nil)
+	scanDir := filepath.Join(s.dataDir, "example.com", "2026-05-23", "scan-1")
+	if err := os.MkdirAll(scanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := "2026-05-23T01:02:03Z"
+	s.saveScanRecordTo(&ScanRecord{
+		ID:           "scan-1",
+		InstanceID:   "old-inst",
+		Target:       "old.example",
+		StartedAt:    startedAt,
+		FinishedAt:   "2026-05-23T02:02:03Z",
+		Status:       "stopped",
+		StopReason:   "server_restart",
+		Events:       []WSEvent{{Type: "message", Content: "kept event"}},
+		Vulns:        []VulnSummary{{ID: "XALG-1", Title: "kept vuln", Severity: "high", Target: "old.example", Endpoint: "/login"}},
+		TotalTokens:  1234,
+		Iterations:   4,
+		ToolCalls:    7,
+		Phases:       []int{1, 6, 22},
+		CurrentPhase: 6,
+		SubScans: []SubScanSummary{{
+			ID:     "child-1",
+			Target: "api.example.com",
+			Status: "finished",
+		}},
+	}, scanDir)
+
+	sess := &scanSession{
+		id:              "scan-1",
+		instanceID:      "inst-1",
+		target:          "example.com",
+		scanDir:         scanDir,
+		server:          s,
+		userInstruction: "resume instructions",
+		severityFilter:  []string{"critical"},
+		discordWebhook:  "https://discord.example/hook",
+		scanMode:        "single",
+		companyName:     "ACME",
+		logoPath:        "/uploads/logos/acme.png",
+		phases:          []int{1, 6, 22},
+		reconMode:       "passive",
+		scanIntensity:   "active",
+		resetState:      false,
+	}
+
+	rec := s.scanRecordForSession(sess)
+	if rec.Status != "running" || rec.FinishedAt != "" || rec.StopReason != "" {
+		t.Fatalf("resume status fields not reset: status=%q finished=%q reason=%q", rec.Status, rec.FinishedAt, rec.StopReason)
+	}
+	if rec.StartedAt != startedAt {
+		t.Fatalf("StartedAt = %q, want %q", rec.StartedAt, startedAt)
+	}
+	if len(rec.Events) != 1 || rec.Events[0].Content != "kept event" {
+		t.Fatalf("events were not preserved: %#v", rec.Events)
+	}
+	if len(rec.Vulns) != 1 || rec.Vulns[0].Title != "kept vuln" {
+		t.Fatalf("vulns were not preserved: %#v", rec.Vulns)
+	}
+	if rec.Iterations != 4 || rec.ToolCalls != 7 || rec.TotalTokens != 1234 {
+		t.Fatalf("counters not preserved: iterations=%d toolCalls=%d tokens=%d", rec.Iterations, rec.ToolCalls, rec.TotalTokens)
+	}
+	if sess.recordTokenOffset != 1234 {
+		t.Fatalf("recordTokenOffset = %d, want 1234", sess.recordTokenOffset)
+	}
+	if rec.Target != "example.com" || rec.InstanceID != "inst-1" || rec.CurrentPhase != 6 {
+		t.Fatalf("resume metadata not refreshed correctly: %#v", rec)
+	}
+	if len(rec.SubScans) != 1 || rec.SubScans[0].Target != "api.example.com" {
+		t.Fatalf("subscan progress not preserved: %#v", rec.SubScans)
+	}
+}
+
+func TestScanRecordForSessionResumeIgnoresMismatchedRecord(t *testing.T) {
+	s := newTestServer(t, nil)
+	scanDir := filepath.Join(s.dataDir, "example.com", "2026-05-23", "scan-1")
+	if err := os.MkdirAll(scanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.saveScanRecordTo(&ScanRecord{
+		ID:          "other-scan",
+		Target:      "old.example",
+		StartedAt:   "2026-05-23T01:02:03Z",
+		Status:      "stopped",
+		Events:      []WSEvent{{Type: "message", Content: "should not load"}},
+		Vulns:       []VulnSummary{{ID: "XALG-1", Title: "should not load", Severity: "high"}},
+		TotalTokens: 999,
+	}, scanDir)
+
+	sess := &scanSession{
+		id:            "scan-1",
+		target:        "example.com",
+		scanDir:       scanDir,
+		server:        s,
+		scanMode:      "single",
+		reconMode:     "active",
+		scanIntensity: "active",
+		resetState:    false,
+	}
+
+	rec := s.scanRecordForSession(sess)
+	if rec.ID != "scan-1" || len(rec.Events) != 0 || len(rec.Vulns) != 0 || rec.TotalTokens != 0 {
+		t.Fatalf("mismatched persisted record was reused: %#v", rec)
+	}
+	if sess.recordTokenOffset != 0 {
+		t.Fatalf("recordTokenOffset = %d, want 0", sess.recordTokenOffset)
+	}
+}
+
+func TestMergeReportedVulnerabilitiesIntoRecordPreservesPersistedVulns(t *testing.T) {
+	rec := &ScanRecord{
+		Vulns: []VulnSummary{
+			{ID: "old", Title: "Existing IDOR", Severity: "high", Target: "https://a.test", Endpoint: "/account", Method: "GET"},
+			{ID: "dup", Title: "SQL Injection", Severity: "critical", Target: "https://a.test", Endpoint: "/search", Method: "POST"},
+		},
+	}
+	mergeReportedVulnerabilitiesIntoRecord(rec, []reporting.Vulnerability{
+		{ID: "XALG-1", Title: "SQL Injection", Severity: "critical", Target: "https://a.test", Endpoint: "/search", Method: "POST"},
+		{ID: "XALG-2", Title: "Stored XSS", Severity: "high", Target: "https://a.test", Endpoint: "/profile", Method: "POST"},
+	})
+
+	if len(rec.Vulns) != 3 {
+		t.Fatalf("merged vuln count = %d, want 3: %#v", len(rec.Vulns), rec.Vulns)
+	}
+	if rec.Vulns[0].Title != "Existing IDOR" || rec.Vulns[2].Title != "Stored XSS" {
+		t.Fatalf("unexpected merged vulns: %#v", rec.Vulns)
+	}
+}
+
+func TestSeedResumeInstanceFromRecordPreservesDashboardState(t *testing.T) {
+	s := newTestServer(t, nil)
+	scanDir := filepath.Join(s.dataDir, "example.com", "2026-05-23", "scan-1")
+	if err := os.MkdirAll(scanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.saveScanRecordTo(&ScanRecord{
+		ID:           "scan-1",
+		Name:         "Saved scan",
+		Target:       "example.com",
+		StartedAt:    "2026-05-23T01:02:03Z",
+		Status:       "stopped",
+		Events:       []WSEvent{{Type: "message", Content: "old event"}},
+		Vulns:        []VulnSummary{{ID: "XALG-1", Title: "old vuln", Severity: "high", Target: "example.com"}},
+		TotalTokens:  1234,
+		Iterations:   4,
+		ToolCalls:    7,
+		CurrentPhase: 6,
+	}, scanDir)
+
+	inst := &ScanInstance{ID: "inst-1", Status: "pending", Targets: "example.com"}
+	s.seedResumeInstanceFromRecord(inst, ScanRequest{IsResume: true, ResumeScanDir: scanDir})
+
+	if inst.Iterations != 4 || inst.ToolCalls != 7 || inst.TotalTokens != 1234 {
+		t.Fatalf("instance counters not seeded: iterations=%d toolCalls=%d tokens=%d", inst.Iterations, inst.ToolCalls, inst.TotalTokens)
+	}
+	if inst.VulnCount != 1 || len(inst.Vulns) != 1 || inst.Vulns[0].Title != "old vuln" {
+		t.Fatalf("instance vulns not seeded: count=%d vulns=%#v", inst.VulnCount, inst.Vulns)
+	}
+	if len(inst.events) != 1 || inst.events[0].Content != "old event" {
+		t.Fatalf("instance events not seeded: %#v", inst.events)
+	}
+	if inst.CurrentPhase != 6 || inst.Status != "pending" {
+		t.Fatalf("unexpected seeded instance phase/status: phase=%d status=%q", inst.CurrentPhase, inst.Status)
+	}
+}
+
+func TestApplyInstanceSnapshotDoesNotErasePersistedResumeData(t *testing.T) {
+	s := newTestServer(t, nil)
+	rec := &ScanRecord{
+		ID:          "scan-1",
+		InstanceID:  "inst-1",
+		Status:      "stopped",
+		Events:      []WSEvent{{Type: "message", Content: "persisted event"}},
+		Vulns:       []VulnSummary{{ID: "XALG-1", Title: "persisted vuln", Severity: "high", Target: "example.com"}},
+		Iterations:  4,
+		ToolCalls:   7,
+		TotalTokens: 1234,
+	}
+	inst := &ScanInstance{ID: "inst-1", Status: "running", Iterations: 1, ToolCalls: 2, TotalTokens: 100}
+	s.instancesMu.Lock()
+	s.instances[inst.ID] = inst
+	s.instancesMu.Unlock()
+
+	s.applyInstanceSnapshot(rec, true)
+
+	if rec.Status != "running" {
+		t.Fatalf("status = %q, want running", rec.Status)
+	}
+	if rec.Iterations != 4 || rec.ToolCalls != 7 || rec.TotalTokens != 1234 {
+		t.Fatalf("persisted counters were erased: iterations=%d toolCalls=%d tokens=%d", rec.Iterations, rec.ToolCalls, rec.TotalTokens)
+	}
+	if len(rec.Vulns) != 1 || rec.Vulns[0].Title != "persisted vuln" {
+		t.Fatalf("persisted vulns were erased: %#v", rec.Vulns)
+	}
+	if len(rec.Events) != 1 || rec.Events[0].Content != "persisted event" {
+		t.Fatalf("persisted events were erased: %#v", rec.Events)
 	}
 }
 
@@ -869,6 +1381,19 @@ func TestQueueState_OldFileWithoutNewFields(t *testing.T) {
 	}
 }
 
+func TestBuildActivityPolicyInstructionPassiveOverridesActiveExamples(t *testing.T) {
+	instruction := buildActivityPolicyInstruction("passive", "passive")
+	if !strings.Contains(instruction, "Recon phase: PASSIVE ONLY") {
+		t.Fatalf("missing passive recon policy: %s", instruction)
+	}
+	if !strings.Contains(instruction, "Testing phases: PASSIVE ONLY") {
+		t.Fatalf("missing passive testing policy: %s", instruction)
+	}
+	if !strings.Contains(instruction, "overrides all methodology examples") {
+		t.Fatalf("missing override language: %s", instruction)
+	}
+}
+
 func TestQueueStatus_ReturnsNewFields(t *testing.T) {
 	s := newTestServer(t, nil)
 	s.saveQueueState(0, ScanRequest{
@@ -877,6 +1402,8 @@ func TestQueueStatus_ReturnsNewFields(t *testing.T) {
 		Name:           "Status Test",
 		SeverityFilter: []string{"high"},
 		Phases:         []int{1, 22},
+		ReconMode:      "passive",
+		ScanIntensity:  "passive",
 		CompanyName:    "TestCo",
 		LogoPath:       "/logos/test.png",
 	})
@@ -898,6 +1425,12 @@ func TestQueueStatus_ReturnsNewFields(t *testing.T) {
 	}
 	if status["logo_path"] != "/logos/test.png" {
 		t.Errorf("logo_path = %v", status["logo_path"])
+	}
+	if status["recon_mode"] != "passive" {
+		t.Errorf("recon_mode = %v", status["recon_mode"])
+	}
+	if status["scan_intensity"] != "passive" {
+		t.Errorf("scan_intensity = %v", status["scan_intensity"])
 	}
 	// DiscordWebhook should NOT be exposed via the API
 	if _, ok := status["discord_webhook"]; ok {

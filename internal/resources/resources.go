@@ -10,8 +10,10 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -49,6 +51,35 @@ type SystemStats struct {
 	MemTotalMB     int64
 	MemAvailableMB int64
 	DiskFreeMB     int64
+	ProcessRSSMB   int64
+	GoHeapAllocMB  int64
+	GoHeapSysMB    int64
+	Goroutines     int
+}
+
+// CapacitySnapshot describes the current adaptive capacity model used by the
+// scan scheduler and subprocess launcher.
+type CapacitySnapshot struct {
+	ActiveToolLeases      int
+	ActiveHeavyToolLeases int
+	HeavyToolSlots        int
+	LightToolSlots        int
+	ToolMemLimitMB        int64
+	ScanMemoryBudgetMB    int64
+	ScanCPULoad           float64
+	HeavyToolCPULoad      float64
+	GoMemoryLimitMB       int64
+	Reason                string
+}
+
+// ToolLease represents reserved CPU/RAM headroom for one subprocess launch.
+// Call Release exactly once after the process exits.
+type ToolLease struct {
+	id               uint64
+	toolName         string
+	heavy            bool
+	memoryLimitBytes int64
+	released         bool
 }
 
 // ── Thresholds (auto-scaled by init, overridable via env vars) ──
@@ -78,7 +109,10 @@ var (
 	manualMaxInstances = envOptionalInt("XALGORIX_MAX_INSTANCES")
 
 	// Estimated load-average budget consumed by one active scan instance.
-	perScanCPULoad = envFloat("XALGORIX_SCAN_CPU_LOAD", 1.0)
+	perScanCPULoad float64
+
+	// Estimated load-average budget consumed by one heavy terminal tool.
+	heavyToolCPULoad float64
 
 	// Per-process memory limit for heavy tools (bytes).
 	// Auto-scaled in init() based on total RAM. Set to 0 to disable.
@@ -86,16 +120,28 @@ var (
 
 	// Total RAM budget per running scan instance. This is the admission-control
 	// unit used to decide how many scans can run concurrently.
-	scanMemoryBudgetMB = envInt64("XALGORIX_SCAN_MEMORY_BUDGET_MB", 2048)
+	scanMemoryBudgetMB int64
 
 	// Extra RAM budget per running scan for the Go process, browser state,
 	// LLM history, buffers, and small helper tools around one heavy command.
-	scanOverheadMB = envInt64("XALGORIX_SCAN_OVERHEAD_MB", 384)
+	scanOverheadMB int64
+
+	goMemoryLimitMB int64
+
+	resourceMu            sync.Mutex
+	nextLeaseID           uint64
+	activeToolLeases      int
+	activeHeavyToolLeases int
 )
 
 func init() {
 	cores := runtime.NumCPU()
 	totalMB, _ := readMemInfo()
+
+	perScanCPULoad = envFloatDefault("XALGORIX_SCAN_CPU_LOAD", autoScanCPULoad(cores))
+	heavyToolCPULoad = envFloatDefault("XALGORIX_HEAVY_TOOL_CPU_LOAD", autoHeavyToolCPULoad(cores))
+	scanOverheadMB = envInt64Default("XALGORIX_SCAN_OVERHEAD_MB", autoScanOverheadMB(totalMB))
+	scanMemoryBudgetMB = envInt64Default("XALGORIX_SCAN_MEMORY_BUDGET_MB", autoScanMemoryBudgetMB(totalMB, cores))
 
 	// ── RAM thresholds ──
 	// Caution: 25% of total RAM (4GB VPS → 1024MB, 24GB → 6144MB)
@@ -123,16 +169,24 @@ func init() {
 	// ── Per-tool memory limit ──
 	// Default: fit one heavy tool inside the per-instance scan budget, leaving
 	// scanOverheadMB for the agent, browser, buffers, and helper processes.
-	HeavyToolMemLimitBytes = envInt64("XALGORIX_HEAVY_TOOL_MEM_LIMIT_MB", autoHeavyToolMemLimitMB(totalMB)) * 1024 * 1024
+	toolMemLimitMB := autoHeavyToolMemLimitMB(totalMB)
+	if override, ok := envOptionalInt64("XALGORIX_HEAVY_TOOL_MEM_LIMIT_MB"); ok {
+		toolMemLimitMB = override
+	}
+	HeavyToolMemLimitBytes = toolMemLimitMB * 1024 * 1024
+
+	configureGoRuntimeLimits(totalMB)
 
 	manualCap := "none"
 	if manualMaxInstances > 0 {
 		manualCap = strconv.Itoa(manualMaxInstances)
 	}
 	log.Printf("[RESOURCES] Auto-scaled for %d cores, %d MB RAM: manual_instance_cap=%s, "+
-		"ram_caution=%dMB, ram_critical=%dMB, tool_mem_limit=%dMB, scan_budget=%dMB, cpu_budget=%.1f",
+		"ram_caution=%dMB, ram_critical=%dMB, tool_mem_limit=%dMB, scan_budget=%dMB, "+
+		"scan_cpu_budget=%.2f, heavy_tool_cpu_budget=%.2f, go_mem_limit=%dMB",
 		cores, totalMB, manualCap, ramCautionMB, ramCriticalMB,
-		HeavyToolMemLimitBytes/(1024*1024), perInstanceMemoryBudgetMB(), perScanCPULoad)
+		HeavyToolMemLimitBytes/(1024*1024), perInstanceMemoryBudgetMB(),
+		perScanCPULoad, heavyToolCPULoad, goMemoryLimitMB)
 }
 
 // ── Public API ──
@@ -146,6 +200,12 @@ func GetStats() SystemStats {
 	stats.LoadAvg1m = readLoadAvg()
 	stats.MemTotalMB, stats.MemAvailableMB = readMemInfo()
 	stats.DiskFreeMB = readDiskFree()
+	stats.ProcessRSSMB = readProcessRSSMB()
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	stats.GoHeapAllocMB = int64(mem.HeapAlloc / 1024 / 1024)
+	stats.GoHeapSysMB = int64(mem.HeapSys / 1024 / 1024)
+	stats.Goroutines = runtime.NumGoroutine()
 
 	return stats
 }
@@ -154,6 +214,10 @@ func GetStats() SystemStats {
 // Returns the worst (highest) level across all resource dimensions.
 func CurrentLevel() (Level, string) {
 	stats := GetStats()
+	return currentLevelForStats(stats)
+}
+
+func currentLevelForStats(stats SystemStats) (Level, string) {
 	level := LevelOK
 	var reasons []string
 
@@ -235,8 +299,8 @@ func effectiveMaxInstancesForStats(stats SystemStats, level Level, reason string
 		effective = manualMaxInstances
 	}
 
-	detail := fmt.Sprintf("%s; dynamic slots: cpu=%d, ram=%d, scan_budget=%dMB",
-		reason, cpuCap, ramCap, perInstanceMemoryBudgetMB())
+	detail := fmt.Sprintf("%s; dynamic slots: cpu=%d, ram=%d, scan_budget=%dMB, scan_cpu_budget=%.2f",
+		reason, cpuCap, ramCap, perInstanceMemoryBudgetMB(), perScanCPULoad)
 	if manualMaxInstances > 0 {
 		detail += fmt.Sprintf(", manual_cap=%d", manualMaxInstances)
 	}
@@ -303,6 +367,113 @@ func autoHeavyToolMemLimitMB(totalMB int64) int64 {
 	return limit
 }
 
+func autoScanCPULoad(cores int) float64 {
+	if cores <= 1 {
+		return 0.85
+	}
+	if cores == 2 {
+		return 0.80
+	}
+	return 0.75
+}
+
+func autoHeavyToolCPULoad(cores int) float64 {
+	if cores <= 1 {
+		return 0.85
+	}
+	if cores == 2 {
+		return 0.90
+	}
+	return 1.0
+}
+
+func autoScanOverheadMB(totalMB int64) int64 {
+	overhead := totalMB / 16
+	if overhead < 256 {
+		overhead = 256
+	}
+	if overhead > 512 {
+		overhead = 512
+	}
+	return overhead
+}
+
+func autoScanMemoryBudgetMB(totalMB int64, cores int) int64 {
+	if totalMB <= 0 {
+		return 1024
+	}
+	targetSlots := cores
+	if targetSlots < 1 {
+		targetSlots = 1
+	}
+	if targetSlots > 6 {
+		targetSlots = 6
+	}
+	usable := totalMB - hostReserveMB(totalMB)
+	if usable < 1024 {
+		usable = 1024
+	}
+	budget := usable / int64(targetSlots)
+	if budget < 768 {
+		budget = 768
+	}
+	if budget > 2048 {
+		budget = 2048
+	}
+	return budget
+}
+
+func autoGoMemoryLimitMB(totalMB int64) int64 {
+	if totalMB <= 0 {
+		return 0
+	}
+	limit := totalMB * 45 / 100
+	if limit < 512 {
+		limit = 512
+	}
+	maxLimit := totalMB - hostReserveMB(totalMB)
+	if maxLimit > 0 && limit > maxLimit {
+		limit = maxLimit
+	}
+	if limit > 4096 {
+		limit = 4096
+	}
+	return limit
+}
+
+func hostReserveMB(totalMB int64) int64 {
+	reserve := totalMB * 20 / 100
+	if reserve < 512 {
+		reserve = 512
+	}
+	if reserve > 2048 {
+		reserve = 2048
+	}
+	return reserve
+}
+
+func configureGoRuntimeLimits(totalMB int64) {
+	override, hasOverride := envOptionalInt64("XALGORIX_GO_MEM_LIMIT_MB")
+	if !hasOverride {
+		if _, hasGoMemLimit := os.LookupEnv("GOMEMLIMIT"); hasGoMemLimit {
+			log.Printf("[RESOURCES] GOMEMLIMIT is already set; leaving Go runtime memory limit unchanged")
+			return
+		}
+		override = autoGoMemoryLimitMB(totalMB)
+	}
+	if override > 0 {
+		debug.SetMemoryLimit(override * 1024 * 1024)
+		goMemoryLimitMB = override
+	}
+	if _, hasGOGC := os.LookupEnv("GOGC"); !hasGOGC {
+		if totalMB > 0 && totalMB <= 4096 {
+			debug.SetGCPercent(75)
+		} else {
+			debug.SetGCPercent(100)
+		}
+	}
+}
+
 // CanAdmitScan decides whether a new scan instance should be started.
 // Layer 1: admission control. Uses EffectiveMaxInstances for a live,
 // resource-aware concurrency ceiling instead of a fixed number.
@@ -322,46 +493,351 @@ func CanAdmitScan(runningCount int) (bool, string) {
 }
 
 // CanExecTool decides whether a tool can be executed right now.
-// Layer 2: pre-exec throttle. Heavy tools are gated at LevelCaution,
-// light tools only at LevelCritical.
+// Layer 2: pre-exec throttle. The decision uses both live pressure and active
+// tool leases, so CPU-heavy commands cannot stampede when a scan fleet starts.
 func CanExecTool(isHeavy bool) (bool, string) {
-	level, reason := CurrentLevel()
-	if isHeavy && level >= LevelCaution {
-		return false, reason
-	}
-	if !isHeavy && level >= LevelCritical {
-		return false, reason
-	}
-	return true, reason
+	stats := GetStats()
+	level, reason := currentLevelForStats(stats)
+	resourceMu.Lock()
+	activeTotal := activeToolLeases
+	activeHeavy := activeHeavyToolLeases
+	resourceMu.Unlock()
+	capacity := toolCapacityForStats(stats, level, reason, activeTotal, activeHeavy)
+	return toolSlotAdmission(isHeavy, capacity, activeTotal, activeHeavy)
 }
 
-// WaitForResources blocks until resources drop below the required level,
-// or until maxWait is exceeded. Returns true if resources became available,
-// false if timed out (caller should proceed anyway to avoid deadlock).
-func WaitForResources(isHeavy bool, maxWait time.Duration, toolName string) bool {
+// AcquireToolLease reserves live CPU/RAM headroom for one subprocess. The
+// caller must release the lease after the process exits.
+func AcquireToolLease(isHeavy bool, maxWait time.Duration, toolName string) (*ToolLease, bool) {
+	if maxWait <= 0 {
+		maxWait = time.Second
+	}
+	toolLabel := ToolLogLabel(toolName)
 	deadline := time.Now().Add(maxWait)
 	waited := false
+	var lastReason string
 
-	for time.Now().Before(deadline) {
-		ok, _ := CanExecTool(isHeavy)
-		if ok {
+	for {
+		lease, reason := tryAcquireToolLease(isHeavy, toolLabel)
+		if lease != nil {
 			if waited {
-				log.Printf("[RESOURCES] Resources recovered — proceeding with %q", toolName)
+				log.Printf("[RESOURCES] Resources recovered; proceeding with %s", toolLabel)
 			}
-			return true
+			return lease, true
 		}
+		lastReason = reason
 
 		if !waited {
-			_, reason := CurrentLevel()
-			log.Printf("[THROTTLE] Waiting to exec %q — %s (max wait: %s)", toolName, reason, maxWait)
+			log.Printf("[THROTTLE] Waiting to exec %s — %s (max wait: %s)", toolLabel, reason, maxWait)
 			waited = true
 		}
 
+		if time.Now().After(deadline) {
+			log.Printf("[THROTTLE] Timeout waiting for resources; refusing %s — %s", toolLabel, lastReason)
+			return nil, false
+		}
 		time.Sleep(5 * time.Second)
 	}
+}
 
-	log.Printf("[THROTTLE] Timeout waiting for resources, proceeding with %q anyway", toolName)
-	return false
+// ToolLogLabel returns a short, non-sensitive label for resource-manager logs.
+// Callers may pass full shell commands; this intentionally logs only the tool
+// name so URLs, tokens, headers, and payloads do not end up in journald.
+func ToolLogLabel(toolName string) string {
+	fields := strings.Fields(strings.TrimSpace(toolName))
+	for i := 0; i < len(fields); i++ {
+		part := strings.Trim(fields[i], `"'`)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "=") && !strings.Contains(part, "/") && !strings.HasPrefix(part, "-") {
+			continue
+		}
+		switch part {
+		case "sudo", "env", "command", "time", "timeout", "nice", "nohup":
+			continue
+		case "bash", "sh", "zsh":
+			return "shell"
+		}
+		if slash := strings.LastIndex(part, "/"); slash >= 0 {
+			part = part[slash+1:]
+		}
+		if part == "" {
+			continue
+		}
+		for _, r := range part {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == '+' {
+				continue
+			}
+			return "tool"
+		}
+		return part
+	}
+	return "tool"
+}
+
+func tryAcquireToolLease(isHeavy bool, toolLabel string) (*ToolLease, string) {
+	stats := GetStats()
+	level, levelReason := currentLevelForStats(stats)
+
+	resourceMu.Lock()
+	defer resourceMu.Unlock()
+
+	capacity := toolCapacityForStats(stats, level, levelReason, activeToolLeases, activeHeavyToolLeases)
+	if ok, reason := toolSlotAdmission(isHeavy, capacity, activeToolLeases, activeHeavyToolLeases); !ok {
+		return nil, reason
+	}
+
+	projectedTotal := activeToolLeases + 1
+	projectedHeavy := activeHeavyToolLeases
+	if isHeavy {
+		projectedHeavy++
+	}
+	limitMB := toolMemoryLimitMBForStats(stats, isHeavy, projectedTotal, projectedHeavy, level)
+	if isHeavy && HeavyToolMemLimitBytes > 0 && limitMB < minimumHeavyToolMemMB() {
+		return nil, fmt.Sprintf("not enough RAM for heavy tool: dynamic limit %dMB below minimum %dMB (%s)",
+			limitMB, minimumHeavyToolMemMB(), capacity.Reason)
+	}
+
+	nextLeaseID++
+	activeToolLeases++
+	if isHeavy {
+		activeHeavyToolLeases++
+	}
+	lease := &ToolLease{
+		id:               nextLeaseID,
+		toolName:         toolLabel,
+		heavy:            isHeavy,
+		memoryLimitBytes: limitMB * 1024 * 1024,
+	}
+	log.Printf("[RESOURCES] Lease %d acquired for %s: heavy=%v active_tools=%d active_heavy=%d mem_limit=%dMB slots=%d/%d",
+		lease.id, toolLabel, isHeavy, activeToolLeases, activeHeavyToolLeases, limitMB,
+		capacity.HeavyToolSlots, capacity.LightToolSlots)
+	return lease, capacity.Reason
+}
+
+func toolSlotAdmission(isHeavy bool, capacity toolCapacity, activeTotal, activeHeavy int) (bool, string) {
+	if isHeavy && activeHeavy >= capacity.HeavyToolSlots {
+		return false, fmt.Sprintf("heavy tool slots full: %d/%d (%s)",
+			activeHeavy, capacity.HeavyToolSlots, capacity.Reason)
+	}
+	if activeTotal >= capacity.LightToolSlots {
+		return false, fmt.Sprintf("tool slots full: %d/%d (%s)",
+			activeTotal, capacity.LightToolSlots, capacity.Reason)
+	}
+	return true, capacity.Reason
+}
+
+// Release frees the CPU/RAM reservation held by this tool lease.
+func (l *ToolLease) Release() {
+	if l == nil {
+		return
+	}
+	resourceMu.Lock()
+	defer resourceMu.Unlock()
+	if l.released {
+		return
+	}
+	l.released = true
+	if activeToolLeases > 0 {
+		activeToolLeases--
+	}
+	if l.heavy && activeHeavyToolLeases > 0 {
+		activeHeavyToolLeases--
+	}
+	log.Printf("[RESOURCES] Lease %d released for %s: active_tools=%d active_heavy=%d",
+		l.id, l.toolName, activeToolLeases, activeHeavyToolLeases)
+}
+
+// MemoryLimitBytes returns the per-process memory ceiling selected for this
+// lease. A zero value means memory limiting is disabled by configuration.
+func (l *ToolLease) MemoryLimitBytes() int64 {
+	if l == nil {
+		return CurrentToolMemoryLimitBytes(true)
+	}
+	return l.memoryLimitBytes
+}
+
+// CurrentToolMemoryLimitBytes returns a best-effort memory limit for callers
+// that cannot hold an explicit lease.
+func CurrentToolMemoryLimitBytes(isHeavy bool) int64 {
+	stats := GetStats()
+	level, _ := currentLevelForStats(stats)
+	resourceMu.Lock()
+	projectedTotal := activeToolLeases + 1
+	projectedHeavy := activeHeavyToolLeases
+	if isHeavy {
+		projectedHeavy++
+	}
+	resourceMu.Unlock()
+	return toolMemoryLimitMBForStats(stats, isHeavy, projectedTotal, projectedHeavy, level) * 1024 * 1024
+}
+
+// Capacity returns the current resource model, including active tool leases.
+func Capacity() CapacitySnapshot {
+	stats := GetStats()
+	level, reason := currentLevelForStats(stats)
+	resourceMu.Lock()
+	activeTotal := activeToolLeases
+	activeHeavy := activeHeavyToolLeases
+	resourceMu.Unlock()
+	capacity := toolCapacityForStats(stats, level, reason, activeTotal, activeHeavy)
+	return CapacitySnapshot{
+		ActiveToolLeases:      activeTotal,
+		ActiveHeavyToolLeases: activeHeavy,
+		HeavyToolSlots:        capacity.HeavyToolSlots,
+		LightToolSlots:        capacity.LightToolSlots,
+		ToolMemLimitMB:        toolMemoryLimitMBForStats(stats, true, activeTotal+1, activeHeavy+1, level),
+		ScanMemoryBudgetMB:    perInstanceMemoryBudgetMB(),
+		ScanCPULoad:           perScanCPULoad,
+		HeavyToolCPULoad:      heavyToolCPULoad,
+		GoMemoryLimitMB:       goMemoryLimitMB,
+		Reason:                capacity.Reason,
+	}
+}
+
+type toolCapacity struct {
+	HeavyToolSlots int
+	LightToolSlots int
+	Reason         string
+}
+
+func toolCapacityForStats(stats SystemStats, level Level, reason string, activeTotal, activeHeavy int) toolCapacity {
+	spareMB := stats.MemAvailableMB - ramCriticalMB
+	if spareMB <= 0 || level >= LevelCritical {
+		return toolCapacity{Reason: reason}
+	}
+
+	memUnitMB := HeavyToolMemLimitBytes / (1024 * 1024)
+	if memUnitMB <= 0 {
+		memUnitMB = autoHeavyToolMemLimitMB(stats.MemTotalMB)
+	}
+	if memUnitMB < minimumHeavyToolMemMB() {
+		memUnitMB = minimumHeavyToolMemMB()
+	}
+	memSlots := int(spareMB / memUnitMB)
+	if memSlots < 1 && spareMB >= minimumHeavyToolMemMB() {
+		memSlots = 1
+	}
+
+	cpuHeavySlots := heavyToolCPUCapacity(stats)
+	parallelCap := heavyToolParallelCap(stats.CPUCores)
+	heavySlots := minInt(memSlots, minInt(cpuHeavySlots, parallelCap))
+	if level == LevelCaution && heavySlots > 1 {
+		heavySlots = 1
+	}
+
+	lightMemSlots := int(spareMB / 128)
+	if lightMemSlots < 1 && spareMB >= 128 {
+		lightMemSlots = 1
+	}
+	lightSlots := minInt(lightMemSlots, lightToolCPUCapacity(stats))
+	if lightSlots < heavySlots {
+		lightSlots = heavySlots
+	}
+	if level == LevelCaution && lightSlots > maxInt(1, stats.CPUCores) {
+		lightSlots = maxInt(1, stats.CPUCores)
+	}
+
+	detail := fmt.Sprintf("%s; tool_slots: heavy=%d/%d light=%d/%d, active_tools=%d, active_heavy=%d, mem_unit=%dMB, cpu_budget=%.2f",
+		reason, activeHeavy, heavySlots, activeTotal, lightSlots, activeTotal, activeHeavy, memUnitMB, heavyToolCPULoad)
+	return toolCapacity{HeavyToolSlots: heavySlots, LightToolSlots: lightSlots, Reason: detail}
+}
+
+func toolMemoryLimitMBForStats(stats SystemStats, isHeavy bool, projectedTotal, projectedHeavy int, level Level) int64 {
+	if HeavyToolMemLimitBytes <= 0 {
+		return 0
+	}
+	maxLimitMB := HeavyToolMemLimitBytes / (1024 * 1024)
+	if maxLimitMB <= 0 {
+		return 0
+	}
+	spareMB := stats.MemAvailableMB - ramCriticalMB
+	if spareMB <= 0 {
+		return minimumHeavyToolMemMB()
+	}
+
+	divisor := projectedHeavy
+	if !isHeavy {
+		divisor = projectedTotal
+	}
+	if divisor < 1 {
+		divisor = 1
+	}
+	dynamicLimit := spareMB / int64(divisor)
+	if level == LevelCaution {
+		dynamicLimit = dynamicLimit * 3 / 4
+	}
+	if dynamicLimit > maxLimitMB {
+		dynamicLimit = maxLimitMB
+	}
+	minLimit := minimumHeavyToolMemMB()
+	if !isHeavy {
+		minLimit = 128
+	}
+	if dynamicLimit < minLimit {
+		dynamicLimit = minLimit
+	}
+	return dynamicLimit
+}
+
+func heavyToolCPUCapacity(stats SystemStats) int {
+	budget := heavyToolCPULoad
+	if budget <= 0 {
+		budget = autoHeavyToolCPULoad(stats.CPUCores)
+	}
+	criticalLoad := float64(stats.CPUCores) * cpuCriticalPct / 100
+	headroom := criticalLoad - stats.LoadAvg1m
+	if headroom <= 0 {
+		return 0
+	}
+	capacity := int(headroom / budget)
+	if capacity < 1 {
+		return 1
+	}
+	return capacity
+}
+
+func lightToolCPUCapacity(stats SystemStats) int {
+	criticalLoad := float64(stats.CPUCores) * cpuCriticalPct / 100
+	headroom := criticalLoad - stats.LoadAvg1m
+	if headroom <= 0 {
+		return 0
+	}
+	capacity := int(headroom / 0.25)
+	if capacity < 1 {
+		return 1
+	}
+	cap := maxInt(2, stats.CPUCores*4)
+	if capacity > cap {
+		return cap
+	}
+	return capacity
+}
+
+func heavyToolParallelCap(cores int) int {
+	if cores <= 1 {
+		return 1
+	}
+	if cores == 2 {
+		return 2
+	}
+	return maxInt(2, cores-1)
+}
+
+func minimumHeavyToolMemMB() int64 {
+	return 256
+}
+
+// WaitForResources blocks until resources are available, or until maxWait is
+// exceeded. It keeps the old API for non-lease callers by acquiring and
+// immediately releasing a short lease.
+func WaitForResources(isHeavy bool, maxWait time.Duration, toolName string) bool {
+	lease, ok := AcquireToolLease(isHeavy, maxWait, toolName)
+	if lease != nil {
+		lease.Release()
+	}
+	return ok
 }
 
 // MaxInstances returns the optional manual cap. A zero value means no static
@@ -440,6 +916,28 @@ func readMemInfo() (totalMB, availableMB int64) {
 	return totalMB, availableMB
 }
 
+func readProcessRSSMB() int64 {
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "VmRSS:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return kb / 1024
+	}
+	return 0
+}
+
 // readDiskFree returns free disk space (in MB) for the root filesystem.
 func readDiskFree() int64 {
 	var stat syscall.Statfs_t
@@ -466,6 +964,10 @@ func envFloat(key string, defaultVal float64) float64 {
 	return v
 }
 
+func envFloatDefault(key string, defaultVal float64) float64 {
+	return envFloat(key, defaultVal)
+}
+
 func envInt64(key string, defaultVal int64) int64 {
 	s := os.Getenv(key)
 	if s == "" {
@@ -477,6 +979,23 @@ func envInt64(key string, defaultVal int64) int64 {
 		return defaultVal
 	}
 	return v
+}
+
+func envInt64Default(key string, defaultVal int64) int64 {
+	return envInt64(key, defaultVal)
+}
+
+func envOptionalInt64(key string) (int64, bool) {
+	s, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(s) == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || v < 0 {
+		log.Printf("[RESOURCES] Invalid %s=%q, ignoring override", key, s)
+		return 0, false
+	}
+	return v, true
 }
 
 func envOptionalInt(key string) int {
@@ -502,6 +1021,13 @@ func maxLevel(a, b Level) Level {
 
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

@@ -113,7 +113,7 @@ func computeTimeout(command string) time.Duration {
 // setProcessLimits applies resource constraints to a child process:
 // - Adjusts OOM score so the kernel kills scan tools before xalgorix
 // - Sets RLIMIT_AS (virtual memory limit) when memoryLimited is true
-func setProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
+func setProcessLimits(cmd *exec.Cmd, memoryLimited bool, memLimitBytes int64) {
 	if cmd.Process == nil {
 		return
 	}
@@ -132,10 +132,10 @@ func setProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
 	// ── Memory limit for scanner subprocesses ──
 	// Uses prlimit64 syscall to set RLIMIT_AS on the child process.
 	// If the tool exceeds this, it gets ENOMEM / SIGSEGV — xalgorix survives.
-	if memoryLimited && resources.HeavyToolMemLimitBytes > 0 {
+	if memoryLimited && memLimitBytes > 0 {
 		newLimit := syscall.Rlimit{
-			Cur: uint64(resources.HeavyToolMemLimitBytes),
-			Max: uint64(resources.HeavyToolMemLimitBytes),
+			Cur: uint64(memLimitBytes),
+			Max: uint64(memLimitBytes),
 		}
 		// prlimit64(pid, resource, new_rlimit*, old_rlimit*)
 		_, _, errno := syscall.RawSyscall6(
@@ -150,7 +150,7 @@ func setProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
 			log.Printf("[RESOURCES] Cannot set RLIMIT_AS for PID %d: %v", pid, errno)
 		} else {
 			log.Printf("[RESOURCES] Tool PID %d: OOM score=500, mem limit=%d MB",
-				pid, resources.HeavyToolMemLimitBytes/(1024*1024))
+				pid, memLimitBytes/(1024*1024))
 		}
 	} else {
 		log.Printf("[RESOURCES] PID %d: OOM score set to 500", pid)
@@ -160,7 +160,13 @@ func setProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
 // ApplyProcessLimits applies the same child-process protections used by
 // terminal_execute to subprocess-based tools in other packages.
 func ApplyProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
-	setProcessLimits(cmd, memoryLimited)
+	setProcessLimits(cmd, memoryLimited, resources.CurrentToolMemoryLimitBytes(false))
+}
+
+// ApplyProcessLimitsWithLimit applies child-process protections using an
+// already-reserved resource lease memory limit.
+func ApplyProcessLimitsWithLimit(cmd *exec.Cmd, memoryLimited bool, memLimitBytes int64) {
+	setProcessLimits(cmd, memoryLimited, memLimitBytes)
 }
 
 // ActiveProcessCount returns the number of currently running processes.
@@ -712,10 +718,10 @@ func commandEnv(homeDir, goPath, workDir string) []string {
 	)
 }
 
-func shellPrelude(homeDir, workDir string) string {
+func shellPrelude(homeDir, workDir string, memLimitBytes int64) string {
 	var b strings.Builder
-	if resources.HeavyToolMemLimitBytes > 0 {
-		limitKB := resources.HeavyToolMemLimitBytes / 1024
+	if memLimitBytes > 0 {
+		limitKB := memLimitBytes / 1024
 		fmt.Fprintf(&b, "ulimit -Sv %d 2>/dev/null || true\n", limitKB)
 		fmt.Fprintf(&b, "ulimit -Hv %d 2>/dev/null || true\n", limitKB)
 	}
@@ -793,7 +799,28 @@ func runShellInternal(contextID string, command string) (string, int) {
 	if goPath == "" {
 		goPath = homeDir + "/go"
 	}
-	command = shellPrelude(homeDir, workDir) + cleanCmd
+	// ── Layer 2: Pre-exec resource throttle ──
+	// Before launching, check if the system has enough resources.
+	// Heavy tools (nuclei, masscan, etc.) are gated more strictly.
+	// If a heavy tool can't get resources within the timeout, abort it
+	// to prevent the kernel OOM killer from nuking the whole server.
+	heavy := isHeavyTool(cleanCmd)
+	wait := 30 * time.Second
+	if heavy {
+		wait = 2 * time.Minute
+	}
+	toolLabel := resources.ToolLogLabel(cleanCmd)
+	lease, ok := resources.AcquireToolLease(heavy, wait, toolLabel)
+	if !ok {
+		if heavy {
+			return fmt.Sprintf("[THROTTLE] Refused to launch heavy tool %q — system resources exhausted after 2m wait", toolLabel), -1
+		}
+		return fmt.Sprintf("[THROTTLE] Refused to launch tool %q — system resources exhausted after 30s wait", toolLabel), -1
+	}
+	defer lease.Release()
+	memLimitBytes := lease.MemoryLimitBytes()
+
+	command = shellPrelude(homeDir, workDir, memLimitBytes) + cleanCmd
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = workDir
@@ -802,20 +829,6 @@ func runShellInternal(contextID string, command string) (string, int) {
 	// Create new process group for this command
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
-	}
-
-	// ── Layer 2: Pre-exec resource throttle ──
-	// Before launching, check if the system has enough resources.
-	// Heavy tools (nuclei, masscan, etc.) are gated more strictly.
-	// If a heavy tool can't get resources within the timeout, abort it
-	// to prevent the kernel OOM killer from nuking the whole server.
-	heavy := isHeavyTool(cleanCmd)
-	if heavy {
-		if !resources.WaitForResources(true, 2*time.Minute, cleanCmd) {
-			return fmt.Sprintf("[THROTTLE] Refused to launch heavy tool %q — system resources exhausted after 2m wait", cleanCmd), -1
-		}
-	} else {
-		resources.WaitForResources(false, 30*time.Second, cleanCmd)
 	}
 
 	// Use pipes for real-time output streaming
@@ -835,7 +848,7 @@ func runShellInternal(contextID string, command string) (string, int) {
 
 	// ── Layer 3: Post-start process limits ──
 	// Set OOM score and a per-process memory limit on the shell and children.
-	setProcessLimits(cmd, true)
+	setProcessLimits(cmd, true, memLimitBytes)
 
 	TrackProcessForContext(contextID, cmd, cancel, cleanCmd)
 	defer UntrackProcessForContext(contextID, cmd)
@@ -1234,7 +1247,7 @@ var blockedPatterns = []struct {
 //
 // IMPORTANT: This is a BEST-EFFORT GUARDRAIL, not a security boundary.
 // A determined adversary (or a confused LLM) can trivially bypass any
-// string-based denylist via subshells, quoting tricks (r''m), variable
+// string-based denylist via subshells, quoting tricks (r”m), variable
 // expansion (rm$IFS-rf$IFS/), eval $'\\x72m -rf /', fetching a script over
 // HTTP then piping to sh, writing destructive code with tee, etc.
 //

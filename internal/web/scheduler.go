@@ -22,6 +22,8 @@ type ScanSchedule struct {
 	ScanMode       string    `json:"scan_mode"`
 	SeverityFilter []string  `json:"severity_filter,omitempty"`
 	Phases         []int     `json:"phases,omitempty"`
+	ReconMode      string    `json:"recon_mode,omitempty"`
+	ScanIntensity  string    `json:"scan_intensity,omitempty"`
 	CompanyName    string    `json:"company_name,omitempty"`
 	LogoPath       string    `json:"logo_path,omitempty"`
 	DiscordWebhook string    `json:"discord_webhook,omitempty"`
@@ -73,6 +75,7 @@ func (s *Server) loadSchedulesFromDisk() {
 			log.Printf("[SCHEDULER] Error decoding schedule %s: %v", path, err)
 			continue
 		}
+		normalizeScheduleActivity(&sch)
 		s.schedules[sch.ID] = &sch
 	}
 	log.Printf("[SCHEDULER] Loaded %d schedules from disk", len(s.schedules))
@@ -141,31 +144,33 @@ func (s *Server) checkAndRunSchedules() {
 		}
 		if now.After(sch.NextRun) || now.Equal(sch.NextRun) {
 			log.Printf("[SCHEDULER] Triggering scheduled scan: %s (Targets: %v)", sch.Name, sch.Targets)
-			
+
 			req := ScanRequest{
 				Targets:        sch.Targets,
 				Instruction:    sch.Instruction,
 				ScanMode:       sch.ScanMode,
 				SeverityFilter: sch.SeverityFilter,
 				Phases:         sch.Phases,
+				ReconMode:      sch.ReconMode,
+				ScanIntensity:  sch.ScanIntensity,
 				CompanyName:    sch.CompanyName,
 				LogoPath:       sch.LogoPath,
 				DiscordWebhook: sch.DiscordWebhook,
 				Name:           sch.Name + " (Scheduled)",
 				Model:          sch.Model,
 			}
-			
+
 			scanCfg := *s.cfg
 			if sch.Model != "" {
 				scanCfg.LLM = sch.Model
 			}
 			instanceID := randomSlug()
-			
+
 			go s.runMultiScan(req, &scanCfg, instanceID)
-			
+
 			sch.LastRun = now
 			sch.NextRun = calculateNextRun(sch.Interval, now)
-			
+
 			if err := s.saveScheduleToDisk(sch); err != nil {
 				log.Printf("[SCHEDULER] Error saving triggered schedule %s: %v", sch.ID, err)
 			}

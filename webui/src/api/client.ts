@@ -209,6 +209,7 @@ export const api = {
   queueResume: () =>
     http<{
       status: string;
+      resumed_queues?: number;
       from_index?: number;
       targets_left?: number;
       error?: string;

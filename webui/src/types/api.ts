@@ -61,6 +61,8 @@ export interface ScanInstance {
   instruction?: string;
   severity_filter?: string[];
   phases?: number[];
+  recon_mode?: "active" | "passive";
+  scan_intensity?: "active" | "passive";
   company_name?: string;
   logo_path?: string;
   vulns?: VulnSummary[];
@@ -92,6 +94,8 @@ export interface ScanRecord {
   severity_filter?: string[];
   discord_webhook?: string;
   discord_webhook_configured?: boolean;
+  recon_mode?: "active" | "passive";
+  scan_intensity?: "active" | "passive";
   events: WSEvent[];
   vulns: VulnSummary[];
   total_tokens: number;
@@ -130,11 +134,24 @@ export interface InstancesResponse {
     ram_total_mb: number;
     ram_available_mb: number;
     disk_free_mb: number;
+    process_rss_mb?: number;
+    go_heap_alloc_mb?: number;
+    go_heap_sys_mb?: number;
+    goroutines?: number;
     level: string;
     reason: string;
     max_instances: number;
     manual_max_instances: number;
     effective_max_instances: number;
+    active_tool_leases?: number;
+    active_heavy_tool_leases?: number;
+    heavy_tool_slots?: number;
+    light_tool_slots?: number;
+    tool_mem_limit_mb?: number;
+    scan_memory_budget_mb?: number;
+    scan_cpu_load?: number;
+    heavy_tool_cpu_load?: number;
+    go_memory_limit_mb?: number;
   };
 }
 
@@ -174,17 +191,31 @@ export interface ScanRequest {
   name?: string;
   save_only?: boolean;
   phases?: number[];
+  recon_mode?: "active" | "passive";
+  scan_intensity?: "active" | "passive";
   company_name?: string;
   logo_path?: string;
 }
 
 export interface QueueStatus {
   available: boolean;
+  queue_count?: number;
+  total_remaining?: number;
+  instance_id?: string;
   targets?: string[];
   current_idx?: number;
   remaining?: number;
   instruction?: string;
   scan_mode?: string;
+  recon_mode?: "active" | "passive";
+  scan_intensity?: "active" | "passive";
+  paused?: boolean;
+  active_target?: string;
+  active_scan_id?: string;
+  wildcard_active_target?: string;
+  wildcard_active_scan_id?: string;
+  wildcard_sub_index?: number;
+  wildcard_subdomains_total?: number;
   started_at?: string;
 }
 
@@ -220,7 +251,14 @@ export interface EnvironmentVariableSetting {
   description: string;
   defaultValue?: string;
   placeholder?: string;
-  inputType: "text" | "url" | "path" | "secret" | "number" | "boolean" | "select";
+  inputType:
+    | "text"
+    | "url"
+    | "path"
+    | "secret"
+    | "number"
+    | "boolean"
+    | "select";
   options?: string[];
   sensitive: boolean;
   requiresRestart: boolean;
@@ -246,6 +284,8 @@ export interface ScanSchedule {
   scan_mode: string;
   severity_filter?: string[];
   phases?: number[];
+  recon_mode?: "active" | "passive";
+  scan_intensity?: "active" | "passive";
   company_name?: string;
   logo_path?: string;
   discord_webhook?: string;
