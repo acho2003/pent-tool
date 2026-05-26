@@ -19,12 +19,30 @@ import (
 // singleton) for normal callers; tests inject their own roots via New.
 //
 // The zero value is not usable — always go through New or Default.
+//
+// Two boundary semantics are exposed:
+//
+//   - CheckResolve enforces the Allow_List for WRITES (R5.x / R8.x).
+//     Writes must land inside cfg.Workspace, cfg.HomeDir, or /tmp.
+//   - CheckRead enforces only the deny-list for READS. Reads succeed
+//     anywhere on the filesystem unless the canonical path falls
+//     under a deny-list root (~/.ssh, ~/.aws, /etc/shadow, etc.).
+//     Tools that consume system wordlists, payload directories, and
+//     other shared assets call CheckRead so the agent can find them
+//     without having to copy them under the workspace.
 type Policy struct {
-	// roots holds canonical absolute prefixes. Each entry is the result
-	// of filepath.Abs + filepath.Clean, with empty/duplicate entries
-	// dropped, sorted longest-first so the prefix match is deterministic
-	// when one root is nested inside another (e.g. /tmp/xalgorix vs /tmp).
+	// roots holds canonical absolute prefixes used for write checks.
+	// Each entry is the result of filepath.Abs + filepath.Clean, with
+	// empty/duplicate entries dropped, sorted longest-first so the
+	// prefix match is deterministic when one root is nested inside
+	// another (e.g. /tmp/xalgorix vs /tmp).
 	roots []string
+
+	// readDeny holds canonical absolute prefixes that REVOKE the
+	// default-allow read policy. Empty/duplicate entries are dropped
+	// at construction time. Reads are otherwise permitted everywhere
+	// the OS will read (so wordlists in /usr/share/seclists work).
+	readDeny []string
 }
 
 // New constructs a Policy from the supplied Allow_List roots. Each
@@ -35,7 +53,29 @@ type Policy struct {
 //
 // New never touches the filesystem; missing roots are accepted and
 // will simply never match. Use Default() in production code.
+//
+// The deny-list (passed via NewWithReadDeny / Default) is left empty
+// here, which means CheckRead allows reads anywhere. Tests that want
+// the default deny-list behavior should call NewWithReadDeny.
 func New(roots ...string) *Policy {
+	return NewWithReadDeny(roots, nil)
+}
+
+// NewWithReadDeny constructs a Policy with explicit write roots and
+// read deny-list. Both slices are canonicalized + deduplicated +
+// sorted longest-first. See New for the write-roots semantics; see
+// CheckRead for the deny-list semantics.
+func NewWithReadDeny(roots, readDeny []string) *Policy {
+	return &Policy{
+		roots:    canonicalizeRootList(roots),
+		readDeny: canonicalizeRootList(readDeny),
+	}
+}
+
+// canonicalizeRootList canonicalizes, dedups, and sorts a list of
+// path roots. Used for both the write Allow_List and the read
+// deny-list — both share the same lookup semantics.
+func canonicalizeRootList(roots []string) []string {
 	seen := make(map[string]struct{}, len(roots))
 	canonical := make([]string, 0, len(roots))
 	for _, raw := range roots {
@@ -59,7 +99,7 @@ func New(roots ...string) *Policy {
 	sort.SliceStable(canonical, func(i, j int) bool {
 		return len(canonical[i]) > len(canonical[j])
 	})
-	return &Policy{roots: canonical}
+	return canonical
 }
 
 var (
@@ -76,9 +116,14 @@ var (
 //   - cfg.HomeDir (~/.xalgorix),
 //   - "/tmp".
 //
+// The read deny-list comes from cfg.ReadDenyList (sensible defaults
+// merged with XALGORIX_READ_DENY_LIST entries). Reads outside the
+// Allow_List are permitted by default; only deny-list members are
+// rejected.
+//
 // The first call must follow config.Get(); subsequent calls return the
-// memoized instance. Tests that need a different Allow_List should
-// construct their own Policy via New.
+// memoized instance. Tests that need a different policy should
+// construct their own via New / NewWithReadDeny.
 func Default() *Policy {
 	defaultOnce.Do(func() {
 		cfg := config.Get()
@@ -86,7 +131,14 @@ func Default() *Policy {
 		// the field; before that landed it points at the legacy
 		// $CWD-derived workspace). Either way it is the right
 		// resolution root for Filesystem_Tool writes.
-		defaultPolicy = New(cfg.Workspace, cfg.HomeDir, "/tmp")
+		var readDeny []string
+		if cfg != nil {
+			readDeny = cfg.ReadDenyList
+		}
+		defaultPolicy = NewWithReadDeny(
+			[]string{cfg.Workspace, cfg.HomeDir, "/tmp"},
+			readDeny,
+		)
 	})
 	return defaultPolicy
 }
@@ -101,6 +153,18 @@ func (p *Policy) Roots() []string {
 	}
 	out := make([]string, len(p.roots))
 	copy(out, p.roots)
+	return out
+}
+
+// ReadDenyRoots returns a defensive copy of the deny-list used by
+// CheckRead. Returned for the health endpoint and for tests; the
+// Policy's internal state is not mutated by callers.
+func (p *Policy) ReadDenyRoots() []string {
+	if p == nil {
+		return nil
+	}
+	out := make([]string, len(p.readDeny))
+	copy(out, p.readDeny)
 	return out
 }
 
@@ -189,6 +253,9 @@ func (p *Policy) Check(canonical string) error {
 // "python_action") used in both the log line and the returned error.
 // On success the returned string is the canonical, allow-list-cleared
 // path the caller can hand directly to os.Open / os.MkdirAll / etc.
+//
+// CheckResolve is the WRITE entry point. Use CheckRead for read paths
+// — reads are permitted everywhere except deny-list members.
 func (p *Policy) CheckResolve(sc *scanctx.ScanContext, toolName, raw string) (string, error) {
 	canonical, err := p.Resolve(sc, raw)
 	if err != nil {
@@ -213,6 +280,77 @@ func (p *Policy) CheckResolve(sc *scanctx.ScanContext, toolName, raw string) (st
 		return "", rej
 	}
 	return canonical, nil
+}
+
+// CheckRead is the READ entry point used by Filesystem_Tools that need
+// to consume files anywhere on the host (system wordlists, payload
+// dirs, /etc/services, /usr/share/seclists, etc.). It returns the
+// canonical path on success and a *PathRejectError ONLY when the path
+// resolves into a deny-list root.
+//
+// Behavior summary:
+//
+//   - Reads inside the Allow_List succeed (same as CheckResolve).
+//   - Reads outside the Allow_List succeed by default.
+//   - Reads under any deny-list root fail with PathRejectError and
+//     the same counter / log line as CheckResolve.
+//
+// toolName is forwarded to the rejection log line and the typed error.
+// Callers should pass the same namespaced operation name they use for
+// CheckResolve (e.g. "fileedit.view", "terminal_read").
+func (p *Policy) CheckRead(sc *scanctx.ScanContext, toolName, raw string) (string, error) {
+	canonical, err := p.Resolve(sc, raw)
+	if err != nil {
+		return "", err
+	}
+	if err := p.CheckReadCanonical(canonical); err != nil {
+		var rej *PathRejectError
+		if pre, ok := err.(*PathRejectError); ok {
+			rej = pre
+		} else {
+			rej = &PathRejectError{Path: canonical, Roots: p.ReadDenyRoots()}
+		}
+		rej.Tool = toolName
+		rej.ScanCtxID = scanContextID(sc)
+
+		safe.IncPathReject()
+		log.Printf("[path-policy] read-deny tool=%s scan=%s path=%s deny=%v",
+			rej.Tool, rej.ScanCtxID, rej.Path, p.readDeny)
+
+		return "", rej
+	}
+	return canonical, nil
+}
+
+// CheckReadCanonical applies only the deny-list portion of the read
+// policy to an already-canonical path. Returns nil when the path is
+// outside every deny-list root, or *PathRejectError otherwise. The
+// returned error has Path and Roots populated (with the deny-list
+// roots) but Tool / ScanCtxID empty — CheckRead fills those.
+//
+// Side-effect-free: never touches the filesystem, never increments
+// counters, never logs.
+func (p *Policy) CheckReadCanonical(canonical string) error {
+	abs, err := filepath.Abs(canonical)
+	if err != nil {
+		return fmt.Errorf("path policy: abs(%s): %w", canonical, err)
+	}
+	abs = filepath.Clean(abs)
+	for _, deny := range p.readDeny {
+		if abs == deny {
+			return &PathRejectError{
+				Path:  abs,
+				Roots: append([]string(nil), p.readDeny...),
+			}
+		}
+		if strings.HasPrefix(abs, deny+string(filepath.Separator)) {
+			return &PathRejectError{
+				Path:  abs,
+				Roots: append([]string(nil), p.readDeny...),
+			}
+		}
+	}
+	return nil
 }
 
 // resolutionBase picks the directory relative paths resolve against.
