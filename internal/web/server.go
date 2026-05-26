@@ -2214,6 +2214,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// internally consistent (Task 11.4 / R9.5).
 	counters := safe.Snapshot()
 	allowList := sandbox.Default().Roots()
+	readDeny := sandbox.Default().ReadDenyRoots()
 
 	// vulns_persisted: total count from on-disk corpus across every scan
 	// record. Stable across teardown — survives reporting.CleanupContext.
@@ -2237,6 +2238,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"llm_inflight_cap":   resources.LLMInFlightCap(),
 		"data_dir":           s.cfg.DataDir,
 		"allow_list":         allowList,
+		// read_deny is the deny-list applied to Filesystem_Tool reads.
+		// Reads outside allow_list succeed by default; only paths under
+		// these roots are rejected. Set XALGORIX_READ_DENY_LIST
+		// (colon-separated) to extend the defaults.
+		"read_deny": readDeny,
 	})
 }
 

@@ -152,11 +152,16 @@ func runEditorWithPolicy(sc *scanctx.ScanContext, args map[string]string) (tools
 
 	switch command {
 	case "view":
-		path, err := resolveViewPath(sc, rawPath)
-		if err != nil {
-			return tools.Result{}, err
+		// Reads honor the deny-list but are otherwise permitted
+		// anywhere — agents need access to system wordlists, payload
+		// dirs, /etc/services, etc. CheckRead canonicalizes the path
+		// and rejects only if it lands inside a deny-list root
+		// (~/.ssh, ~/.aws, /etc/shadow, etc.).
+		canonical, rerr := sandbox.Default().CheckRead(sc, "fileedit.view", rawPath)
+		if rerr != nil {
+			return tools.Result{Error: rerr.Error()}, nil
 		}
-		return viewFile(path, args["view_range"])
+		return viewFile(canonical, args["view_range"])
 	case "create":
 		canonical, rerr := sandbox.Default().CheckResolve(sc, "fileedit.create", rawPath)
 		if rerr != nil {
@@ -180,24 +185,10 @@ func runEditorWithPolicy(sc *scanctx.ScanContext, args map[string]string) (tools
 	}
 }
 
-// resolveViewPath keeps the prior scan-workspace containment rule for the
-// read-only view command: it never touches the Path_Policy (writes only)
-// but still resolves relative paths against the active Scan_Context.
-func resolveViewPath(sc *scanctx.ScanContext, rawPath string) (string, error) {
-	contextID := ""
-	if sc != nil {
-		contextID = sc.ID
-	}
-	if contextID == "" {
-		return resolvePath(rawPath), nil
-	}
-	return resolvePathForContext(contextID, rawPath)
-}
-
 // runEditor is intentionally removed: the editor entry point now lives in
 // runEditorWithPolicy, which inlines the dispatch so each write command can
-// route its path through sandbox.Default().CheckResolve with the correct
-// "fileedit.<op>" tool name.
+// route its path through sandbox.Default().CheckResolve (writes) or
+// sandbox.Default().CheckRead (the view read).
 
 func viewFile(path, viewRange string) (tools.Result, error) {
 	data, err := os.ReadFile(path)

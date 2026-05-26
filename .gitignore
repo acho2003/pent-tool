@@ -53,3 +53,8 @@ webui/node_modules/
 webui/dist/
 webui/.vite/
 webui/.turbo/
+
+# Local-only ephemeral files used by release/commit tooling
+.commit_msg.tmp
+.pr_body.tmp
+.release_notes.tmp

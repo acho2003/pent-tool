@@ -88,6 +88,15 @@ type Config struct {
 	HomeDir     string // ~/.xalgorix
 	SkillsDir   string // embedded or local skills directory
 	BrowserPath string // XALGORIX_BROWSER_PATH — override auto-download with custom Chrome path
+
+	// Filesystem read deny-list. Reads outside the Allow_List are
+	// permitted by default so tools can use system wordlists, payload
+	// directories, and other shared assets. Entries here are
+	// canonicalized prefix matches that REVOKE that default for
+	// sensitive locations (~/.ssh, ~/.aws, /etc/shadow, etc.). Set
+	// XALGORIX_READ_DENY_LIST to a colon-separated list of additional
+	// roots; defaults are merged in. See sandbox.Policy.CheckRead.
+	ReadDenyList []string // XALGORIX_READ_DENY_LIST
 }
 
 var (
@@ -220,6 +229,10 @@ func load() *Config {
 		HomeDir:     xalgorixHome,
 		SkillsDir:   filepath.Join(xalgorixHome, "skills"),
 		BrowserPath: envOr("XALGORIX_BROWSER_PATH", ""),
+
+		// Filesystem read deny-list. Defaults applied in resolveReadDenyList
+		// (sensitive home and system paths); user list extends them.
+		ReadDenyList: resolveReadDenyList(home, os.Getenv("XALGORIX_READ_DENY_LIST")),
 	}
 
 	// Debug: show loaded config so users can verify correct env was picked up.
@@ -487,4 +500,64 @@ func loadEnvFile(path string) {
 		// Always set — later files override earlier ones
 		os.Setenv(key, value)
 	}
+}
+
+// defaultReadDenyList returns the built-in deny-list applied to every
+// Filesystem_Tool read. Reads outside the Allow_List are permitted by
+// default (so tools can consume /usr/share/wordlists, payload dirs,
+// system binaries, etc.); these entries REVOKE that default for
+// sensitive locations only.
+//
+// Each entry is canonicalized at Policy construction time and treated
+// as a prefix match (entry == path OR entry/ is a prefix of path).
+func defaultReadDenyList(home string) []string {
+	if home == "" {
+		home = "/root"
+	}
+	return []string{
+		// User secrets
+		filepath.Join(home, ".ssh"),
+		filepath.Join(home, ".gnupg"),
+		filepath.Join(home, ".aws"),
+		filepath.Join(home, ".azure"),
+		filepath.Join(home, ".config", "gcloud"),
+		filepath.Join(home, ".kube"),
+		filepath.Join(home, ".docker"),
+		filepath.Join(home, ".netrc"),
+		filepath.Join(home, ".pgpass"),
+		filepath.Join(home, ".bash_history"),
+		filepath.Join(home, ".zsh_history"),
+		// System secrets
+		"/etc/shadow",
+		"/etc/gshadow",
+		"/etc/sudoers",
+		"/etc/sudoers.d",
+		"/etc/ssh",
+		"/root/.ssh",
+		"/root/.aws",
+		"/root/.gnupg",
+		// Process / kernel keyrings & memory
+		"/proc/kcore",
+		"/proc/kallsyms",
+		// Encrypted volume keys
+		"/etc/luks",
+	}
+}
+
+// resolveReadDenyList composes the default deny-list with any extra
+// entries supplied via XALGORIX_READ_DENY_LIST. Entries in the env var
+// are colon-separated (Linux PATH convention); an empty string yields
+// the defaults. Empty tokens are skipped.
+func resolveReadDenyList(home, raw string) []string {
+	out := defaultReadDenyList(home)
+	if raw == "" {
+		return out
+	}
+	for _, entry := range strings.Split(raw, ":") {
+		entry = strings.TrimSpace(entry)
+		if entry != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
