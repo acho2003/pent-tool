@@ -3,6 +3,7 @@ import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import { ConnectionBanner } from "@/components/connection-status";
+import { LegacyImportBanner } from "@/components/legacy-import-banner";
 import { CommandPalette } from "@/components/command-palette";
 import { useWSStore } from "@/store/ws";
 
@@ -49,6 +50,7 @@ export function AppShell() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Topbar onMenuToggle={handleSidebarToggle} />
         <ConnectionBanner />
+        <LegacyImportBanner />
         <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6">
             <Outlet />

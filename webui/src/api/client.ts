@@ -163,7 +163,6 @@ export const api = {
 
   status: () => http<StatusResponse>("/api/status"),
   version: () => http<VersionInfo>("/api/version"),
-
   listScans: () => http<ScanListItem[] | null>("/api/scans"),
   getScan: (id: string) => http<ScanRecord | null>(`/api/scans/${id}`),
   deleteScan: (id: string) =>
@@ -247,6 +246,14 @@ export const api = {
     }),
 
   reportUrl: (scanId: string) => `/api/report/${scanId}`,
+
+  legacyImportStatus: () =>
+    http<{ count: number; dismissed: boolean }>("/api/legacy-import/status"),
+  dismissLegacyImport: () =>
+    http<{ count: number; dismissed: boolean }>(
+      "/api/legacy-import/status",
+      { method: "POST" },
+    ),
 
   chat: (message: string, instanceId?: string) =>
     http<{ reply?: string; error?: string }>("/api/chat", {

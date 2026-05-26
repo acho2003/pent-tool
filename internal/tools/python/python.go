@@ -2,7 +2,6 @@
 package python
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -17,6 +16,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
+	"github.com/xalgord/xalgorix/v4/internal/tools/iolimit"
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
 
@@ -84,18 +84,37 @@ func executePythonForContext(contextID string, args map[string]string) (tools.Re
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, pythonBin, "-c", code)
-	if wd := terminal.GetWorkDirForContext(contextID); wd != "" {
-		cmd.Dir = wd
+	// Resolve the python child's working directory in this priority order so
+	// the .tmp/.cache/.config/.local scratch dirs created by
+	// preparePythonWorkspace land inside an Allow_List root (R8.7, R8.10):
+	//
+	//   1. sc.ScanDir — when a Scan_Context owns the invocation, all
+	//      python-tool side effects must stay inside that scan's working
+	//      directory.
+	//   2. terminal.GetWorkDirForContext — honors any explicit cd performed
+	//      via the terminal tool inside the same agent session, so python
+	//      and shell stay in sync.
+	//   3. cfg.WorkspaceRoot (= Data_Dir) — the CLI / no-Scan_Context
+	//      fallback. Per R8.10, no Filesystem_Tool is allowed to fall back
+	//      to $CWD here; WorkspaceRoot is always an Allow_List descendant.
+	scanDir := ""
+	if sc := scanctx.Get(contextID); sc != nil && sc.ScanDir != "" {
+		scanDir = sc.ScanDir
+	} else if wd := terminal.GetWorkDirForContext(contextID); wd != "" {
+		scanDir = wd
 	} else {
-		cmd.Dir = config.Get().Workspace
+		scanDir = config.Get().WorkspaceRoot
 	}
-	cmd.Dir = filepath.Clean(cmd.Dir)
+	cmd.Dir = filepath.Clean(scanDir)
 	preparePythonWorkspace(cmd.Dir)
+	// pythonWorkspaceEnv roots HOME, TMPDIR, and XDG_{CACHE,CONFIG,DATA}_HOME
+	// at cmd.Dir, which is now guaranteed to be sc.ScanDir or
+	// cfg.WorkspaceRoot — both Allow_List descendants. That satisfies R8.8.
 	cmd.Env = pythonWorkspaceEnv(cmd.Dir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout := newLimitedBuffer(1024 * 1024)
-	stderr := newLimitedBuffer(512 * 1024)
+	stdout := iolimit.New(1 << 20)
+	stderr := iolimit.New(1 << 19)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -163,6 +182,11 @@ func pythonWaitContext(contextID string) context.Context {
 	return context.Background()
 }
 
+// preparePythonWorkspace creates the .tmp/.cache/.config/.local/share scratch
+// dirs that pythonWorkspaceEnv exports to the child via HOME, TMPDIR, and
+// XDG_*. Callers MUST pass a workDir that is an Allow_List descendant
+// (sc.ScanDir or cfg.WorkspaceRoot per R8.7, R8.10); this function does not
+// validate the path itself and would otherwise leak directories into $CWD.
 func preparePythonWorkspace(workDir string) {
 	_ = os.MkdirAll(filepath.Join(workDir, ".tmp"), 0o755)
 	_ = os.MkdirAll(filepath.Join(workDir, ".cache"), 0o755)
@@ -197,33 +221,4 @@ func pythonWorkspaceEnv(workDir string) []string {
 		"XALGORIX_WORKSPACE="+workDir,
 		"PYTHONDONTWRITEBYTECODE=1",
 	)
-}
-
-type limitedBuffer struct {
-	bytes.Buffer
-	limit     int
-	truncated bool
-}
-
-func newLimitedBuffer(limit int) *limitedBuffer {
-	return &limitedBuffer{limit: limit}
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.limit <= 0 || b.Len() >= b.limit {
-		b.truncated = true
-		return len(p), nil
-	}
-	remaining := b.limit - b.Len()
-	if len(p) > remaining {
-		b.truncated = true
-		_, _ = b.Buffer.Write(p[:remaining])
-		return len(p), nil
-	}
-	_, _ = b.Buffer.Write(p)
-	return len(p), nil
-}
-
-func (b *limitedBuffer) Truncated() bool {
-	return b.truncated
 }

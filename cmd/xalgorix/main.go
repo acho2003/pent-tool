@@ -432,11 +432,12 @@ func handleStart() {
 	if home == "" {
 		home = "/root"
 	}
-	workspaceDir := filepath.Join(home, "xalgorix-workspace")
-	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
-		log.Printf("Warning: failed to create workspace directory %s: %v", workspaceDir, err)
-	}
-	serviceContent := serviceUnitContent(home, workspaceDir, installPath)
+	// The active workspace root is now owned by config.resolveDataDir
+	// (XALGORIX_DATA_DIR / ~/.xalgorix/data) per Task 3.6 / R6.4. The
+	// systemd unit no longer derives a $CWD-style "workspace" path; its
+	// WorkingDirectory is just $HOME so relative paths in operator-supplied
+	// env vars resolve predictably.
+	serviceContent := serviceUnitContent(home, installPath)
 	// Try to write service file (requires sudo)
 	servicePath := "/etc/systemd/system/xalgorix.service"
 	err := os.WriteFile(servicePath, []byte(serviceContent), 0644)
@@ -480,7 +481,7 @@ func handleStart() {
 	fmt.Println("   Status: systemctl status xalgorix")
 }
 
-func serviceUnitContent(home, workspaceDir, installPath string) string {
+func serviceUnitContent(home, installPath string) string {
 	return fmt.Sprintf(`[Unit]
 Description=Xalgorix - Autonomous AI Pentesting Engine
 After=network.target
@@ -491,7 +492,6 @@ User=root
 WorkingDirectory=%s
 Environment="PATH=%s/go/bin:%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="GOPATH=%s/go"
-Environment="XALGORIX_WORKSPACE=%s"
 EnvironmentFile=%s/.xalgorix.env
 ExecStart=%s --web
 Restart=always
@@ -501,7 +501,7 @@ OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target
-`, workspaceDir, home, home, home, workspaceDir, home, installPath)
+`, home, home, home, home, home, installPath)
 }
 
 func startBackground() {
@@ -519,16 +519,15 @@ func startBackground() {
 	if homeDir == "" {
 		homeDir = "/root"
 	}
-	workspaceDir := filepath.Join(homeDir, "xalgorix-workspace")
-	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to create workspace directory: %v\n", err)
-		os.Exit(1)
-	}
+	// Task 3.6 / R6.4: don't re-derive a workspace from $CWD or invent a
+	// new ~/xalgorix-workspace tree. The active Data_Dir is owned by
+	// config.resolveDataDir; we just run from $HOME so relative paths the
+	// operator supplies via env vars resolve predictably.
 	startCmd := exec.Command("/bin/bash", "-c", "source "+homeDir+"/.xalgorix.env && "+installPath+" --web")
 	startCmd.Stdout = logFile
 	startCmd.Stderr = logFile
-	startCmd.Dir = workspaceDir
-	startCmd.Env = append(os.Environ(), "XALGORIX_WORKSPACE="+workspaceDir)
+	startCmd.Dir = homeDir
+	startCmd.Env = os.Environ()
 
 	if err := startCmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to start xalgorix: %v\n", err)
@@ -659,11 +658,10 @@ func handleUninstall() {
 	// Ask about data removal
 	fmt.Println()
 	fmt.Println("📁 Data directories (not removed automatically):")
-	fmt.Println("   ~/.xalgorix/         - Configuration & skills")
-	fmt.Println("   ~/xalgorix-data/    - Scan data & reports")
+	fmt.Println("   ~/.xalgorix/         - Configuration, skills, and scan data")
 	fmt.Println()
 	fmt.Println("To remove data manually:")
-	fmt.Println("   rm -rf ~/.xalgorix ~/xalgorix-data")
+	fmt.Println("   rm -rf ~/.xalgorix")
 
 	fmt.Println()
 	fmt.Println("✅ Uninstall complete!")

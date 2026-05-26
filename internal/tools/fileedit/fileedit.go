@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/sandbox"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
@@ -127,34 +128,76 @@ func isWithinPath(root, path string) bool {
 }
 
 func strReplaceEditor(args map[string]string) (tools.Result, error) {
-	command := args["command"]
-	path := resolvePath(args["path"])
-	return runEditor(command, path, args)
+	return runEditorWithPolicy(nil, args)
 }
 
 func strReplaceEditorForContext(contextID string, args map[string]string) (tools.Result, error) {
-	command := args["command"]
-	path, err := resolvePathForContext(contextID, args["path"])
-	if err != nil {
-		return tools.Result{}, err
-	}
-	return runEditor(command, path, args)
+	sc := scanctx.Get(strings.TrimSpace(contextID))
+	return runEditorWithPolicy(sc, args)
 }
 
-func runEditor(command, path string, args map[string]string) (tools.Result, error) {
+// runEditorWithPolicy dispatches the editor command and routes every
+// write (create / str_replace / insert) through sandbox.Default().CheckResolve
+// using the operation-specific tool name "fileedit.<op>" (R8.1, R5.3).
+//
+// The view command is read-only and intentionally bypasses the Path_Policy:
+// Task 8.1 covers create/replace/insert/delete writes only.
+//
+// On Path_Policy reject we return the error to the agent loop via
+// tools.Result{Error: err.Error()}, nil — never as a Go-level error —
+// so the LLM can recover and try a path inside the Allow_List.
+func runEditorWithPolicy(sc *scanctx.ScanContext, args map[string]string) (tools.Result, error) {
+	command := args["command"]
+	rawPath := args["path"]
+
 	switch command {
 	case "view":
+		path, err := resolveViewPath(sc, rawPath)
+		if err != nil {
+			return tools.Result{}, err
+		}
 		return viewFile(path, args["view_range"])
 	case "create":
-		return createFile(path, args["file_text"])
+		canonical, rerr := sandbox.Default().CheckResolve(sc, "fileedit.create", rawPath)
+		if rerr != nil {
+			return tools.Result{Error: rerr.Error()}, nil
+		}
+		return createFile(canonical, args["file_text"])
 	case "str_replace":
-		return replaceInFile(path, args["old_str"], args["new_str"])
+		canonical, rerr := sandbox.Default().CheckResolve(sc, "fileedit.replace", rawPath)
+		if rerr != nil {
+			return tools.Result{Error: rerr.Error()}, nil
+		}
+		return replaceInFile(canonical, args["old_str"], args["new_str"])
 	case "insert":
-		return insertInFile(path, args["new_str"], args["insert_line"])
+		canonical, rerr := sandbox.Default().CheckResolve(sc, "fileedit.insert", rawPath)
+		if rerr != nil {
+			return tools.Result{Error: rerr.Error()}, nil
+		}
+		return insertInFile(canonical, args["new_str"], args["insert_line"])
 	default:
 		return tools.Result{}, fmt.Errorf("unknown command: %s (expected: view, create, str_replace, insert)", command)
 	}
 }
+
+// resolveViewPath keeps the prior scan-workspace containment rule for the
+// read-only view command: it never touches the Path_Policy (writes only)
+// but still resolves relative paths against the active Scan_Context.
+func resolveViewPath(sc *scanctx.ScanContext, rawPath string) (string, error) {
+	contextID := ""
+	if sc != nil {
+		contextID = sc.ID
+	}
+	if contextID == "" {
+		return resolvePath(rawPath), nil
+	}
+	return resolvePathForContext(contextID, rawPath)
+}
+
+// runEditor is intentionally removed: the editor entry point now lives in
+// runEditorWithPolicy, which inlines the dispatch so each write command can
+// route its path through sandbox.Default().CheckResolve with the correct
+// "fileedit.<op>" tool name.
 
 func viewFile(path, viewRange string) (tools.Result, error) {
 	data, err := os.ReadFile(path)

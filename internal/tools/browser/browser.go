@@ -24,9 +24,38 @@ import (
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
+	"github.com/xalgord/xalgorix/v4/internal/sandbox"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
+	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
+
+// browserCacheDir is the on-disk root for every browser cache, extension
+// extraction, and downloaded Chromium binary. Per Task 8.5 this lives under
+// ~/.xalgorix/browser/ so the default policy roots admit it without any
+// per-scan workspace trickery.
+func browserCacheDir() string {
+	return filepath.Join(config.Get().HomeDir, "browser")
+}
+
+// resolveBrowserPath canonicalizes path through Path_Policy with the
+// "browser" tool name, using the active Scan_Context for ctxID when one
+// exists. Every browser write (download cache, extension extraction,
+// session persistence) flows through this helper so the Allow_List
+// boundary is enforced uniformly (R8.5).
+func resolveBrowserPath(ctxID, path string) (string, error) {
+	sc := scanctx.Get(ctxID)
+	return sandbox.Default().CheckResolve(sc, "browser", path)
+}
+
+// scanContextForCtx returns the active Scan_Context for ctxID, falling
+// back to scanctx.Default() so callers always have a lease holder.
+func scanContextForCtx(ctxID string) *scanctx.ScanContext {
+	if sc := scanctx.Get(ctxID); sc != nil {
+		return sc
+	}
+	return scanctx.Default()
+}
 
 // ── Per-instance browser stores ──
 var (
@@ -155,7 +184,7 @@ func CleanupContext(contextID string) {
 	defer browserStoresMu.Unlock()
 	if s, ok := browserStores[contextID]; ok {
 		s.mu.Lock()
-		cleanupBrowserLocked(s)
+		cleanupBrowserLocked(contextID, s)
 		s.mu.Unlock()
 		delete(browserStores, contextID)
 	}
@@ -244,7 +273,7 @@ var extensionFS embed.FS
 
 // getChromiumPath returns the path to a Chromium binary.
 // Priority: 1) XALGORIX_BROWSER_PATH env  2) System-installed browser  3) Rod auto-download (~170MB first run)
-func getChromiumPath() (string, error) {
+func getChromiumPath(ctxID string) (string, error) {
 	// 1. User override via config
 	if p := config.Get().BrowserPath; p != "" {
 		if _, err := os.Stat(p); err == nil {
@@ -278,7 +307,11 @@ func getChromiumPath() (string, error) {
 	}
 
 	// 4. Auto-download via Rod's built-in browser manager (last resort)
-	cacheDir := filepath.Join(config.Get().HomeDir, "browser")
+	rawCacheDir := browserCacheDir()
+	cacheDir, err := resolveBrowserPath(ctxID, rawCacheDir)
+	if err != nil {
+		return "", fmt.Errorf("browser cache dir rejected by path policy: %w", err)
+	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create browser cache dir: %w", err)
 	}
@@ -298,9 +331,22 @@ func getChromiumPath() (string, error) {
 // extractExtension writes the embedded extension files to disk so Chrome
 // can load them via --load-extension. Returns the extension directory path.
 // Files are only re-written if the directory doesn't exist or manifest changed.
-func extractExtension() (string, error) {
-	extDir := filepath.Join(config.Get().HomeDir, "extension")
-	manifestPath := filepath.Join(extDir, "manifest.json")
+//
+// Per Task 8.5 the extension lives under the browser cache root
+// (~/.xalgorix/browser/extension) and every write is canonicalized through
+// sandbox.Default().CheckResolve with the "browser" tool name so the
+// Path_Policy Allow_List always admits it.
+func extractExtension(ctxID string) (string, error) {
+	rawExtDir := filepath.Join(browserCacheDir(), "extension")
+	extDir, err := resolveBrowserPath(ctxID, rawExtDir)
+	if err != nil {
+		return "", fmt.Errorf("extension dir rejected by path policy: %w", err)
+	}
+	rawManifestPath := filepath.Join(extDir, "manifest.json")
+	manifestPath, err := resolveBrowserPath(ctxID, rawManifestPath)
+	if err != nil {
+		return "", fmt.Errorf("extension manifest rejected by path policy: %w", err)
+	}
 
 	// Check if already extracted and up-to-date
 	embeddedManifest, err := fs.ReadFile(extensionFS, "extension/manifest.json")
@@ -333,7 +379,11 @@ func extractExtension() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", entry.Name(), err)
 		}
-		dst := filepath.Join(extDir, entry.Name())
+		rawDst := filepath.Join(extDir, entry.Name())
+		dst, err := resolveBrowserPath(ctxID, rawDst)
+		if err != nil {
+			return "", fmt.Errorf("extension file %s rejected by path policy: %w", entry.Name(), err)
+		}
 		if err := os.WriteFile(dst, data, 0o644); err != nil {
 			return "", fmt.Errorf("write %s: %w", entry.Name(), err)
 		}
@@ -353,13 +403,13 @@ func ensureBrowser(ctxID, proxy string) error {
 	}
 
 	// 1. Get Chromium binary (auto-download if needed)
-	path, err := getChromiumPath()
+	path, err := getChromiumPath(ctxID)
 	if err != nil {
 		return fmt.Errorf("chromium: %w", err)
 	}
 
 	// 2. Extract embedded extension
-	extDir, err := extractExtension()
+	extDir, err := extractExtension(ctxID)
 	if err != nil {
 		log.Printf("[browser] WARNING: Extension extraction failed: %v (launching without extension)", err)
 		extDir = ""
@@ -400,13 +450,26 @@ func ensureBrowser(ctxID, proxy string) error {
 			Set("ignore-certificate-errors", "true")
 	}
 
-	lease, err := resources.AcquireToolLeaseContext(browserWaitContext(ctxID), true, "browser_action launch")
-	if err != nil {
-		return fmt.Errorf("browser launch cancelled while waiting for resource capacity: %w", err)
+	// Acquire a Tool_Lease before the first browser context for this scan.
+	// The lease is cached on BrowserState so it survives across multiple
+	// browser_action invocations and is released exactly once when the
+	// Scan_Context closes (Tasks 10.1, 10.3, 13.3). isHeavy=false because
+	// a single shared Chromium process is light relative to scan-wide
+	// terminal/python heavy tools — admission still throttles light slots.
+	bs := scanContextForCtx(ctxID).Browser
+	leaseAcquired := false
+	var lease *resources.ToolLease
+	if bs == nil || bs.Lease() == nil {
+		l, err := resources.AcquireToolLeaseContext(browserWaitContext(ctxID), false, "browser_action")
+		if err != nil {
+			return fmt.Errorf("browser launch cancelled while waiting for resource capacity: %w", err)
+		}
+		lease = l
+		leaseAcquired = true
 	}
 	leaseAttached := false
 	defer func() {
-		if !leaseAttached {
+		if leaseAcquired && !leaseAttached {
 			lease.Release()
 		}
 	}()
@@ -414,6 +477,32 @@ func ensureBrowser(ctxID, proxy string) error {
 	u, err := ln.Launch()
 	if err != nil {
 		return fmt.Errorf("launch browser: %w", err)
+	}
+
+	// Apply OOM/RLIMIT_AS to the freshly spawned Chromium process tree so
+	// the lease's memory ceiling is enforced kernel-side (R4.4). go-rod's
+	// launcher manages Chromium outside of os/exec and exposes only the
+	// PID, so we use the PID-based companion to ApplyProcessLimitsWithLimit.
+	// The "active" lease is either the one this call just acquired or the
+	// one already cached on BrowserState from a previous launch in this
+	// scan — in both cases the same memory ceiling applies. isHeavy=true
+	// matches the python tool: Chromium is a memory-hungry subprocess and
+	// should be reaped before xalgorix under pressure.
+	pid := ln.PID()
+	if pid > 0 {
+		activeLease := lease
+		if activeLease == nil && bs != nil {
+			activeLease = bs.Lease()
+		}
+		var memLimitBytes int64
+		if activeLease != nil {
+			memLimitBytes = activeLease.MemoryLimitBytes()
+		} else {
+			memLimitBytes = resources.CurrentToolMemoryLimitBytes(false)
+		}
+		terminal.ApplyProcessLimitsToPID(pid, true, memLimitBytes)
+	} else {
+		log.Printf("[browser] Skipping process-limit apply: launcher reported pid=0")
 	}
 
 	br := rod.New().ControlURL(u)
@@ -424,9 +513,18 @@ func ensureBrowser(ctxID, proxy string) error {
 
 	s.browser = br
 	s.browserLauncher = ln
-	s.lease = lease
-	leaseAttached = true
-	log.Printf("[browser] Standalone browser launched (extension=%v)", extDir != "")
+	if leaseAcquired {
+		// Cache for cleanupBrowserLocked's per-store fallback release
+		// (covers CleanupContext and timeout paths that don't call
+		// BrowserState.Close), and attach to BrowserState so the
+		// scan-context Close path can release exactly once.
+		s.lease = lease
+		if bs != nil {
+			bs.SetLease(lease)
+		}
+		leaseAttached = true
+	}
+	log.Printf("[browser] Standalone browser launched (extension=%v, lease_acquired=%v)", extDir != "", leaseAcquired)
 	return nil
 }
 
@@ -772,10 +870,17 @@ func saveSession(ctxID, sessionName string) (tools.Result, error) {
 		}
 		data, err := json.MarshalIndent(entries, "", "  ")
 		if err == nil {
-			if err := os.WriteFile(diskPath, data, 0600); err != nil {
-				log.Printf("[browser] Warning: failed to save session '%s' to %s: %v", sessionName, diskPath, err)
+			// Route the session-persistence write through Path_Policy
+			// (R8.5). The session directory is provided by the agent
+			// (SetSessionPathForCtx); without this guard a misconfigured
+			// path could escape the Allow_List.
+			canonical, perr := resolveBrowserPath(ctxID, diskPath)
+			if perr != nil {
+				log.Printf("[browser] Warning: refusing to save session '%s' to %s: %v", sessionName, diskPath, perr)
+			} else if err := os.WriteFile(canonical, data, 0600); err != nil {
+				log.Printf("[browser] Warning: failed to save session '%s' to %s: %v", sessionName, canonical, err)
 			} else {
-				log.Printf("[browser] Session '%s' saved to disk: %s (%d cookies)", sessionName, diskPath, len(entries))
+				log.Printf("[browser] Session '%s' saved to disk: %s (%d cookies)", sessionName, canonical, len(entries))
 			}
 		}
 	}
@@ -1433,13 +1538,13 @@ func closeBrowser(ctxID string) (tools.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cleanupBrowserLocked(s)
+	cleanupBrowserLocked(ctxID, s)
 
 	return tools.Result{Output: "Browser closed"}, nil
 }
 
 // cleanupBrowserLocked closes browser resources (must hold s.mu).
-func cleanupBrowserLocked(s *browserStore) {
+func cleanupBrowserLocked(ctxID string, s *browserStore) {
 	closed := false
 	s.savedSessions = make(map[string][]*proto.NetworkCookie)
 	if s.browser != nil {
@@ -1464,15 +1569,26 @@ func cleanupBrowserLocked(s *browserStore) {
 		s.lease.Release()
 		s.lease = nil
 	}
+	// Keep BrowserState cache in sync so the next launch in this scan
+	// re-acquires a fresh lease. Without this the bs.Lease() != nil guard
+	// in ensureBrowser would short-circuit re-acquire on a stale, already-
+	// released lease pointer. Note: ToolLease.Release is idempotent so
+	// this is safe even if Task 10.3 later adds a release in
+	// BrowserState.Close — only the first call deducts from the
+	// semaphore.
+	if sc := scanctx.Get(ctxID); sc != nil && sc.Browser != nil {
+		sc.Browser.DropLease()
+	}
 }
 
 // CleanupBrowser safely closes any open browser and resets state.
 // Called between scan phases and on agent stop to prevent stale connection usage.
 func CleanupBrowser() {
-	s := getBrowserStore()
+	ctxID := scanctx.Default().ID
+	s := getBrowserStoreByID(ctxID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cleanupBrowserLocked(s)
+	cleanupBrowserLocked(ctxID, s)
 }
 
 func pageState(ctxID, action, tabID string) (tools.Result, error) {

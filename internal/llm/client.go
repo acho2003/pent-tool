@@ -15,7 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/resources"
+	"github.com/xalgord/xalgorix/v4/internal/safe"
 )
 
 // Message represents a chat message.
@@ -44,6 +48,11 @@ type Client struct {
 	// SetContext. Use atomic.Value to avoid a race; loadCtx() is the only
 	// reader, storeCtx() is the only writer.
 	ctx atomic.Value // context.Context
+	// rateLimiter enforces cfg.RateLimitRPS / cfg.RateLimitBurst against
+	// outbound LLM calls. Wait(ctx) blocks until a token is available
+	// (or ctx is cancelled), so the limiter cannot drop requests
+	// (R3.5). nil when the configured RPS is non-positive.
+	rateLimiter *rate.Limiter
 }
 
 // TokenUsage holds cumulative token counts.
@@ -74,6 +83,18 @@ func NewClient(cfg *config.Config) *Client {
 		provider:   provider,
 	}
 	c.ctx.Store(ctxHolder{ctx: context.Background()})
+	// Construct the token-bucket rate limiter from cfg.RateLimitRPS /
+	// cfg.RateLimitBurst (R3.5). Wait(ctx) is the only consumer, so
+	// requests block instead of being dropped, and ctx cancellation is
+	// honored. A non-positive RPS leaves rateLimiter nil so chatWithRetry
+	// skips the wait (matching legacy behavior).
+	if cfg != nil && cfg.RateLimitRPS > 0 {
+		burst := cfg.RateLimitBurst
+		if burst < 1 {
+			burst = 1
+		}
+		c.rateLimiter = rate.NewLimiter(rate.Limit(cfg.RateLimitRPS), burst)
+	}
 	return c
 }
 
@@ -418,8 +439,30 @@ func (c *Client) chatWithRetry(messages []Message) (string, error) {
 func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 	ch := make(chan StreamChunk, 64)
 
-	go func() {
+	// Spawn the streaming goroutine under safe.Go (R1.2 / R1.5) so a
+	// panic in JSON parsing, transport, or scanner produces exactly one
+	// recovery log line and increments PanicsRecovered. Without this
+	// wrapper a panic here would crash the entire process.
+	safe.Go("llm.stream", "", func() {
 		defer close(ch)
+
+		// Honor the LLM token-bucket rate limiter (R3.5) and the
+		// in-flight cap (R3.3 / R3.4) for streaming calls too — both
+		// limits are about outbound LLM volume, not request shape.
+		// On ctx cancellation neither call consumes a slot (P3.4).
+		streamCtx := c.loadCtx()
+		if c.rateLimiter != nil {
+			if err := c.rateLimiter.Wait(streamCtx); err != nil {
+				ch <- StreamChunk{Err: fmt.Errorf("llm rate limit: %w", err)}
+				return
+			}
+		}
+		release, err := resources.AcquireLLMSlot(streamCtx)
+		if err != nil {
+			ch <- StreamChunk{Err: fmt.Errorf("llm slot: %w", err)}
+			return
+		}
+		defer release()
 
 		endpoint, model := c.resolveEndpoint()
 		isGoogle := c.usesGeminiAPI(endpoint)
@@ -475,8 +518,7 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 			body, _ = json.Marshal(reqBody)
 		}
 
-		reqCtx := c.loadCtx()
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			ch <- StreamChunk{Err: err}
 			return
@@ -610,13 +652,39 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 		}
 
 		ch <- StreamChunk{Done: true}
-	}()
+	})
 
 	return ch
 }
 
 // doChat performs a single non-streaming API call.
-func (c *Client) doChat(messages []Message) (string, error) {
+func (c *Client) doChat(messages []Message) (out string, err error) {
+	// Panic boundary (R1.5): any panic in the LLM client (JSON
+	// marshalling, header construction, HTTP transport panic) is
+	// converted into a typed error so the caller can decide whether to
+	// retry. The recovered panic is logged exactly once and the
+	// PanicsRecovered counter is incremented by safe.Recover.
+	defer safe.Recover("llm.doChat", "", &err)
+
+	// Honor the LLM token-bucket rate limiter (R3.5): block instead of
+	// dropping, and propagate ctx cancellation (R3.4 / P3.4) without
+	// consuming a token slot.
+	reqCtx := c.loadCtx()
+	if c.rateLimiter != nil {
+		if err = c.rateLimiter.Wait(reqCtx); err != nil {
+			return "", fmt.Errorf("llm rate limit: %w", err)
+		}
+	}
+
+	// Reserve one in-flight LLM slot (R3.3 / R3.4). The slot is held
+	// for the entire request, including body read, so a stalled
+	// upstream cannot let more requests pile up than the cap allows.
+	release, err := resources.AcquireLLMSlot(reqCtx)
+	if err != nil {
+		return "", fmt.Errorf("llm slot: %w", err)
+	}
+	defer release()
+
 	endpoint, model := c.resolveEndpoint()
 	log.Printf("[llm] Request → URL=%s model=%s apiModel=%s cfgLLM=%s cfgAPIBase=%s", endpoint, model, c.apiModel, c.cfg.LLM, c.cfg.APIBase)
 
@@ -624,7 +692,6 @@ func (c *Client) doChat(messages []Message) (string, error) {
 	isAnthropic := c.usesAnthropicAPI(endpoint)
 
 	var body []byte
-	var err error
 	if isGoogle {
 		// Google Gemini: extract system messages, convert roles
 		var systemParts []geminiPart
@@ -680,7 +747,6 @@ func (c *Client) doChat(messages []Message) (string, error) {
 		}
 	}
 
-	reqCtx := c.loadCtx()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err

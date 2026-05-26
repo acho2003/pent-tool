@@ -32,6 +32,16 @@ func NewNoteStore() *NoteStore {
 }
 
 // SetPersistPath configures disk persistence for notes.
+//
+// Path_Policy note (Requirement 8.3): NoteStore lives in package scanctx,
+// which sandbox imports. To avoid an import cycle we cannot call
+// sandbox.Default().CheckResolve from here. The persist path is constructed
+// as filepath.Join(dir, "notes.json") — there is no user-supplied path
+// component, so the boundary is preserved by construction provided callers
+// hand us a directory inside the Allow_List. In production the only caller
+// is internal/tools/notes (which routes its own writes through
+// sandbox.CheckResolve); the directory passed to NoteStore is the per-scan
+// ScanDir, which is an Allow_List descendant by construction.
 func (ns *NoteStore) SetPersistPath(dir string) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
@@ -160,6 +170,13 @@ func (ns *NoteStore) marshalSnapshot() ([]byte, string) {
 // writeFile persists serialized data to disk. Safe to call without holding
 // the data lock (mu); writeMu serializes concurrent writers so two Set()s
 // cannot race on the file.
+//
+// Path_Policy note (Requirement 8.3): safe by construction. The path
+// originates from SetPersistPath which scopes it to dir + "notes.json"; in
+// production dir is the per-scan ScanDir, an Allow_List descendant. We
+// cannot call sandbox.Default().CheckResolve here because scanctx is
+// imported by sandbox. User-supplied paths into the notes feature flow
+// through internal/tools/notes, which calls CheckResolve directly.
 func (ns *NoteStore) writeFile(data []byte, path string) {
 	if data == nil || path == "" {
 		return

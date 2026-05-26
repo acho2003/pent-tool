@@ -191,6 +191,13 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 
 func TestConfig_Validate(t *testing.T) {
 	cfg := &Config{}
+	// First failure mode: empty DataDir (R6.5 guard runs before the LLM/API checks).
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for empty DataDir")
+	}
+
+	// With DataDir resolved, we fall through to the LLM check.
+	cfg.DataDir = "/tmp/xalgorix-validate-test"
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for empty LLM")
 	}
@@ -203,14 +210,21 @@ func TestConfig_Validate(t *testing.T) {
 
 	cfg.APIKey = "test-key"
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error with LLM and APIKey set, got: %v", err)
+		t.Errorf("expected no error with DataDir, LLM, and APIKey set, got: %v", err)
 	}
 }
 
 func TestConfig_WorkspacePath(t *testing.T) {
-	cfg := &Config{Workspace: "/home/user/project"}
+	// WorkspacePath now resolves through WorkspaceRoot (R6.4/R6.6). In the
+	// real load path WorkspaceRoot equals DataDir which equals Workspace,
+	// but the fixture only needs WorkspaceRoot for the join behavior.
+	cfg := &Config{
+		Workspace:     "/home/user/project",
+		DataDir:       "/home/user/project",
+		WorkspaceRoot: "/home/user/project",
+	}
 
-	// Relative path should be joined with workspace
+	// Relative path should be joined with the workspace root
 	if got := cfg.WorkspacePath("subdir/file.txt"); got != "/home/user/project/subdir/file.txt" {
 		t.Errorf("expected joined path, got: %s", got)
 	}
@@ -218,6 +232,17 @@ func TestConfig_WorkspacePath(t *testing.T) {
 	// Absolute path should be returned as-is
 	if got := cfg.WorkspacePath("/absolute/path"); got != "/absolute/path" {
 		t.Errorf("expected absolute path as-is, got: %s", got)
+	}
+
+	// Drift guard: if Workspace ever diverges from WorkspaceRoot the helper
+	// must follow WorkspaceRoot, not Workspace.
+	drift := &Config{
+		Workspace:     "/legacy/cwd",
+		DataDir:       "/home/user/.xalgorix/data",
+		WorkspaceRoot: "/home/user/.xalgorix/data",
+	}
+	if got := drift.WorkspacePath("subdir/file.txt"); got != "/home/user/.xalgorix/data/subdir/file.txt" {
+		t.Errorf("expected resolution against WorkspaceRoot, got: %s", got)
 	}
 }
 

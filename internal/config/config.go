@@ -27,6 +27,9 @@ type Config struct {
 	// Runtime settings
 	RuntimeBackend string // XALGORIX_RUNTIME_BACKEND — always "native"
 	Workspace      string // XALGORIX_WORKSPACE — workspace root dir
+	DataDir        string // Active per-installation data root. Defaults to ~/.xalgorix/data/. Override via XALGORIX_DATA_DIR.
+	WorkspaceRoot  string // Resolution root used by Filesystem_Tools when no Scan_Context.ScanDir is in effect. Equals DataDir.
+	legacyCWD      string // Captured os.Getwd() at config load time. Used only by the migration warning.
 	DisableBrowser bool   // XALGORIX_DISABLE_BROWSER
 	MaxIterations  int    // XALGORIX_MAX_ITERATIONS — 0 = unlimited
 
@@ -123,7 +126,34 @@ func load() *Config {
 		log.Printf("Warning: failed to get working directory: %v", err)
 		cwd = home
 	}
-	workspace := envOr("XALGORIX_WORKSPACE", cwd)
+	// Capture the user's *original* intent for Data_Dir / Workspace selection
+	// before the backwards-compat shim runs. The migration-warning
+	// suppression check (R7.4) needs to see whether the user explicitly
+	// pinned a workspace path; if we sampled XALGORIX_DATA_DIR after the
+	// shim ran, the shim's synthetic value would always look like an
+	// override and we'd never warn legitimate cases.
+	originalDataDirEnv := os.Getenv("XALGORIX_DATA_DIR")
+	originalWorkspaceEnv := os.Getenv("XALGORIX_WORKSPACE")
+	// Backwards-compat shim for legacy XALGORIX_WORKSPACE: if it's set and
+	// XALGORIX_DATA_DIR is not, treat XALGORIX_WORKSPACE as if it were
+	// XALGORIX_DATA_DIR and emit a deprecation notice. External scripts that
+	// pin a workspace path therefore keep working without change.
+	if originalWorkspaceEnv != "" && originalDataDirEnv == "" {
+		log.Printf("[config] WARN XALGORIX_WORKSPACE is deprecated; please use XALGORIX_DATA_DIR=%s", originalWorkspaceEnv)
+		os.Setenv("XALGORIX_DATA_DIR", originalWorkspaceEnv)
+	}
+	// Resolve the per-installation Data_Dir (R6.1–R6.3, R6.7). On failure we
+	// emit a non-fatal warning and fall back to $CWD so the binary doesn't
+	// crash hard during startup; Task 3.4 adds the strict Validate() guard
+	// that turns this into a fatal error.
+	dataDir, err := resolveDataDir(home)
+	if err != nil {
+		log.Printf("[config] WARN Data_Dir resolution failed: %v — falling back to CWD", err)
+		dataDir = cwd
+	}
+	// Workspace is now an alias for DataDir (R6.4). The legacy
+	// XALGORIX_WORKSPACE env var is honored above as a backwards-compat shim.
+	workspace := dataDir
 
 	cfg := &Config{
 		// LLM
@@ -137,6 +167,9 @@ func load() *Config {
 		// Runtime
 		RuntimeBackend: "native", // Always native in Go version
 		Workspace:      workspace,
+		DataDir:        dataDir,
+		WorkspaceRoot:  dataDir,
+		legacyCWD:      cwd,
 		DisableBrowser: envOrBool("XALGORIX_DISABLE_BROWSER", false),
 		MaxIterations:  envOrInt("XALGORIX_MAX_ITERATIONS", 0),
 
@@ -204,6 +237,17 @@ func load() *Config {
 		fmt.Printf("[config] Loaded: LLM=%q APIBase=%q APIKey=%s UseProxy=%v\n", cfg.LLM, cfg.APIBase, maskedKey, cfg.UseProxy)
 	}
 
+	// R6.7: announce the resolved Data_Dir / Workspace_Root once at startup
+	// so operators can see at a glance where artefacts will land.
+	log.Printf("[config] Data_Dir=%s Workspace_Root=%s", cfg.DataDir, cfg.WorkspaceRoot)
+
+	// R7: emit the Migration_Warning when a legacy $CWD layout is detected.
+	// Suppressed by an explicit XALGORIX_DATA_DIR or the legacy
+	// XALGORIX_WORKSPACE override (R7.4); idempotence (R7.3) is provided by
+	// configOnce since this only runs from load().
+	suppressMigrationWarning := originalDataDirEnv != "" || originalWorkspaceEnv != ""
+	maybeEmitMigrationWarning(cwd, cfg.DataDir, suppressMigrationWarning)
+
 	return cfg
 }
 
@@ -216,16 +260,30 @@ func (c *Config) ResolveModel() string {
 	return model
 }
 
-// WorkspacePath resolves a path relative to the workspace.
+// WorkspacePath resolves a path relative to the workspace root.
+//
+// Per R6.4, Workspace_Root is the canonical resolution root for relative
+// inputs and equals Data_Dir. Workspace remains as an alias for backwards
+// compatibility, but new resolution logic (and any code reading from this
+// helper) goes through WorkspaceRoot so the intent is explicit and the
+// behaviour stays correct if the two ever diverge.
 func (c *Config) WorkspacePath(rel string) string {
 	if filepath.IsAbs(rel) {
 		return rel
 	}
-	return filepath.Join(c.Workspace, rel)
+	return filepath.Join(c.WorkspaceRoot, rel)
 }
 
 // Validate checks that required configuration is present.
 func (c *Config) Validate() error {
+	// R6.5: refuse to start when Data_Dir resolution failed. load() logs a
+	// non-fatal warning and falls back to CWD so the binary doesn't crash
+	// before Validate() runs, but any boot path that calls Validate() must
+	// surface this as a hard error rather than silently scribbling files
+	// into the user's working directory.
+	if c.DataDir == "" {
+		return fmt.Errorf("DataDir is empty — Data_Dir resolution failed; check XALGORIX_DATA_DIR or HOME and verify the binary can create ~/.xalgorix/data with mode 0o700")
+	}
 	if c.LLM == "" {
 		return fmt.Errorf("XALGORIX_LLM is required. Set it to a model like 'openai/gpt-5.4' or 'anthropic/claude-sonnet-4-20250514'")
 	}
@@ -284,6 +342,71 @@ func CheckEnvFile() error {
 	}
 
 	return nil
+}
+
+// resolveDataDir picks the active Data_Dir, canonicalizes it, and creates it
+// with mode 0o700 if it doesn't exist yet (R6.1, R6.2, R6.3). When the env
+// var XALGORIX_DATA_DIR is unset it falls back to ~/.xalgorix/data/. Existing
+// directories are tightened to 0o700 so we never trust looser ambient perms.
+func resolveDataDir(home string) (string, error) {
+	raw := os.Getenv("XALGORIX_DATA_DIR")
+	if raw == "" {
+		raw = filepath.Join(home, ".xalgorix", "data")
+	}
+	abs, err := filepath.Abs(raw)
+	if err != nil {
+		return "", fmt.Errorf("data dir %q: %w", raw, err)
+	}
+	abs = filepath.Clean(abs)
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return "", fmt.Errorf("create data dir %q: %w", abs, err)
+	}
+	_ = os.Chmod(abs, 0o700)
+	return abs, nil
+}
+
+// maybeEmitMigrationWarning emits a single WARN-level [MIGRATION] log line
+// when the binary is launched from a directory that looks like the legacy
+// $CWD-rooted Xalgorix workspace layout (notes.json, _schedules/,
+// vulnerabilities.json, or YYYY-MM-DD/scan-* output dirs) and the user has
+// not pinned the workspace via XALGORIX_DATA_DIR or XALGORIX_WORKSPACE.
+//
+// Idempotence (R7.3) is provided by configOnce since the only call site is
+// load(). This function never reads, copies, modifies, or deletes any
+// legacy file (R7.5); it only stat()s known marker names.
+func maybeEmitMigrationWarning(cwd, dataDir string, suppressed bool) {
+	if suppressed {
+		return // R7.4: explicit Data_Dir/Workspace override suppresses
+	}
+	if cwd == "" || filepath.Clean(cwd) == filepath.Clean(dataDir) {
+		return
+	}
+	legacy := []string{
+		"notes.json",
+		"_schedules",
+		"vulnerabilities.json",
+	}
+	found := ""
+	for _, name := range legacy {
+		if _, err := os.Stat(filepath.Join(cwd, name)); err == nil {
+			found = name
+			break
+		}
+	}
+	if found == "" {
+		// Glob date-pattern dirs (YYYY-MM-DD/scan-*).
+		matches, _ := filepath.Glob(filepath.Join(cwd, "20??-??-??", "scan-*"))
+		if len(matches) > 0 {
+			found = "date-stamped scan output"
+		}
+	}
+	if found == "" {
+		return
+	}
+	log.Printf("[MIGRATION] Detected legacy workspace layout under %s "+
+		"(matched %q). The default data directory has changed in this "+
+		"release to %s. To keep writing to the legacy location, run with "+
+		"XALGORIX_DATA_DIR=%s", cwd, found, dataDir, cwd)
 }
 
 func envOr(key, fallback string) string {

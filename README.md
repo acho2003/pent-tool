@@ -49,6 +49,7 @@ Open `http://127.0.0.1:9137`.
 - [Features](#features)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Upgrading from previous versions](#upgrading-from-previous-versions)
 - [Running](#running)
 - [Service Mode](#service-mode)
 - [Web UI Workflow](#web-ui-workflow)
@@ -185,6 +186,42 @@ XALGORIX_PASSWORD=change-this-password
 
 > [!TIP]
 > Prefer `XALGORIX_PASSWORD_HASH` for production deployments.
+
+## Upgrading from previous versions
+
+This release ships a stability and workspace-isolation pass with one breaking change and a few new knobs worth knowing about.
+
+### Breaking change: default workspace moved to `~/.xalgorix/data/`
+
+Scan output, notes, schedules, and other generated artefacts now live under `~/.xalgorix/data/` instead of `$CWD` (the directory the binary was launched from).
+
+To retain the previous behavior, point `XALGORIX_DATA_DIR` at your current working directory:
+
+```bash
+export XALGORIX_DATA_DIR=$(pwd)
+```
+
+A `[MIGRATION]` warning is emitted at startup when legacy markers (`notes.json`, `_schedules/`, `vulnerabilities.json`, or `YYYY-MM-DD/scan-*` directories) are detected in `$CWD` and `XALGORIX_DATA_DIR` is unset. Xalgorix never reads, copies, or deletes those legacy files automatically; the warning is informational and only fires once per process.
+
+### New environment variable
+
+| Variable                     | Default                       | Description                                                                                              |
+| ---------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `XALGORIX_LLM_MAX_INFLIGHT`  | `4 × EffectiveMaxInstances`   | Caps simultaneous outbound LLM calls across all running scans. Minimum `1`. Cancelled waiters do not consume a slot. |
+
+### New health endpoint counters
+
+`GET /api/status` now exposes:
+
+| Field                 | Meaning                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `panics_recovered`    | Goroutine, HTTP handler, and tool panics that were recovered without crashing.       |
+| `path_rejections`     | Filesystem writes refused by Path_Policy (outside `data_dir` / `~/.xalgorix/` / `/tmp`). |
+| `watchdog_kills`      | Subprocesses terminated by the per-tool hard-timeout watchdog.                       |
+| `admission_refusals`  | Scan admission requests denied due to the concurrency ceiling.                       |
+| `llm_inflight_cap`    | Effective `XALGORIX_LLM_MAX_INFLIGHT` value for this process.                        |
+| `data_dir`            | Resolved Data_Dir in use.                                                            |
+| `allow_list`          | Filesystem roots accepted by Path_Policy.                                            |
 
 ## Running
 

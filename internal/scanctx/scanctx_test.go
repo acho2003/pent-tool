@@ -801,3 +801,61 @@ func TestNoteStore_ConcurrentDiskWrite(t *testing.T) {
 		}
 	}
 }
+
+// TestCloseReleasesEveryLeaseUnderPanic exercises Task 13.3's lease
+// conservation property: every Tool_Lease cached on a Scan_Context must be
+// released exactly once during Close, even if an earlier sub-step panics.
+//
+// We can't reach for a real *resources.ToolLease in this package without an
+// import cycle, so we use BrowserState's launched/sessionPath signal as a
+// stand-in for "the lease-holding sub-step ran". Once Task 10.1 caches a
+// lease on BrowserState the same recovered-closure structure exercised here
+// will release it.
+//
+// The test injects a panicking CancelFunc into Terminal.KillAll so the
+// terminal sub-step blows up mid-shutdown. If the recovery boundary in
+// Close were missing, Browser.Close would never run and any cached lease
+// would leak. Because each sub-step is wrapped in its own deferred recover,
+// Browser.Close still runs and the cached state is reset.
+func TestCloseReleasesEveryLeaseUnderPanic(t *testing.T) {
+	sc := New("close-panic-lease", "")
+
+	// Pretend the browser has a lease attached — SetLaunched/SessionPath are
+	// the visible signal that Browser.Close ran. Once Task 10.1 wires a real
+	// lease into BrowserState, the same code path that clears these fields
+	// in BrowserState.Close will release the lease via sync.Once.
+	sc.Browser.SetLaunched(true)
+	sc.Browser.SetSessionPath("/tmp/scan-session")
+
+	// Track a "process" whose CancelFunc panics so Terminal.KillAll panics
+	// mid-iteration. killTrackedProcess(&exec.Cmd{}) is a no-op (no Process
+	// attached), so the panic comes from the cancel func.
+	cancelInvoked := false
+	panicCancel := context.CancelFunc(func() {
+		cancelInvoked = true
+		panic("synthetic terminal cleanup panic")
+	})
+	sc.Terminal.TrackProcess(&exec.Cmd{}, panicCancel, "panic-cmd")
+
+	// Close must not propagate the panic and must still tear down Browser
+	// state so any cached lease is released.
+	sc.Close()
+
+	if !cancelInvoked {
+		t.Fatal("expected Terminal.KillAll to invoke the panicking cancel func")
+	}
+	if sc.Browser.IsLaunched() {
+		t.Fatal("Browser.Close did not run after Terminal.KillAll panicked — " +
+			"lease conservation under panic is broken")
+	}
+	if sc.Browser.GetSessionPath() != "" {
+		t.Fatal("Browser.Close did not clear session path after KillAll panic")
+	}
+	if err := sc.Ctx.Err(); err != context.Canceled {
+		t.Fatalf("scan context not cancelled after Close: err=%v", err)
+	}
+
+	// Idempotency: a second Close must not panic and must keep the lease
+	// release invariant (no double-release).
+	sc.Close()
+}

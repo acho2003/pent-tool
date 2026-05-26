@@ -74,6 +74,43 @@ var (
 	storesMu sync.RWMutex
 )
 
+// ── Child → parent context mapping ──
+// Decouples the reporting package from web/server.go. The web layer calls
+// SetParentContext at session start so PromoteToParent / promoteIfChildOfWildcard
+// can resolve the parent without importing or knowing about scanSession.
+//
+// CleanupContext removes both the vuln store AND the child→parent entry,
+// so the map does not leak entries across scan lifecycles.
+var parentMap = struct {
+	sync.RWMutex
+	m map[string]string
+}{m: make(map[string]string)}
+
+// SetParentContext declares that vulns reported into childCtxID should also
+// be promoted into parentCtxID via PromoteToParent. Idempotent: calling twice
+// with the same arguments is a no-op. Passing an empty parentCtxID clears
+// any prior mapping.
+func SetParentContext(childCtxID, parentCtxID string) {
+	if childCtxID == "" {
+		return
+	}
+	parentMap.Lock()
+	defer parentMap.Unlock()
+	if parentCtxID == "" {
+		delete(parentMap.m, childCtxID)
+		return
+	}
+	parentMap.m[childCtxID] = parentCtxID
+}
+
+// GetParentContext returns the parent context ID registered for childCtxID,
+// or the empty string if none is set.
+func GetParentContext(childCtxID string) string {
+	parentMap.RLock()
+	defer parentMap.RUnlock()
+	return parentMap.m[childCtxID]
+}
+
 // vulnStore is a per-instance vulnerability list.
 type vulnStore struct {
 	mu    sync.RWMutex
@@ -328,6 +365,11 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 
 	store.vulns = append(store.vulns, vuln)
 	store.mu.Unlock()
+
+	// Panic-safe persistence: if this context is a child of a wildcard parent,
+	// promote the vuln into the parent immediately so an agent panic before
+	// MergeVulnsToContext at session finalization does not lose it.
+	promoteIfChildOfWildcard(contextID, vuln.ID)
 
 	msg := fmt.Sprintf("✅ Vulnerability reported: [%s] %s (%s | CVSS %.1f) — Verified: %v", vuln.ID, vuln.Title, strings.ToUpper(vuln.Severity), vuln.CVSS, vuln.Verified)
 	if originalSeverity != "" {
@@ -717,10 +759,75 @@ func ResetVulnerabilitiesForContext(contextID string) {
 }
 
 // CleanupContext removes the store for a context that has been deactivated.
+// Also removes any parent-context mapping registered for this context so the
+// parentMap does not leak entries across scan lifecycles.
 func CleanupContext(contextID string) {
 	storesMu.Lock()
-	defer storesMu.Unlock()
 	delete(stores, contextID)
+	storesMu.Unlock()
+
+	parentMap.Lock()
+	delete(parentMap.m, contextID)
+	parentMap.Unlock()
+}
+
+// PromoteToParent copies a single vulnerability from the child reporting
+// context into the parent's reporting context if it isn't already there.
+//
+// Idempotent: if the parent already contains a vuln with the same ID, this
+// is a no-op. Safe to call after every successful report_vulnerability so
+// the parent aggregate stays current and survives a child panic before
+// the broader MergeVulnsToContext can run at session finalization.
+//
+// Validates: Property 4 (panic-safe persistence) of the
+// findings-consistency-and-pagination spec.
+func PromoteToParent(childContextID, parentContextID, vulnID string) {
+	if childContextID == "" || parentContextID == "" || vulnID == "" {
+		return
+	}
+	if childContextID == parentContextID {
+		return
+	}
+
+	src := getStoreByID(childContextID)
+	src.mu.RLock()
+	var found *Vulnerability
+	for i := range src.vulns {
+		if src.vulns[i].ID == vulnID {
+			v := src.vulns[i]
+			found = &v
+			break
+		}
+	}
+	src.mu.RUnlock()
+	if found == nil {
+		return
+	}
+
+	dst := getStoreByID(parentContextID)
+	dst.mu.Lock()
+	defer dst.mu.Unlock()
+	for _, v := range dst.vulns {
+		if v.ID == vulnID {
+			return // already present
+		}
+	}
+	// Skip semantic duplicates too, mirroring MergeVulnsToContext's behavior.
+	if _, _, dup := findDuplicateVulnerability(dst.vulns, found.Title, found.Description, found.Target, found.Endpoint); dup {
+		return
+	}
+	dst.vulns = append(dst.vulns, *found)
+}
+
+// promoteIfChildOfWildcard looks up the parent context registered for the
+// child via SetParentContext and forwards to PromoteToParent. No-op if no
+// parent has been declared for childCtxID.
+func promoteIfChildOfWildcard(childCtxID, vulnID string) {
+	parent := GetParentContext(childCtxID)
+	if parent == "" {
+		return
+	}
+	PromoteToParent(childCtxID, parent, vulnID)
 }
 
 // MergeVulnsToContext copies all vulnerabilities from srcContextID into dstContextID.

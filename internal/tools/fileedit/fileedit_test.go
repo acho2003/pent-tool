@@ -127,6 +127,9 @@ func TestContextFileEditorStaysInsideScanWorkspace(t *testing.T) {
 	scanctx.Activate(sc)
 	defer scanctx.Deactivate(sc.ID)
 
+	// In-scan-workspace writes go through sandbox.Default().CheckResolve
+	// and resolve relative to sc.ScanDir, which lives under /tmp and is
+	// therefore inside the Path_Policy Allow_List.
 	if _, err := strReplaceEditorForContext(sc.ID, map[string]string{
 		"command":   "create",
 		"path":      "notes.txt",
@@ -138,13 +141,25 @@ func TestContextFileEditorStaysInsideScanWorkspace(t *testing.T) {
 		t.Fatalf("expected file in scan workspace: %v", err)
 	}
 
-	outside := filepath.Join(t.TempDir(), "outside.txt")
-	_, err := strReplaceEditorForContext(sc.ID, map[string]string{
+	// A write target outside every Allow_List root (Data_Dir, ~/.xalgorix, /tmp)
+	// is rejected by Policy.CheckResolve. The error is returned to the agent
+	// loop via tools.Result{Error: ...}, nil — never as a Go-level error —
+	// so the LLM can recover and retry under an allowed root.
+	res, err := strReplaceEditorForContext(sc.ID, map[string]string{
 		"command":   "create",
-		"path":      outside,
+		"path":      "/etc/xalgorix-fileedit-test-outside.txt",
 		"file_text": "outside",
 	})
-	if err == nil || !strings.Contains(err.Error(), "outside the active scan workspace") {
-		t.Fatalf("outside path error = %v", err)
+	if err != nil {
+		t.Fatalf("path-policy reject must be returned via Result.Error, not Go error: %v", err)
+	}
+	if !strings.Contains(res.Error, "path-policy reject") {
+		t.Fatalf("expected path-policy reject error, got Result.Error=%q output=%q", res.Error, res.Output)
+	}
+	if !strings.Contains(res.Error, "fileedit.create") {
+		t.Fatalf("expected tool name fileedit.create in error, got %q", res.Error)
+	}
+	if _, statErr := os.Stat("/etc/xalgorix-fileedit-test-outside.txt"); statErr == nil {
+		t.Fatalf("rejected path must not have been written")
 	}
 }

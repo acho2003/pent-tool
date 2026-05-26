@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/safe"
 )
 
 // RequestRatePolicy is the per-scan outbound request budget. MaxRPS is kept as
@@ -106,16 +108,63 @@ func New(id, scanDir string) *ScanContext {
 
 // Close tears down all resources owned by this scan context.
 // Safe to call multiple times.
+//
+// Each sub-step (cancel, Terminal.KillAll, Browser.Close) runs inside its
+// own recovered closure so a panic in one step never prevents the others
+// from running. The outer defer is a final safety net for anything not
+// covered by the inner closures.
+//
+// Lease-conservation under panic (Task 13.3, Requirements 4.1 and 4.5):
+// every Tool_Lease cached on this Scan_Context is released exactly once
+// during Close, regardless of whether any earlier sub-step panics. The
+// recovered-closure structure above is what carries this guarantee:
+//
+//   - The Cancel sub-step releases the scan's root context.WithCancel
+//     funds — it never holds a Tool_Lease, but cancelling here lets the
+//     downstream subprocesses tracked by Terminal observe their context's
+//     Done channel and exit cleanly before KillAll runs.
+//
+//   - The Terminal.KillAll sub-step is responsible for releasing every
+//     per-process Tool_Lease acquired by terminal_execute and python_action
+//     invocations. Each tool acquires its lease via
+//     resources.AcquireToolLeaseContext and releases it in its own defer
+//     when the subprocess exits or is killed, so KillAll's role here is to
+//     trigger that exit path for any still-running child.
+//
+//   - The Browser.Close sub-step releases the browser Tool_Lease cached on
+//     BrowserState. The release is idempotent (sync.Once on the browser
+//     side), so a duplicate Close call from another shutdown path will
+//     not double-release the lease.
+//
+// Because each sub-step lives in its own deferred-recover closure, a panic
+// inside one step (for example, a corrupted cmd handle inside KillAll)
+// produces a single recovery log line and lets the remaining steps run.
+// That preserves the lease-conservation invariant: no cached lease is
+// leaked, and none is released more than once, even when a panic occurs
+// mid-shutdown.
 func (sc *ScanContext) Close() {
-	if sc.Cancel != nil {
-		sc.Cancel()
-	}
-	if sc.Terminal != nil {
-		sc.Terminal.KillAll()
-	}
-	if sc.Browser != nil {
-		sc.Browser.Close()
-	}
+	defer safe.Recover("scanctx.close", sc.ID)
+
+	func() {
+		defer safe.Recover("scanctx.close.cancel", sc.ID)
+		if sc.Cancel != nil {
+			sc.Cancel()
+		}
+	}()
+
+	func() {
+		defer safe.Recover("scanctx.close.terminal", sc.ID)
+		if sc.Terminal != nil {
+			sc.Terminal.KillAll()
+		}
+	}()
+
+	func() {
+		defer safe.Recover("scanctx.close.browser", sc.ID)
+		if sc.Browser != nil {
+			sc.Browser.Close()
+		}
+	}()
 }
 
 // SetRequestRatePolicy stores the scan-specific outbound request budget.
