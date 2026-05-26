@@ -53,17 +53,23 @@ func TestIsNewer(t *testing.T) {
 }
 
 func TestServiceUnitUsesDedicatedWorkspaceAndContinuesAfterChildOOM(t *testing.T) {
-	unit := serviceUnitContent("/root", "/root/xalgorix-workspace", "/usr/local/bin/xalgorix")
+	unit := serviceUnitContent("/root", "/usr/local/bin/xalgorix")
 
 	for _, want := range []string{
-		"WorkingDirectory=/root/xalgorix-workspace",
-		`Environment="XALGORIX_WORKSPACE=/root/xalgorix-workspace"`,
+		"WorkingDirectory=/root",
 		"OOMScoreAdjust=-500",
 		"OOMPolicy=continue",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("service unit missing %q:\n%s", want, unit)
 		}
+	}
+
+	// Task 3.6 / R6.4: the unit must NOT pin the legacy XALGORIX_WORKSPACE
+	// env var — the active workspace root is owned by
+	// config.resolveDataDir (XALGORIX_DATA_DIR / ~/.xalgorix/data).
+	if strings.Contains(unit, "XALGORIX_WORKSPACE") {
+		t.Fatalf("service unit must not set XALGORIX_WORKSPACE (deprecated by Task 3.6):\n%s", unit)
 	}
 }
 

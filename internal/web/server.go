@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -39,6 +40,8 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
+	"github.com/xalgord/xalgorix/v4/internal/safe"
+	"github.com/xalgord/xalgorix/v4/internal/sandbox"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
 	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
@@ -222,7 +225,9 @@ func isDashboardReadPath(method, path string) bool {
 		"/api/version",
 		"/api/scans",
 		"/api/instances",
-		"/api/queue/status":
+		"/api/queue/status",
+		"/api/findings/summary",
+		"/api/legacy-import/status":
 		return true
 	default:
 		return strings.HasPrefix(path, "/api/scans/") ||
@@ -1529,16 +1534,38 @@ type Server struct {
 	schedulesMu          sync.RWMutex
 	schedules            map[string]*ScanSchedule
 	shutdownChan         chan struct{}
+	// admissionWake is a buffered (len=1) channel used by runMultiScan's
+	// admission loop to wait fairly for a freed slot. A scan instance ending
+	// signals this channel non-blockingly in its defer cleanup, waking
+	// exactly one waiter per terminate. The 2-second ticker in the loop is
+	// retained as a safety-net so we still re-check periodically if a wake
+	// signal is missed for any reason. (R3.2, R3.6 / Property 5.)
+	admissionWake chan struct{}
+
+	// legacyImportCount is the number of scan records imported from the
+	// pre-migration directory (~/xalgorix-data/) into the active dataDir
+	// on the current server start. It is set once by importLegacyDataDir
+	// and surfaced via /api/legacy-import/status so the WebUI can render
+	// a one-time banner. Not persisted; resets to 0 each restart.
+	// legacyImportDismissed flips to true when the WebUI dismisses the
+	// banner; only valid for the current process lifetime.
+	// Guarded by legacyImportMu so the short banner-status reads/writes
+	// don't contend with the WebSocket-clients lock (s.mu).
+	// (See findings-consistency-and-pagination spec, Property 6.)
+	legacyImportMu        sync.RWMutex
+	legacyImportCount     int
+	legacyImportDismissed bool
 }
 
 // NewServer creates a new web server.
 func NewServer(cfg *config.Config, port int) *Server {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("Warning: failed to get home directory: %v (using /root)", err)
-		home = "/root"
-	}
-	dataDir := filepath.Join(home, "xalgorix-data")
+	// The active Data_Dir is owned by config.resolveDataDir (R6.1, R6.3) and
+	// already canonicalized + created with mode 0o700 before we get here.
+	// The Web_Server is a downstream consumer; it must NOT re-derive a data
+	// root from $HOME or $CWD (Task 3.6 / R6.4 / R6.6) — doing so would
+	// silently bypass XALGORIX_DATA_DIR and resurrect the legacy
+	// ~/xalgorix-data location.
+	dataDir := cfg.DataDir
 	// Rate limit from config (defaults: 60 requests per minute)
 	rl := NewRateLimiter(cfg.RateLimitRequests, time.Duration(cfg.RateLimitWindow)*time.Second)
 
@@ -1560,7 +1587,24 @@ func NewServer(cfg *config.Config, port int) *Server {
 		},
 		schedules:    make(map[string]*ScanSchedule),
 		shutdownChan: make(chan struct{}),
+		// Buffered to length 1 so a non-blocking send from a terminating
+		// scan never blocks; the buffered slot guarantees a wake signal
+		// is delivered to whichever waiter is currently parked in the
+		// admission select.
+		admissionWake: make(chan struct{}, 1),
 	}
+
+	// Import legacy data dir (pre-migration ~/xalgorix-data/) into the
+	// active dataDir on first start. Idempotent (sentinel-gated) and
+	// non-fatal — failures are logged and the server still starts. Must
+	// run BEFORE rebuildInstancesFromDisk so imported scans appear in
+	// the dashboard immediately.
+	imported, ierr := srv.importLegacyDataDir()
+	if ierr != nil {
+		log.Printf("[legacy-import] error: %v (continuing)", ierr)
+	}
+	srv.legacyImportCount = imported
+	srv.legacyImportDismissed = false
 
 	// Rebuild instances map from disk so dashboard shows historical scans on startup
 	srv.rebuildInstancesFromDisk()
@@ -1684,6 +1728,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/scan", s.handleScan)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/findings/summary", s.handleFindingsSummary)
+	mux.HandleFunc("/api/legacy-import/status", s.handleLegacyImportStatus)
 	mux.HandleFunc("/api/scans", s.handleListScans)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/vulns/") && r.Method == http.MethodDelete {
@@ -1797,8 +1843,12 @@ func (s *Server) Start() error {
 
 	// ── Graceful shutdown on SIGTERM/SIGINT ──
 	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: authMw(rlMiddleware(mux)),
+		Addr: addr,
+		// safe.HTTPMiddleware MUST be the outermost wrapper so it catches
+		// panics from every layer below it (auth, rate-limit, mux,
+		// individual handlers). On panic it increments PanicsRecovered,
+		// emits a structured log line with stack trace, and returns 500.
+		Handler: safe.HTTPMiddleware(authMw(rlMiddleware(mux))),
 	}
 
 	go func() {
@@ -1869,9 +1919,15 @@ func (s *Server) Start() error {
 	return err
 }
 
-// initDataDir creates the data directory and cleans up old scans (>30 days).
+// initDataDir is a thin wrapper around cfg.DataDir (Task 3.6 / R6.4, R6.6):
+// the directory is already canonicalized and created with mode 0o700 by
+// config.resolveDataDir at startup, so the MkdirAll below is belt-and-
+// suspenders — it covers the narrow window where a test or operator
+// removes the directory between config load and Server.Start. The
+// function's real job is the per-startup cleanup of stale scan dirs and
+// the surfacing of any interrupted scan queues for auto-resume.
 func (s *Server) initDataDir() {
-	if err := os.MkdirAll(s.dataDir, 0755); err != nil {
+	if err := os.MkdirAll(s.dataDir, 0o700); err != nil {
 		log.Printf("Error: failed to create data directory %s: %v", s.dataDir, err)
 	}
 
@@ -2154,14 +2210,169 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	s.instancesMu.RUnlock()
 
+	// Take a single atomic snapshot of safe counters so the values are
+	// internally consistent (Task 11.4 / R9.5).
+	counters := safe.Snapshot()
+	allowList := sandbox.Default().Roots()
+
+	// vulns_persisted: total count from on-disk corpus across every scan
+	// record. Stable across teardown — survives reporting.CleanupContext.
+	// Additive change; the existing `vulns` field keeps its in-memory
+	// semantics for backward compatibility. See Task 3.3 in
+	// .kiro/specs/findings-consistency-and-pagination/tasks.md.
+	persistedVulns := s.totalPersistedVulnCount()
+
 	json.NewEncoder(w).Encode(map[string]any{
-		"running":           s.running.Load() || runningCount > 0,
-		"scan_id":           scanID,
-		"instance_id":       runningInstanceID,
-		"current_phase":     currentPhase,
-		"vulns":             totalVulns,
-		"running_instances": runningCount,
+		"running":            s.running.Load() || runningCount > 0,
+		"scan_id":            scanID,
+		"instance_id":        runningInstanceID,
+		"current_phase":      currentPhase,
+		"vulns":              totalVulns,
+		"vulns_persisted":    persistedVulns,
+		"running_instances":  runningCount,
+		"panics_recovered":   counters.PanicsRecovered,
+		"path_rejections":    counters.PathRejections,
+		"watchdog_kills":     counters.WatchdogKills,
+		"admission_refusals": counters.AdmissionRefusals,
+		"llm_inflight_cap":   resources.LLMInFlightCap(),
+		"data_dir":           s.cfg.DataDir,
+		"allow_list":         allowList,
 	})
+}
+
+// handleFindingsSummary returns a stable on-disk severity tally across
+// every scan record under cfg.DataDir. Used by the WebUI Findings and
+// Overview totals widgets to surface a counter that does NOT collapse
+// when reporting.CleanupContext wipes in-memory stores during teardown.
+//
+// Counts are deduplicated by (target, endpoint, title, severity) — the
+// same key the WebUI's dedupFindings helper uses. Without this, a
+// vulnerability that recurs across N rescans of the same target would
+// inflate the totals strip relative to the deduped row count rendered
+// below it on /findings.
+//
+// Response shape:
+//
+//	{
+//	  "totals": {"critical": N, "high": N, "medium": N, "low": N, "info": N},
+//	  "as_of": "<RFC3339>",
+//	  "etag": "<hex sha256>"
+//	}
+//
+// Honors If-None-Match: returns 304 Not Modified when the etag matches.
+// The etag is derived from the marshaled totals plus the seconds-truncated
+// as_of timestamp, so it is stable for short polling windows but rotates
+// at least once per second when totals change.
+//
+// See Task 3.2 in .kiro/specs/findings-consistency-and-pagination/tasks.md
+// and Property 2 (counter monotonicity) in design.md.
+func (s *Server) handleFindingsSummary(w http.ResponseWriter, r *http.Request) {
+	totals := map[string]int{
+		"critical": 0,
+		"high":     0,
+		"medium":   0,
+		"low":      0,
+		"info":     0,
+	}
+
+	// Wrap the iteration in safe.Recover so a corrupt scan record cannot
+	// kill the handler. (defer + named recover keeps response writing in
+	// scope even when the walk panics.)
+	func() {
+		defer safe.Recover("findings-summary", "")
+		seen := make(map[string]struct{})
+		for _, entry := range s.findAllScans() {
+			for _, v := range entry.rec.Vulns {
+				key := dedupFindingKey(entry.rec.Target, v)
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				bucket := normalizeSeverityBucket(v.Severity)
+				totals[bucket]++
+			}
+		}
+	}()
+
+	asOf := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+
+	// etag: sha256 over (marshaled totals || as_of). Truncating as_of to
+	// seconds keeps the etag stable for sub-second polling windows.
+	totalsJSON, _ := json.Marshal(totals)
+	hash := sha256.New()
+	hash.Write(totalsJSON)
+	hash.Write([]byte(asOf))
+	etag := hex.EncodeToString(hash.Sum(nil))
+
+	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	json.NewEncoder(w).Encode(map[string]any{
+		"totals": totals,
+		"as_of":  asOf,
+		"etag":   etag,
+	})
+}
+
+// handleLegacyImportStatus exposes the in-memory legacy import counter
+// surfaced once to the WebUI on the run that did the import. The count
+// originates from importLegacyDataDir at startup; this endpoint just
+// reads the cached value so the WebUI can render a one-time dismissible
+// banner on first load.
+//
+// Response shape:
+//
+//	{"count": N, "dismissed": false}
+//
+// Methods:
+//   - GET  → return the current state.
+//   - POST → flip dismissed=true for the remainder of the process and
+//     return the updated state. Restart re-shows the banner once.
+//
+// The dismissed flag is in-memory only; restart re-shows. When count==0
+// the WebUI suppresses the banner outright (so dismissal of a zero
+// state is a harmless no-op).
+//
+// See Task 5.2 in .kiro/specs/findings-consistency-and-pagination/tasks.md
+// and Property 6 (legacy-import idempotence) in design.md.
+func (s *Server) handleLegacyImportStatus(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.legacyImportMu.RLock()
+		count := s.legacyImportCount
+		dismissed := s.legacyImportDismissed
+		s.legacyImportMu.RUnlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache")
+		json.NewEncoder(w).Encode(map[string]any{
+			"count":     count,
+			"dismissed": dismissed,
+		})
+	case http.MethodPost:
+		s.legacyImportMu.Lock()
+		s.legacyImportDismissed = true
+		count := s.legacyImportCount
+		dismissed := s.legacyImportDismissed
+		s.legacyImportMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache")
+		json.NewEncoder(w).Encode(map[string]any{
+			"count":     count,
+			"dismissed": dismissed,
+		})
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleInstances returns all scan instances (running + recent)
@@ -2539,11 +2750,41 @@ func (sess *scanSession) cleanup() {
 	// Clean up tool-level context stores to prevent unbounded memory growth.
 	// Each tool package maintains a map[contextID]→store that must be cleared.
 	if sess.sctx != nil {
-		// Wildcard vuln accumulation: merge this session's vulns into the parent
-		// reporting context BEFORE we delete this session's reporting store.
+		// Panic-safe persistence (Property 4 / spec
+		// findings-consistency-and-pagination Wave C 4.2): persist
+		// any in-memory vulns reported via report_vulnerability into
+		// the on-disk scan record, and merge this child session's
+		// vulns into the parent reporting context, BEFORE we delete
+		// the in-memory reporting store via CleanupContext below.
+		//
+		// Each merge runs in its own safe.Recover boundary so a
+		// panic in one branch does not skip the other. Both merges
+		// are idempotent (mergeReportedVulnerabilitiesIntoRecord
+		// dedups via appendVulnSummaryUnique keyed on
+		// title|target|endpoint|method|CVE; MergeVulnsToContext
+		// skips ID duplicates and semantic duplicates), so even when
+		// the success path has already saved a partial record this
+		// deferred call is a no-op for vulns it has already
+		// persisted.
+		func() {
+			defer safe.Recover("cleanup.scanrecord.merge", sess.sctx.ID)
+			if sess.record == nil {
+				return
+			}
+			before := len(sess.record.Vulns)
+			mergeReportedVulnerabilitiesIntoRecord(sess.record, reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
+			if added := len(sess.record.Vulns) - before; added > 0 {
+				log.Printf("[cleanup] Persisted %d in-memory vulns into scan.json for session %s", added, sess.sctx.ID)
+			}
+			sess.server.saveScanRecordTo(sess.record, sess.scanDir)
+		}()
+
+		// Wildcard vuln accumulation: merge this session's vulns into
+		// the parent reporting context BEFORE we delete this session's
+		// reporting store.
 		if sess.parentReportingCtxID != "" {
 			func() {
-				defer logRecover("cleanup.reporting.merge")
+				defer safe.Recover("cleanup.reporting.merge", sess.sctx.ID)
 				merged := reporting.MergeVulnsToContext(sess.sctx.ID, sess.parentReportingCtxID)
 				if merged > 0 {
 					log.Printf("[wildcard] Merged %d vulns from session %s into parent context %s", merged, sess.sctx.ID, sess.parentReportingCtxID)
@@ -2731,6 +2972,99 @@ func mergeReportedVulnerabilitiesIntoRecord(rec *ScanRecord, reported []reportin
 	}
 }
 
+// effectiveVulnCount returns the most stable counter source for an instance.
+// Strategy: prefer in-memory while running (live), fall back to on-disk
+// VulnCount once the scan is finished or torn down (stable across teardown).
+//
+// This consolidates the three triple-source assignments at the legacy
+// VulnCount call sites (resume seeding and per-event status update),
+// which previously caused visible counter drift as the scan moved between
+// phases. See Property 2 (counter monotonicity) in
+// .kiro/specs/findings-consistency-and-pagination/design.md.
+//
+// When sess is non-nil and the instance is actively running, the count
+// comes from reporting.GetVulnerabilitiesForContext, preferring the
+// parent reporting context when present (covers wildcard child sessions).
+// In every other state — finished, stopped, errored, paused, torn down —
+// the count comes from len(inst.Vulns), the on-disk-derived in-memory
+// mirror that survives reporting.CleanupContext.
+//
+// The caller is responsible for holding inst.mu at the appropriate level
+// (RLock to read inst.Status / inst.Vulns, Lock when assigning the
+// returned value back into inst.VulnCount).
+func (s *Server) effectiveVulnCount(inst *ScanInstance, sess *scanSession) int {
+	if inst == nil {
+		return 0
+	}
+	if sess != nil && inst.Status == "running" {
+		ctxID := ""
+		if sess.parentReportingCtxID != "" {
+			ctxID = sess.parentReportingCtxID
+		} else if sess.sctx != nil {
+			ctxID = sess.sctx.ID
+		}
+		if ctxID != "" {
+			return len(reporting.GetVulnerabilitiesForContext(ctxID))
+		}
+	}
+	return len(inst.Vulns)
+}
+
+// totalPersistedVulnCount returns the total number of persisted (on-disk)
+// vulnerabilities across every scan record under cfg.DataDir, deduplicated
+// by (target, endpoint, title, severity). This is the stable on-disk
+// corpus used by both /api/findings/summary and the vulns_persisted field
+// on /api/status. The dedup matches the WebUI's dedupFindings helper so
+// the totals strip and the row count never disagree. See Property 2
+// (counter monotonicity) — the on-disk total is monotonic-non-decreasing
+// across teardown because reporting.CleanupContext does not touch
+// ScanRecord.Vulns.
+func (s *Server) totalPersistedVulnCount() int {
+	seen := make(map[string]struct{})
+	for _, entry := range s.findAllScans() {
+		for _, v := range entry.rec.Vulns {
+			key := dedupFindingKey(entry.rec.Target, v)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
+// dedupFindingKey computes the same lowercase (target, endpoint, title,
+// severity) key the WebUI's dedupFindings helper uses, so the server
+// counter sources and the WebUI row list are always in agreement.
+//
+// Severity is bucketed via normalizeSeverityBucket so "Informational",
+// "info", and "" all collapse to "info" (mirrors the WebUI's
+// normalizeSeverity).
+func dedupFindingKey(target string, v VulnSummary) string {
+	return strings.ToLower(strings.TrimSpace(target)) + "|" +
+		strings.ToLower(strings.TrimSpace(v.Endpoint)) + "|" +
+		strings.ToLower(strings.TrimSpace(v.Title)) + "|" +
+		normalizeSeverityBucket(v.Severity)
+}
+
+// normalizeSeverityBucket folds free-form severity strings into one of
+// the five canonical buckets. Mirrors the WebUI's normalizeSeverity so
+// server-side dedup keys match client-side ones.
+func normalizeSeverityBucket(severity string) string {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
+		return "critical"
+	case "high":
+		return "high"
+	case "medium":
+		return "medium"
+	case "low":
+		return "low"
+	default:
+		return "info"
+	}
+}
+
 func (s *Server) seedResumeInstanceFromRecord(inst *ScanInstance, req ScanRequest) {
 	if inst == nil || !req.IsResume || req.ResumeScanDir == "" {
 		return
@@ -2776,7 +3110,9 @@ func (s *Server) seedResumeInstanceFromRecord(inst *ScanInstance, req ScanReques
 	inst.ToolCalls = rec.ToolCalls
 	inst.TotalTokens = rec.TotalTokens
 	inst.Vulns = append([]VulnSummary(nil), rec.Vulns...)
-	inst.VulnCount = len(inst.Vulns)
+	// Resume path: scan is being seeded from on-disk record, no live session
+	// exists yet, so effectiveVulnCount falls back to len(inst.Vulns).
+	inst.VulnCount = s.effectiveVulnCount(inst, nil)
 	if rec.CurrentPhase > 0 {
 		inst.CurrentPhase = rec.CurrentPhase
 	}
@@ -2810,6 +3146,13 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	scanctx.Activate(sctx)
 	sess.sctx = sctx
 	log.Printf("[scanctx] Activated context %s for target %s (dir=%s)", sctx.ID, sess.target, sess.scanDir)
+
+	// Panic-safe persistence: register the child→parent reporting mapping so
+	// reporting.PromoteToParent runs incrementally on every report_vulnerability
+	// call. CleanupContext clears the mapping on session teardown.
+	if sess.parentReportingCtxID != "" {
+		reporting.SetParentContext(sctx.ID, sess.parentReportingCtxID)
+	}
 
 	// Propagate ScanContext to parent instance (if multi-instance mode)
 	if sess.instanceID != "" {
@@ -2909,7 +3252,11 @@ func (s *Server) executeScanSession(sess *scanSession) {
 		sess.record.Status = status
 		sess.record.StopReason = stopReason
 		sess.record.FinishedAt = time.Now().Format(time.RFC3339)
-		mergeReportedVulnerabilitiesIntoRecord(sess.record, reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
+		// NOTE: in-memory→record merge and child→parent reporting merge
+		// are deferred to sess.cleanup() (Wave C 4.2) so they survive an
+		// agent panic. The deferred path is idempotent: merge dedups by
+		// vuln summary key and MergeVulnsToContext skips ID/semantic
+		// duplicates, so the success path merges exactly once.
 		s.saveScanRecordTo(sess.record, sess.scanDir)
 		return
 	}
@@ -2918,7 +3265,11 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	sess.record.Status = "finished"
 	sess.record.FinishedAt = time.Now().Format(time.RFC3339)
 
-	mergeReportedVulnerabilitiesIntoRecord(sess.record, reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
+	// NOTE: merges are deferred to sess.cleanup() (Wave C 4.2) under
+	// safe.Recover boundaries to guarantee panic-safe persistence. Both
+	// mergeReportedVulnerabilitiesIntoRecord and MergeVulnsToContext are
+	// idempotent (each entry keyed by vuln id / summary tuple), so the
+	// clean-finish path runs the merges exactly once via cleanup().
 
 	s.saveScanRecordTo(sess.record, sess.scanDir)
 
@@ -3131,13 +3482,13 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 				inst.TotalTokens += evt.TotalTokens - inst.lastSessionTokens
 				inst.lastSessionTokens = evt.TotalTokens
 			}
-			// Vulns: use parent reporting context in wildcard mode,
-			// otherwise use session-specific context
-			if sess.parentReportingCtxID != "" {
-				inst.VulnCount = len(reporting.GetVulnerabilitiesForContext(sess.parentReportingCtxID))
-			} else {
-				inst.VulnCount = len(reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
-			}
+			// Vulns: route through effectiveVulnCount so the counter source
+			// is consistent across the scan lifecycle. While running, this
+			// returns the in-memory count (parent context for wildcard child
+			// sessions, session context otherwise); after teardown the
+			// helper falls back to len(inst.Vulns). See Task 3.1 in
+			// .kiro/specs/findings-consistency-and-pagination/tasks.md.
+			inst.VulnCount = s.effectiveVulnCount(inst, sess)
 			inst.mu.Unlock()
 		}
 		s.instancesMu.RUnlock()
@@ -3487,6 +3838,20 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		if !stillRunning {
 			s.running.Store(false)
 		}
+		// Wake exactly one admission waiter (if any) now that this
+		// instance has finished and a slot is free. Non-blocking send:
+		// the channel is buffered to len=1 so a single pending wake is
+		// always queued; additional terminate signals while a wake is
+		// already pending are intentionally collapsed (the recipient
+		// will re-check via runningCount and either admit or wait
+		// again on the safety-net ticker). This wake fires regardless
+		// of whether the scan finished, errored, was stopped, or
+		// panicked, because it lives in the unconditional defer.
+		// (Task 11.2 / R3.2, R3.6 / Property 5.)
+		select {
+		case s.admissionWake <- struct{}{}:
+		default:
+		}
 		log.Printf("[INFO] runMultiScan instance %s exited (ranScan=%v)", instanceID, ranScan)
 	}()
 
@@ -3494,6 +3859,15 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// CRITICAL: The slot check + status transition MUST be atomic under a single
 	// Lock to prevent a TOCTOU race where two goroutines both see runningCount=0
 	// and start simultaneously, causing mutual process kills.
+	//
+	// Wakeup model (Task 11.2 / R3.2, R3.6): instead of busy-sleeping for 2s
+	// between admission attempts, we park on a select that wakes when
+	// (a) another instance terminates and signals s.admissionWake (fair
+	// wakeup — exactly one waiter per terminate), (b) the 2s ticker fires
+	// as a safety-net, or (c) the server is shutting down. The top of the
+	// loop re-checks per-instance and global stop flags after every wake.
+	admissionTicker := time.NewTicker(2 * time.Second)
+	defer admissionTicker.Stop()
 	for {
 		// Check if THIS instance was stopped (via per-instance stop API)
 		instance.mu.RLock()
@@ -3541,7 +3915,37 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		if gotSlot {
 			break
 		}
-		time.Sleep(2 * time.Second)
+		// Admission refused — record the event and emit a structured INFO log.
+		// Each refusal observation is a distinct event; ticker cadence keeps
+		// counter growth proportional to wait time, while admissionWake
+		// signals collapse multiple near-simultaneous terminates into a
+		// single fair wakeup for the next waiter.
+		safe.IncAdmissionRefusal()
+		ceiling, _ := resources.EffectiveMaxInstances()
+		level, _ := resources.CurrentLevel()
+		log.Printf("[admission] refused level=%s reason=%q ceiling=%d running=%d scan=%s",
+			level.String(), reason, ceiling, runningCount, instanceID)
+
+		// Park on the wake channel, the safety-net ticker, or shutdown.
+		select {
+		case <-s.admissionWake:
+			// A peer instance freed a slot — re-check immediately.
+		case <-admissionTicker.C:
+			// Periodic safety-net wake; prevents indefinite waits if a
+			// signal is ever missed (e.g. concurrent terminates collapse
+			// onto a single buffered slot).
+		case <-s.shutdownChan:
+			// Server is shutting down. Mark this pending instance stopped
+			// and exit; the defer will run the rest of cleanup.
+			instance.mu.Lock()
+			if instance.Status == "pending" {
+				instance.Status = "stopped"
+				instance.StopReason = "server_shutdown"
+				instance.FinishedAt = time.Now().Format(time.RFC3339)
+			}
+			instance.mu.Unlock()
+			return
+		}
 	}
 
 	// Instance got a slot — mark that the scan ran for full cleanup
@@ -4934,6 +5338,162 @@ func sanitizeTarget(target string) string {
 		clean = clean[:60]
 	}
 	return clean
+}
+
+// importLegacyDataDir copies scan records from the pre-migration data
+// directory ~/xalgorix-data/ into the active s.dataDir, idempotently
+// and non-destructively. Each scan ID already present under dataDir is
+// skipped. On completion (or no-op early return), a sentinel file
+// .legacy-imported is written so subsequent starts skip the walk.
+//
+// Returns the number of scans imported.
+//
+// Validates: Property 6 (legacy-import idempotence) of the
+// findings-consistency-and-pagination spec.
+func (s *Server) importLegacyDataDir() (int, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return 0, fmt.Errorf("home dir: %w", err)
+	}
+	legacyPath := filepath.Join(home, "xalgorix-data")
+	sentinelPath := filepath.Join(s.dataDir, ".legacy-imported")
+
+	// Early return: legacy IS the active dir — nothing to migrate.
+	if filepath.Clean(legacyPath) == filepath.Clean(s.dataDir) {
+		return 0, nil
+	}
+	// Early return: already imported once.
+	if _, err := os.Stat(sentinelPath); err == nil {
+		return 0, nil
+	}
+	// Early return: legacy dir doesn't exist or is empty.
+	if info, err := os.Stat(legacyPath); err != nil || !info.IsDir() {
+		// Still write the sentinel to skip future stat() calls.
+		_ = os.MkdirAll(s.dataDir, 0o700)
+		_ = os.WriteFile(sentinelPath, []byte("nothing-to-import\n"), 0o600)
+		return 0, nil
+	}
+
+	existing := map[string]bool{}
+	for _, entry := range s.findAllScans() {
+		if entry.rec.ID != "" {
+			existing[entry.rec.ID] = true
+		}
+	}
+
+	imported := 0
+	skipped := 0
+	walkErr := filepath.WalkDir(legacyPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			log.Printf("[legacy-import] walk %s: %v", path, err)
+			skipped++
+			return nil // best effort; skip unreadable entries
+		}
+		if d.IsDir() || d.Name() != "scan.json" {
+			return nil
+		}
+		// Read the scan.json to extract the id and target.
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			log.Printf("[legacy-import] skipped %s: read error: %v", path, readErr)
+			skipped++
+			return nil
+		}
+		var rec ScanRecord
+		if jerr := json.Unmarshal(data, &rec); jerr != nil {
+			log.Printf("[legacy-import] skipped %s: malformed json: %v", path, jerr)
+			skipped++
+			return nil
+		}
+		if rec.ID == "" {
+			log.Printf("[legacy-import] skipped %s: missing scan id", path)
+			skipped++
+			return nil
+		}
+		if existing[rec.ID] {
+			// Already present in active dataDir — not an error, no log spam.
+			return nil
+		}
+
+		// Determine destination directory using the same date-stamped
+		// shape as createScanDirFor: dataDir/<target>/<date>/<scan-id>/
+		srcDir := filepath.Dir(path)
+		target := sanitizeTarget(rec.Target)
+		if target == "" {
+			target = "unknown"
+		}
+		date := ""
+		if t, perr := time.Parse(time.RFC3339, rec.StartedAt); perr == nil {
+			date = t.Format("2006-01-02")
+		} else if t, perr := time.Parse(time.RFC3339Nano, rec.StartedAt); perr == nil {
+			date = t.Format("2006-01-02")
+		} else {
+			date = time.Now().Format("2006-01-02")
+		}
+		dstDir := filepath.Join(s.dataDir, target, date, rec.ID)
+
+		if err := copyDirRecursive(srcDir, dstDir); err != nil {
+			log.Printf("[legacy-import] copy %s -> %s: %v", srcDir, dstDir, err)
+			skipped++
+			return nil
+		}
+		imported++
+		existing[rec.ID] = true
+		return nil
+	})
+	if walkErr != nil {
+		return imported, walkErr
+	}
+
+	// Write sentinel even on partial success — failed copies are logged
+	// and the user can retry by removing the sentinel.
+	if err := os.MkdirAll(s.dataDir, 0o700); err != nil {
+		log.Printf("[legacy-import] mkdir dataDir: %v", err)
+	}
+	if err := os.WriteFile(sentinelPath, []byte(fmt.Sprintf("imported=%d skipped=%d at=%s\n", imported, skipped, time.Now().Format(time.RFC3339))), 0o600); err != nil {
+		log.Printf("[legacy-import] write sentinel: %v", err)
+	}
+	if skipped > 0 {
+		log.Printf("[legacy-import] imported %d scans, skipped %d (see log lines above) from %s", imported, skipped, legacyPath)
+	} else {
+		log.Printf("[legacy-import] imported %d scans from %s", imported, legacyPath)
+	}
+	return imported, nil
+}
+
+// copyDirRecursive copies src directory tree to dst, creating dst if
+// needed. Existing files at dst are overwritten. Used by
+// importLegacyDataDir for non-destructive copy semantics (legacy dir
+// preserved untouched).
+func copyDirRecursive(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		_, err = io.Copy(out, in)
+		return err
+	})
 }
 
 // saveScanRecordTo saves a scan record to a specific directory.

@@ -11,6 +11,7 @@ require (
 	github.com/go-rod/rod v0.116.2
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.39.0
+	golang.org/x/sync v0.16.0
 	golang.org/x/time v0.14.0
 )
 

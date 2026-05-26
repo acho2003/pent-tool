@@ -1,7 +1,11 @@
 import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useQueries } from "@tanstack/react-query";
-import type { ScanRecord, VulnSummary } from "@/types/api";
+import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
+import type {
+  FindingsSummaryResponse,
+  ScanRecord,
+  VulnSummary,
+} from "@/types/api";
 import {
   Activity,
   AlertOctagon,
@@ -47,7 +51,7 @@ export default function OverviewPage() {
   const { data: queue } = useQueueStatus();
   const events = useWSStore((s) => s.events);
   const scanDetailIds = useMemo(
-    () => (scanList ?? []).filter((s) => (s.vuln_count ?? 0) > 0).slice(0, 50).map((s) => s.id),
+    () => (scanList ?? []).map((s) => s.id),
     [scanList],
   );
   const scanDetailQueries = useQueries({
@@ -55,6 +59,11 @@ export default function OverviewPage() {
       queryKey: ["scan", id],
       queryFn: () => api.getScan(id),
       staleTime: 30_000,
+      // Retain the previous successful result while a refetch is in
+      // flight. Without this the reducer below would see `data ===
+      // undefined` for every query that re-enters `isFetching`, causing
+      // the totals widget to flicker as scans take turns refetching.
+      placeholderData: keepPreviousData,
     })),
   });
 
@@ -103,23 +112,66 @@ export default function OverviewPage() {
     }
     for (const q of scanDetailQueries) {
       const rec = q.data as ScanRecord | null | undefined;
-      if (!rec?.vulns) continue;
-      for (const v of rec.vulns) {
+      // Skip ONLY on initial-load `undefined`. Once a scan has produced
+      // any data, `placeholderData: keepPreviousData` keeps `q.data`
+      // populated across refetches so the contribution does not drop to
+      // zero. An empty `vulns` array is a legitimate value and must not
+      // be treated as missing.
+      if (!rec) continue;
+      const vulns = rec.vulns ?? [];
+      for (const v of vulns) {
         add(v, rec.instance_id || rec.id);
       }
     }
     return Array.from(map.values());
   }, [allInstances, scanDetailQueries]);
 
+  // Stable on-disk totals from /api/findings/summary. Polled every 10s
+  // and used to drive the Overview totals widget so the count never
+  // drops during refetch. Shared qk.findingsSummary key means
+  // /findings reads the same cache entry.
+  const summary = useQuery<FindingsSummaryResponse>({
+    queryKey: qk.findingsSummary,
+    queryFn: async () => {
+      const res = await fetch("/api/findings/summary", {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()) as FindingsSummaryResponse;
+    },
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+    placeholderData: keepPreviousData,
+  });
+
   const scanListFindings = useMemo(
     () => (scanList ?? []).reduce((sum, s) => sum + (s.vuln_count ?? 0), 0),
     [scanList],
   );
-  const totalFindings = Math.max(scanListFindings, aggregateVulns.length);
-  const criticalHigh = aggregateVulns.filter((v) => {
-    const s = normalizeSeverity(v.vuln.severity);
-    return s === "critical" || s === "high";
-  }).length;
+  // Prefer the stable on-disk total from /api/findings/summary when it
+  // resolves; fall back to the in-memory tally on initial load so the
+  // widget is never blank. Math.max keeps the displayed total from
+  // dropping below either source while data is still loading in.
+  const summaryTotal = useMemo(() => {
+    const t = summary.data?.totals;
+    if (!t) return 0;
+    return t.critical + t.high + t.medium + t.low + t.info;
+  }, [summary.data]);
+  const totalFindings = Math.max(
+    summaryTotal,
+    scanListFindings,
+    aggregateVulns.length,
+  );
+  const criticalHigh = useMemo(() => {
+    if (summary.data?.totals) {
+      return summary.data.totals.critical + summary.data.totals.high;
+    }
+    return aggregateVulns.filter((v) => {
+      const s = normalizeSeverity(v.vuln.severity);
+      return s === "critical" || s === "high";
+    }).length;
+  }, [aggregateVulns, summary.data]);
   const severityCounts = useMemo(() => {
     const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
     for (const { vuln } of aggregateVulns) {

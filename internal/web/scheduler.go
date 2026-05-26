@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/safe"
 )
 
 type ScanSchedule struct {
@@ -134,46 +136,50 @@ func (s *Server) startScheduler() {
 
 // checkAndRunSchedules evaluates all schedules and launches due scans.
 func (s *Server) checkAndRunSchedules() {
+	defer safe.Recover("scheduler.tick", "")
 	s.schedulesMu.Lock()
 	defer s.schedulesMu.Unlock()
 
 	now := time.Now()
 	for _, sch := range s.schedules {
-		if !sch.Enabled {
-			continue
-		}
-		if now.After(sch.NextRun) || now.Equal(sch.NextRun) {
-			log.Printf("[SCHEDULER] Triggering scheduled scan: %s (Targets: %v)", sch.Name, sch.Targets)
-
-			req := ScanRequest{
-				Targets:        sch.Targets,
-				Instruction:    sch.Instruction,
-				ScanMode:       sch.ScanMode,
-				SeverityFilter: sch.SeverityFilter,
-				Phases:         sch.Phases,
-				ReconMode:      sch.ReconMode,
-				ScanIntensity:  sch.ScanIntensity,
-				CompanyName:    sch.CompanyName,
-				LogoPath:       sch.LogoPath,
-				DiscordWebhook: sch.DiscordWebhook,
-				Name:           sch.Name + " (Scheduled)",
-				Model:          sch.Model,
+		func(sch *ScanSchedule) {
+			defer safe.Recover("scheduler."+sch.ID, "")
+			if !sch.Enabled {
+				return
 			}
+			if now.After(sch.NextRun) || now.Equal(sch.NextRun) {
+				log.Printf("[SCHEDULER] Triggering scheduled scan: %s (Targets: %v)", sch.Name, sch.Targets)
 
-			scanCfg := *s.cfg
-			if sch.Model != "" {
-				scanCfg.LLM = sch.Model
+				req := ScanRequest{
+					Targets:        sch.Targets,
+					Instruction:    sch.Instruction,
+					ScanMode:       sch.ScanMode,
+					SeverityFilter: sch.SeverityFilter,
+					Phases:         sch.Phases,
+					ReconMode:      sch.ReconMode,
+					ScanIntensity:  sch.ScanIntensity,
+					CompanyName:    sch.CompanyName,
+					LogoPath:       sch.LogoPath,
+					DiscordWebhook: sch.DiscordWebhook,
+					Name:           sch.Name + " (Scheduled)",
+					Model:          sch.Model,
+				}
+
+				scanCfg := *s.cfg
+				if sch.Model != "" {
+					scanCfg.LLM = sch.Model
+				}
+				instanceID := randomSlug()
+
+				go s.runMultiScan(req, &scanCfg, instanceID)
+
+				sch.LastRun = now
+				sch.NextRun = calculateNextRun(sch.Interval, now)
+
+				if err := s.saveScheduleToDisk(sch); err != nil {
+					log.Printf("[SCHEDULER] Error saving triggered schedule %s: %v", sch.ID, err)
+				}
 			}
-			instanceID := randomSlug()
-
-			go s.runMultiScan(req, &scanCfg, instanceID)
-
-			sch.LastRun = now
-			sch.NextRun = calculateNextRun(sch.Interval, now)
-
-			if err := s.saveScheduleToDisk(sch); err != nil {
-				log.Printf("[SCHEDULER] Error saving triggered schedule %s: %v", sch.ID, err)
-			}
-		}
+		}(sch)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/xalgord/xalgorix/v4/internal/sandbox"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
@@ -21,7 +22,11 @@ var (
 )
 
 type noteStore struct {
-	mu          sync.RWMutex
+	mu sync.RWMutex
+	// contextID is the owning ScanContext.ID for this store. Captured at
+	// creation time so writeFile can look up the active ScanContext for
+	// Path_Policy resolution (sc.ScanDir-relative roots).
+	contextID   string
 	store       map[string]string
 	persistPath string
 }
@@ -39,7 +44,7 @@ func getNoteStoreByID(id string) *noteStore {
 	if s, ok := noteStores[id]; ok {
 		return s
 	}
-	s = &noteStore{store: make(map[string]string)}
+	s = &noteStore{contextID: id, store: make(map[string]string)}
 	noteStores[id] = s
 	return s
 }
@@ -61,7 +66,7 @@ func getNoteStoreForContext(contextID string) *noteStore {
 	if s, ok := noteStores[contextID]; ok {
 		return s
 	}
-	s = &noteStore{store: make(map[string]string)}
+	s = &noteStore{contextID: contextID, store: make(map[string]string)}
 	noteStores[contextID] = s
 	return s
 }
@@ -137,12 +142,22 @@ func (s *noteStore) marshalSnapshot() ([]byte, string) {
 }
 
 // writeFile persists serialized data to disk. Safe to call without holding s.mu.
+//
+// Every persistence write flows through sandbox.Default().CheckResolve so a
+// misconfigured persistPath cannot escape the Allow_List (Requirement 8.3).
+// The lookup uses the owning ScanContext's roots when available, falling
+// back to the process Workspace_Root via sandbox.Resolve.
 func (s *noteStore) writeFile(data []byte, path string) {
 	if data == nil || path == "" {
 		return
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		log.Printf("[notes] Warning: failed to save notes to %s: %v", path, err)
+	canonical, err := sandbox.Default().CheckResolve(scanctx.Get(s.contextID), "notes", path)
+	if err != nil {
+		log.Printf("[notes] Warning: refusing to save notes to %s: %v", path, err)
+		return
+	}
+	if err := os.WriteFile(canonical, data, 0644); err != nil {
+		log.Printf("[notes] Warning: failed to save notes to %s: %v", canonical, err)
 	}
 }
 

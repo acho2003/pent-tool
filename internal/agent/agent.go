@@ -17,6 +17,7 @@ import (
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
+	"github.com/xalgord/xalgorix/v4/internal/safe"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentmail"
@@ -35,6 +36,27 @@ import (
 )
 
 var thinkRegex = regexp.MustCompile(`(?s)<think>.*?</think>`)
+
+// toolHardTimeout maps tool names to their per-invocation hard ceiling.
+// Tools not in the map fall back to defaultToolHardTimeout (15 min).
+var toolHardTimeout = map[string]time.Duration{
+	"terminal_execute": 65 * time.Minute,
+	"browser_action":   10 * time.Minute,
+}
+
+// defaultToolHardTimeout is the per-invocation hard ceiling applied to any
+// tool not explicitly listed in toolHardTimeout.
+const defaultToolHardTimeout = 15 * time.Minute
+
+// hardTimeoutFor returns the configured hard-timeout ceiling for the given
+// tool name, falling back to defaultToolHardTimeout when the tool is not
+// listed in toolHardTimeout.
+func (a *Agent) hardTimeoutFor(tool string) time.Duration {
+	if t, ok := toolHardTimeout[tool]; ok {
+		return t
+	}
+	return defaultToolHardTimeout
+}
 
 // Event represents an agent event (for UI updates).
 type Event struct {
@@ -151,7 +173,13 @@ func NewAgent(cfg *config.Config, name string, events chan Event, sc ...*scanctx
 		}
 		var results strings.Builder
 		done := make(chan struct{})
-		go func() {
+		// Sub-agent event-forwarder is a long-lived streaming consumer.
+		// Wrap with safe.Go so a panic during forwarding (e.g. on a
+		// closed parent channel) is logged and counted instead of
+		// taking down the parent agent. The inner `defer close(done)`
+		// runs during fn's unwind even on panic, so the parent's
+		// `<-done` rendezvous still completes.
+		safe.Go("agent.subagent_stream", a.scanCtx.ID, func() {
 			defer close(done)
 			for evt := range subEvents {
 				// Forward partial results to sub-agent state
@@ -173,7 +201,7 @@ func NewAgent(cfg *config.Config, name string, events chan Event, sc ...*scanctx
 					safeSend(a.events, parentEvt, 0)
 				}
 			}
-		}()
+		})
 		subAgent.Run(targets, task)
 		close(subEvents)
 		<-done
@@ -442,7 +470,11 @@ func (a *Agent) startWatchdog() func() {
 		idleKillThreshold  = 0 * time.Minute  // 0 = disabled (stuck-loop detection handles per-target stalls)
 	)
 
-	go func() {
+	// Watchdog is a long-running background monitor; wrap with safe.Go
+	// so a panic inside the tick loop (e.g. from terminal/scancontext
+	// state mutation) is logged and counted instead of crashing the
+	// process.
+	safe.Go("agent.watchdog", a.scanCtx.ID, func() {
 		// Check every 30 seconds
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -468,6 +500,10 @@ func (a *Agent) startWatchdog() func() {
 						if a.cancel != nil {
 							a.cancel()
 						}
+						activeCmd, _ := a.scanCtx.Terminal.GetActiveCommand()
+						safe.IncWatchdogKill()
+						log.Printf("[watchdog] WARN kill command=%q duration=%s scan=%s reason=scan_max_duration",
+							activeCmd, scanDuration.Round(time.Second), a.scanCtx.ID)
 						a.scanCtx.Terminal.KillAll()
 						return
 					}
@@ -486,6 +522,9 @@ func (a *Agent) startWatchdog() func() {
 				// If a single process has been running too long, kill it
 				if activeProcs > 0 && cmdDuration > processMaxDuration {
 					a.emit(Event{Type: "error", Content: fmt.Sprintf("⚠️ Watchdog: Process running for %s (limit: %s), killing it: %s", cmdDuration.Round(time.Minute), processMaxDuration, activeCmd)})
+					safe.IncWatchdogKill()
+					log.Printf("[watchdog] WARN kill command=%q duration=%s scan=%s reason=process_max_duration",
+						activeCmd, cmdDuration.Round(time.Second), a.scanCtx.ID)
 					a.scanCtx.Terminal.KillAll()
 					a.touchActivity() // reset idle timer since we just intervened
 					continue
@@ -531,13 +570,17 @@ func (a *Agent) startWatchdog() func() {
 						if a.cancel != nil {
 							a.cancel()
 						}
+						idleCmd, _ := a.scanCtx.Terminal.GetActiveCommand()
+						safe.IncWatchdogKill()
+						log.Printf("[watchdog] WARN kill command=%q duration=%s scan=%s reason=idle_timeout",
+							idleCmd, idleTime.Round(time.Second), a.scanCtx.ID)
 						a.scanCtx.Terminal.KillAll()
 						return
 					}
 				}
 			}
 		}
-	}()
+	})
 
 	return func() {
 		close(stopChan)
@@ -547,7 +590,16 @@ func (a *Agent) startWatchdog() func() {
 // executeToolAsync runs a tool in a goroutine with heartbeat monitoring.
 // It keeps the watchdog alive by updating lastActivity while the tool runs,
 // and streams partial output from long-running terminal commands.
-func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (tools.Result, error) {
+//
+// The function body is guarded by safe.Recover so any panic in the tool
+// invocation, heartbeat plumbing, or watchdog hooks is converted into a
+// typed error rather than crashing the agent loop. The tool invocation is
+// additionally bounded by a context.WithTimeout derived from
+// hardTimeoutFor(toolName) plus a 30-second grace window so even tools
+// that ignore their own context still terminate within the ceiling.
+func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (result tools.Result, returnErr error) {
+	defer safe.Recover("agent.tool_exec", a.scanCtx.ID, &returnErr)
+
 	// Set up streaming callback for terminal commands
 	var lastPartialOutput string
 	a.scanCtx.Terminal.SetStreamCallback(func(partial string) {
@@ -568,7 +620,19 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 	})
 	defer a.scanCtx.Terminal.ClearStreamCallback()
 
-	// Execute in goroutine with panic recovery
+	// Execute in goroutine with panic recovery.
+	//
+	// NOTE (Task 6.3): this goroutine is intentionally NOT wrapped with
+	// safe.Go. The inner `defer recover()` here has bespoke behavior the
+	// generic safe.Recover cannot replicate: on panic it must construct
+	// a tools.Result{Error: "tool panicked: …"} and push it on resultCh
+	// so the agent loop can surface a tool result (with the typed err)
+	// to the LLM instead of bubbling the panic up. The enclosing
+	// executeToolAsync function body is already wrapped by
+	// `defer safe.Recover("agent.tool_exec", …)` (Task 6.2), which
+	// catches any panic that escapes this defer (e.g. a panic in the
+	// recover branch itself). Wrapping with safe.Go in addition would
+	// duplicate counter increments and log lines without adding safety.
 	resultCh := make(chan toolExecResult, 1)
 	go func() {
 		defer func() {
@@ -580,24 +644,21 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 				}
 			}
 		}()
-		result, err := a.registry.Execute(toolName, toolArgs)
-		resultCh <- toolExecResult{Result: result, Err: err}
+		res, err := a.registry.Execute(toolName, toolArgs)
+		resultCh <- toolExecResult{Result: res, Err: err}
 	}()
 
 	// Heartbeat loop while waiting for tool to complete
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 
-	// Hard timeout safety net: prevents infinite hangs (e.g., blocking JS dialogs,
-	// unresponsive processes) from keeping the agent stuck forever via heartbeat masking.
-	// Terminal commands get a longer timeout to accommodate heavy tools (sqlmap, nuclei, ffuf).
-	hardTimeoutDuration := 15 * time.Minute // default for most tools
-	if toolName == "terminal_execute" {
-		hardTimeoutDuration = 65 * time.Minute // heavy tools (nmap, nuclei, sqlmap) need up to 60min
-	} else if toolName == "browser_action" {
-		hardTimeoutDuration = 10 * time.Minute // browser interactions can be slow
-	}
-	hardTimeout := time.After(hardTimeoutDuration)
+	// Hard timeout safety net (P2.1): bound the tool invocation by the
+	// per-tool ceiling plus a 30-second grace so even tools that ignore
+	// their own ctx still terminate. We derive from a.ctx so parent
+	// cancellation propagates as well.
+	hardTimeoutDuration := a.hardTimeoutFor(toolName)
+	tcCtx, tcCancel := context.WithTimeout(a.ctx, hardTimeoutDuration+30*time.Second)
+	defer tcCancel()
 
 	for {
 		select {
@@ -610,19 +671,21 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (t
 			// Keep watchdog alive while tool is running
 			a.touchActivity()
 
-		case <-hardTimeout:
-			// Tool exceeded its hard timeout — force return
-			a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Tool '%s' timed out after %s. Force-returning to prevent infinite hang.", toolName, hardTimeoutDuration)})
-			switch toolName {
-			case "terminal_execute", "python_action":
-				a.scanCtx.Terminal.KillAll()
-			case "browser_action":
-				browser.CleanupContext(a.scanCtx.ID)
+		case <-tcCtx.Done():
+			// Distinguish hard-timeout from parent cancellation. When the
+			// parent (a.ctx) is cancelled, tcCtx.Err() is context.Canceled;
+			// when our own deadline elapses it is context.DeadlineExceeded.
+			if tcCtx.Err() == context.DeadlineExceeded {
+				a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Tool '%s' timed out after %s. Force-returning to prevent infinite hang.", toolName, hardTimeoutDuration)})
+				switch toolName {
+				case "terminal_execute", "python_action":
+					a.scanCtx.Terminal.KillAll()
+				case "browser_action":
+					browser.CleanupContext(a.scanCtx.ID)
+				}
+				return tools.Result{Error: fmt.Sprintf("[TIMEOUT exceeded %s]", hardTimeoutDuration)}, nil
 			}
-			return tools.Result{Error: fmt.Sprintf("tool '%s' timed out after %s", toolName, hardTimeoutDuration)}, nil
-
-		case <-a.ctx.Done():
-			// Agent was stopped/cancelled
+			// Parent cancelled (agent stopped).
 			return tools.Result{Error: "Agent stopped during tool execution"}, fmt.Errorf("agent cancelled")
 		}
 	}
@@ -909,6 +972,17 @@ func (a *Agent) Run(targets []string, instruction string) {
 		}
 		if iterResult.EmitMessage != "" {
 			a.emit(Event{Type: "message", Content: iterResult.EmitMessage, TotalTokens: tokenCount()})
+		}
+
+		// Proactively prune before the LLM call when the accumulated
+		// message buffer has grown past pruneThresholdBytes. This is the
+		// pre-LLM pruning gate (Requirement 2.3 / Property P2.3) — it
+		// supplements the existing post-iteration prune at the end of
+		// the loop and the context-overflow recovery branch below, so
+		// the serialized buffer is bounded before every outbound call,
+		// not only after a 413 from the provider.
+		if a.shouldPruneBeforeLLM() {
+			a.pruneMessages()
 		}
 
 		response, err := a.client.Chat(a.messages)
@@ -1283,6 +1357,38 @@ func alignPruneCutoff(messages []llm.Message, start int) int {
 		}
 	}
 	return cutoff
+}
+
+// pruneThresholdBytes is the serialized message-buffer ceiling used by
+// shouldPruneBeforeLLM. ~800 KiB ≈ ~200K tokens at ~4 bytes per token,
+// safely below the smallest provider context window we target while
+// leaving headroom for the system prompt + a multi-turn tool dialogue.
+const pruneThresholdBytes = 800 * 1024
+
+// perMessageOverheadBytes accounts for role tags, JSON delimiters, and
+// per-message structural overhead added by the provider serializer that
+// is not visible in Message.Content alone.
+const perMessageOverheadBytes = 50
+
+// shouldPruneBeforeLLM reports whether the agent's current message buffer
+// would serialize larger than pruneThresholdBytes and therefore should be
+// pruned before the next outbound LLM call. Cheap byte-count heuristic:
+// no tokenizer dependency and no allocations beyond the message slice.
+//
+// Implements Requirement 2.3 (bounded message history before LLM calls)
+// and underwrites Property P2.3.
+func (a *Agent) shouldPruneBeforeLLM() bool {
+	a.msgMu.Lock()
+	defer a.msgMu.Unlock()
+
+	size := 0
+	for i := range a.messages {
+		size += len(a.messages[i].Content) + perMessageOverheadBytes
+		if size > pruneThresholdBytes {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) pruneMessages() {

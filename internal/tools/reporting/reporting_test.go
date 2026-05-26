@@ -346,3 +346,97 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// TestPromoteToParentViaSetParentContext verifies that:
+//  1. A vuln reported into a child context registered via SetParentContext is
+//     promoted into the parent context immediately (panic-safe persistence).
+//  2. Re-reporting the same finding in the child does not duplicate the entry
+//     in the parent (idempotent promotion).
+//
+// Validates: Property 4 (panic-safe persistence).
+func TestPromoteToParentViaSetParentContext(t *testing.T) {
+	child := "test-promote-child"
+	parent := "test-promote-parent"
+	CleanupContext(child)
+	CleanupContext(parent)
+	defer CleanupContext(child)
+	defer CleanupContext(parent)
+
+	SetParentContext(child, parent)
+
+	first, err := reportVulnWithContextID(child, validReportArgs())
+	if err != nil {
+		t.Fatalf("first report error = %v", err)
+	}
+	vulnID, ok := first.Metadata["vuln_id"].(string)
+	if !ok {
+		t.Fatalf("first report metadata = %#v, want vuln_id", first.Metadata)
+	}
+
+	parentVulns := GetVulnerabilitiesForContext(parent)
+	if len(parentVulns) != 1 {
+		t.Fatalf("parent vulnerabilities after promote = %d, want 1", len(parentVulns))
+	}
+	if parentVulns[0].ID != vulnID {
+		t.Fatalf("parent vuln id = %q, want %q", parentVulns[0].ID, vulnID)
+	}
+
+	// Re-report the same finding in the child — duplicate-rejected in child,
+	// and the parent must not gain a second copy.
+	second, err := reportVulnWithContextID(child, validReportArgs())
+	if err != nil {
+		t.Fatalf("second report error = %v", err)
+	}
+	if dup, _ := second.Metadata["duplicate"].(bool); !dup {
+		t.Fatalf("second report metadata = %#v, want duplicate=true", second.Metadata)
+	}
+	if got := len(GetVulnerabilitiesForContext(parent)); got != 1 {
+		t.Fatalf("parent vulnerabilities after duplicate report = %d, want 1", got)
+	}
+}
+
+// TestPromoteToParentIdempotent verifies the lower-level PromoteToParent helper
+// is a no-op when called twice with the same vulnID.
+func TestPromoteToParentIdempotent(t *testing.T) {
+	child := "test-promote-idem-child"
+	parent := "test-promote-idem-parent"
+	CleanupContext(child)
+	CleanupContext(parent)
+	defer CleanupContext(child)
+	defer CleanupContext(parent)
+
+	// Seed the child with a vuln directly so we can call PromoteToParent twice.
+	first, err := reportVulnWithContextID(child, validReportArgs())
+	if err != nil {
+		t.Fatalf("seed report error = %v", err)
+	}
+	vulnID, _ := first.Metadata["vuln_id"].(string)
+	if vulnID == "" {
+		t.Fatalf("seed report metadata = %#v, want vuln_id", first.Metadata)
+	}
+
+	PromoteToParent(child, parent, vulnID)
+	PromoteToParent(child, parent, vulnID)
+
+	if got := len(GetVulnerabilitiesForContext(parent)); got != 1 {
+		t.Fatalf("parent vulnerabilities after two PromoteToParent calls = %d, want 1", got)
+	}
+}
+
+// TestSetParentContextCleanedOnCleanup verifies that CleanupContext also clears
+// the child→parent mapping so it does not leak across scan lifecycles.
+func TestSetParentContextCleanedOnCleanup(t *testing.T) {
+	child := "test-promote-cleanup-child"
+	parent := "test-promote-cleanup-parent"
+	defer CleanupContext(parent)
+
+	SetParentContext(child, parent)
+	if got := GetParentContext(child); got != parent {
+		t.Fatalf("GetParentContext = %q, want %q", got, parent)
+	}
+
+	CleanupContext(child)
+	if got := GetParentContext(child); got != "" {
+		t.Fatalf("GetParentContext after cleanup = %q, want empty", got)
+	}
+}

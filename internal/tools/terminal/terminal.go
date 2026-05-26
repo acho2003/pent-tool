@@ -2,7 +2,6 @@
 package terminal
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -23,6 +22,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
+	"github.com/xalgord/xalgorix/v4/internal/tools/iolimit"
 )
 
 const maxOutputLen = 20000
@@ -570,7 +570,17 @@ func setProcessLimits(cmd *exec.Cmd, memoryLimited bool, memLimitBytes int64) {
 	if cmd.Process == nil {
 		return
 	}
-	pid := cmd.Process.Pid
+	setProcessLimitsForPID(cmd.Process.Pid, memoryLimited, memLimitBytes)
+}
+
+// setProcessLimitsForPID applies the same OOM / RLIMIT_AS constraints as
+// setProcessLimits but works with an already-known PID. This is the path
+// used for processes spawned outside of os/exec (e.g. go-rod's launcher,
+// which exposes only Launcher.PID()).
+func setProcessLimitsForPID(pid int, memoryLimited bool, memLimitBytes int64) {
+	if pid <= 0 {
+		return
+	}
 
 	// ── OOM score adjustment ──
 	// Score 500 = "kill me before most things, but not before 1000"
@@ -620,6 +630,17 @@ func ApplyProcessLimits(cmd *exec.Cmd, memoryLimited bool) {
 // already-reserved resource lease memory limit.
 func ApplyProcessLimitsWithLimit(cmd *exec.Cmd, memoryLimited bool, memLimitBytes int64) {
 	setProcessLimits(cmd, memoryLimited, memLimitBytes)
+}
+
+// ApplyProcessLimitsToPID is the PID-based companion to
+// ApplyProcessLimitsWithLimit. It is intended for tools that spawn their
+// child process outside of os/exec (e.g. go-rod's Launcher, which manages
+// the Chromium subprocess internally and exposes only Launcher.PID()).
+// Call this immediately after the launcher reports a non-zero PID so the
+// kernel-side OOM and RLIMIT_AS protections track the lease's memory
+// ceiling for the whole Chromium process tree.
+func ApplyProcessLimitsToPID(pid int, memoryLimited bool, memLimitBytes int64) {
+	setProcessLimitsForPID(pid, memoryLimited, memLimitBytes)
 }
 
 // ActiveProcessCount returns the number of currently running processes.
@@ -1095,6 +1116,21 @@ func commandWaitContext(contextID string) context.Context {
 	return context.Background()
 }
 
+// effectiveWorkDirForContext resolves the working directory for a terminal
+// command. Resolution order (R8.6, R8.10):
+//
+//  1. an explicitly set per-context Terminal workdir (sc.Terminal.GetWorkDir()
+//     or the package-level termStore.workDir),
+//  2. the active Scan_Context's ScanDir,
+//  3. cfg.WorkspaceRoot (= Data_Dir),
+//  4. /tmp/xalgorix-workspace as a last-resort sentinel.
+//
+// $CWD is intentionally NOT consulted: the previous os.Getwd() fallback was
+// the source of the workspace-leak bug where running xalgorix from a source
+// tree caused .tmp/, .cache/, .config/, .local/share/ to be created in that
+// tree by prepareCommandWorkspace. Falling back to WorkspaceRoot keeps the
+// resolution rooted inside the Allow_List even if every higher-priority
+// source is empty.
 func effectiveWorkDirForContext(contextID string, cfg *config.Config) string {
 	workDir := strings.TrimSpace(GetWorkDirForContext(contextID))
 	if workDir == "" {
@@ -1103,11 +1139,11 @@ func effectiveWorkDirForContext(contextID string, cfg *config.Config) string {
 		}
 	}
 	if workDir == "" && cfg != nil {
-		workDir = strings.TrimSpace(cfg.Workspace)
-	}
-	if workDir == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			workDir = cwd
+		// Prefer WorkspaceRoot (the explicit Data_Dir resolution root) over
+		// the legacy Workspace alias so a future divergence stays correct.
+		workDir = strings.TrimSpace(cfg.WorkspaceRoot)
+		if workDir == "" {
+			workDir = strings.TrimSpace(cfg.Workspace)
 		}
 	}
 	if workDir == "" {
@@ -1121,6 +1157,14 @@ func effectiveWorkDirForContext(contextID string, cfg *config.Config) string {
 	return filepath.Clean(workDir)
 }
 
+// prepareCommandWorkspace creates the per-command workspace skeleton
+// (`.tmp/`, `.cache/`, `.config/`, `.local/share/`) under workDir.
+//
+// Callers MUST pass a workDir resolved through effectiveWorkDirForContext so
+// the directories land under sc.ScanDir (when a Scan_Context is active) or
+// cfg.WorkspaceRoot (= Data_Dir) otherwise — never under $CWD (R8.6, R8.10).
+// This is the workspace-leak fix paired with the env-var routing in
+// commandEnv (R8.9).
 func prepareCommandWorkspace(workDir string) error {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return err
@@ -1142,6 +1186,13 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
+// commandEnv builds the environment for the terminal child process. Every
+// path-flavored variable (HOME, TMPDIR, XDG_CACHE_HOME, XDG_CONFIG_HOME,
+// XDG_DATA_HOME, XALGORIX_WORKSPACE) is rooted at workDir, which the caller
+// resolved via effectiveWorkDirForContext. This is the terminal counterpart
+// of pythonWorkspaceEnv and satisfies R8.9 / R8.10 — XDG_* and TMPDIR for
+// every spawned terminal command stay inside sc.ScanDir (or
+// cfg.WorkspaceRoot when no Scan_Context is active), never $CWD.
 func commandEnv(homeDir, goPath, workDir string, rateRuntime requestRateRuntime) []string {
 	dynamicPath := goPath + "/bin:" + homeDir + "/go/bin:" + homeDir + "/.local/bin"
 	dynamicPath += ":" + homeDir + "/.cargo/bin"
@@ -1332,11 +1383,11 @@ func runShellInternal(contextID string, command string) (string, int) {
 	TrackProcessForContext(contextID, cmd, cancel, cleanCmd)
 	defer UntrackProcessForContext(contextID, cmd)
 
-	// Read output in goroutines with periodic streaming
-	// Buffers are capped at 5MB to prevent OOM on huge command output
-	const maxBufSize = 5 * 1024 * 1024
-	var stdout, stderr bytes.Buffer
-	var stdoutOverflow, stderrOverflow bool
+	// Read output in goroutines with periodic streaming.
+	// Captured output is bounded at 1 MiB stdout / 512 KiB stderr by
+	// iolimit.LimitedBuffer; bytes past the limit are silently dropped and
+	// surfaced via Truncated() markers in the assembled result.
+	stdout, stderr := iolimit.NewLimited(1<<20, 1<<19)
 	var wg sync.WaitGroup
 
 	// Stream stdout
@@ -1348,17 +1399,7 @@ func runShellInternal(contextID string, command string) (string, int) {
 		for {
 			n, err := stdoutPipe.Read(buf)
 			if n > 0 {
-				chunk := buf[:n]
-				// Cap buffer size to prevent OOM
-				if stdout.Len()+n > maxBufSize {
-					if !stdoutOverflow {
-						stdoutOverflow = true
-					}
-					// Keep only the last part — discard old data
-					stdout.Reset()
-					stdout.WriteString("[OUTPUT TRUNCATED — exceeded 5MB]\n")
-				}
-				stdout.Write(chunk)
+				stdout.Write(buf[:n])
 
 				// Stream partial output every 10 seconds.
 				cb := streamCallbackForContext(contextID)
@@ -1385,13 +1426,6 @@ func runShellInternal(contextID string, command string) (string, int) {
 		for {
 			n, err := stderrPipe.Read(buf)
 			if n > 0 {
-				if stderr.Len()+n > maxBufSize {
-					if !stderrOverflow {
-						stderrOverflow = true
-					}
-					stderr.Reset()
-					stderr.WriteString("[STDERR TRUNCATED — exceeded 5MB]\n")
-				}
 				stderr.Write(buf[:n])
 			}
 			if err != nil {
@@ -1407,6 +1441,15 @@ func runShellInternal(contextID string, command string) (string, int) {
 	err = cmd.Wait()
 	// Note: process unregistration is handled by defer UntrackProcess(cmd) above
 
+	stdoutStr := stdout.String()
+	if stdout.Truncated() {
+		stdoutStr += "\n[output truncated at 1 MiB]"
+	}
+	stderrStr := stderr.String()
+	if stderr.Truncated() {
+		stderrStr += "\n[stderr truncated at 512 KiB]"
+	}
+
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -1414,15 +1457,16 @@ func runShellInternal(contextID string, command string) (string, int) {
 		} else if ctx.Err() == context.DeadlineExceeded {
 			// Command was killed by timeout
 			return ratePolicyNotice + fmt.Sprintf("[TIMEOUT] Command killed after %s. Use more targeted scans (fewer ports, specific paths, smaller scope) to stay within the time limit.\nPartial stdout:\n%s\nPartial stderr:\n%s",
-				timeout.Round(time.Second), truncate(stdout.String()), truncate(stderr.String())), -1
+				timeout.Round(time.Second), truncate(stdoutStr), truncate(stderrStr)), -1
+
 		} else if ctx.Err() == context.Canceled {
 			// Context was cancelled (Stop or watchdog kill)
 			return ratePolicyNotice + fmt.Sprintf("Command cancelled.\nPartial stdout:\n%s\nPartial stderr:\n%s",
-				truncate(stdout.String()), truncate(stderr.String())), -1
+				truncate(stdoutStr), truncate(stderrStr)), -1
 		}
 	}
 
-	return ratePolicyNotice + formatOutput(stdout.String(), stderr.String(), exitCode), exitCode
+	return ratePolicyNotice + formatOutput(stdoutStr, stderrStr, exitCode), exitCode
 }
 
 func isCommandNotFound(output string) bool {

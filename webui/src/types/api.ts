@@ -291,3 +291,20 @@ export interface ScanSchedule {
   discord_webhook?: string;
   model?: string;
 }
+
+// Response shape of GET /api/findings/summary. Polled every 10s by the
+// Findings and Overview pages; counts are deduplicated server-side by
+// (target, endpoint, title, severity) so the totals strip and the
+// row list always agree. The same query key (qk.findingsSummary) is
+// used on both pages so the React Query cache is shared.
+export interface FindingsSummaryResponse {
+  totals: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    info: number;
+  };
+  as_of: string;
+  etag: string;
+}

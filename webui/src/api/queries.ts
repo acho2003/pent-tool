@@ -17,6 +17,10 @@ export const qk = {
   llmSettings: ["settings", "llm"] as const,
   environmentSettings: ["settings", "environment"] as const,
   schedules: ["schedules"] as const,
+  legacyImport: ["legacy-import", "status"] as const,
+  // Shared between /findings and /overview so the totals widget
+  // reads a single cache entry across both pages.
+  findingsSummary: ["findings", "summary"] as const,
 };
 
 export function useAuthStatus() {
@@ -308,6 +312,30 @@ export function useTriggerSchedule() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.schedules });
       qc.invalidateQueries({ queryKey: qk.instances });
+    },
+  });
+}
+
+// Legacy-import banner: fetched once on first load. The server-side count
+// is only meaningful on the run that did the import (in-memory only,
+// resets on restart). Stale-time Infinity prevents background refetch
+// from re-showing a dismissed banner mid-session.
+export function useLegacyImportStatus() {
+  return useQuery({
+    queryKey: qk.legacyImport,
+    queryFn: api.legacyImportStatus,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function useDismissLegacyImport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.dismissLegacyImport,
+    onSuccess: (data) => {
+      qc.setQueryData(qk.legacyImport, data);
     },
   });
 }

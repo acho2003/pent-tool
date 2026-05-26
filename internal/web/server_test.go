@@ -35,7 +35,17 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	if cfg.RateLimitWindow == 0 {
 		cfg.RateLimitWindow = 60
 	}
+	// NewServer now derives s.dataDir from cfg.DataDir (Task 3.6 / R6.4),
+	// so seed a per-test temp dir BEFORE construction. Otherwise
+	// rebuildInstancesFromDisk / loadSchedulesFromDisk would touch the
+	// real ~/.xalgorix/data tree (or worse, the test's CWD).
+	if cfg.DataDir == "" {
+		cfg.DataDir = t.TempDir()
+	}
 	s := NewServer(cfg, 0)
+	// Backwards-compat for tests that override s.dataDir after construction:
+	// if the caller didn't pre-pick a path, switch to a fresh TempDir so
+	// existing tests that mutate s.dataDir keep working.
 	s.dataDir = t.TempDir()
 	t.Cleanup(func() {
 		if s.rateLimiter != nil {
