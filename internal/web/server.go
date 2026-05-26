@@ -4297,6 +4297,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				parentRecord.StopReason = "user_stopped"
 			}
 		} else {
+			saveWildcardProgress(len(subdomains), -1, "", "")
 			parentRecord.Status = "finished"
 		}
 		parentRecord.FinishedAt = time.Now().Format(time.RFC3339)
@@ -5227,6 +5228,40 @@ func isFinishedSubScanStatus(status string) bool {
 	}
 }
 
+func isCompletedScanStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "finished", "completed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTerminalScanStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "finished", "completed", "stopped", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUnresolvedSubScanStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "pending", "running":
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalSubScanStatus(parentStatus string) string {
+	if strings.EqualFold(strings.TrimSpace(parentStatus), "failed") {
+		return "failed"
+	}
+	return "stopped"
+}
+
 func isChildOfScan(parent, child *ScanRecord) bool {
 	if parent == nil || child == nil || child.ParentTarget == "" {
 		return false
@@ -5411,15 +5446,8 @@ func (s *Server) attachWildcardSubScans(rec *ScanRecord) {
 	}
 
 	summaries := make([]SubScanSummary, 0, len(order))
-	completed := 0
-	running := 0
 	for _, key := range order {
 		child := *children[key]
-		if isFinishedSubScanStatus(child.Status) {
-			completed++
-		} else if strings.EqualFold(child.Status, "running") {
-			running++
-		}
 		summaries = append(summaries, child)
 	}
 	sort.SliceStable(summaries, func(i, j int) bool {
@@ -5429,15 +5457,61 @@ func (s *Server) attachWildcardSubScans(rec *ScanRecord) {
 		return summaries[i].StartedAt < summaries[j].StartedAt
 	})
 
+	danglingActive := false
+	if isTerminalScanStatus(rec.Status) {
+		fallbackStatus := terminalSubScanStatus(rec.Status)
+		finishedAt := rec.FinishedAt
+		if finishedAt == "" {
+			finishedAt = time.Now().Format(time.RFC3339)
+		}
+		for i := range summaries {
+			if !isUnresolvedSubScanStatus(summaries[i].Status) {
+				continue
+			}
+			danglingActive = true
+			summaries[i].Status = fallbackStatus
+			if summaries[i].FinishedAt == "" {
+				summaries[i].FinishedAt = finishedAt
+			}
+		}
+	}
+
+	completed := 0
+	running := 0
+	for _, child := range summaries {
+		if isFinishedSubScanStatus(child.Status) {
+			completed++
+		} else if strings.EqualFold(child.Status, "running") {
+			running++
+		}
+	}
 	remaining := total - completed - running
 	if remaining < 0 {
 		remaining = 0
+	}
+	if isCompletedScanStatus(rec.Status) && (danglingActive || running > 0 || remaining > 0) {
+		rec.Status = "stopped"
+		if rec.StopReason == "" {
+			rec.StopReason = "incomplete_wildcard_subscans"
+		}
+		if rec.FinishedAt == "" {
+			rec.FinishedAt = time.Now().Format(time.RFC3339)
+		}
 	}
 	rec.SubScans = summaries
 	rec.SubScanTotal = total
 	rec.SubScanCompleted = completed
 	rec.SubScanRunning = running
 	rec.SubScanRemaining = remaining
+}
+
+func finalizeScanRecordForResponse(rec *ScanRecord) {
+	if rec == nil {
+		return
+	}
+	if isCompletedScanStatus(rec.Status) && phaseAllowed(rec.Phases, 22) {
+		rec.CurrentPhase = 22
+	}
 }
 
 // rebuildInstancesFromDisk populates s.instances from all saved scan.json files on disk.
@@ -6147,6 +6221,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		rec := allScans[0].rec
 		s.applyInstanceSnapshot(&rec, true)
 		s.attachWildcardSubScans(&rec)
+		finalizeScanRecordForResponse(&rec)
 		s.markDiscordWebhookConfigured(&rec)
 		data, _ := json.Marshal(rec)
 		w.Header().Set("Content-Type", "application/json")
@@ -6200,7 +6275,18 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		inst := s.instances[scanID]
 		s.instancesMu.RUnlock()
 		if rec := scanRecordFromInstance(inst); rec != nil {
+			if _, persisted := s.findScanByID(scanID); persisted != nil {
+				s.applyInstanceSnapshot(persisted, true)
+				s.attachWildcardSubScans(persisted)
+				finalizeScanRecordForResponse(persisted)
+				s.markDiscordWebhookConfigured(persisted)
+				data, _ := json.Marshal(persisted)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+				return
+			}
 			s.attachWildcardSubScans(rec)
+			finalizeScanRecordForResponse(rec)
 			s.markDiscordWebhookConfigured(rec)
 			data, _ := json.Marshal(rec)
 			w.Header().Set("Content-Type", "application/json")
@@ -6223,6 +6309,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 
 	s.applyInstanceSnapshot(rec, true)
 	s.attachWildcardSubScans(rec)
+	finalizeScanRecordForResponse(rec)
 	s.markDiscordWebhookConfigured(rec)
 	data, _ := json.Marshal(rec)
 	w.Header().Set("Content-Type", "application/json")
