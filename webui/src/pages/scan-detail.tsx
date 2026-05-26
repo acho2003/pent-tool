@@ -146,24 +146,24 @@ export default function ScanDetailPage() {
       </div>
 
       <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="space-y-2 min-w-0">
+        <div className="space-y-2 min-w-0 flex-1">
           <div className="flex items-center gap-3 min-w-0">
-            <h1 className="font-mono text-2xl font-semibold tracking-tight text-foreground truncate">
+            <h1 className="font-mono text-xl sm:text-2xl font-semibold tracking-tight text-foreground truncate min-w-0">
               {scan.target}
             </h1>
             <CopyButton value={scan.target} />
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span className="mono">{scan.id}</span>
-            <span>·</span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span className="mono truncate max-w-full">{scan.id}</span>
+            <span className="hidden sm:inline">·</span>
             <span>Started {timeAgo(scan.started_at)}</span>
-            <span>·</span>
+            <span className="hidden sm:inline">·</span>
             <span>
               Duration {formatDuration(scan.started_at, scan.finished_at)}
             </span>
             {scan.scan_mode && (
               <>
-                <span>·</span>
+                <span className="hidden sm:inline">·</span>
                 <Badge variant="outline" className="font-normal capitalize">
                   {scan.scan_mode}
                 </Badge>
@@ -250,20 +250,26 @@ export default function ScanDetailPage() {
               selected={scan.phases}
               status={scan.status}
             />
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {/* Responsive phase-tile grid. Cells use a min-width
+                template so 22 short tiles flow into rows that fit the
+                viewport instead of cramming 5 wide cells into 800 px
+                of card space. */}
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
               {PHASES.map((p) => (
                 <div
                   key={p.id}
                   className={cn(
-                    "rounded-md border border-border bg-muted/20 px-2 py-1.5 text-[11px]",
+                    "flex items-baseline gap-1.5 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-[11px]",
                     scan.current_phase === p.id &&
                       "border-amber-400/50 text-amber-300",
                   )}
                 >
-                  <span className="text-muted-foreground mono mr-1.5">
+                  <span className="mono shrink-0 text-muted-foreground">
                     {p.id}
                   </span>
-                  {p.name}
+                  <span className="truncate" title={p.name}>
+                    {p.name}
+                  </span>
                 </div>
               ))}
             </div>
@@ -425,7 +431,7 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
   ];
   return (
     <div className="space-y-3">
-      <div className="flex items-end gap-1">
+      <div className="flex h-12 items-end gap-1">
         {order.map((sev) => {
           const n = counts[sev as string];
           if (!n) return null;
@@ -434,7 +440,7 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
             <div
               key={sev}
               className={cn(
-                "h-12 rounded-sm",
+                "h-full rounded-sm",
                 sev === "critical" && "bg-red-500/70",
                 sev === "high" && "bg-orange-500/70",
                 sev === "medium" && "bg-amber-400/70",
@@ -447,21 +453,23 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
           );
         })}
         {vulns.length === 0 && (
-          <div className="h-12 w-full rounded-sm border border-dashed border-border" />
+          <div className="h-full w-full rounded-sm border border-dashed border-border" />
         )}
       </div>
-      <div className="grid grid-cols-5 gap-1.5 text-[11px]">
+      {/* Severity legend. Horizontal-scroll on very narrow widths so the
+          five labels never overlap; wide enough to read at all sizes. */}
+      <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 text-[11px]">
         {order.map((sev) => (
           <div
             key={sev}
-            className="rounded-md border border-border bg-muted/20 px-2 py-1.5"
+            className="flex min-w-[60px] flex-1 flex-col rounded-md border border-border bg-muted/20 px-2 py-1.5"
           >
-            <div className="text-muted-foreground uppercase tracking-wide">
+            <span className="truncate uppercase tracking-wide text-muted-foreground">
               {sev}
-            </div>
-            <div className="mono text-base text-foreground">
+            </span>
+            <span className="mono text-base leading-tight text-foreground">
               {counts[sev as string]}
-            </div>
+            </span>
           </div>
         ))}
       </div>
