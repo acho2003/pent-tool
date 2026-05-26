@@ -58,3 +58,7 @@ webui/.turbo/
 .commit_msg.tmp
 .pr_body.tmp
 .release_notes.tmp
+
+# Local-only spec/design docs (Kiro). Internal authoring scratch space —
+# not part of the published source.
+.kiro/
