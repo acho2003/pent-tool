@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1602,6 +1603,114 @@ func TestHandleGetScan_MarksGlobalDiscordWebhookConfigured(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "discord.example") {
 		t.Fatalf("webhook URL leaked in response: %s", rr.Body.String())
+	}
+}
+
+func TestHandleGetScan_PrefersPersistedWildcardProgressOverFinishedInstanceReplay(t *testing.T) {
+	s := newTestServer(t, nil)
+	startedAt := "2026-05-01T10:00:00Z"
+	finishedAt := "2026-05-01T12:00:00Z"
+	subScans := make([]SubScanSummary, 0, 9)
+	for i := 1; i <= 9; i++ {
+		subScans = append(subScans, SubScanSummary{
+			ID:         "child-finished",
+			Target:     "sub" + strconv.Itoa(i) + ".b.test",
+			Status:     "finished",
+			FinishedAt: finishedAt,
+		})
+	}
+	writeScanRecord(t, s.dataDir, "target-b/2026-05-01/scan-parent", ScanRecord{
+		ID:               "scan-parent",
+		InstanceID:       "queue-1234",
+		Target:           "https://b.test",
+		StartedAt:        startedAt,
+		FinishedAt:       finishedAt,
+		Status:           "finished",
+		ScanMode:         "wildcard",
+		CurrentPhase:     5,
+		SubScanTotal:     9,
+		SubScanCompleted: 9,
+		SubScans:         subScans,
+	})
+
+	inst := &ScanInstance{
+		ID:           "queue-1234",
+		Targets:      "https://b.test",
+		Status:       "finished",
+		StartedAt:    startedAt,
+		FinishedAt:   finishedAt,
+		ScanMode:     "wildcard",
+		CurrentPhase: 5,
+	}
+	for i := 1; i <= 5; i++ {
+		target := "sub" + strconv.Itoa(i) + ".b.test"
+		inst.events = append(inst.events,
+			WSEvent{Type: "target_started", Target: target, ParentTarget: "https://b.test", SubTargetTotal: 9, Timestamp: startedAt},
+			WSEvent{Type: "target_completed", Target: target, ParentTarget: "https://b.test", SubTargetTotal: 9, Timestamp: finishedAt},
+		)
+	}
+	for i := 6; i <= 9; i++ {
+		inst.events = append(inst.events, WSEvent{
+			Type:           "target_started",
+			Target:         "sub" + strconv.Itoa(i) + ".b.test",
+			ParentTarget:   "https://b.test",
+			SubTargetTotal: 9,
+			Timestamp:      startedAt,
+		})
+	}
+	s.instancesMu.Lock()
+	s.instances[inst.ID] = inst
+	s.instancesMu.Unlock()
+
+	rr := httptest.NewRecorder()
+	s.handleGetScan(rr, httptest.NewRequest(http.MethodGet, "/api/scans/queue-1234", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get scan code = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var rec ScanRecord
+	if err := json.Unmarshal(rr.Body.Bytes(), &rec); err != nil {
+		t.Fatalf("decode scan: %v body=%s", err, rr.Body.String())
+	}
+	if rec.ID != "scan-parent" || rec.Status != "finished" {
+		t.Fatalf("expected persisted finished parent, got %#v", rec)
+	}
+	if rec.CurrentPhase != 22 {
+		t.Fatalf("finished scan current phase = %d, want 22", rec.CurrentPhase)
+	}
+	if rec.SubScanCompleted != 9 || rec.SubScanRunning != 0 || rec.SubScanRemaining != 0 {
+		t.Fatalf("wildcard counts came from stale replay instead of persisted progress: completed=%d running=%d remaining=%d", rec.SubScanCompleted, rec.SubScanRunning, rec.SubScanRemaining)
+	}
+}
+
+func TestAttachWildcardSubScans_NormalizesDanglingRunningChildrenForTerminalParent(t *testing.T) {
+	s := newTestServer(t, nil)
+	rec := &ScanRecord{
+		ID:         "scan-parent",
+		Target:     "https://b.test",
+		StartedAt:  "2026-05-01T10:00:00Z",
+		FinishedAt: "2026-05-01T12:00:00Z",
+		Status:     "finished",
+		ScanMode:   "wildcard",
+		SubScans: []SubScanSummary{
+			{Target: "done.b.test", Status: "finished"},
+			{Target: "active.b.test", Status: "running"},
+			{Target: "queued.b.test", Status: "pending"},
+		},
+		SubScanTotal: 3,
+	}
+
+	s.attachWildcardSubScans(rec)
+
+	if rec.Status != "stopped" || rec.StopReason != "incomplete_wildcard_subscans" {
+		t.Fatalf("terminal parent with dangling children should become stopped, got status=%q reason=%q", rec.Status, rec.StopReason)
+	}
+	if rec.SubScanRunning != 0 || rec.SubScanRemaining != 0 || rec.SubScanCompleted != 3 {
+		t.Fatalf("dangling child counts not normalized: completed=%d running=%d remaining=%d", rec.SubScanCompleted, rec.SubScanRunning, rec.SubScanRemaining)
+	}
+	for _, child := range rec.SubScans {
+		if child.Status == "running" || child.Status == "pending" {
+			t.Fatalf("child %s still active after parent ended: %#v", child.Target, child)
+		}
 	}
 }
 
