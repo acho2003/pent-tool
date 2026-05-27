@@ -107,13 +107,19 @@ function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof 
           icon={<MemoryStick className="h-3 w-3" />}
           label="HOST MEMORY"
           value={`${ramPct}%`}
-          sub={rss > 0 ? `${Math.round(ramUsed)}MB used · xalgorix ${rss}MB RSS` : `${Math.round(ramUsed)}MB used`}
+          sub={(() => {
+            const used = `${Math.round(ramUsed)}MB used${rss > 0 ? ` · xalgorix ${rss}MB RSS` : ""}`
+            const cap = scanMem > 0
+              ? `Max ${resources.effective_max_instances} · scan ${scanMem}MB${toolLimitText}`
+              : `Max ${resources.effective_max_instances} instances`
+            return `${used} · ${cap}`
+          })()}
         />
         <ResourceStat
           icon={<HardDrive className="h-3 w-3" />}
           label="DISK FREE"
           value={`${diskFreeGb}GB`}
-          sub={scanMem > 0 ? `Max ${resources.effective_max_instances} · scan ${scanMem}MB${toolLimitText}` : `Max ${resources.effective_max_instances} instances`}
+          sub="Used for scan logs, tool output, reports"
         />
         <div className={`rounded-md border px-3 py-2 text-xs ${levelColor}`}>
           <div className="uppercase tracking-wide opacity-70">Host resource level</div>

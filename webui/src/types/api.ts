@@ -149,7 +149,6 @@ export interface InstancesResponse {
     light_tool_slots?: number;
     tool_mem_limit_mb?: number;
     scan_memory_budget_mb?: number;
-    scan_cpu_load?: number;
     heavy_tool_cpu_load?: number;
     go_memory_limit_mb?: number;
   };

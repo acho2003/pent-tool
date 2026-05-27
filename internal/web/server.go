@@ -2452,7 +2452,6 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 			"light_tool_slots":         capacity.LightToolSlots,
 			"tool_mem_limit_mb":        capacity.ToolMemLimitMB,
 			"scan_memory_budget_mb":    capacity.ScanMemoryBudgetMB,
-			"scan_cpu_load":            capacity.ScanCPULoad,
 			"heavy_tool_cpu_load":      capacity.HeavyToolCPULoad,
 			"go_memory_limit_mb":       capacity.GoMemoryLimitMB,
 		},
