@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -1971,4 +1972,119 @@ func TestInstanceAction_GetAndStopSpecificInstance(t *testing.T) {
 	if got := s.instances["inst-1"].Status; got != "stopped" {
 		t.Fatalf("instance status = %q, want stopped", got)
 	}
+}
+
+
+// withStubLookupHost swaps the package-level lookupHost shim for the
+// duration of a single test. Restoration runs via t.Cleanup so every
+// test exits with the original net.LookupHost binding in place,
+// regardless of failure or skip. The test functions below MUST NOT call
+// t.Parallel() because lookupHost is package-level state.
+func withStubLookupHost(t *testing.T, stub func(string) ([]string, error)) {
+	t.Helper()
+	prev := lookupHost
+	lookupHost = stub
+	t.Cleanup(func() { lookupHost = prev })
+}
+
+// TestIsBlockedTarget_SingleLookup asserts that isBlockedTarget invokes
+// the test-shimmed lookupHost exactly once per call when the target is a
+// hostname that requires DNS resolution, and that two back-to-back calls
+// each perform one lookup (no caching across calls). Covers Req 3.1 and
+// 3.6.
+func TestIsBlockedTarget_SingleLookup(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	var calls int
+	withStubLookupHost(t, func(host string) ([]string, error) {
+		calls++
+		// Return a public IP so the target threads through every
+		// downstream check (port match, self-iface match, private
+		// CIDR scan) without short-circuiting before the lookup
+		// counter is observed.
+		return []string{"203.0.113.10"}, nil
+	})
+
+	if blocked := s.isBlockedTarget("https://oos.example/"); blocked {
+		t.Fatalf("public-IP-resolving target reported blocked = true")
+	}
+	if calls != 1 {
+		t.Fatalf("lookupHost call count after first call = %d, want 1", calls)
+	}
+
+	// Second call: lookups are not cached across invocations, so the
+	// counter MUST advance by exactly one.
+	if blocked := s.isBlockedTarget("https://oos.example/"); blocked {
+		t.Fatalf("second call to public-IP-resolving target reported blocked = true")
+	}
+	if calls != 2 {
+		t.Fatalf("lookupHost call count after second call = %d, want 2", calls)
+	}
+}
+
+// TestIsBlockedTarget_IPLiteralSkipsLookup asserts that when the target
+// host is already an IP literal, isBlockedTarget never invokes the
+// resolver shim. Covers Req 3.3.
+func TestIsBlockedTarget_IPLiteralSkipsLookup(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	var calls int
+	withStubLookupHost(t, func(host string) ([]string, error) {
+		calls++
+		return nil, errors.New("lookupHost should not be invoked for IP literals")
+	})
+
+	// Public IP literal — should pass through without a lookup and
+	// without being blocked.
+	if blocked := s.isBlockedTarget("https://203.0.113.10/"); blocked {
+		t.Fatalf("public IP literal reported blocked = true")
+	}
+	if calls != 0 {
+		t.Fatalf("lookupHost calls for public IP literal = %d, want 0", calls)
+	}
+
+	// Private RFC1918 IP literal — must be blocked AND must not
+	// resolve. Confirms the private-range check runs against the
+	// parsed IP without re-routing through DNS.
+	if blocked := s.isBlockedTarget("http://10.0.0.5/"); !blocked {
+		t.Fatalf("private IP literal 10.0.0.5 reported blocked = false")
+	}
+	if calls != 0 {
+		t.Fatalf("lookupHost calls for private IP literal = %d, want 0", calls)
+	}
+}
+
+// TestIsBlockedTarget_DNSFailureAllows asserts that lookup failures and
+// empty resolutions result in an allow (return false), without any
+// further blocking signals being applied. Covers Req 3.4.
+func TestIsBlockedTarget_DNSFailureAllows(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	t.Run("lookup error", func(t *testing.T) {
+		var calls int
+		withStubLookupHost(t, func(host string) ([]string, error) {
+			calls++
+			return nil, errors.New("simulated NXDOMAIN")
+		})
+		if blocked := s.isBlockedTarget("https://nope.example/"); blocked {
+			t.Fatalf("DNS-error target reported blocked = true; want false (allow)")
+		}
+		if calls != 1 {
+			t.Fatalf("lookupHost calls = %d, want 1", calls)
+		}
+	})
+
+	t.Run("empty result", func(t *testing.T) {
+		var calls int
+		withStubLookupHost(t, func(host string) ([]string, error) {
+			calls++
+			return []string{}, nil
+		})
+		if blocked := s.isBlockedTarget("https://void.example/"); blocked {
+			t.Fatalf("empty-result target reported blocked = true; want false (allow)")
+		}
+		if calls != 1 {
+			t.Fatalf("lookupHost calls = %d, want 1", calls)
+		}
+	})
 }

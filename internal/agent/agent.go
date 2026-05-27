@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
@@ -879,6 +880,15 @@ func extractHostsFromArgs(toolArgs map[string]string) []string {
 		if raw == "" {
 			continue
 		}
+		raw = truncateForScopeScan(raw)
+		for _, span := range extractEmbeddedURLs(raw) {
+			h := extractHostFromTokenForScope(span)
+			if h == "" || seen[h] {
+				continue
+			}
+			seen[h] = true
+			out = append(out, h)
+		}
 		for _, tok := range scopeHostTokenSplit(raw) {
 			h := extractHostFromTokenForScope(tok)
 			if h == "" || seen[h] {
@@ -894,18 +904,11 @@ func extractHostsFromArgs(toolArgs map[string]string) []string {
 // scopeHostTokenSplit splits a free-form string into tokens that are
 // candidates for host extraction. Splits on whitespace and common
 // shell metacharacters so URLs inside curl/python invocations are
-// still found.
+// still found. The separator set is owned by scopeTokenSeparator so
+// extractEmbeddedURLs and redactOutOfScopeHosts agree on token
+// edges.
 func scopeHostTokenSplit(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		switch r {
-		case ' ', '\t', '\n', '\r',
-			'"', '\'', '`',
-			'(', ')', '{', '}', '[', ']',
-			',', ';', '|', '&', '<', '>':
-			return true
-		}
-		return false
-	})
+	return strings.FieldsFunc(s, scopeTokenSeparator)
 }
 
 // extractHostFromTokenForScope pulls a hostname out of a token, or
@@ -1025,6 +1028,209 @@ func hostInScope(host string, scopeHosts []string) bool {
 		}
 	}
 	return false
+}
+
+// argScanLimitBytes caps how many bytes of any single tool-argument
+// value the Agent_Scope_Guard will tokenize when extracting OOS host
+// references. Values larger than this cap are tokenized only over
+// their first argScanLimitBytes bytes; the cap silently bounds CPU
+// and never short-circuits to a reject.
+const argScanLimitBytes = 8192
+
+// truncateForScopeScan returns v truncated to at most
+// argScanLimitBytes bytes, trimmed back to the largest UTF-8 rune
+// boundary at or below the cap so downstream tokenizers never see a
+// partial rune. Values whose byte length is already at or below the
+// cap are returned unchanged.
+func truncateForScopeScan(v string) string {
+	if len(v) <= argScanLimitBytes {
+		return v
+	}
+	end := argScanLimitBytes
+	for end > 0 && !utf8.RuneStart(v[end]) {
+		end--
+	}
+	return v[:end]
+}
+
+// extractEmbeddedURLs scans s for case-insensitive "http://" and
+// "https://" substrings and returns each contiguous URL span. Each
+// span starts at a scheme-prefix occurrence and ends at the first
+// scopeHostTokenSplit separator rune or the end of s, whichever
+// comes first. The helper lets the host-extraction path see URLs
+// embedded inside query-parameter redirects, userinfo wrappers, and
+// other key=value forms before scopeHostTokenSplit's separator pass
+// runs over the same value. When a span cannot be parsed as a URL
+// later, extractHostFromTokenForScope drops it silently and the
+// separator pass still recovers any bare host.
+func extractEmbeddedURLs(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	n := len(s)
+	for i := 0; i < n; {
+		prefixLen := 0
+		switch {
+		case i+7 <= n && strings.EqualFold(s[i:i+7], "http://"):
+			prefixLen = 7
+		case i+8 <= n && strings.EqualFold(s[i:i+8], "https://"):
+			prefixLen = 8
+		}
+		if prefixLen == 0 {
+			i++
+			continue
+		}
+		end := i + prefixLen
+	span:
+		for end < n {
+			r, size := utf8.DecodeRuneInString(s[end:])
+			if size == 0 {
+				size = 1
+			}
+			if scopeTokenSeparator(r) {
+				break span
+			}
+			end += size
+		}
+		out = append(out, s[i:end])
+		i = end
+	}
+	return out
+}
+
+// scopeTokenSeparator reports whether r is one of the runes
+// scopeHostTokenSplit treats as a token boundary. Kept in lockstep
+// with that function's switch so the URL sweep, the separator-pass
+// tokenizer, and the redaction tokenizer agree on token edges.
+func scopeTokenSeparator(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\r',
+		'"', '\'', '`',
+		'(', ')', '{', '}', '[', ']',
+		',', ';', '|', '&', '<', '>',
+		'=', '?', '#', '@':
+		return true
+	}
+	return false
+}
+
+// redactOutOfScopeHosts returns s rewritten with every out-of-scope
+// host span replaced by the literal marker
+// "[redacted: out-of-scope host]", along with the number of
+// substitutions performed. Tokenization mirrors extractHostsFromArgs:
+// the value is first capped at argScanLimitBytes via
+// truncateForScopeScan, embedded http(s):// spans are swept first,
+// and the remainder is split through the same separator set as
+// scopeHostTokenSplit. Each candidate span is classified through
+// extractHostFromTokenForScope and a.activityHosts via hostInScope;
+// only OOS spans are redacted. Bytes beyond the cap (the unredacted
+// tail) are appended to the result unchanged, per Requirement 4.7,
+// so the caller never silently loses data. When a.activityHosts is
+// empty or s is empty, s is returned unchanged with a zero count.
+func (a *Agent) redactOutOfScopeHosts(s string) (string, int) {
+	if s == "" || len(a.activityHosts) == 0 {
+		return s, 0
+	}
+	const marker = "[redacted: out-of-scope host]"
+
+	head := truncateForScopeScan(s)
+	tail := s[len(head):]
+	if head == "" {
+		return s, 0
+	}
+
+	// mask[i]=true marks byte i of head as part of an OOS span.
+	mask := make([]bool, len(head))
+	markIfOOS := func(start, end int) {
+		if start < 0 || end > len(head) || start >= end {
+			return
+		}
+		h := extractHostFromTokenForScope(head[start:end])
+		if h == "" {
+			return
+		}
+		if hostInScope(h, a.activityHosts) {
+			return
+		}
+		for i := start; i < end; i++ {
+			mask[i] = true
+		}
+	}
+
+	n := len(head)
+
+	// URL sweep: find every http(s):// span with positions, mirror
+	// of extractEmbeddedURLs.
+	for i := 0; i < n; {
+		prefixLen := 0
+		switch {
+		case i+7 <= n && strings.EqualFold(head[i:i+7], "http://"):
+			prefixLen = 7
+		case i+8 <= n && strings.EqualFold(head[i:i+8], "https://"):
+			prefixLen = 8
+		}
+		if prefixLen == 0 {
+			i++
+			continue
+		}
+		end := i + prefixLen
+		for end < n {
+			r, size := utf8.DecodeRuneInString(head[end:])
+			if size == 0 {
+				size = 1
+			}
+			if scopeTokenSeparator(r) {
+				break
+			}
+			end += size
+		}
+		markIfOOS(i, end)
+		i = end
+	}
+
+	// Separator-pass tokenizer: same boundary set as
+	// scopeHostTokenSplit, but tracked with positions so OOS tokens
+	// can be redacted in place.
+	start := -1
+	for i := 0; i < n; {
+		r, size := utf8.DecodeRuneInString(head[i:])
+		if size == 0 {
+			size = 1
+		}
+		if scopeTokenSeparator(r) {
+			if start >= 0 {
+				markIfOOS(start, i)
+				start = -1
+			}
+		} else if start < 0 {
+			start = i
+		}
+		i += size
+	}
+	if start >= 0 {
+		markIfOOS(start, n)
+	}
+
+	// Emit head with each contiguous masked region collapsed to a
+	// single marker, then append the unredacted tail unchanged.
+	var b strings.Builder
+	b.Grow(len(head) + len(tail))
+	count := 0
+	for i := 0; i < n; {
+		if mask[i] {
+			b.WriteString(marker)
+			count++
+			for i < n && mask[i] {
+				i++
+			}
+			continue
+		}
+		b.WriteByte(head[i])
+		i++
+	}
+	b.WriteString(tail)
+	return b.String(), count
 }
 
 func passivePolicyBlockReason(passiveScan bool) string {
@@ -1403,6 +1609,23 @@ func (a *Agent) Run(targets []string, instruction string) {
 				a.messages = append(a.messages, llm.Message{Role: "user", Content: blockMsg})
 				a.msgMu.Unlock()
 				continue
+			}
+
+			// ── add_note redaction (pre-gate) ──
+			// add_note is not a gated tool, but its arguments persist
+			// into read_notes on later iterations. Scrub OOS host
+			// references in place so an LLM cannot launder an OOS
+			// hostname through the notes store. Empty activityHosts
+			// short-circuits the path (matches shouldBlockForOutOfScope).
+			if tc.Name == "add_note" && len(a.activityHosts) > 0 {
+				for _, k := range []string{"key", "value"} {
+					if v, ok := tc.Args[k]; ok {
+						if r, n := a.redactOutOfScopeHosts(v); n > 0 {
+							tc.Args[k] = r
+							log.Printf("[scope] redacted %d out-of-scope host(s) from add_note", n)
+						}
+					}
+				}
 			}
 
 			// ── In-scope guard ──
