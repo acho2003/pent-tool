@@ -213,22 +213,29 @@ export interface ScanRequest {
 // the HTTP boundary by internal/web/masks.go).
 // ---------------------------------------------------------------------------
 
-// CatalogEntry mirrors providers.Entry. The runtime-editable LLM
-// provider catalog persisted at ~/.xalgorix/data/providers.json and
-// returned by GET /api/providers.
+// CatalogEntry mirrors providers.Entry. The compiled-in LLM
+// provider catalog returned by GET /api/providers in v4.4.22+.
 export interface CatalogEntry {
   id: string;
   displayName: string;
   baseURL: string;
   models?: string[];
   headerStyle: "openai" | "anthropic" | "gemini";
+  // v4.4.22 surfaces AuthMethods so the dashboard can render the
+  // matching sub-form (api_key / oauth / none) without duplicating
+  // the catalog's policy. Older servers omit this field entirely.
+  authMethods?: Array<"api_key" | "oauth" | "none">;
   flow?: "" | "pkce" | "device_code" | "setup_token" | "claude_cli_reuse";
   clientID?: string;
   authorizationEndpoint?: string;
   tokenEndpoint?: string;
   deviceAuthorizationEndpoint?: string;
+  revocationEndpoint?: string;
   scopes?: string[];
   audience?: string;
+  // Free-form per-provider caveat surfaced as a hint in the LLM
+  // tab (beta status, env-var overrides, etc.).
+  notes?: string;
 }
 
 // AuthProfileType discriminates between the two stored credential
@@ -241,37 +248,31 @@ export type AuthProfileType = "api_key" | "oauth";
 // ones (see internal/web/masks.go, Requirements 5.1, 5.2). The
 // expiresAt and updatedAt fields are RFC3339 / ISO 8601 timestamps.
 export interface AuthProfile {
+  // Canonical "<provider>:<profileId>" key the rest of the system
+  // uses to reference this profile. Older servers (pre-v4.4.22)
+  // may omit it; consumers that need a key should fall back to
+  // ${provider}:${profileId}.
+  key?: string;
   provider: string;
   profileId: string;
   type: AuthProfileType;
   // API_Key fields. Masked credential string when type === "api_key".
   apiKey?: string;
+  // hasApiKey / hasAccessToken are convenience booleans returned by
+  // the LLM settings handler (handlers_profiles.go returns the
+  // masked credential directly; the LLM tab surface adds these to
+  // make truthiness checks straightforward).
+  hasApiKey?: boolean;
   apiBaseOverride?: string;
   // OAuth fields. Masked credential strings when type === "oauth".
   accessToken?: string;
+  hasAccessToken?: boolean;
   refreshToken?: string;
   expiresAt?: string;
   scopes?: string[];
   tokenType?: string;
   requiresReauth?: boolean;
-  updatedAt: string;
-}
-
-// OpenclawImportOutcome reports the per-entry result of
-// POST /api/providers/import-openclaw. action is "imported" when the
-// id was new and added to the local catalog, or "skipped" when the
-// id already existed locally (reason === "id_exists" today).
-export interface OpenclawImportOutcome {
-  id: string;
-  action: "imported" | "skipped";
-  reason?: string;
-}
-
-// OpenclawImportResponse is the success-envelope returned by
-// POST /api/providers/import-openclaw. Upstream errors instead
-// surface as HTTP 502 with the upstream {statusCode, body} payload.
-export interface OpenclawImportResponse {
-  outcomes: OpenclawImportOutcome[];
+  updatedAt?: string;
 }
 
 // OAuthStartMode discriminates the three shapes returned by
@@ -356,6 +357,52 @@ export interface LLMSettings {
   geminiApiKey: string;
   hasGeminiApiKey: boolean;
   envFile: string;
+  // v4.4.22: catalog-aware fields driving the new LLM Settings tab.
+  // Provider mirrors the active provider id. AuthMethod tracks
+  // which branch the resolver currently dispatches through.
+  // Profiles is the masked list of saved profiles for the active
+  // provider only.
+  provider?: string;
+  authMethod?: "" | "api_key" | "oauth" | "none";
+  activeProfileKey?: string;
+  profiles?: LLMProfileSummary[];
+}
+
+// LLMProfileSummary is the masked, dashboard-friendly view of one
+// auth.Profile filtered to the active provider in the LLM tab.
+export interface LLMProfileSummary {
+  key: string;
+  provider: string;
+  profileId: string;
+  type: AuthProfileType;
+  hasAccessToken: boolean;
+  hasApiKey: boolean;
+  apiBaseOverride?: string;
+  expiresAt?: string;
+  requiresReauth?: boolean;
+}
+
+// LLMSettingsRequest is the POST body shape accepted by
+// PUT /api/settings/llm. The v4.4.22 fields (provider/authMethod/
+// profileId/activeProfileKey/apiBaseOverride) drive the catalog-
+// aware path; if any of those is supplied the handler dispatches
+// through applyCatalogLLMSettings. Otherwise the legacy fields
+// (model/apiBase/apiKey/...) take the v4.4.21 free-text path.
+export interface LLMSettingsRequest {
+  model?: string;
+  apiBase?: string;
+  apiKey?: string;
+  reasoningEffort?: string;
+  llmMaxRetries?: number;
+  memoryCompressorTimeout?: number;
+  maxIterations?: number;
+  geminiApiKey?: string;
+  // v4.4.22 catalog-aware fields.
+  provider?: string;
+  authMethod?: "api_key" | "oauth" | "none";
+  profileId?: string;
+  apiBaseOverride?: string;
+  activeProfileKey?: string;
 }
 
 export interface EnvironmentVariableSetting {

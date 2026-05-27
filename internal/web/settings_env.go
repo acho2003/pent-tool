@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/auth"
 )
 
 type envSettingDefinition struct {
@@ -40,18 +43,70 @@ type environmentSettingsResponse struct {
 }
 
 type llmSettingsResponse struct {
-	Model                     string `json:"model"`
-	APIBase                   string `json:"apiBase"`
-	APIKey                    string `json:"apiKey"`
-	HasAPIKey                 bool   `json:"hasApiKey"`
-	ReasoningEffort           string `json:"reasoningEffort"`
-	LLMMaxRetries             int    `json:"llmMaxRetries"`
-	MemoryCompressorTimeout   int    `json:"memoryCompressorTimeout"`
-	MaxIterations             int    `json:"maxIterations"`
-	GeminiAPIKey              string `json:"geminiApiKey"`
-	HasGeminiAPIKey           bool   `json:"hasGeminiApiKey"`
-	EnvFile                   string `json:"envFile"`
-	EnvironmentRestartWarning bool   `json:"environmentRestartWarning"`
+	Model                     string                `json:"model"`
+	APIBase                   string                `json:"apiBase"`
+	APIKey                    string                `json:"apiKey"`
+	HasAPIKey                 bool                  `json:"hasApiKey"`
+	ReasoningEffort           string                `json:"reasoningEffort"`
+	LLMMaxRetries             int                   `json:"llmMaxRetries"`
+	MemoryCompressorTimeout   int                   `json:"memoryCompressorTimeout"`
+	MaxIterations             int                   `json:"maxIterations"`
+	GeminiAPIKey              string                `json:"geminiApiKey"`
+	HasGeminiAPIKey           bool                  `json:"hasGeminiApiKey"`
+	EnvFile                   string                `json:"envFile"`
+	EnvironmentRestartWarning bool                  `json:"environmentRestartWarning"`
+	// v4.4.22: catalog-aware fields driving the new LLM Settings
+	// tab. Provider mirrors the active provider id derived from
+	// LLMProfile (or the legacy XALGORIX_LLM "<provider>/<model>"
+	// prefix when no profile is active). AuthMethod tracks which
+	// branch the resolver currently dispatches through. Profiles
+	// is the masked list of saved profiles for the active
+	// provider only — see handleLLMSettings GET for filtering.
+	Provider         string             `json:"provider"`
+	AuthMethod       string             `json:"authMethod"`
+	ActiveProfileKey string             `json:"activeProfileKey"`
+	Profiles         []llmProfileSummary `json:"profiles"`
+}
+
+// llmProfileSummary is the masked, dashboard-friendly view of one
+// auth.Profile filtered to the active provider in the LLM tab.
+// Wire shape mirrors maskedProfile in handlers_profiles.go but is
+// declared independently so we never import handlers_profiles types.
+type llmProfileSummary struct {
+	Key             string `json:"key"`
+	Provider        string `json:"provider"`
+	ProfileID       string `json:"profileId"`
+	Type            string `json:"type"`
+	HasAccessToken  bool   `json:"hasAccessToken"`
+	HasAPIKey       bool   `json:"hasApiKey"`
+	APIBaseOverride string `json:"apiBaseOverride,omitempty"`
+	ExpiresAt       string `json:"expiresAt,omitempty"`
+	RequiresReauth  bool   `json:"requiresReauth,omitempty"`
+}
+
+// llmSettingsRequest is the shared decoded shape of POST
+// /api/settings/llm. Both the legacy field set
+// (model/apiBase/apiKey/...) and the v4.4.22 field set
+// (provider/authMethod/profileId/activeProfileKey/...) decode into
+// this struct; handleLLMSettings sniffs which branch to take by
+// presence of provider/authMethod/activeProfileKey.
+type llmSettingsRequest struct {
+	// Legacy fields (kept for backwards compat).
+	Model                   string `json:"model"`
+	APIBase                 string `json:"apiBase"`
+	APIKey                  string `json:"apiKey"`
+	ReasoningEffort         string `json:"reasoningEffort"`
+	LLMMaxRetries           int    `json:"llmMaxRetries"`
+	MemoryCompressorTimeout int    `json:"memoryCompressorTimeout"`
+	MaxIterations           int    `json:"maxIterations"`
+	GeminiAPIKey            string `json:"geminiApiKey"`
+
+	// v4.4.22 fields.
+	Provider         string `json:"provider"`
+	AuthMethod       string `json:"authMethod"`
+	ProfileID        string `json:"profileId"`
+	APIBaseOverride  string `json:"apiBaseOverride"`
+	ActiveProfileKey string `json:"activeProfileKey"`
 }
 
 var envSettingKeyRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
@@ -65,6 +120,7 @@ func allEnvSettingDefinitions() []envSettingDefinition {
 		{Key: "XALGORIX_LLM", Label: "LLM model", Category: "LLM", Description: "Default model used by scans and post-scan chat.", Placeholder: "minimax/MiniMax-M2.7", InputType: "text"},
 		{Key: "XALGORIX_API_KEY", Label: "LLM API key", Category: "LLM", Description: "Provider API key for the configured model.", Placeholder: "sk-...", InputType: "secret", Sensitive: true},
 		{Key: "XALGORIX_API_BASE", Label: "API base URL", Category: "LLM", Description: "Optional custom provider endpoint. Leave blank to use provider defaults.", Placeholder: "https://api.openai.com/v1", InputType: "url"},
+		{Key: "XALGORIX_LLM_PROFILE", Label: "Active LLM profile", Category: "LLM", Description: "Active credential pointer (\"<provider>:<profileId>\"). Set by the LLM Settings tab; takes precedence over XALGORIX_API_KEY/XALGORIX_LLM when present.", Placeholder: "openai:default", InputType: "text"},
 		{Key: "XALGORIX_REASONING_EFFORT", Label: "Reasoning effort", Category: "LLM", Description: "Reasoning depth for providers that support it.", DefaultValue: "high", InputType: "select", Options: []string{"low", "medium", "high", "xhigh"}},
 		{Key: "XALGORIX_LLM_MAX_RETRIES", Label: "LLM max retries", Category: "LLM", Description: "Retry count for transient LLM provider failures.", DefaultValue: "5", InputType: "number"},
 		{Key: "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", Label: "Memory compressor timeout", Category: "LLM", Description: "Timeout in seconds for context compression.", DefaultValue: "30", InputType: "number"},
@@ -133,13 +189,34 @@ func (s *Server) handleLLMSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
 	case http.MethodGet:
-		_ = json.NewEncoder(w).Encode(s.llmSettings())
+		_ = json.NewEncoder(w).Encode(s.llmSettings(r.Context()))
 	case http.MethodPost:
-		var req llmSettingsResponse
+		var req llmSettingsRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+
+		// Sniff which shape the client sent. Any of provider /
+		// authMethod / activeProfileKey present → catalog-aware
+		// path. Otherwise → legacy free-text path. The legacy
+		// path is kept verbatim (Requirement: backwards-compat
+		// for older WebUI builds and for anyone scripting against
+		// the API).
+		isCatalogShape := strings.TrimSpace(req.Provider) != "" ||
+			strings.TrimSpace(req.AuthMethod) != "" ||
+			strings.TrimSpace(req.ActiveProfileKey) != ""
+
+		if isCatalogShape {
+			if err := s.applyCatalogLLMSettings(r.Context(), req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(s.llmSettings(r.Context()))
+			return
+		}
+
+		// Legacy shape — unchanged from v4.4.21.
 		req.LLMMaxRetries = clampInt(req.LLMMaxRetries, 0, 20)
 		req.MemoryCompressorTimeout = clampInt(req.MemoryCompressorTimeout, 5, 600)
 		req.MaxIterations = clampInt(req.MaxIterations, 0, 1000)
@@ -170,10 +247,128 @@ func (s *Server) handleLLMSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(s.llmSettings())
+		_ = json.NewEncoder(w).Encode(s.llmSettings(r.Context()))
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// applyCatalogLLMSettings handles the v4.4.22 LLM settings POST
+// shape: a (provider, authMethod, ...) bundle that maps onto the
+// catalog + Profile_Store. Three sub-branches:
+//
+//  1. activeProfileKey supplied without new credentials → just
+//     write XALGORIX_LLM_PROFILE so the resolver picks up the
+//     existing Profile next request.
+//  2. authMethod=api_key with apiKey supplied → upsert an
+//     auth.Profile{Type: APIKey} for "<provider>:<profileId or
+//     'default'>", also write XALGORIX_LLM/XALGORIX_API_KEY/
+//     XALGORIX_API_BASE for legacy callers, and finally point
+//     XALGORIX_LLM_PROFILE at the new key so the resolver
+//     dispatches through the catalog branch.
+//  3. authMethod=oauth or none with no profile work → just sync
+//     the env-var side-channel (model + provider hint) so the
+//     legacy path still has something usable; OAuth profile work
+//     happens through /api/auth/profiles/oauth/{start,complete}.
+func (s *Server) applyCatalogLLMSettings(ctx context.Context, req llmSettingsRequest) error {
+	provider := strings.TrimSpace(req.Provider)
+	authMethod := strings.ToLower(strings.TrimSpace(req.AuthMethod))
+	activeProfileKey := strings.TrimSpace(req.ActiveProfileKey)
+	profileID := strings.TrimSpace(req.ProfileID)
+	if profileID == "" {
+		profileID = "default"
+	}
+
+	// Validate provider against the compiled-in catalog whenever
+	// it's supplied. The dashboard never sends a provider that
+	// isn't in the dropdown, but a hand-crafted POST can — we
+	// reject those with a 400 so the resolver never receives a
+	// stale pointer.
+	if provider != "" && s.catalog != nil {
+		if _, ok, err := s.catalog.Get(ctx, provider); err != nil {
+			return fmt.Errorf("catalog lookup: %w", err)
+		} else if !ok {
+			return fmt.Errorf("unknown provider %q", provider)
+		}
+	}
+
+	updates := map[string]string{}
+
+	// API_KEY path: persist the credential AS a profile, then point
+	// XALGORIX_LLM_PROFILE at it. We also continue to write the
+	// legacy XALGORIX_LLM / XALGORIX_API_KEY / XALGORIX_API_BASE
+	// trio so anyone still consuming those env vars (legacy
+	// scripts, the legacyResolver fallback) keeps working.
+	if authMethod == "api_key" && provider != "" && !isMaskedSettingValue(req.APIKey) && strings.TrimSpace(req.APIKey) != "" {
+		if s.profiles == nil {
+			return fmt.Errorf("profile store not initialized")
+		}
+		baseOverride := strings.TrimSpace(req.APIBaseOverride)
+		if baseOverride == "" {
+			baseOverride = strings.TrimSpace(req.APIBase)
+		}
+		prof := auth.Profile{
+			Provider:        provider,
+			ProfileID:       profileID,
+			Type:            auth.APIKey,
+			APIKey:          strings.TrimSpace(req.APIKey),
+			APIBaseOverride: baseOverride,
+		}
+		if err := s.profiles.Put(ctx, prof); err != nil {
+			return fmt.Errorf("save profile: %w", err)
+		}
+		activeProfileKey = prof.Key()
+	}
+
+	// activeProfileKey wins as the source of truth for
+	// XALGORIX_LLM_PROFILE. Either the api_key branch above set
+	// it, or the operator picked an existing profile from the
+	// list, or both fields are empty (auth_method=none / oauth-
+	// only flow) and we leave the pointer alone.
+	if activeProfileKey != "" {
+		updates["XALGORIX_LLM_PROFILE"] = activeProfileKey
+	}
+
+	// Legacy env-var sync. Always written when the operator
+	// supplied a model so a fresh-out-of-the-tab "openai/gpt-5"
+	// keeps the legacy path runnable even before the catalog
+	// branch picks up.
+	if model := strings.TrimSpace(req.Model); model != "" {
+		updates["XALGORIX_LLM"] = model
+	}
+	if base := strings.TrimSpace(req.APIBase); base != "" {
+		updates["XALGORIX_API_BASE"] = base
+	}
+	if !isMaskedSettingValue(req.APIKey) && strings.TrimSpace(req.APIKey) != "" {
+		updates["XALGORIX_API_KEY"] = strings.TrimSpace(req.APIKey)
+	}
+	if !isMaskedSettingValue(req.GeminiAPIKey) {
+		updates["GEMINI_API_KEY"] = strings.TrimSpace(req.GeminiAPIKey)
+	}
+	// Numeric settings still come through both shapes.
+	if req.LLMMaxRetries > 0 {
+		updates["XALGORIX_LLM_MAX_RETRIES"] = strconv.Itoa(clampInt(req.LLMMaxRetries, 0, 20))
+	}
+	if req.MemoryCompressorTimeout > 0 {
+		updates["XALGORIX_MEMORY_COMPRESSOR_TIMEOUT"] = strconv.Itoa(clampInt(req.MemoryCompressorTimeout, 5, 600))
+	}
+	if req.MaxIterations > 0 {
+		updates["XALGORIX_MAX_ITERATIONS"] = strconv.Itoa(clampInt(req.MaxIterations, 0, 1000))
+	}
+	if reasoning := strings.ToLower(strings.TrimSpace(req.ReasoningEffort)); reasoning != "" {
+		if !oneOf(reasoning, []string{"low", "medium", "high", "xhigh"}) {
+			return fmt.Errorf("invalid reasoning effort %q", req.ReasoningEffort)
+		}
+		updates["XALGORIX_REASONING_EFFORT"] = reasoning
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+	if _, err := s.applyEnvironmentUpdates(updates); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) handleEnvironmentSettings(w http.ResponseWriter, r *http.Request) {
@@ -200,8 +395,8 @@ func (s *Server) handleEnvironmentSettings(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (s *Server) llmSettings() llmSettingsResponse {
-	return llmSettingsResponse{
+func (s *Server) llmSettings(ctx context.Context) llmSettingsResponse {
+	resp := llmSettingsResponse{
 		Model:                   s.cfg.LLM,
 		APIBase:                 s.cfg.APIBase,
 		APIKey:                  maskSecretValue(s.cfg.APIKey),
@@ -213,7 +408,84 @@ func (s *Server) llmSettings() llmSettingsResponse {
 		GeminiAPIKey:            maskSecretValue(s.cfg.GeminiAPIKey),
 		HasGeminiAPIKey:         s.cfg.GeminiAPIKey != "",
 		EnvFile:                 xalgorixEnvFilePath(),
+		ActiveProfileKey:        s.cfg.LLMProfile,
+		Profiles:                []llmProfileSummary{},
 	}
+
+	// Provider derivation: prefer cfg.LLMProfile (the explicit
+	// catalog pointer); fall back to parsing the legacy
+	// "<provider>/<model>" prefix in cfg.LLM. Both can be empty
+	// on a fresh install.
+	provider := ""
+	if key := strings.TrimSpace(s.cfg.LLMProfile); key != "" {
+		if i := strings.Index(key, ":"); i > 0 {
+			provider = key[:i]
+		}
+	}
+	if provider == "" {
+		if i := strings.Index(s.cfg.LLM, "/"); i > 0 {
+			provider = strings.ToLower(s.cfg.LLM[:i])
+		}
+	}
+	resp.Provider = provider
+
+	// AuthMethod derivation: dispatch precedence mirrors the
+	// resolver. cfg.LLMProfile present + Profile.Type drives the
+	// answer; otherwise cfg.APIKey indicates api_key; otherwise
+	// "" (operator hasn't picked anything yet).
+	authMethod := ""
+	if s.profiles != nil && strings.TrimSpace(s.cfg.LLMProfile) != "" {
+		if prof, ok, err := s.profiles.Get(ctx, strings.TrimSpace(s.cfg.LLMProfile)); err == nil && ok {
+			switch prof.Type {
+			case auth.OAuth:
+				authMethod = "oauth"
+			case auth.APIKey:
+				authMethod = "api_key"
+			}
+		}
+	}
+	if authMethod == "" && s.cfg.APIKey != "" {
+		authMethod = "api_key"
+	}
+	resp.AuthMethod = authMethod
+
+	// Profiles: filter to the active provider only. The full list
+	// surface lives at /api/auth/profiles; this field is a
+	// dashboard convenience so the LLM tab can render the saved
+	// credentials picker without a second roundtrip.
+	if s.profiles != nil && provider != "" {
+		all, err := s.profiles.List(ctx)
+		if err == nil {
+			for _, p := range all {
+				if p.Provider != provider {
+					continue
+				}
+				resp.Profiles = append(resp.Profiles, llmProfileSummaryFor(p))
+			}
+		}
+	}
+
+	return resp
+}
+
+// llmProfileSummaryFor produces the masked, dashboard-friendly view
+// of one auth.Profile. Credentials are NEVER returned in plaintext;
+// only the boolean has* flags + masked metadata.
+func llmProfileSummaryFor(p auth.Profile) llmProfileSummary {
+	out := llmProfileSummary{
+		Key:             p.Key(),
+		Provider:        p.Provider,
+		ProfileID:       p.ProfileID,
+		Type:            string(p.Type),
+		HasAccessToken:  p.AccessToken != "",
+		HasAPIKey:       p.APIKey != "",
+		APIBaseOverride: p.APIBaseOverride,
+		RequiresReauth:  p.RequiresReauth,
+	}
+	if !p.ExpiresAt.IsZero() {
+		out.ExpiresAt = p.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 func (s *Server) environmentSettings(restartRequired bool) environmentSettingsResponse {
@@ -309,6 +581,8 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 			s.cfg.APIBase = value
 		case "XALGORIX_API_KEY":
 			s.cfg.APIKey = value
+		case "XALGORIX_LLM_PROFILE":
+			s.cfg.LLMProfile = value
 		case "XALGORIX_REASONING_EFFORT":
 			s.cfg.ReasoningEffort = valueOrDefault(value, "high")
 		case "XALGORIX_LLM_MAX_RETRIES":
@@ -400,6 +674,8 @@ func (s *Server) envSettingValue(key string) string {
 		return s.cfg.APIBase
 	case "XALGORIX_API_KEY":
 		return s.cfg.APIKey
+	case "XALGORIX_LLM_PROFILE":
+		return s.cfg.LLMProfile
 	case "XALGORIX_REASONING_EFFORT":
 		return valueOrDefault(s.cfg.ReasoningEffort, "high")
 	case "XALGORIX_LLM_MAX_RETRIES":

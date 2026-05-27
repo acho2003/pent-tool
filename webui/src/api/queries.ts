@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { CatalogEntry, ScanRequest, ScanSchedule } from "@/types/api";
+import type { ScanRequest, ScanSchedule } from "@/types/api";
 
 export const qk = {
   authStatus: ["auth", "status"] as const,
@@ -18,17 +18,11 @@ export const qk = {
   environmentSettings: ["settings", "environment"] as const,
   schedules: ["schedules"] as const,
   legacyImport: ["legacy-import", "status"] as const,
-  // Provider-catalog-and-oauth: shared cache keys for the runtime
-  // catalog and the credential profile list. Mutations on either
-  // surface invalidate both keys when the change can affect the
-  // other (e.g. deleting a provider invalidates profiles too).
+  // v4.4.22: shared cache keys for the compiled-in catalog and the
+  // credential profile list. Mutations on the profile surface
+  // invalidate both keys when relevant.
   authProfiles: ["auth", "profiles"] as const,
   providers: ["providers"] as const,
-  // Legacy migration eligibility probe. Fetched once on dashboard
-  // load (staleTime Infinity) so the banner doesn't flicker as
-  // other queries refetch. The POST migration mutation invalidates
-  // this key so the banner re-evaluates and disappears on success.
-  migrateLegacy: ["providers", "migrate-legacy", "status"] as const,
   // Shared between /findings and /overview so the totals widget
   // reads a single cache entry across both pages.
   findingsSummary: ["findings", "summary"] as const,
@@ -238,6 +232,7 @@ export function useUpdateLLMSettings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.llmSettings });
       qc.invalidateQueries({ queryKey: qk.environmentSettings });
+      qc.invalidateQueries({ queryKey: qk.authProfiles });
       qc.invalidateQueries({ queryKey: qk.version });
     },
   });
@@ -351,11 +346,11 @@ export function useDismissLegacyImport() {
   });
 }
 
-// Auth profile picker source (provider-catalog-and-oauth, R14.4).
-// Drives the provider/model selector on /new-scan and /schedules. The
-// staleTime keeps switching between pages snappy; mutations elsewhere
-// (settings/providers tab) invalidate qk.authProfiles so this stays
-// fresh without a polling interval.
+// Auth profile picker source. Drives the credentials list on the LLM
+// Settings tab and the provider/model selector on /new-scan and
+// /schedules. The staleTime keeps switching between pages snappy;
+// mutations elsewhere invalidate qk.authProfiles so this stays fresh
+// without a polling interval.
 export function useAuthProfiles() {
   return useQuery({
     queryKey: qk.authProfiles,
@@ -364,76 +359,32 @@ export function useAuthProfiles() {
   });
 }
 
-// Provider catalog list — used to render `displayName` next to each
-// profile in the picker. Cached longer than profiles since the catalog
-// changes far less often than credentials are rotated.
+// Provider catalog — compiled into the binary in v4.4.22, so the
+// list is effectively immutable across a session. Cached forever
+// since the only way to change it is a server upgrade.
 export function useProviders() {
   return useQuery({
     queryKey: qk.providers,
     queryFn: api.listProviders,
-    staleTime: 60_000,
+    staleTime: Infinity,
   });
 }
 
 // ---------------------------------------------------------------------------
-// Provider catalog + auth profile mutation hooks
-//
-// Read hooks (useAuthProfiles, useProviders) are defined above. The
-// mutations below invalidate both caches whenever a write can affect
-// the other surface (e.g. deleting a provider invalidates profiles
-// too).
+// Auth profile mutation hooks. The catalog is read-only in v4.4.22, so
+// there is no provider-create / -update / -delete and no openclaw or
+// legacy-migrate mutation. Profile CRUD is the only state-changing
+// surface left.
 // ---------------------------------------------------------------------------
-
-export function useCreateProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (entry: CatalogEntry) => api.createProvider(entry),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.providers }),
-  });
-}
-
-export function useUpdateProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, entry }: { id: string; entry: CatalogEntry }) =>
-      api.updateProvider(id, entry),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.providers }),
-  });
-}
-
-export function useDeleteProvider() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.deleteProvider(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.providers });
-      // Removing a provider can leave dangling profiles that the
-      // backend will reject the next time they are written to —
-      // keep the cached list fresh so the UI doesn't show stale
-      // "Sign in with…" buttons.
-      qc.invalidateQueries({ queryKey: qk.authProfiles });
-      // Removing the last catalog entry flips the legacy-migrate
-      // eligibility back to "eligible" (catalog is empty again),
-      // so re-run the gate so the banner re-evaluates without
-      // a follow-up reload. M6.
-      qc.invalidateQueries({ queryKey: qk.migrateLegacy });
-    },
-  });
-}
-
-export function useImportOpenclaw() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (url: string) => api.importOpenclaw(url),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.providers }),
-  });
-}
 
 export function useCreateAPIKeyProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.createAPIKeyProfile,
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.authProfiles }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.authProfiles });
+      qc.invalidateQueries({ queryKey: qk.llmSettings });
+    },
   });
 }
 
@@ -451,7 +402,10 @@ export function useOAuthComplete() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.oauthComplete,
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.authProfiles }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.authProfiles });
+      qc.invalidateQueries({ queryKey: qk.llmSettings });
+    },
   });
 }
 
@@ -459,7 +413,10 @@ export function useRefreshAuthProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (key: string) => api.refreshAuthProfile(key),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.authProfiles }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.authProfiles });
+      qc.invalidateQueries({ queryKey: qk.llmSettings });
+    },
   });
 }
 
@@ -467,39 +424,9 @@ export function useDeleteAuthProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (key: string) => api.deleteAuthProfile(key),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.authProfiles }),
-  });
-}
-
-// One-time legacy provider migration (provider-catalog-and-oauth,
-// R15.4). The status probe is session-once: the eligibility decision
-// only flips on the operator confirming the migration (or reaching
-// the equivalent state through manual catalog edits), so we can lean
-// on staleTime: Infinity to avoid background polling that would
-// otherwise re-render the banner mid-session. The mutation
-// invalidates qk.migrateLegacy so the banner re-evaluates and
-// disappears as soon as the importer succeeds, plus qk.providers
-// and qk.authProfiles so the rest of the Settings → Providers tab
-// reflects the newly-created legacy entry + profile without a
-// follow-up reload.
-export function useMigrateLegacyStatus() {
-  return useQuery({
-    queryKey: qk.migrateLegacy,
-    queryFn: api.migrateLegacyStatus,
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-}
-
-export function useMigrateLegacy() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.migrateLegacy,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.providers });
       qc.invalidateQueries({ queryKey: qk.authProfiles });
-      qc.invalidateQueries({ queryKey: qk.migrateLegacy });
+      qc.invalidateQueries({ queryKey: qk.llmSettings });
     },
   });
 }

@@ -1,0 +1,524 @@
+// Package providers — Builtin() returns the compiled-in list of
+// known LLM providers shipped with v4.4.22. This list is the single
+// authoritative source of provider metadata. There is no
+// operator-editable catalog file, no openclaw importer, and no
+// startup catalog write.
+//
+// The 44 entries are sorted alphabetically by ID and end with the
+// "custom" sentinel so the LLM tab dropdown ordering matches the
+// data ordering one-to-one ("custom" is alphabetically last by
+// design — it represents user-supplied endpoints rather than a
+// concrete provider).
+//
+// Per-entry notes:
+//
+//   - BaseURL is filled when the provider's documented OpenAI-/
+//     Anthropic-/Gemini-compatible endpoint is publicly stable.
+//     Operators with providers whose base URL is unknown to us
+//     should pick "Custom Provider" and fill the field manually.
+//
+//   - OAuth-capable entries have Flow set; for the four flows we
+//     wired fully (anthropic, google, copilot, xai) the endpoint
+//     fields are populated from public docs. Other OAuth-capable
+//     entries (codex, opencode, openai, opencode, qwen, zai,
+//     huggingface) keep the OAuth fields empty and document the
+//     beta status via Notes — the existing PKCE / device-code
+//     drivers surface "endpoint not configured" errors to the
+//     operator.
+//
+//   - For entries where the operator must supply a per-deploy
+//     OAuth client ID (Google's per-app constraint is the
+//     canonical case), Notes calls out the override env var and
+//     ClientIDForEntry reads
+//     XALGORIX_<UPPER_ID>_OAUTH_CLIENT_ID at runtime.
+package providers
+
+import (
+	"os"
+	"sort"
+	"strings"
+	"sync"
+)
+
+// builtinList is the alphabetically-sorted compiled-in catalog.
+// "custom" is appended last because it represents free-form
+// user-supplied endpoints rather than a discrete provider; the
+// LLM tab dropdown surfaces it at the bottom of the list.
+//
+// Frozen + cloned through Builtin so callers cannot mutate the
+// shared slice — return a fresh copy on every call.
+var builtinList = []Entry{
+	{
+		ID:          "anthropic",
+		DisplayName: "Anthropic (Claude)",
+		BaseURL:     "https://api.anthropic.com",
+		HeaderStyle: "anthropic",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "claude_cli_reuse",
+		Models:      []string{"claude-sonnet-4-5-20250929", "claude-opus-4-1-20250805", "claude-haiku-4-5-20251022"},
+		Notes:       "OAuth path imports an existing Claude CLI credential file (~/.claude/.credentials.json).",
+	},
+	{
+		ID:          "arcee",
+		DisplayName: "Arcee AI",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"arcee-spark"},
+		Notes:       "Set base URL via the Custom Provider option if the default is unknown.",
+	},
+	{
+		ID:          "byteplus",
+		DisplayName: "BytePlus",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"skylark-pro"},
+		Notes:       "Set base URL via the Custom Provider option if the default is unknown.",
+	},
+	{
+		ID:          "cerebras",
+		DisplayName: "Cerebras",
+		BaseURL:     "https://api.cerebras.ai/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"llama3.1-70b"},
+	},
+	{
+		ID:          "chutes",
+		DisplayName: "Chutes",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"meta-llama/Llama-3.1-70B-Instruct"},
+		Notes:       "Set base URL via the Custom Provider option if the default is unknown.",
+	},
+	{
+		ID:          "cloudflare",
+		DisplayName: "Cloudflare AI Gateway",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"@cf/meta/llama-3.1-70b-instruct"},
+		Notes:       "Configure your account-specific gateway URL via Custom Provider (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/openai).",
+	},
+	{
+		ID:          "codex",
+		DisplayName: "Codex",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		Models:      []string{"codex-1"},
+		Notes:       "OAuth flow is beta — endpoints are not publicly documented yet; API key path is fully tested.",
+	},
+	{
+		ID:          "copilot",
+		DisplayName: "Copilot",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "device_code",
+		ClientID:    "Iv1.b507a08c87ecfe98",
+		// Well-known GitHub Copilot CLI client. Public values from
+		// the github.com/cli/cli auth flow.
+		AuthorizationEndpoint:       "https://github.com/login/oauth/authorize",
+		TokenEndpoint:               "https://github.com/login/oauth/access_token",
+		DeviceAuthorizationEndpoint: "https://github.com/login/device/code",
+		Scopes:                      []string{"read:user"},
+		Models:                      []string{"gpt-4o"},
+		Notes:                       "GitHub Copilot CLI device-code flow. The matching API base URL depends on the proxy you point at — leave empty and use Custom Provider for self-hosted Copilot proxies.",
+	},
+	{
+		ID:          "deepinfra",
+		DisplayName: "DeepInfra",
+		BaseURL:     "https://api.deepinfra.com/v1/openai",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"meta-llama/Meta-Llama-3.1-70B-Instruct"},
+	},
+	{
+		ID:          "deepseek",
+		DisplayName: "DeepSeek",
+		BaseURL:     "https://api.deepseek.com/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"deepseek-chat", "deepseek-reasoner"},
+	},
+	{
+		ID:          "fireworks",
+		DisplayName: "Fireworks",
+		BaseURL:     "https://api.fireworks.ai/inference/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"accounts/fireworks/models/llama-v3p1-70b-instruct"},
+	},
+	{
+		ID:          "google",
+		DisplayName: "Google (Gemini)",
+		BaseURL:     "https://generativelanguage.googleapis.com",
+		HeaderStyle: "gemini",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		// ClientID is intentionally empty — Google forces per-app
+		// client IDs. Operators set XALGORIX_GOOGLE_OAUTH_CLIENT_ID
+		// (read at lookup time by ClientIDForEntry).
+		AuthorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+		TokenEndpoint:         "https://oauth2.googleapis.com/token",
+		Scopes:                []string{"https://www.googleapis.com/auth/cloud-platform"},
+		Models:                []string{"gemini-2.5-pro", "gemini-2.5-flash"},
+		Notes:                 "Set XALGORIX_GOOGLE_OAUTH_CLIENT_ID to your Google Cloud OAuth client.",
+	},
+	{
+		ID:          "googlevertex",
+		DisplayName: "Google Vertex",
+		BaseURL:     "https://us-central1-aiplatform.googleapis.com",
+		HeaderStyle: "gemini",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"gemini-2.5-pro"},
+		Notes:       "Vertex auth normally uses gcloud-managed credentials picked up via env (GOOGLE_APPLICATION_CREDENTIALS).",
+	},
+	{
+		ID:          "groq",
+		DisplayName: "Groq",
+		BaseURL:     "https://api.groq.com/openai/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"llama-3.3-70b-versatile", "mixtral-8x7b-32768"},
+	},
+	{
+		ID:          "huggingface",
+		DisplayName: "Hugging Face",
+		BaseURL:     "https://router.huggingface.co/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		Models:      []string{"meta-llama/Meta-Llama-3.1-70B-Instruct"},
+		Notes:       "OAuth flow is beta — Hugging Face's OAuth client metadata is not publicly stable yet; API key path is fully tested.",
+	},
+	{
+		ID:          "kilo",
+		DisplayName: "Kilo Gateway",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"kilo/auto"},
+		Notes:       "Set base URL via the Custom Provider option if the default is unknown.",
+	},
+	{
+		ID:          "litellm",
+		DisplayName: "LiteLLM",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"gpt-4o"},
+		Notes:       "Point base URL at your LiteLLM proxy via Custom Provider (commonly http://localhost:4000).",
+	},
+	{
+		ID:          "lmstudio",
+		DisplayName: "LM Studio",
+		BaseURL:     "http://localhost:1234/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"none"},
+		Models:      []string{"local-model"},
+		Notes:       "Local runtime — no credential required.",
+	},
+	{
+		ID:          "microsoftfoundry",
+		DisplayName: "Microsoft Foundry",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"gpt-4o"},
+		Notes:       "Configure your tenant-specific endpoint via Custom Provider.",
+	},
+	{
+		ID:          "minimax",
+		DisplayName: "MiniMax",
+		BaseURL:     "https://api.minimax.io/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"MiniMax-M2.7"},
+	},
+	{
+		ID:          "mistral",
+		DisplayName: "Mistral AI",
+		BaseURL:     "https://api.mistral.ai/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"mistral-large-latest", "open-mistral-nemo"},
+	},
+	{
+		ID:          "moonshot",
+		DisplayName: "Moonshot AI (Kimi)",
+		BaseURL:     "https://api.moonshot.cn/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"moonshot-v1-128k", "kimi-k2-0905-preview"},
+	},
+	{
+		ID:          "nvidia",
+		DisplayName: "NVIDIA",
+		BaseURL:     "https://integrate.api.nvidia.com/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"meta/llama-3.1-70b-instruct"},
+	},
+	{
+		ID:          "ollama",
+		DisplayName: "Ollama",
+		BaseURL:     "http://localhost:11434/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"none"},
+		Models:      []string{"llama3.1"},
+		Notes:       "Local runtime — no credential required.",
+	},
+	{
+		ID:          "openai",
+		DisplayName: "OpenAI (ChatGPT/Codex)",
+		BaseURL:     "https://api.openai.com/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		Models:      []string{"gpt-4o", "gpt-4o-mini", "o1", "gpt-5"},
+		Notes:       "OAuth flow is beta — OpenAI's public ChatGPT sign-in endpoints are not stable yet; API key path is fully tested.",
+	},
+	{
+		ID:          "opencode",
+		DisplayName: "OpenCode",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		Models:      []string{"opencode-1"},
+		Notes:       "OAuth flow is beta — endpoints are not publicly documented yet; API key path is fully tested.",
+	},
+	{
+		ID:          "openrouter",
+		DisplayName: "OpenRouter",
+		BaseURL:     "https://openrouter.ai/api/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"openrouter/auto", "anthropic/claude-3.5-sonnet"},
+	},
+	{
+		ID:          "qianfan",
+		DisplayName: "Qianfan",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"ernie-4.0-8k"},
+		Notes:       "Configure your Baidu Qianfan endpoint via Custom Provider.",
+	},
+	{
+		ID:          "qwen",
+		DisplayName: "Qwen Cloud",
+		BaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		Models:      []string{"qwen-max", "qwen-plus", "qwen-turbo"},
+		Notes:       "OAuth flow is beta — DashScope OAuth client metadata is not publicly stable yet; API key path is fully tested.",
+	},
+	{
+		ID:          "sglang",
+		DisplayName: "SGLang",
+		BaseURL:     "http://localhost:30000/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"none"},
+		Models:      []string{"local-model"},
+		Notes:       "Local runtime — no credential required.",
+	},
+	{
+		ID:          "stepfun",
+		DisplayName: "StepFun",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"step-1v-8k"},
+		Notes:       "Configure your StepFun endpoint via Custom Provider.",
+	},
+	{
+		ID:          "synthetic",
+		DisplayName: "Synthetic",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"synthetic-1"},
+		Notes:       "Set base URL via the Custom Provider option if the default is unknown.",
+	},
+	{
+		ID:          "tencent",
+		DisplayName: "Tencent Cloud",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"hunyuan-pro"},
+		Notes:       "Configure your Tencent Hunyuan endpoint via Custom Provider.",
+	},
+	{
+		ID:          "together",
+		DisplayName: "Together AI",
+		BaseURL:     "https://api.together.xyz/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+	},
+	{
+		ID:          "venice",
+		DisplayName: "Venice AI",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"venice-1"},
+		Notes:       "Set base URL via the Custom Provider option if the default is unknown.",
+	},
+	{
+		ID:          "vercel",
+		DisplayName: "Vercel AI Gateway",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"openai/gpt-4o"},
+		Notes:       "Configure your Vercel AI Gateway endpoint via Custom Provider.",
+	},
+	{
+		ID:          "vllm",
+		DisplayName: "vLLM",
+		BaseURL:     "http://localhost:8000/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"none"},
+		Models:      []string{"local-model"},
+		Notes:       "Local runtime — no credential required.",
+	},
+	{
+		ID:          "volcano",
+		DisplayName: "Volcano Engine",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"doubao-pro-32k"},
+		Notes:       "Configure your Volcano Engine endpoint via Custom Provider.",
+	},
+	{
+		ID:          "xai",
+		DisplayName: "xAI (Grok)",
+		BaseURL:     "https://api.x.ai/v1",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		AuthorizationEndpoint: "https://x.ai/oauth/authorize",
+		TokenEndpoint:         "https://x.ai/oauth/token",
+		Models:                []string{"grok-4", "grok-3"},
+		Notes:                 "OAuth scopes vary by client — confirm via xAI developer console.",
+	},
+	{
+		ID:          "xiaomi",
+		DisplayName: "Xiaomi",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"mi-llm-1"},
+		Notes:       "Configure your Xiaomi endpoint via Custom Provider.",
+	},
+	{
+		ID:          "zai",
+		DisplayName: "Z.AI",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key", "oauth"},
+		Flow:        "pkce",
+		Models:      []string{"glm-4.5"},
+		Notes:       "OAuth flow is beta — Z.AI OAuth client metadata is not publicly stable yet; API key path is fully tested.",
+	},
+	// Custom is the explicit "operator-supplied endpoint" entry.
+	// Always last in the LLM tab dropdown.
+	{
+		ID:          "custom",
+		DisplayName: "Custom Provider",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+		AuthMethods: []string{"api_key"},
+		Notes:       "Free-form base URL + API key + model. Use this for self-hosted or unlisted providers.",
+	},
+}
+
+// initOnce de-duplicates Kilo (placeholder) and sorts the slice
+// once at first access. The init step is idempotent and protected
+// by a sync.Once so concurrent first reads are safe.
+var (
+	initOnce  sync.Once
+	finalList []Entry
+)
+
+// finalize collapses any accidental duplicate IDs to the first
+// occurrence and sorts the slice with "custom" forced to the
+// trailing position. A duplicate would be a build-time bug; we
+// drop later occurrences silently rather than panic so a stray
+// merge conflict cannot crash startup.
+func finalize() {
+	seen := make(map[string]struct{}, len(builtinList))
+	deduped := make([]Entry, 0, len(builtinList))
+	for _, e := range builtinList {
+		if _, dup := seen[e.ID]; dup {
+			continue
+		}
+		seen[e.ID] = struct{}{}
+		deduped = append(deduped, e)
+	}
+	// Stable alphabetical sort, then move "custom" to the end.
+	sort.SliceStable(deduped, func(i, j int) bool {
+		return deduped[i].ID < deduped[j].ID
+	})
+	for i := range deduped {
+		if deduped[i].ID == "custom" {
+			cust := deduped[i]
+			deduped = append(deduped[:i], deduped[i+1:]...)
+			deduped = append(deduped, cust)
+			break
+		}
+	}
+	finalList = deduped
+}
+
+// Builtin returns a fresh copy of the compiled-in catalog so
+// callers cannot mutate the package-level slice.
+func Builtin() []Entry {
+	initOnce.Do(finalize)
+	out := make([]Entry, len(finalList))
+	copy(out, finalList)
+	return out
+}
+
+// LookupBuiltin returns the entry for id (case-insensitive trim)
+// and a boolean reporting whether it exists.
+func LookupBuiltin(id string) (Entry, bool) {
+	initOnce.Do(finalize)
+	id = strings.TrimSpace(strings.ToLower(id))
+	for _, e := range finalList {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return Entry{}, false
+}
+
+// ClientIDForEntry returns the OAuth client ID Xalgorix should use
+// for the given entry. Operators can override the compiled-in
+// default with the env var XALGORIX_<UPPER_ID>_OAUTH_CLIENT_ID
+// (e.g. XALGORIX_GOOGLE_OAUTH_CLIENT_ID for the "google" slug).
+// When the env var is unset, the entry's compiled-in ClientID
+// (often empty) is returned verbatim.
+//
+// This is the escape hatch for providers that require per-deploy
+// client IDs — Google's OAuth client constraint is the canonical
+// case, and the escape hatch lets operators wire their own ID
+// without rebuilding xalgorix.
+func ClientIDForEntry(e Entry) string {
+	upper := strings.ToUpper(strings.ReplaceAll(e.ID, "-", "_"))
+	envKey := "XALGORIX_" + upper + "_OAUTH_CLIENT_ID"
+	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
+		return v
+	}
+	return e.ClientID
+}

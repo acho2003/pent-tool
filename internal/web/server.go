@@ -1577,11 +1577,8 @@ var dashboardRoutes = []string{
 	"/api/auth/logout",
 	"/api/auth/status",
 
-	// Provider catalog + auth profile routes (Wave E task 5.4).
+	// Provider catalog (read-only) + auth profile routes.
 	"/api/providers",
-	"/api/providers/",
-	"/api/providers/migrate-legacy",
-	"/api/providers/migrate-legacy/status",
 	"/api/auth/profiles",
 	"/api/auth/profiles/api-key",
 	"/api/auth/profiles/oauth/start",
@@ -1636,15 +1633,14 @@ type Server struct {
 	legacyImportCount     int
 	legacyImportDismissed bool
 
-	// catalog is the runtime-editable LLM provider catalog backing
-	// the GET/POST/PUT/DELETE /api/providers handlers (Wave E task
-	// 5.1) and the per-scan endpoint resolver (Wave E task 5.3).
-	// It is initialized in NewServer against
-	// ~/.xalgorix/data/providers.json. A nil value signals that
-	// initialization failed at startup; the catalog handlers
-	// surface that as HTTP 503 so the operator sees the dashboard
-	// degrade gracefully rather than crash. Validates: Requirement
-	// 1.1.
+	// catalog is the read-only LLM provider catalog backing the
+	// GET /api/providers handler and the per-scan endpoint
+	// resolver. v4.4.22 collapsed the runtime-editable JSON-backed
+	// catalog into a compiled-in providers.Builtin() set;
+	// providers.NewService() is unconditional and never fails. The
+	// field is kept (rather than being read from a singleton) so
+	// tests can swap a fixture catalog in without touching package
+	// state.
 	catalog *providers.Service
 
 	// profiles is the runtime-editable credential profile store
@@ -1748,41 +1744,34 @@ func NewServer(cfg *config.Config, port int) *Server {
 
 	// Provider catalog + auth profile store.
 	//
-	// Both stores are file-backed under ~/.xalgorix/data/. A failure
-	// here (permissions, corrupt JSON) is non-fatal — the dashboard
-	// still serves traffic, and the catalog/profile handlers surface
-	// the missing dependency as HTTP 503 so the operator can repair
-	// the file without losing access to the rest of the UI.
+	// As of v4.4.22 the catalog is compiled-in (providers.Builtin)
+	// rather than file-backed. providers.NewService is constructed
+	// unconditionally and never fails. The auth profile store is
+	// still file-backed under ~/.xalgorix/data/auth-profiles.json;
+	// a failure there is non-fatal — the dashboard still serves
+	// traffic, and the profile handlers surface the missing
+	// dependency as HTTP 503 so the operator can repair the file
+	// without losing access to the rest of the UI.
 	//
-	// providers.NewService treats a missing file as an empty catalog
-	// without creating it (Requirement 1.3); auth.NewStore likewise
-	// defers file creation until the first write. So the constructors
-	// are safe to invoke unconditionally on every start.
-	//
-	// Driver registration (PKCE / device-code / setup-token /
-	// claude-cli-reuse) lands in Wave E task 5.4 once the registry
-	// surface is finalized.
-	catalogPath := filepath.Join(dataDir, "providers.json")
-	if cat, err := providers.NewService(catalogPath); err != nil {
-		log.Printf("[providers] failed to load catalog at %s: %v (handlers will return 503)", catalogPath, err)
+	// auth.NewStore defers file creation until the first write, so
+	// the constructor is safe to invoke unconditionally on every
+	// start.
+	srv.catalog = providers.NewService()
+	profilePath := filepath.Join(dataDir, "auth-profiles.json")
+	if store, err := auth.NewStore(profilePath, srv.catalog); err != nil {
+		log.Printf("[auth] failed to load profile store at %s: %v (profile handlers will return 503)", profilePath, err)
 	} else {
-		srv.catalog = cat
-		profilePath := filepath.Join(dataDir, "auth-profiles.json")
-		if store, err := auth.NewStore(profilePath, cat); err != nil {
-			log.Printf("[auth] failed to load profile store at %s: %v (profile handlers will return 503)", profilePath, err)
-		} else {
-			srv.profiles = store
-			// Wire the OAuth driver registry now that both
-			// catalog + profile store are live. Driver
-			// constructors in internal/auth are unexported,
-			// so RegisterDefaultDrivers is the single
-			// exported seam through which production code
-			// stands up the canonical four-driver registry.
-			// nil clock → registry uses realClock for the
-			// device-code poller. (Wave E task 5.2.)
-			srv.oauthRegistry = auth.NewRegistry(store, http.DefaultClient, nil)
-			auth.RegisterDefaultDrivers(srv.oauthRegistry, nil)
-		}
+		srv.profiles = store
+		// Wire the OAuth driver registry now that both
+		// catalog + profile store are live. Driver
+		// constructors in internal/auth are unexported,
+		// so RegisterDefaultDrivers is the single
+		// exported seam through which production code
+		// stands up the canonical four-driver registry.
+		// nil clock → registry uses realClock for the
+		// device-code poller.
+		srv.oauthRegistry = auth.NewRegistry(store, http.DefaultClient, nil)
+		auth.RegisterDefaultDrivers(srv.oauthRegistry, nil)
 	}
 
 	// Rebuild instances map from disk so dashboard shows historical scans on startup
@@ -1969,44 +1958,11 @@ func (s *Server) Start() error {
 	// method so an unexpected verb returns 405 even when called
 	// through these adapters from a future entry point.
 	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			s.handleListProviders(w, r)
-		case http.MethodPost:
-			s.handleCreateProvider(w, r)
-		default:
+		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-	// /api/providers/{id} (PUT/DELETE) and the special
-	// /api/providers/import-openclaw (POST) sub-route share a single
-	// trailing-slash registration because http.ServeMux dispatches
-	// every sub-path of "/api/providers/" through the same handler.
-	// /api/providers/migrate-legacy (POST) and
-	// /api/providers/migrate-legacy/status (GET) — the Wave G
-	// one-time legacy importer (see internal/web/migrate.go) — are
-	// routed through this same dispatcher to keep the catalog
-	// surface consolidated under one mux registration.
-	mux.HandleFunc("/api/providers/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/providers/import-openclaw":
-			s.handleImportOpenclaw(w, r)
-			return
-		case "/api/providers/migrate-legacy":
-			s.handleLegacyMigrate(w, r)
-			return
-		case "/api/providers/migrate-legacy/status":
-			s.handleLegacyMigrateStatus(w, r)
 			return
 		}
-		switch r.Method {
-		case http.MethodPut:
-			s.handleUpdateProvider(w, r)
-		case http.MethodDelete:
-			s.handleDeleteProvider(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
+		s.handleListProviders(w, r)
 	})
 	mux.HandleFunc("/api/auth/profiles", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

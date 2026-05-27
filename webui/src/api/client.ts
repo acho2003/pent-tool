@@ -6,8 +6,8 @@ import type {
   EnvironmentSettings,
   InstancesResponse,
   LLMSettings,
+  LLMSettingsRequest,
   OAuthStartResponse,
-  OpenclawImportResponse,
   QueueStatus,
   RateLimitSettings,
   ScanInstance,
@@ -235,7 +235,7 @@ export const api = {
     }),
 
   llmSettings: () => http<LLMSettings>("/api/settings/llm"),
-  updateLLMSettings: (req: LLMSettings) =>
+  updateLLMSettings: (req: LLMSettingsRequest) =>
     http<LLMSettings>("/api/settings/llm", {
       method: "POST",
       json: req,
@@ -284,36 +284,16 @@ export const api = {
     }),
 
   // ---------------------------------------------------------------
-  // Provider catalog + auth profiles (provider-catalog-and-oauth).
+  // Provider catalog (read-only) + auth profiles (v4.4.22).
   //
-  // Mirrors the HTTP surface added in internal/web/handlers_providers.go
-  // and internal/web/handlers_profiles.go. Credential fields on profile
-  // responses arrive masked from the server (internal/web/masks.go) —
-  // the dashboard never touches plain-text credentials in the browser.
+  // The catalog is now compiled into the binary, so /api/providers
+  // is GET-only. Profile CRUD lives under /api/auth/profiles/*.
+  // Credential fields on profile responses arrive masked from the
+  // server (internal/web/masks.go) — the dashboard never touches
+  // plaintext credentials in the browser.
   // ---------------------------------------------------------------
 
   listProviders: () => http<CatalogEntry[]>("/api/providers"),
-  createProvider: (entry: CatalogEntry) =>
-    http<CatalogEntry>("/api/providers", { method: "POST", json: entry }),
-  updateProvider: (id: string, entry: CatalogEntry) =>
-    http<CatalogEntry>(`/api/providers/${encodeURIComponent(id)}`, {
-      method: "PUT",
-      json: entry,
-    }),
-  deleteProvider: (id: string) =>
-    http<{ status: string }>(`/api/providers/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    }),
-  // The backend handler expects a JSON body of {"url":"https://..."}
-  // identifying the openclaw catalog source. The dashboard surfaces
-  // this as a single text input on the Providers tab — no default
-  // is baked in (Requirement 3.3: the import is operator-triggered
-  // and never automatic).
-  importOpenclaw: (url: string) =>
-    http<OpenclawImportResponse>("/api/providers/import-openclaw", {
-      method: "POST",
-      json: { url },
-    }),
 
   listAuthProfiles: () => http<AuthProfile[]>("/api/auth/profiles"),
   createAPIKeyProfile: (req: {
@@ -351,23 +331,9 @@ export const api = {
   // on success and the wire response carries no body. Typing the
   // mutation as void (rather than the http<T>() generic default)
   // lets useDeleteAuthProfile's onSuccess callback skip data
-  // handling entirely. M7.
+  // handling entirely.
   deleteAuthProfile: (key: string): Promise<void> =>
     http<void>(`/api/auth/profiles/${encodeURIComponent(key)}`, {
       method: "DELETE",
-    }),
-
-  // One-time legacy provider migration (provider-catalog-and-oauth, R15.4).
-  // GET probe is read-only and idempotent — the dashboard polls it on
-  // load to decide whether to render the migration banner. POST runs
-  // the importer, which is gated server-side by the same eligibility
-  // rules surfaced via the GET response.
-  migrateLegacyStatus: () =>
-    http<{ eligible: boolean; reason?: string }>(
-      "/api/providers/migrate-legacy/status",
-    ),
-  migrateLegacy: () =>
-    http<{ success: boolean }>("/api/providers/migrate-legacy", {
-      method: "POST",
     }),
 };

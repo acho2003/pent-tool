@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/agent"
+	"github.com/xalgord/xalgorix/v4/internal/auth"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
@@ -1889,6 +1890,150 @@ func TestLLMSettings_MasksPreservesAndPersists(t *testing.T) {
 		if !strings.Contains(env, want) {
 			t.Fatalf("env file missing %q:\n%s", want, env)
 		}
+	}
+}
+
+// TestLLMSettings_CatalogShape_APIKeyCreatesProfile validates the
+// v4.4.22 POST shape: a (provider, authMethod=api_key, apiKey, model)
+// bundle must Put an auth.Profile into the store, write the matching
+// XALGORIX_LLM_PROFILE env var, and continue to write the legacy env
+// trio so existing scripts keep working.
+func TestLLMSettings_CatalogShape_APIKeyCreatesProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	envFile := filepath.Join(home, ".xalgorix.env")
+	if err := os.WriteFile(envFile, []byte(""), 0o644); err != nil {
+		t.Fatalf("seed env file: %v", err)
+	}
+
+	s := newTestServer(t, &config.Config{
+		ReasoningEffort:   "high",
+		RateLimitRequests: 60,
+		RateLimitWindow:   60,
+	})
+
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"provider":"openai","authMethod":"api_key","profileId":"default","apiKey":"sk-test-12345","model":"openai/gpt-4o"}`)
+	s.handleLLMSettings(rr, httptest.NewRequest(http.MethodPost, "/api/settings/llm", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST code = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Profile must be persisted.
+	if s.profiles == nil {
+		t.Fatalf("profile store not initialized")
+	}
+	prof, ok, err := s.profiles.Get(context.Background(), "openai:default")
+	if err != nil {
+		t.Fatalf("profile get: %v", err)
+	}
+	if !ok {
+		t.Fatalf("profile openai:default not persisted")
+	}
+	if prof.APIKey != "sk-test-12345" {
+		t.Fatalf("profile APIKey = %q, want sk-test-12345", prof.APIKey)
+	}
+
+	// XALGORIX_LLM_PROFILE must be wired so the resolver can pick
+	// up the new profile.
+	if s.cfg.LLMProfile != "openai:default" {
+		t.Fatalf("LLMProfile = %q, want openai:default", s.cfg.LLMProfile)
+	}
+	if got := os.Getenv("XALGORIX_LLM_PROFILE"); got != "openai:default" {
+		t.Fatalf("env XALGORIX_LLM_PROFILE = %q, want openai:default", got)
+	}
+
+	// Legacy env vars must still be written for the legacyResolver
+	// fallback path.
+	if s.cfg.LLM != "openai/gpt-4o" {
+		t.Fatalf("legacy LLM = %q, want openai/gpt-4o", s.cfg.LLM)
+	}
+	if s.cfg.APIKey != "sk-test-12345" {
+		t.Fatalf("legacy APIKey not synced: %q", s.cfg.APIKey)
+	}
+
+	// GET must surface the new fields.
+	rr = httptest.NewRecorder()
+	s.handleLLMSettings(rr, httptest.NewRequest(http.MethodGet, "/api/settings/llm", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET code = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if resp["provider"] != "openai" {
+		t.Fatalf("provider = %v, want openai", resp["provider"])
+	}
+	if resp["authMethod"] != "api_key" {
+		t.Fatalf("authMethod = %v, want api_key", resp["authMethod"])
+	}
+	if resp["activeProfileKey"] != "openai:default" {
+		t.Fatalf("activeProfileKey = %v, want openai:default", resp["activeProfileKey"])
+	}
+	profiles, ok := resp["profiles"].([]any)
+	if !ok || len(profiles) != 1 {
+		t.Fatalf("profiles list malformed: %#v", resp["profiles"])
+	}
+}
+
+// TestLLMSettings_CatalogShape_ActiveOnly validates the "pick existing
+// profile" branch: when only activeProfileKey is supplied (no new
+// credentials), the handler just writes XALGORIX_LLM_PROFILE.
+func TestLLMSettings_CatalogShape_ActiveOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".xalgorix.env"), []byte(""), 0o644); err != nil {
+		t.Fatalf("seed env file: %v", err)
+	}
+
+	s := newTestServer(t, &config.Config{
+		ReasoningEffort:   "high",
+		RateLimitRequests: 60,
+		RateLimitWindow:   60,
+	})
+
+	// Pre-seed a profile so activeProfileKey points at something real.
+	if err := s.profiles.Put(context.Background(), auth.Profile{
+		Provider:  "openai",
+		ProfileID: "scratch",
+		Type:      auth.APIKey,
+		APIKey:    "sk-pre-existing",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"activeProfileKey":"openai:scratch"}`)
+	s.handleLLMSettings(rr, httptest.NewRequest(http.MethodPost, "/api/settings/llm", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST code = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if s.cfg.LLMProfile != "openai:scratch" {
+		t.Fatalf("LLMProfile = %q, want openai:scratch", s.cfg.LLMProfile)
+	}
+}
+
+// TestLLMSettings_CatalogShape_RejectsUnknownProvider validates the
+// 400-on-unknown-provider gate.
+func TestLLMSettings_CatalogShape_RejectsUnknownProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".xalgorix.env"), []byte(""), 0o644); err != nil {
+		t.Fatalf("seed env file: %v", err)
+	}
+
+	s := newTestServer(t, &config.Config{
+		ReasoningEffort:   "high",
+		RateLimitRequests: 60,
+		RateLimitWindow:   60,
+	})
+
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"provider":"acme-not-real","authMethod":"api_key","apiKey":"sk-x","model":"acme-not-real/foo"}`)
+	s.handleLLMSettings(rr, httptest.NewRequest(http.MethodPost, "/api/settings/llm", body))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("POST code = %d, want 400; body=%s", rr.Code, rr.Body.String())
 	}
 }
 

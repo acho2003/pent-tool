@@ -1,41 +1,34 @@
-// Package providers — error sentinels for the Catalog_Service.
+// Package providers — error sentinels retained from v4.4.21 for
+// backwards compatibility with internal/auth.Store error wrapping.
 //
-// This file declares the cross-handler error sentinels that callers in
-// internal/web (Wave E task 5.1) match with errors.Is to pick the
-// correct HTTP status code. Validation-style sentinels live in
-// types.go because they're keyed off Entry shape, not Service state.
+// The catalog is now read-only, so the mutation-related sentinels
+// (ErrIDExists, ErrIDInvalid, ErrIDMismatch, ErrCatalogCorrupt) are
+// gone. ErrNotFound stays so internal/auth Store.Put can keep its
+// "unknown provider" envelope, and ErrUpstream stays as a
+// convenient typed error for any future remote-fetch use cases
+// (today it is unused).
 package providers
 
 import "errors"
 
-// ErrCatalogCorrupt is returned from every Service write path when
-// the on-disk catalog file failed JSON validation at startup. Reads
-// (List/Get) instead behave as if the catalog were empty so the rest
-// of the system keeps serving traffic; only mutations are refused.
-//
-// Per the design, the HTTP layer maps this to 503 Service Unavailable
-// so the operator can see "catalog corrupt: refuse writes" in the
-// dashboard and either repair or remove the file before retrying.
-//
-// Validates: Requirement 1.7.
-var ErrCatalogCorrupt = errors.New("catalog corrupt: refuse writes")
-
-// ErrIDInvalid is returned from Service.Create / Service.Update when
-// the supplied id does not satisfy idRE (Requirement 1.2). Mapped to
-// HTTP 400 by the web layer.
-var ErrIDInvalid = errors.New("id must match ^[a-z0-9][a-z0-9_-]{0,63}$")
-
-// ErrIDMismatch is returned from Service.Update when the URL-path id
-// disagrees with the Entry.ID in the request body. The two must
-// agree so the caller cannot rename an entry through Update.
-var ErrIDMismatch = errors.New("id in path does not match id in body")
-
-// ErrIDExists is returned from Service.Create when the supplied id is
-// already present in the catalog. Mapped to HTTP 409 by the web layer.
-var ErrIDExists = errors.New("id already exists")
-
-// ErrNotFound is returned from Service.Update / Service.Delete /
-// Service.Get callers when the requested id is not in the catalog.
-// Service.Get also signals this case via its (Entry, false, nil) tuple
-// for callers that prefer the boolean form.
+// ErrNotFound is returned by Service.Get callers when the
+// requested id is not in the compiled-in catalog. Service.Get
+// itself signals this case via its (Entry, false, nil) tuple; the
+// sentinel is exported so other packages can errors.Is on the
+// "not found" condition when they wrap the lookup.
 var ErrNotFound = errors.New("provider not found")
+
+// ErrUpstream preserves the v4.4.21 typed error shape for any
+// future remote-fetch use case. Today it is unused — kept so
+// downstream packages that errors.As against it continue to
+// compile cleanly. Safe to delete in a future release if no
+// callers materialize.
+type ErrUpstream struct {
+	StatusCode int
+	Body       string
+}
+
+// Error implements the error interface.
+func (e ErrUpstream) Error() string {
+	return "upstream error"
+}

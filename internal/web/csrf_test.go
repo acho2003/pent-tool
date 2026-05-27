@@ -163,17 +163,14 @@ func TestNewRoutes_CSRFGate(t *testing.T) {
 		method string
 		path   string
 	}
-	// Every mutating verb in the new surface (catalog CRUD,
-	// openclaw import, legacy migrate, profile CRUD, OAuth start
-	// / complete / refresh). The set MUST stay aligned with the
+	// Every mutating verb in the new surface (profile CRUD, OAuth
+	// start / complete / refresh). v4.4.22 dropped the
+	// operator-facing catalog CRUD and the openclaw / legacy-migrate
+	// importers, so the only remaining state-changing surface lives
+	// under /api/auth/profiles/*. The set MUST stay aligned with the
 	// dashboardRoutes slice in server.go so a future addition to
 	// either side surfaces here as a missed test cell.
 	routes := []mutatingRoute{
-		{http.MethodPost, "/api/providers"},
-		{http.MethodPut, "/api/providers/openai"},
-		{http.MethodDelete, "/api/providers/openai"},
-		{http.MethodPost, "/api/providers/import-openclaw"},
-		{http.MethodPost, "/api/providers/migrate-legacy"},
 		{http.MethodPost, "/api/auth/profiles/api-key"},
 		{http.MethodPost, "/api/auth/profiles/oauth/start"},
 		{http.MethodPost, "/api/auth/profiles/oauth/complete"},
