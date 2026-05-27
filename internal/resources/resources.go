@@ -68,7 +68,6 @@ type CapacitySnapshot struct {
 	LightToolSlots        int
 	ToolMemLimitMB        int64
 	ScanMemoryBudgetMB    int64
-	ScanCPULoad           float64
 	HeavyToolCPULoad      float64
 	GoMemoryLimitMB       int64
 	Reason                string
@@ -107,11 +106,8 @@ var (
 	diskCriticalMB = envInt64("XALGORIX_DISK_CRITICAL_MB", 1024) // 1 GB
 
 	// Optional manual ceiling on concurrent instances. By default there is no
-	// static instance limit; live CPU/RAM headroom computes the ceiling.
+	// static instance limit; live RAM headroom computes the ceiling.
 	manualMaxInstances = envOptionalInt("XALGORIX_MAX_INSTANCES")
-
-	// Estimated load-average budget consumed by one active scan instance.
-	perScanCPULoad float64
 
 	// Estimated load-average budget consumed by one heavy terminal tool.
 	heavyToolCPULoad float64
@@ -145,7 +141,14 @@ func init() {
 	cores := runtime.NumCPU()
 	totalMB, _ := readMemInfo()
 
-	perScanCPULoad = envFloatDefault("XALGORIX_SCAN_CPU_LOAD", autoScanCPULoad(cores))
+	// XALGORIX_SCAN_CPU_LOAD was a per-scan CPU budget input for the legacy
+	// admission model that gated new scans on CPU load. Admission is now
+	// RAM-only; if an operator still has the env var set we log a one-time
+	// deprecation notice so they know it's a no-op.
+	if _, ok := os.LookupEnv("XALGORIX_SCAN_CPU_LOAD"); ok {
+		log.Printf("[RESOURCES] XALGORIX_SCAN_CPU_LOAD is deprecated and ignored; scan admission is now RAM-only. Use XALGORIX_HEAVY_TOOL_CPU_LOAD to tune per-tool CPU throttling.")
+	}
+
 	heavyToolCPULoad = envFloatDefault("XALGORIX_HEAVY_TOOL_CPU_LOAD", autoHeavyToolCPULoad(cores))
 	scanOverheadMB = envInt64Default("XALGORIX_SCAN_OVERHEAD_MB", autoScanOverheadMB(totalMB))
 	scanMemoryBudgetMB = envInt64Default("XALGORIX_SCAN_MEMORY_BUDGET_MB", autoScanMemoryBudgetMB(totalMB, cores))
@@ -193,10 +196,10 @@ func init() {
 	}
 	log.Printf("[RESOURCES] Auto-scaled for %d cores, %d MB RAM: manual_instance_cap=%s, "+
 		"ram_caution=%dMB, ram_critical=%dMB, tool_mem_limit=%s, scan_budget=%dMB, "+
-		"scan_cpu_budget=%.2f, heavy_tool_cpu_budget=%.2f, go_mem_limit=%dMB",
+		"heavy_tool_cpu_budget=%.2f, go_mem_limit=%dMB",
 		cores, totalMB, manualCap, ramCautionMB, ramCriticalMB,
 		toolMemoryLimitLabel(), perInstanceMemoryBudgetMB(),
-		perScanCPULoad, heavyToolCPULoad, goMemoryLimitMB)
+		heavyToolCPULoad, goMemoryLimitMB)
 }
 
 // ── Public API ──
@@ -274,27 +277,58 @@ func currentLevelForStats(stats SystemStats) (Level, string) {
 	return level, strings.Join(reasons, "; ")
 }
 
-// EffectiveMaxInstances computes the live concurrency ceiling from current CPU,
-// RAM, and disk pressure. There is no static default instance cap; if
-// XALGORIX_MAX_INSTANCES is set, it is treated as an optional manual override.
+// EffectiveMaxInstances computes the live concurrency ceiling from current
+// RAM headroom. CPU and disk are intentionally NOT slot inputs:
+//
+//   - CPU saturation throttles scans (kernel time-slices, scans complete
+//     more slowly) but never crashes them. Gating new scans on CPU only
+//     reduces total throughput. Per-tool CPU throttling lives in the
+//     tool-lease layer (see tryAcquireToolLease) where it correctly
+//     queues heavy subprocess launches without blocking scan admission.
+//   - Disk consumption is bursty and bounded; scans don't reserve a fixed
+//     budget up front. Disk only short-circuits to "refuse new scans"
+//     when free space is critically low (the safety floor for log writes
+//     and tool output) and is otherwise not a slot multiplier.
 //
 // Algorithm:
-//   - Compute CPU slots from remaining load-average headroom
-//   - Compute RAM slots from available RAM and per-instance memory budget
-//   - At LevelCaution: halve the dynamic ceiling
-//   - At LevelCritical: admit no new scans until pressure recovers
-//   - Apply XALGORIX_MAX_INSTANCES only when explicitly configured
+//   - Compute RAM slots from available RAM and per-instance memory budget.
+//   - If free disk is below the critical threshold, admit nothing.
+//   - Apply XALGORIX_MAX_INSTANCES only when explicitly configured.
 func EffectiveMaxInstances() (int, string) {
 	stats := GetStats()
-	level, reason := CurrentLevel()
-	return effectiveMaxInstancesForStats(stats, level, reason)
+	return effectiveMaxInstancesForStats(stats, admissionReason(stats))
 }
 
-func effectiveMaxInstancesForStats(stats SystemStats, level Level, reason string) (int, string) {
-	ramCap := memoryInstanceCapacity(stats)
-	cpuCap := cpuInstanceCapacity(stats)
-	effective := minInt(ramCap, cpuCap)
-	if diskInstanceCapacity(stats) == 0 {
+// admissionReason returns the human-readable rationale string for admission
+// decisions. It is derived from currentLevelForStats but filtered to mention
+// only the dimensions that actually gate admission (RAM and disk-critical) —
+// CPU pressure is handled at the tool-lease layer, so surfacing it here
+// would tell operators "CPU critical" while admission still proceeds.
+func admissionReason(stats SystemStats) string {
+	var reasons []string
+	switch {
+	case stats.MemAvailableMB < ramCriticalMB:
+		reasons = append(reasons, fmt.Sprintf("RAM critical: %d MB free < %d MB min",
+			stats.MemAvailableMB, ramCriticalMB))
+	case stats.MemAvailableMB < ramCautionMB:
+		reasons = append(reasons, fmt.Sprintf("RAM low: %d MB free < %d MB caution",
+			stats.MemAvailableMB, ramCautionMB))
+	}
+	if stats.DiskFreeMB > 0 && stats.DiskFreeMB < diskCriticalMB {
+		reasons = append(reasons, fmt.Sprintf("Disk critical: %d MB free < %d MB min",
+			stats.DiskFreeMB, diskCriticalMB))
+	}
+	if len(reasons) == 0 {
+		return fmt.Sprintf("OK — RAM: %d MB free, Disk: %d MB free",
+			stats.MemAvailableMB, stats.DiskFreeMB)
+	}
+	return strings.Join(reasons, "; ")
+}
+
+func effectiveMaxInstancesForStats(stats SystemStats, reason string) (int, string) {
+	ramSlots := memoryInstanceCapacity(stats)
+	effective := ramSlots
+	if !diskHasHeadroom(stats) {
 		effective = 0
 	}
 
@@ -302,8 +336,8 @@ func effectiveMaxInstancesForStats(stats SystemStats, level Level, reason string
 		effective = manualMaxInstances
 	}
 
-	detail := fmt.Sprintf("%s; dynamic slots: cpu=%d, ram=%d, scan_budget=%dMB, scan_cpu_budget=%.2f",
-		reason, cpuCap, ramCap, perInstanceMemoryBudgetMB(), perScanCPULoad)
+	detail := fmt.Sprintf("%s; ram_slots=%d, scan_budget=%dMB",
+		reason, ramSlots, perInstanceMemoryBudgetMB())
 	if manualMaxInstances > 0 {
 		detail += fmt.Sprintf(", manual_cap=%d", manualMaxInstances)
 	}
@@ -322,28 +356,18 @@ func memoryInstanceCapacity(stats SystemStats) int {
 	return ramCap
 }
 
-func cpuInstanceCapacity(stats SystemStats) int {
-	budget := perScanCPULoad
-	if budget <= 0 {
-		budget = 1
+// diskHasHeadroom reports whether free disk is above the critical floor.
+// This is a yes/no admission gate — disk does NOT contribute to slot count.
+// Scans don't reserve disk up front; they write logs, tool output, and
+// reports as they go. The critical floor exists so a scan can't run on a
+// system that's about to fail to write its own results.
+func diskHasHeadroom(stats SystemStats) bool {
+	if stats.DiskFreeMB <= 0 {
+		// statfs failed or filesystem reports zero; don't block on a
+		// missing reading.
+		return true
 	}
-	cores := maxInt(1, stats.CPUCores)
-	loadPerCore := stats.LoadAvg1m / float64(cores)
-	if loadPerCore < 1 {
-		loadPerCore = 1
-	}
-	capacity := int(math.Floor(float64(cores) / (budget * loadPerCore)))
-	if capacity < 1 {
-		return 1
-	}
-	return capacity
-}
-
-func diskInstanceCapacity(stats SystemStats) int {
-	if stats.DiskFreeMB > 0 && stats.DiskFreeMB < diskCriticalMB {
-		return 0
-	}
-	return 1
+	return stats.DiskFreeMB >= diskCriticalMB
 }
 
 func perInstanceMemoryBudgetMB() int64 {
@@ -375,16 +399,6 @@ func autoHeavyToolMemLimitMB(totalMB int64) int64 {
 		limit = budgetedLimit
 	}
 	return limit
-}
-
-func autoScanCPULoad(cores int) float64 {
-	if cores <= 1 {
-		return 0.85
-	}
-	if cores == 2 {
-		return 0.80
-	}
-	return 0.75
 }
 
 func autoHeavyToolCPULoad(cores int) float64 {
@@ -735,7 +749,6 @@ func Capacity() CapacitySnapshot {
 		LightToolSlots:        capacity.LightToolSlots,
 		ToolMemLimitMB:        toolMemoryLimitMBForStats(stats, true, activeTotal+1, activeHeavy+1, level),
 		ScanMemoryBudgetMB:    perInstanceMemoryBudgetMB(),
-		ScanCPULoad:           perScanCPULoad,
 		HeavyToolCPULoad:      heavyToolCPULoad,
 		GoMemoryLimitMB:       goMemoryLimitMB,
 		Reason:                capacity.Reason,

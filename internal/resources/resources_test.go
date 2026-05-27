@@ -113,16 +113,12 @@ func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 	oldOverhead := scanOverheadMB
 	oldBudget := scanMemoryBudgetMB
 	oldCriticalRAM := ramCriticalMB
-	oldCPUCritical := cpuCriticalPct
-	oldCPUBudget := perScanCPULoad
 	oldManualCap := manualMaxInstances
 	t.Cleanup(func() {
 		HeavyToolMemLimitBytes = oldLimit
 		scanOverheadMB = oldOverhead
 		scanMemoryBudgetMB = oldBudget
 		ramCriticalMB = oldCriticalRAM
-		cpuCriticalPct = oldCPUCritical
-		perScanCPULoad = oldCPUBudget
 		manualMaxInstances = oldManualCap
 	})
 
@@ -130,8 +126,6 @@ func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 	scanOverheadMB = 500
 	scanMemoryBudgetMB = 2048
 	ramCriticalMB = 1000
-	cpuCriticalPct = 90
-	perScanCPULoad = 1
 	manualMaxInstances = 0
 
 	stats := SystemStats{
@@ -139,20 +133,20 @@ func TestEffectiveMaxInstancesUsesDynamicResourceCapacity(t *testing.T) {
 		LoadAvg1m:      1.0,
 		MemAvailableMB: 11000,
 	}
-	got, _ := effectiveMaxInstancesForStats(stats, LevelOK, "OK")
+	got, _ := effectiveMaxInstancesForStats(stats, "OK")
 	if got != 4 {
 		t.Fatalf("dynamic instances = %d, want 4 from RAM capacity", got)
 	}
 
 	manualMaxInstances = 3
-	got, _ = effectiveMaxInstancesForStats(stats, LevelOK, "OK")
+	got, _ = effectiveMaxInstancesForStats(stats, "OK")
 	if got != 3 {
 		t.Fatalf("manual cap dynamic instances = %d, want 3", got)
 	}
 
 	manualMaxInstances = 0
 	stats.MemAvailableMB = 500
-	got, _ = effectiveMaxInstancesForStats(stats, LevelCritical, "RAM critical")
+	got, _ = effectiveMaxInstancesForStats(stats, "RAM critical")
 	if got != 0 {
 		t.Fatalf("critical dynamic instances = %d, want 0", got)
 	}
