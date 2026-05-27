@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Search } from "lucide-react";
+import { Search, RefreshCw, Trash2, CheckCircle2, AlertTriangle } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -25,9 +25,13 @@ import { Badge } from "@/components/ui/badge";
 import { ErrorState } from "@/components/states";
 import {
   useAgentMail,
+  useAuthProfiles,
+  useDeleteAuthProfile,
   useEnvironmentSettings,
   useLLMSettings,
+  useProviders,
   useRateLimit,
+  useRefreshAuthProfile,
   useUpdateAgentMail,
   useUpdateEnvironmentSettings,
   useUpdateLLMSettings,
@@ -35,12 +39,17 @@ import {
   useAuthStatus,
 } from "@/api/queries";
 import { useAuth } from "@/store/auth";
-import type { EnvironmentSettings, EnvironmentVariableSetting, LLMSettings } from "@/types/api";
-import ProvidersTab from "./settings/providers-tab";
+import type {
+  AuthProfile,
+  CatalogEntry,
+  EnvironmentSettings,
+  EnvironmentVariableSetting,
+  LLMSettingsRequest,
+} from "@/types/api";
+import OAuthModal from "./settings/oauth-modal";
 
 const settingsTabs = [
   "llm",
-  "providers",
   "engagement",
   "notifications",
   "email",
@@ -50,18 +59,47 @@ const settingsTabs = [
 
 type SettingsTab = (typeof settingsTabs)[number];
 
-const emptyLLMForm: LLMSettings = {
-  model: "",
-  apiBase: "",
+// LLMFormState mirrors the catalog-aware POST shape. We keep the
+// numeric / Gemini fields here too so the bottom row of inputs
+// (max retries, memory timeout, max iterations, Gemini search key)
+// continues to live on the same tab. Empty string sentinels make
+// the diff against the loaded settings state explicit.
+interface LLMFormState {
+  provider: string;
+  authMethod: "" | "api_key" | "oauth" | "none";
+  profileId: string;
+  apiKey: string;
+  apiBase: string;
+  apiBaseOverride: string;
+  model: string;
+  reasoningEffort: string;
+  llmMaxRetries: number;
+  memoryCompressorTimeout: number;
+  maxIterations: number;
+  geminiApiKey: string;
+  hasApiKey: boolean;
+  hasGeminiApiKey: boolean;
+  envFile: string;
+  activeProfileKey: string;
+}
+
+const emptyLLMForm: LLMFormState = {
+  provider: "",
+  authMethod: "",
+  profileId: "default",
   apiKey: "",
-  hasApiKey: false,
+  apiBase: "",
+  apiBaseOverride: "",
+  model: "",
   reasoningEffort: "high",
   llmMaxRetries: 5,
   memoryCompressorTimeout: 30,
   maxIterations: 0,
   geminiApiKey: "",
+  hasApiKey: false,
   hasGeminiApiKey: false,
   envFile: "",
+  activeProfileKey: "",
 };
 
 export default function SettingsPage() {
@@ -83,9 +121,15 @@ export default function SettingsPage() {
   const logout = useAuth((s) => s.logout);
   const navigate = useNavigate();
 
+  const providers = useProviders();
+  const profiles = useAuthProfiles();
+  const refreshProfile = useRefreshAuthProfile();
+  const deleteProfile = useDeleteAuthProfile();
+
   const [rateForm, setRateForm] = useState({ requests: 10, window: 1 });
   const [mailForm, setMailForm] = useState({ pod: "", apiKey: "" });
-  const [llmForm, setLLMForm] = useState<LLMSettings>(emptyLLMForm);
+  const [llmForm, setLLMForm] = useState<LLMFormState>(emptyLLMForm);
+  const [oauthOpen, setOAuthOpen] = useState(false);
   const [notificationForm, setNotificationForm] = useState({
     webhook: "",
     minSeverity: "",
@@ -119,9 +163,30 @@ export default function SettingsPage() {
   }, [mail.data]);
 
   useEffect(() => {
-    if (llm.data) {
-      setLLMForm(llm.data);
-    }
+    if (!llm.data) return;
+    // Derive the form state from the settings response. We keep
+    // both the legacy fields (model/apiBase/apiKey) and the new
+    // catalog fields (provider/authMethod/activeProfileKey) so a
+    // user who picks a provider but doesn't change anything else
+    // still sees the saved values in the lower-row inputs.
+    setLLMForm({
+      provider: llm.data.provider ?? "",
+      authMethod: (llm.data.authMethod as LLMFormState["authMethod"]) ?? "",
+      profileId: "default",
+      apiKey: llm.data.apiKey ?? "",
+      apiBase: llm.data.apiBase ?? "",
+      apiBaseOverride: "",
+      model: llm.data.model ?? "",
+      reasoningEffort: llm.data.reasoningEffort || "high",
+      llmMaxRetries: llm.data.llmMaxRetries ?? 5,
+      memoryCompressorTimeout: llm.data.memoryCompressorTimeout ?? 30,
+      maxIterations: llm.data.maxIterations ?? 0,
+      geminiApiKey: llm.data.geminiApiKey ?? "",
+      hasApiKey: llm.data.hasApiKey ?? false,
+      hasGeminiApiKey: llm.data.hasGeminiApiKey ?? false,
+      envFile: llm.data.envFile ?? "",
+      activeProfileKey: llm.data.activeProfileKey ?? "",
+    });
   }, [llm.data]);
 
   useEffect(() => {
@@ -143,29 +208,64 @@ export default function SettingsPage() {
     setEnvChanges({});
   }, [environment.data]);
 
-  const filteredEnvironment = useMemo(() => {
-    const needle = envFilter.trim().toLowerCase();
-    const variables = environment.data?.variables ?? [];
-    const filtered = needle
-      ? variables.filter((variable) =>
-          [
-            variable.key,
-            variable.label,
-            variable.category,
-            variable.description,
-          ]
-            .join(" ")
-            .toLowerCase()
-            .includes(needle),
-        )
-      : variables;
-    return groupBy(filtered, (variable) => variable.category);
-  }, [environment.data, envFilter]);
+  // Sort providers alphabetically by displayName, with the
+  // "custom" sentinel pinned last because it represents free-form
+  // user-supplied endpoints rather than a discrete provider.
+  const sortedProviders = useMemo<CatalogEntry[]>(() => {
+    const list = providers.data ?? [];
+    return [...list].sort((a, b) => {
+      if (a.id === "custom") return 1;
+      if (b.id === "custom") return -1;
+      return a.displayName.localeCompare(b.displayName);
+    });
+  }, [providers.data]);
+
+  const selectedProvider = useMemo<CatalogEntry | undefined>(() => {
+    if (!llmForm.provider) return undefined;
+    return sortedProviders.find((p) => p.id === llmForm.provider);
+  }, [sortedProviders, llmForm.provider]);
+
+  // Auth methods come straight from the catalog entry. Custom
+  // provider always supports api_key (it's just a free-form base
+  // URL + key); local-runtime providers (Ollama, LM Studio) only
+  // expose "none". The default selection is the first method in
+  // AuthMethods, falling back to api_key.
+  const availableAuthMethods = useMemo<string[]>(() => {
+    if (!selectedProvider) return [];
+    return selectedProvider.id === "custom"
+      ? ["api_key"]
+      : selectedProvider.authMethods ?? ["api_key"];
+  }, [selectedProvider]);
+
+  // Filter the profile list to the selected provider for the
+  // saved-credentials picker. The dashboard never sees plaintext
+  // credentials — only the masked envelope.
+  const providerProfiles = useMemo<AuthProfile[]>(() => {
+    if (!llmForm.provider) return [];
+    return (profiles.data ?? []).filter((p) => p.provider === llmForm.provider);
+  }, [profiles.data, llmForm.provider]);
 
   function changeTab(value: string) {
     const next = new URLSearchParams(searchParams);
     next.set("tab", value);
     setSearchParams(next, { replace: true });
+  }
+
+  function changeProvider(providerId: string) {
+    const entry = sortedProviders.find((p) => p.id === providerId);
+    const methods = entry?.authMethods ?? ["api_key"];
+    const firstModel = entry?.models?.[0] ?? "";
+    setLLMForm((current) => ({
+      ...current,
+      provider: providerId,
+      authMethod: (methods[0] as LLMFormState["authMethod"]) ?? "api_key",
+      // Prefill the model field with the catalog suggestion so the
+      // user sees a working default. They can still override it.
+      model: firstModel ? `${providerId}/${firstModel}` : current.model,
+      // apiBase resets to the catalog default; "custom" leaves the
+      // current free-text base intact.
+      apiBase: entry?.id === "custom" ? current.apiBase : entry?.baseURL ?? "",
+    }));
   }
 
   function updateEnvValue(variable: EnvironmentVariableSetting, value: string) {
@@ -178,6 +278,49 @@ export default function SettingsPage() {
         next[variable.key] = value;
       }
       return next;
+    });
+  }
+
+  async function saveLLMSettings() {
+    setSavedLLM(false);
+    const req: LLMSettingsRequest = {
+      provider: llmForm.provider,
+      authMethod: (llmForm.authMethod || "api_key") as
+        | "api_key"
+        | "oauth"
+        | "none",
+      profileId: llmForm.profileId || "default",
+      model: llmForm.model,
+      reasoningEffort: llmForm.reasoningEffort,
+      llmMaxRetries: llmForm.llmMaxRetries,
+      memoryCompressorTimeout: llmForm.memoryCompressorTimeout,
+      maxIterations: llmForm.maxIterations,
+    };
+    if (llmForm.authMethod === "api_key") {
+      // Only send the apiKey when the user actually typed
+      // something — the masked **** value means "leave the
+      // saved key alone" (matches the legacy POST contract).
+      if (!isMaskedSettingValue(llmForm.apiKey)) {
+        req.apiKey = llmForm.apiKey;
+      }
+      if (llmForm.apiBaseOverride) {
+        req.apiBaseOverride = llmForm.apiBaseOverride;
+      }
+      if (selectedProvider?.id === "custom" && llmForm.apiBase) {
+        req.apiBase = llmForm.apiBase;
+      }
+    }
+    if (!isMaskedSettingValue(llmForm.geminiApiKey)) {
+      req.geminiApiKey = llmForm.geminiApiKey;
+    }
+    await updateLLM.mutateAsync(req);
+    setSavedLLM(true);
+    setTimeout(() => setSavedLLM(false), 2500);
+  }
+
+  async function setActiveProfile(profile: AuthProfile) {
+    await updateLLM.mutateAsync({
+      activeProfileKey: profile.key ?? `${profile.provider}:${profile.profileId}`,
     });
   }
 
@@ -195,7 +338,6 @@ export default function SettingsPage() {
       <Tabs value={activeTab} onValueChange={changeTab}>
         <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="llm">LLM</TabsTrigger>
-          <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="engagement">Engagement</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="email">AgentMail</TabsTrigger>
@@ -204,7 +346,7 @@ export default function SettingsPage() {
         </TabsList>
 
         <TabsContent value="llm">
-          {llm.isLoading ? (
+          {llm.isLoading || providers.isLoading ? (
             <Skeleton className="h-96" />
           ) : llm.error ? (
             <ErrorState
@@ -227,66 +369,275 @@ export default function SettingsPage() {
               <CardContent className="space-y-5">
                 <div className="grid gap-3 lg:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="llm-model">Model</Label>
-                    <Input
-                      id="llm-model"
-                      value={llmForm.model}
-                      onChange={(e) =>
-                        setLLMForm({ ...llmForm, model: e.target.value })
-                      }
-                      placeholder="minimax/MiniMax-M2.7"
-                      className="font-mono"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="llm-api-key">API key</Label>
-                    <Input
-                      id="llm-api-key"
-                      value={llmForm.apiKey}
-                      onChange={(e) =>
-                        setLLMForm({ ...llmForm, apiKey: e.target.value })
-                      }
-                      placeholder={llmForm.hasApiKey ? "**** (saved)" : "sk-..."}
-                      className="font-mono"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Keep the masked value to preserve the saved key.
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="llm-api-base">API base URL</Label>
-                    <Input
-                      id="llm-api-base"
-                      value={llmForm.apiBase}
-                      onChange={(e) =>
-                        setLLMForm({ ...llmForm, apiBase: e.target.value })
-                      }
-                      placeholder="Provider default"
-                      className="font-mono"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Reasoning effort</Label>
+                    <Label htmlFor="llm-provider">Provider</Label>
                     <Select
-                      value={llmForm.reasoningEffort || "high"}
+                      value={llmForm.provider || "__unset__"}
                       onValueChange={(value) =>
-                        setLLMForm({ ...llmForm, reasoningEffort: value })
+                        changeProvider(value === "__unset__" ? "" : value)
                       }
                     >
-                      <SelectTrigger>
-                        <SelectValue />
+                      <SelectTrigger id="llm-provider">
+                        <SelectValue placeholder="Select a provider" />
                       </SelectTrigger>
                       <SelectContent>
-                        {["low", "medium", "high", "xhigh"].map((value) => (
-                          <SelectItem key={value} value={value}>
-                            {value}
+                        <SelectItem value="__unset__">Not selected</SelectItem>
+                        {sortedProviders.map((provider) => (
+                          <SelectItem key={provider.id} value={provider.id}>
+                            {provider.displayName}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
+                  {selectedProvider && availableAuthMethods.length > 1 && (
+                    <div className="space-y-2">
+                      <Label>Authentication method</Label>
+                      <div className="flex flex-wrap gap-2 rounded-md border border-border bg-muted/30 p-1">
+                        {availableAuthMethods.map((method) => (
+                          <Button
+                            key={method}
+                            type="button"
+                            size="sm"
+                            variant={
+                              llmForm.authMethod === method ? "default" : "ghost"
+                            }
+                            onClick={() =>
+                              setLLMForm({
+                                ...llmForm,
+                                authMethod: method as LLMFormState["authMethod"],
+                              })
+                            }
+                          >
+                            {prettyAuthMethod(method)}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
+                {selectedProvider?.notes && (
+                  <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                    {selectedProvider.notes}
+                  </div>
+                )}
+
+                {/* Auth-method-specific form */}
+                {selectedProvider && llmForm.authMethod === "api_key" && (
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="llm-api-key">API key</Label>
+                      <Input
+                        id="llm-api-key"
+                        value={llmForm.apiKey}
+                        onChange={(e) =>
+                          setLLMForm({ ...llmForm, apiKey: e.target.value })
+                        }
+                        placeholder={llmForm.hasApiKey ? "**** (saved)" : "sk-..."}
+                        className="font-mono"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Keep the masked value to preserve the saved key.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="llm-model">Model</Label>
+                      <Input
+                        id="llm-model"
+                        value={llmForm.model}
+                        onChange={(e) =>
+                          setLLMForm({ ...llmForm, model: e.target.value })
+                        }
+                        placeholder={selectedProvider.models?.[0] ?? "provider/model"}
+                        className="font-mono"
+                      />
+                    </div>
+                    {selectedProvider.id === "custom" ? (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="llm-api-base">Base URL</Label>
+                          <Input
+                            id="llm-api-base"
+                            value={llmForm.apiBase}
+                            onChange={(e) =>
+                              setLLMForm({ ...llmForm, apiBase: e.target.value })
+                            }
+                            placeholder="https://api.example.com/v1"
+                            className="font-mono"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="llm-header-style">Header style</Label>
+                          <Select
+                            value={llmForm.apiBase ? "openai" : "openai"}
+                            onValueChange={() => {}}
+                            disabled
+                          >
+                            <SelectTrigger id="llm-header-style">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="openai">openai</SelectItem>
+                              <SelectItem value="anthropic">anthropic</SelectItem>
+                              <SelectItem value="gemini">gemini</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            Custom providers default to OpenAI-shaped requests. Switch this from the Environment tab if your endpoint speaks Anthropic or Gemini.
+                          </p>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="space-y-2 lg:col-span-2">
+                        <Label htmlFor="llm-api-base-override">
+                          API base override (optional)
+                        </Label>
+                        <Input
+                          id="llm-api-base-override"
+                          value={llmForm.apiBaseOverride}
+                          onChange={(e) =>
+                            setLLMForm({
+                              ...llmForm,
+                              apiBaseOverride: e.target.value,
+                            })
+                          }
+                          placeholder={selectedProvider.baseURL}
+                          className="font-mono"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Leave blank to use the provider default.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {selectedProvider && llmForm.authMethod === "oauth" && (
+                  <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4">
+                    <p className="text-sm">
+                      Sign in with {selectedProvider.displayName} to create a
+                      new OAuth profile. The dashboard polls until the new
+                      credential appears in the saved list below.
+                    </p>
+                    <Button
+                      type="button"
+                      onClick={() => setOAuthOpen(true)}
+                      disabled={!selectedProvider.flow}
+                    >
+                      Sign in with OAuth
+                    </Button>
+                    {!selectedProvider.flow && (
+                      <p className="text-xs text-muted-foreground">
+                        OAuth is not configured for this provider yet.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {selectedProvider && llmForm.authMethod === "none" && (
+                  <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4">
+                    <p className="text-sm">
+                      {selectedProvider.displayName} runs locally — no
+                      credential required. Just confirm the model below.
+                    </p>
+                    <div className="space-y-2">
+                      <Label htmlFor="llm-model-local">Model</Label>
+                      <Input
+                        id="llm-model-local"
+                        value={llmForm.model}
+                        onChange={(e) =>
+                          setLLMForm({ ...llmForm, model: e.target.value })
+                        }
+                        placeholder={selectedProvider.models?.[0] ?? "model"}
+                        className="font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Saved-credentials picker for the active provider. */}
+                {selectedProvider && providerProfiles.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Saved credentials</Label>
+                    <div className="divide-y divide-border rounded-md border border-border">
+                      {providerProfiles.map((profile) => {
+                        const key =
+                          profile.key ??
+                          `${profile.provider}:${profile.profileId}`;
+                        const active = key === llmForm.activeProfileKey;
+                        return (
+                          <div
+                            key={key}
+                            className="flex flex-wrap items-center gap-3 px-3 py-2"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 text-sm font-medium">
+                                {profile.profileId}
+                                <Badge variant="muted">{profile.type}</Badge>
+                                {active && (
+                                  <CheckCircle2 className="h-4 w-4 text-success" />
+                                )}
+                                {profile.requiresReauth && (
+                                  <Badge variant="warning">
+                                    <AlertTriangle className="mr-1 h-3 w-3" />
+                                    re-auth required
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="font-mono text-xs text-muted-foreground">
+                                {profile.type === "oauth"
+                                  ? maskedTokenLabel(profile)
+                                  : maskedAPIKeyLabel(profile)}
+                              </div>
+                              {profile.expiresAt && (
+                                <div className="text-xs text-muted-foreground">
+                                  expires {profile.expiresAt}
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {!active && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={updateLLM.isPending}
+                                  onClick={() => setActiveProfile(profile)}
+                                >
+                                  Set active
+                                </Button>
+                              )}
+                              {profile.type === "oauth" && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={refreshProfile.isPending}
+                                  onClick={() =>
+                                    refreshProfile.mutateAsync(key)
+                                  }
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={deleteProfile.isPending}
+                                onClick={() => deleteProfile.mutateAsync(key)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <Separator />
+
+                {/* Bottom row: numeric tuning that applies regardless
+                    of provider / auth method. */}
                 <div className="grid gap-3 lg:grid-cols-4">
                   <div className="space-y-2">
                     <Label htmlFor="llm-retries">LLM max retries</Label>
@@ -344,9 +695,34 @@ export default function SettingsPage() {
                       onChange={(e) =>
                         setLLMForm({ ...llmForm, geminiApiKey: e.target.value })
                       }
-                      placeholder={llmForm.hasGeminiApiKey ? "**** (saved)" : "AIza..."}
+                      placeholder={
+                        llmForm.hasGeminiApiKey ? "**** (saved)" : "AIza..."
+                      }
                       className="font-mono"
                     />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Reasoning effort</Label>
+                    <Select
+                      value={llmForm.reasoningEffort || "high"}
+                      onValueChange={(value) =>
+                        setLLMForm({ ...llmForm, reasoningEffort: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["low", "medium", "high", "xhigh"].map((value) => (
+                          <SelectItem key={value} value={value}>
+                            {value}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
@@ -354,13 +730,8 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-end gap-3">
                   {savedLLM && <span className="text-xs text-success">Saved</span>}
                   <Button
-                    onClick={async () => {
-                      setSavedLLM(false);
-                      await updateLLM.mutateAsync(llmForm);
-                      setSavedLLM(true);
-                      setTimeout(() => setSavedLLM(false), 2500);
-                    }}
-                    disabled={updateLLM.isPending}
+                    onClick={saveLLMSettings}
+                    disabled={updateLLM.isPending || !llmForm.provider}
                   >
                     {updateLLM.isPending ? "Saving..." : "Save LLM settings"}
                   </Button>
@@ -368,10 +739,21 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           )}
-        </TabsContent>
 
-        <TabsContent value="providers">
-          <ProvidersTab />
+          {/* OAuth modal — opens when the user clicks "Sign in with
+              OAuth". Polls /api/auth/profiles until a new entry for
+              this provider appears. */}
+          {selectedProvider && (
+            <OAuthModal
+              open={oauthOpen}
+              provider={selectedProvider.id}
+              displayName={selectedProvider.displayName}
+              existingKeys={(profiles.data ?? []).map(
+                (p) => p.key ?? `${p.provider}:${p.profileId}`,
+              )}
+              onClose={() => setOAuthOpen(false)}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="engagement">
@@ -679,29 +1061,31 @@ export default function SettingsPage() {
                 </CardContent>
               </Card>
 
-              {Object.entries(filteredEnvironment).map(([category, variables]) => (
-                <Card key={category} className="overflow-hidden">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">{category}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <div className="divide-y divide-border">
-                      {variables.map((variable) => (
-                        <EnvironmentRow
-                          key={variable.key}
-                          variable={variable}
-                          value={envValues[variable.key] ?? variable.value ?? ""}
-                          changed={Object.prototype.hasOwnProperty.call(
-                            envChanges,
-                            variable.key,
-                          )}
-                          onChange={(value) => updateEnvValue(variable, value)}
-                        />
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+              {Object.entries(filterEnvironment(environment.data, envFilter)).map(
+                ([category, variables]) => (
+                  <Card key={category} className="overflow-hidden">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base">{category}</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="divide-y divide-border">
+                        {variables.map((variable) => (
+                          <EnvironmentRow
+                            key={variable.key}
+                            variable={variable}
+                            value={envValues[variable.key] ?? variable.value ?? ""}
+                            changed={Object.prototype.hasOwnProperty.call(
+                              envChanges,
+                              variable.key,
+                            )}
+                            onChange={(value) => updateEnvValue(variable, value)}
+                          />
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ),
+              )}
             </div>
           )}
         </TabsContent>
@@ -859,10 +1243,60 @@ function envValue(data: EnvironmentSettings | undefined, key: string) {
   return data?.variables.find((variable) => variable.key === key)?.value ?? "";
 }
 
+function filterEnvironment(
+  data: EnvironmentSettings | undefined,
+  filter: string,
+) {
+  const needle = filter.trim().toLowerCase();
+  const variables = data?.variables ?? [];
+  const filtered = needle
+    ? variables.filter((variable) =>
+        [
+          variable.key,
+          variable.label,
+          variable.category,
+          variable.description,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(needle),
+      )
+    : variables;
+  return groupBy(filtered, (variable) => variable.category);
+}
+
 function groupBy<T, K extends string>(items: T[], getKey: (item: T) => K) {
   return items.reduce<Record<string, T[]>>((acc, item) => {
     const key = getKey(item);
     (acc[key] ||= []).push(item);
     return acc;
   }, {});
+}
+
+function isMaskedSettingValue(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("****") || trimmed.includes("••••");
+}
+
+function prettyAuthMethod(method: string): string {
+  switch (method) {
+    case "api_key":
+      return "API key";
+    case "oauth":
+      return "OAuth";
+    case "none":
+      return "No credentials";
+    default:
+      return method;
+  }
+}
+
+function maskedAPIKeyLabel(profile: AuthProfile): string {
+  if (profile.apiKey) return profile.apiKey;
+  return "(no key)";
+}
+
+function maskedTokenLabel(profile: AuthProfile): string {
+  if (profile.accessToken) return profile.accessToken;
+  return "(no token)";
 }

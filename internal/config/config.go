@@ -20,6 +20,7 @@ type Config struct {
 	LLM             string // XALGORIX_LLM — model name (e.g. "openai/gpt-5.4", "anthropic/claude-sonnet-4-20250514")
 	APIBase         string // XALGORIX_API_BASE — API endpoint
 	APIKey          string // XALGORIX_API_KEY — API key
+	LLMProfile      string // XALGORIX_LLM_PROFILE — active credential pointer "<provider>:<profileId>" (v4.4.22+)
 	ReasoningEffort string // XALGORIX_REASONING_EFFORT — "low", "medium", "high"
 	LLMMaxRetries   int    // XALGORIX_LLM_MAX_RETRIES
 	MemCompTimeout  int    // XALGORIX_MEMORY_COMPRESSOR_TIMEOUT
@@ -169,6 +170,7 @@ func load() *Config {
 		LLM:             envOr("XALGORIX_LLM", ""),
 		APIBase:         envOr("XALGORIX_API_BASE", ""),
 		APIKey:          envOr("XALGORIX_API_KEY", ""),
+		LLMProfile:      envOr("XALGORIX_LLM_PROFILE", ""),
 		ReasoningEffort: envOr("XALGORIX_REASONING_EFFORT", "high"),
 		LLMMaxRetries:   envOrInt("XALGORIX_LLM_MAX_RETRIES", 5),
 		MemCompTimeout:  envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),

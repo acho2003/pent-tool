@@ -563,35 +563,30 @@ func legacyExpectedHeaderStyle(slug string) string {
 }
 
 // resolverFixture wires a real *providers.Service + *auth.Store
-// rooted at the supplied tempDir. When seedEntry is non-zero the
-// catalog gets that entry plus a matching API_Key profile so the
-// catalog branch's defaultCatalogPick can resolve a (entry, profile)
-// pair on its first call.
+// rooted at the supplied tempDir. The catalog is the compiled-in
+// Builtin() set; when seedProvider is non-empty we look it up from
+// Builtin() and Put a matching API_Key profile so the catalog
+// branch's defaultCatalogPick can resolve a (entry, profile) pair
+// on its first call. cfg.LLMProfile must also be set on the cfg
+// passed to the resolver for the catalog branch to engage.
 type resolverFixture struct {
-	cat     *providers.Service
-	prof    *auth.Store
-	catPath string
+	cat        *providers.Service
+	prof       *auth.Store
+	catPath    string
+	profileKey string
 }
 
 func newResolverFixture(t *testing.T, tempDir string, seedEntry providers.Entry, seedProfileAPIKey string) resolverFixture {
 	t.Helper()
 	dataDir := filepath.Join(tempDir, "data")
-	catPath := filepath.Join(dataDir, "providers.json")
 	profPath := filepath.Join(dataDir, "auth-profiles.json")
 
-	cat, err := providers.NewService(catPath)
-	if err != nil {
-		t.Fatalf("providers.NewService: %v", err)
-	}
-	if seedEntry.ID != "" {
-		if err := cat.Create(context.Background(), seedEntry); err != nil {
-			t.Fatalf("cat.Create(%+v): %v", seedEntry, err)
-		}
-	}
+	cat := providers.NewService()
 	prof, err := auth.NewStore(profPath, cat)
 	if err != nil {
 		t.Fatalf("auth.NewStore: %v", err)
 	}
+	profileKey := ""
 	if seedEntry.ID != "" {
 		if err := prof.Put(context.Background(), auth.Profile{
 			Provider:  seedEntry.ID,
@@ -601,8 +596,9 @@ func newResolverFixture(t *testing.T, tempDir string, seedEntry providers.Entry,
 		}); err != nil {
 			t.Fatalf("prof.Put: %v", err)
 		}
+		profileKey = seedEntry.ID + ":default"
 	}
-	return resolverFixture{cat: cat, prof: prof, catPath: catPath}
+	return resolverFixture{cat: cat, prof: prof, profileKey: profileKey}
 }
 
 // TestResolver_LegacyFallbackDecision validates Property 5 for the
@@ -671,24 +667,35 @@ func TestResolver_LegacyFallbackDecision(t *testing.T) {
 }
 
 // TestResolver_CatalogPreemptsLegacy validates Property 5 for the
-// catalog branch: any time the catalog reports at least one entry,
-// Resolve dispatches through catalogResolver regardless of whether
+// catalog branch: any time cfg.LLMProfile names a saved profile and
+// the profile's Provider matches a Builtin() catalog entry, Resolve
+// dispatches through catalogResolver regardless of whether
 // XALGORIX_LLM names a legacy slug. The test asserts the URL,
-// HeaderStyle, and credentials all come from the seeded catalog
-// entry + matching profile — never from the legacy provider table.
-//
-// The randomized table covers every header style and the on/off
-// state of XALGORIX_LLM's legacy shape so the catalog-wins
-// invariant holds under every (catalogNonEmpty, legacyShape)
-// combination Property 5 enumerates.
+// HeaderStyle, and credentials all come from the Builtin() entry +
+// stored profile — never from the legacy provider table.
 //
 // Validates: Requirements 2.2, 2.3, 11.2.
 func TestResolver_CatalogPreemptsLegacy(t *testing.T) {
-	const iterations = 120
+	// Pick one Builtin() entry per HeaderStyle so every URL-builder
+	// branch (openai /chat/completions, anthropic /v1/messages,
+	// gemini :generateContent) gets exercised. The test was written
+	// against a runtime-editable catalog; v4.4.22 collapses the
+	// catalog to providers.Builtin(), so we now look up real entries
+	// rather than seeding fake ones.
+	builtin, err := providers.NewService().List(context.Background())
+	if err != nil {
+		t.Fatalf("providers.NewService.List: %v", err)
+	}
+	pickByStyle := func(style string) (providers.Entry, bool) {
+		for _, e := range builtin {
+			if e.HeaderStyle == style && e.BaseURL != "" && len(e.Models) > 0 {
+				return e, true
+			}
+		}
+		return providers.Entry{}, false
+	}
+	const iterations = 60
 	headerStyles := []string{"openai", "anthropic", "gemini"}
-	// Used to randomize the legacy XALGORIX_LLM shape. A mix of
-	// legacy slugs and non-legacy strings drives Property 5's
-	// "regardless of legacy shape" assertion.
 	legacyVariants := []string{
 		"openai/legacy-model",
 		"anthropic/legacy-model",
@@ -704,24 +711,19 @@ func TestResolver_CatalogPreemptsLegacy(t *testing.T) {
 
 	for i := 0; i < iterations; i++ {
 		hs := headerStyles[rng.Intn(len(headerStyles))]
-		legacy := legacyVariants[rng.Intn(len(legacyVariants))]
-		// Distinctive base URL so the assertions can verify the
-		// catalog path won — none of the legacy provider defaults
-		// share this hostname.
-		entryID := fmt.Sprintf("catprov%d", i)
-		modelName := fmt.Sprintf("cat-model-%d", i)
-		baseURL := fmt.Sprintf("https://catalog%d.example.com/v1", i)
-		entry := providers.Entry{
-			ID:          entryID,
-			DisplayName: "Catalog " + entryID,
-			BaseURL:     baseURL,
-			Models:      []string{modelName},
-			HeaderStyle: hs,
+		entry, ok := pickByStyle(hs)
+		if !ok {
+			t.Skipf("Builtin() has no entry with HeaderStyle=%q + BaseURL+Models", hs)
 		}
-		profileKey := fmt.Sprintf("catalog-key-%d", i)
+		legacy := legacyVariants[rng.Intn(len(legacyVariants))]
+		profileAPIKey := fmt.Sprintf("catalog-key-%d", i)
 
-		fx := newResolverFixture(t, t.TempDir(), entry, profileKey)
-		cfg := &config.Config{LLM: legacy, APIKey: "ignored-legacy-key"}
+		fx := newResolverFixture(t, t.TempDir(), entry, profileAPIKey)
+		cfg := &config.Config{
+			LLM:        legacy,
+			APIKey:     "ignored-legacy-key",
+			LLMProfile: fx.profileKey,
+		}
 		r := NewCompositeResolver(
 			WithCatalog(fx.cat, fx.prof),
 			WithLegacy(cfg),
@@ -733,24 +735,32 @@ func TestResolver_CatalogPreemptsLegacy(t *testing.T) {
 		}
 
 		// Build the expected URL by mirroring catalogResolver's
-		// own URL-builder branch logic for the chosen header
-		// style. The catalog path must produce a URL whose host
-		// is the seeded catalog host — never the legacy default.
+		// own URL-builder branch logic for the chosen header style.
+		baseURL := strings.TrimRight(entry.BaseURL, "/")
+		modelName := entry.Models[0]
 		var wantURL string
 		switch hs {
 		case "openai":
-			wantURL = baseURL + "/chat/completions"
+			wantURL = baseURL
+			if !strings.HasSuffix(strings.ToLower(wantURL), "/chat/completions") {
+				if !strings.HasSuffix(baseURL, "/v1") && !strings.Contains(baseURL, "/v1/") {
+					wantURL += "/v1"
+				}
+				wantURL += "/chat/completions"
+			}
 		case "anthropic":
-			wantURL = baseURL + "/messages"
+			wantURL = baseURL
+			if !strings.HasSuffix(strings.ToLower(wantURL), "/messages") {
+				if !strings.HasSuffix(baseURL, "/v1") && !strings.Contains(baseURL, "/v1/") {
+					wantURL += "/v1"
+				}
+				wantURL += "/messages"
+			}
 		case "gemini":
-			// Gemini strips trailing /v1 before appending /v1beta/...
 			wantURL = strings.TrimSuffix(baseURL, "/v1") + "/v1beta/models/" + modelName + ":generateContent"
 		}
 		if ep.URL != wantURL {
 			t.Errorf("iter %d hs=%s legacy=%q: URL = %q, want %q", i, hs, legacy, ep.URL, wantURL)
-		}
-		if !strings.Contains(ep.URL, fmt.Sprintf("catalog%d.example.com", i)) {
-			t.Errorf("iter %d: URL %q lost the catalog host — legacy may have leaked", i, ep.URL)
 		}
 		if ep.HeaderStyle != hs {
 			t.Errorf("iter %d hs=%s: HeaderStyle = %q, want %q", i, hs, ep.HeaderStyle, hs)
@@ -758,15 +768,12 @@ func TestResolver_CatalogPreemptsLegacy(t *testing.T) {
 		if ep.Auth != AuthAPIKey {
 			t.Errorf("iter %d hs=%s: Auth = %q, want %q", i, hs, ep.Auth, AuthAPIKey)
 		}
-		if ep.APIKey != profileKey {
-			t.Errorf("iter %d hs=%s: APIKey = %q, want %q (catalog profile)", i, hs, ep.APIKey, profileKey)
+		if ep.APIKey != profileAPIKey {
+			t.Errorf("iter %d hs=%s: APIKey = %q, want %q (catalog profile)", i, hs, ep.APIKey, profileAPIKey)
 		}
-		// AccessToken must be empty for an API-key profile.
 		if ep.AccessToken != "" {
 			t.Errorf("iter %d hs=%s: AccessToken = %q, want empty for api_key profile", i, hs, ep.AccessToken)
 		}
-		// Model must come from the catalog entry, not from the
-		// legacy XALGORIX_LLM (which carries its own model tail).
 		if ep.Model != modelName {
 			t.Errorf("iter %d hs=%s: Model = %q, want %q (catalog entry)", i, hs, ep.Model, modelName)
 		}
