@@ -115,11 +115,40 @@ git commit -m "release: v$NEW_VERSION"
 git tag "v$NEW_VERSION"
 ok "Tagged v$NEW_VERSION"
 
-# ─── Step 6: Push ───
-info "Pushing to origin..."
-git push origin main
+# ─── Step 6: Push to release branch and open PR ───
+# `main` is branch-protected and rejects direct pushes; release work goes onto
+# a per-version release branch and merges via PR, matching the existing
+# v4.4.17 / v4.4.18 / v4.4.19 release pattern.
+RELEASE_BRANCH="release/v$NEW_VERSION"
+info "Switching to $RELEASE_BRANCH and pushing..."
+
+# Capture the commit just made on the current branch (typically main) and use
+# it as the tip of the release branch. This avoids cherry-picking and keeps
+# the tag on the same commit the PR merges.
+RELEASE_COMMIT="$(git rev-parse HEAD)"
+
+if git rev-parse --verify --quiet "$RELEASE_BRANCH" >/dev/null; then
+    warn "Branch $RELEASE_BRANCH already exists locally — refusing to overwrite. Delete it and rerun if intentional."
+    die "release branch collision"
+fi
+
+git branch "$RELEASE_BRANCH" "$RELEASE_COMMIT"
+git push -u origin "$RELEASE_BRANCH"
 git push origin "v$NEW_VERSION"
-ok "Pushed to origin"
+ok "Pushed $RELEASE_BRANCH and tag v$NEW_VERSION"
+
+info "Opening PR against main..."
+PR_BODY="### Changes
+
+$CHANGELOG"
+PR_URL="$(gh pr create --base main --head "$RELEASE_BRANCH" \
+    --title "release: v$NEW_VERSION" \
+    --body "$PR_BODY" 2>/dev/null || true)"
+if [[ -z "$PR_URL" ]]; then
+    warn "PR creation failed or PR already exists; check GitHub manually."
+else
+    ok "PR opened: $PR_URL"
+fi
 
 # ─── Step 7: Create GitHub Release ───
 info "Creating GitHub Release..."
