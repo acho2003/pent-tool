@@ -7263,6 +7263,12 @@ func (s *Server) sendSimpleEmbed(color int, title, description string) {
 	}()
 }
 
+// lookupHost is a package-level indirection over net.LookupHost so tests can
+// swap the resolver out and assert the per-call lookup count. The single call
+// site lives inside isBlockedTarget below; nothing else in this package
+// resolves DNS for self-listener / private-range checks.
+var lookupHost = net.LookupHost
+
 // isBlockedTarget checks whether a target resolves to a local, loopback, or internal
 // IP address — OR matches the running Xalgorix instance's bind address + port.
 // This prevents the agent from inadvertently scanning the host machine OR the
@@ -7289,20 +7295,20 @@ func (s *Server) isBlockedTarget(target string) bool {
 	// any local address, or resolves to one. This catches the case where
 	// XALGORIX_BIND=0.0.0.0 and the operator types the public IP back
 	// in — the previous loopback-only check missed it.
+	//
+	// We capture portMatch here but defer the interface-address comparison
+	// until after the single DNS resolution below, so the same resolved IP
+	// set feeds both the self-listener check and the private-range check.
+	portMatch := false
 	if s != nil && hostPort != "" {
 		if portNum, err := strconv.Atoi(hostPort); err == nil && portNum == s.port {
+			portMatch = true
 			bind := strings.ToLower(strings.TrimSpace(s.cfg.BindAddr))
 			if bind == "" {
 				bind = "127.0.0.1"
 			}
 			lowerHost := strings.ToLower(strings.TrimSpace(host))
 			if lowerHost == bind || lowerHost == "0.0.0.0" || lowerHost == "::" {
-				return true
-			}
-			// Compare against every interface address — covers
-			// the case where bind=0.0.0.0 and the operator reaches
-			// the dashboard via a LAN IP (192.168.x.y) or public IP.
-			if hostMatchesLocalInterface(host) {
 				return true
 			}
 		}
@@ -7314,23 +7320,43 @@ func (s *Server) isBlockedTarget(target string) bool {
 		return true
 	}
 
-	// Parse as IP
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Try DNS resolution for hostnames that might resolve to local IPs
-		addrs, err := net.LookupHost(host)
+	// Resolve the target host to one or more IPs exactly once for the
+	// remainder of this call. IP literals skip DNS entirely; otherwise a
+	// single net.LookupHost feeds every downstream check. An empty or
+	// failing resolution falls back to "allow" (matching prior behavior)
+	// so that unreachable hostnames are not blocked solely on lookup
+	// failure — the request will fail naturally further down the stack.
+	var resolvedIPs []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		resolvedIPs = []net.IP{ip}
+	} else {
+		addrs, err := lookupHost(host)
 		if err != nil || len(addrs) == 0 {
 			return false // can't resolve — let it through, will fail naturally
 		}
-		ip = net.ParseIP(addrs[0])
-		if ip == nil {
+		for _, a := range addrs {
+			if parsed := net.ParseIP(a); parsed != nil {
+				resolvedIPs = append(resolvedIPs, parsed)
+			}
+		}
+		if len(resolvedIPs) == 0 {
 			return false
 		}
 	}
 
-	// Check blocked ranges
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+	// Self-listener interface check, gated by the port-match flag captured
+	// above. Uses the already-resolved IP set so we never issue a second
+	// DNS lookup. Covers the bind=0.0.0.0 + operator-types-public-IP loophole.
+	if portMatch && ipsMatchLocalInterface(resolvedIPs) {
 		return true
+	}
+
+	// Check blocked ranges across the entire resolved set: a single
+	// loopback/link-local/unspecified hit is enough to block.
+	for _, ip := range resolvedIPs {
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return true
+		}
 	}
 
 	// RFC 1918 private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
@@ -7344,44 +7370,57 @@ func (s *Server) isBlockedTarget(target string) bool {
 		"fc00::/7",  // IPv6 unique local
 		"fe80::/10", // IPv6 link-local
 	}
+	parsedSubnets := make([]*net.IPNet, 0, len(privateCIDRs))
 	for _, cidr := range privateCIDRs {
 		_, subnet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			continue
 		}
-		if subnet.Contains(ip) {
-			return true
+		parsedSubnets = append(parsedSubnets, subnet)
+	}
+	for _, ip := range resolvedIPs {
+		for _, subnet := range parsedSubnets {
+			if subnet.Contains(ip) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// hostMatchesLocalInterface returns true when the supplied host string
-// resolves (or directly equals) one of this machine's interface addresses.
-// Used by isBlockedTarget to catch the "bind=0.0.0.0, operator types
-// public IP" self-scan loophole.
-func hostMatchesLocalInterface(host string) bool {
-	host = strings.TrimSpace(host)
-	if host == "" {
+// ipsMatchLocalInterface returns true if any IP in the supplied slice
+// matches one of this machine's interface addresses. Issues a single
+// net.InterfaceAddrs call and walks ips × addrs so callers can resolve
+// a hostname once and reuse the result for every downstream check.
+func ipsMatchLocalInterface(ips []net.IP) bool {
+	if len(ips) == 0 {
 		return false
 	}
-	candidate := net.ParseIP(host)
-	if candidate == nil {
-		// Resolve hostname — best-effort. A DNS failure means we treat
-		// the host as not-local; the broader isBlockedTarget loopback
-		// check will still catch obvious cases.
-		addrs, err := net.LookupHost(host)
-		if err != nil {
-			return false
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if ip == nil {
+			continue
 		}
 		for _, a := range addrs {
-			if ip := net.ParseIP(a); ip != nil && ipMatchesLocalInterface(ip) {
+			var aIP net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				aIP = v.IP
+			case *net.IPAddr:
+				aIP = v.IP
+			}
+			if aIP == nil {
+				continue
+			}
+			if aIP.Equal(ip) {
 				return true
 			}
 		}
-		return false
 	}
-	return ipMatchesLocalInterface(candidate)
+	return false
 }
 
 // ipMatchesLocalInterface walks every configured interface address and
