@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
@@ -151,23 +152,29 @@ func rewriteShellSegments(command string, rewrite func(string) string) string {
 	start := 0
 	var quote rune
 	escaped := false
-	for i, r := range command {
+	i := 0
+	for i < len(command) {
+		r, size := utf8.DecodeRuneInString(command[i:])
 		if escaped {
 			escaped = false
+			i += size
 			continue
 		}
 		if r == '\\' && quote != '\'' {
 			escaped = true
+			i += size
 			continue
 		}
 		if quote != 0 {
 			if r == quote {
 				quote = 0
 			}
+			i += size
 			continue
 		}
 		if r == '\'' || r == '"' {
 			quote = r
+			i += size
 			continue
 		}
 		delimiterLen := 0
@@ -180,11 +187,13 @@ func rewriteShellSegments(command string, rewrite func(string) string) string {
 			delimiterLen = 2
 		}
 		if delimiterLen == 0 {
+			i += size
 			continue
 		}
 		b.WriteString(rewrite(command[start:i]))
 		b.WriteString(command[i : i+delimiterLen])
 		start = i + delimiterLen
+		i = start
 	}
 	b.WriteString(rewrite(command[start:]))
 	return b.String()
