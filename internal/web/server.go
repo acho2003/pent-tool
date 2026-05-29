@@ -6135,9 +6135,16 @@ func isChildOfScan(parent, child *ScanRecord) bool {
 	if parent == nil || child == nil || child.ParentTarget == "" {
 		return false
 	}
-	if parent.InstanceID != "" && child.InstanceID == parent.InstanceID {
-		return true
+	// Instance-aware matching: when the parent has an InstanceID (all
+	// multi-instance scans do), the child must belong to the same
+	// instance. Without this gate a new yahoo.com scan would absorb
+	// every subdomain record from *previous* yahoo.com scans on disk,
+	// instantly showing stale vulns and inflated subdomain counts.
+	if parent.InstanceID != "" {
+		return child.InstanceID == parent.InstanceID
 	}
+	// Legacy fallback for scans created before multi-instance mode:
+	// match by target name only.
 	return normalizeScanTarget(child.ParentTarget) == normalizeScanTarget(parent.Target)
 }
 
