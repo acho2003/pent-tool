@@ -30,7 +30,7 @@ func Register(r *tools.Registry) {
 		Parameters: []tools.Parameter{
 			{Name: "url", Description: "Target URL (include protocol, e.g. https://example.com/api/users)", Required: true},
 			{Name: "method", Description: "HTTP method: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS (default: GET)", Required: false},
-			{Name: "headers", Description: `JSON object of request headers, e.g. {"Authorization":"Bearer eyJ...","Content-Type":"application/json"}`, Required: false},
+			{Name: "headers", Description: `JSON object of request headers. Values may be strings, numbers, or arrays of strings for multi-value headers. e.g. {"Authorization":"Bearer eyJ...","Content-Type":"application/json","X-Ids":[1,2,3]}`, Required: false},
 			{Name: "body", Description: "Request body (for POST/PUT/PATCH). Pass the raw string to send.", Required: false},
 			{Name: "follow_redirects", Description: "Follow HTTP redirects (default: true). Set to false to inspect 3xx responses directly — useful for open redirect and SSRF testing.", Required: false},
 			{Name: "timeout", Description: "Request timeout in seconds (default: 30, max: 60)", Required: false},
@@ -92,15 +92,12 @@ func execute(args map[string]string) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Parse and set custom headers.
+	// Parse and set custom headers. Accepts map[string]any so callers can
+	// pass string, numeric, or []string values.
 	headersStr := strings.TrimSpace(args["headers"])
 	if headersStr != "" {
-		var hdrs map[string]string
-		if err := json.Unmarshal([]byte(headersStr), &hdrs); err != nil {
-			return tools.Result{}, fmt.Errorf("invalid headers JSON: %w", err)
-		}
-		for k, v := range hdrs {
-			req.Header.Set(k, v)
+		if err := applyHeaders(req, headersStr); err != nil {
+			return tools.Result{}, err
 		}
 	}
 
@@ -109,7 +106,7 @@ func execute(args map[string]string) (tools.Result, error) {
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	}
 
-	client := buildClient(timeout, followRedirects)
+	client := buildClient(timeout, followRedirects, config.Get().TLSSkipVerify)
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -132,12 +129,14 @@ func execute(args map[string]string) (tools.Result, error) {
 		}
 	}
 
-	// Read body (capped).
+	// Read body (capped). Use LimitReader + io.ReadAll so we always get
+	// the full (truncated) content without short reads.
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("failed to read response body: %w", err)
 	}
 	truncated := len(bodyBytes) > maxBodyBytes
+	bodyLen := len(bodyBytes) // original length (may be maxBodyBytes+1)
 	if truncated {
 		bodyBytes = bodyBytes[:maxBodyBytes]
 	}
@@ -145,10 +144,15 @@ func execute(args map[string]string) (tools.Result, error) {
 	contentType := resp.Header.Get("Content-Type")
 	isBinary := isBinaryContentType(contentType)
 
-	out.WriteString(fmt.Sprintf("\n--- Response Body%s ---\n", map[bool]string{true: " (text)", false: ""}[!isBinary]))
 	if isBinary {
-		out.WriteString(fmt.Sprintf("[binary content: %s, %d bytes]\n", contentType, len(bodyBytes)))
+		out.WriteString(fmt.Sprintf("\n--- Response Body (binary) ---\n"))
+		sizeNote := fmt.Sprintf("%d bytes", bodyLen)
+		if truncated {
+			sizeNote = fmt.Sprintf("50 KB+ (%d bytes before truncation)", bodyLen)
+		}
+		out.WriteString(fmt.Sprintf("[binary content: %s, %s]\n", contentType, sizeNote))
 	} else {
+		out.WriteString("\n--- Response Body (text) ---\n")
 		out.WriteString(string(bodyBytes))
 		if truncated {
 			out.WriteString("\n\n[Body truncated at 50 KB]")
@@ -156,6 +160,41 @@ func execute(args map[string]string) (tools.Result, error) {
 	}
 
 	return tools.Result{Output: out.String()}, nil
+}
+
+// applyHeaders parses a JSON object and applies each entry as an HTTP header.
+// Values may be strings, numbers (coerced via fmt.Sprint), or []any (each
+// element emitted as a separate header line for multi-value headers like
+// Set-Cookie).
+func applyHeaders(req *http.Request, rawJSON string) error {
+	var hdrs map[string]any
+	if err := json.Unmarshal([]byte(rawJSON), &hdrs); err != nil {
+		return fmt.Errorf("invalid headers JSON: %w", err)
+	}
+	for k, v := range hdrs {
+		switch val := v.(type) {
+		case string:
+			req.Header.Set(k, val)
+		case float64:
+			req.Header.Set(k, fmt.Sprint(val))
+		case bool:
+			req.Header.Set(k, strconv.FormatBool(val))
+		case []any:
+			// Multi-value header — add each element, then use Add for
+			// subsequent values so Set + Add produces all values.
+			for i, elem := range val {
+				s := fmt.Sprint(elem)
+				if i == 0 {
+					req.Header.Set(k, s)
+				} else {
+					req.Header.Add(k, s)
+				}
+			}
+		default:
+			req.Header.Set(k, fmt.Sprint(val))
+		}
+	}
+	return nil
 }
 
 func validMethod(m string) bool {
@@ -181,11 +220,13 @@ func isBinaryContentType(ct string) bool {
 	return false
 }
 
-func buildClient(timeoutSec int, followRedirects bool) *http.Client {
-	cfg := config.Get()
+// testTLSInsecure is a test-only hook that forces TLS verification to be
+// skipped. Set only from tests to avoid mutating the shared global config.
+var testTLSInsecure bool
 
+func buildClient(timeoutSec int, followRedirects bool, tlsSkipVerify bool) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if cfg.TLSSkipVerify {
+	if tlsSkipVerify || testTLSInsecure {
 		if tr.TLSClientConfig == nil {
 			tr.TLSClientConfig = &tls.Config{} //nolint:gosec
 		} else {

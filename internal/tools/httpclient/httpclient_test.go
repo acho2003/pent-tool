@@ -2,12 +2,12 @@ package httpclient
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
@@ -61,6 +61,52 @@ func TestIsBinaryContentType(t *testing.T) {
 	}
 }
 
+func TestApplyHeaders(t *testing.T) {
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+
+	jsonInput := `{
+		"Authorization": "Bearer token",
+		"Content-Length": 123,
+		"X-Debug": true,
+		"Set-Cookie": ["a=1", "b=2"],
+		"X-Single-Array": ["only-one"]
+	}`
+
+	if err := applyHeaders(req, jsonInput); err != nil {
+		t.Fatalf("applyHeaders: %v", err)
+	}
+
+	if got := req.Header.Get("Authorization"); got != "Bearer token" {
+		t.Errorf("Authorization = %q", got)
+	}
+	if got := req.Header.Get("Content-Length"); got != "123" {
+		t.Errorf("Content-Length = %q, want '123'", got)
+	}
+	if got := req.Header.Get("X-Debug"); got != "true" {
+		t.Errorf("X-Debug = %q, want 'true'", got)
+	}
+	if got := req.Header.Get("X-Single-Array"); got != "only-one" {
+		t.Errorf("X-Single-Array = %q, want 'only-one'", got)
+	}
+	// Multi-value header: http.Header.Get returns the first value.
+	if got := req.Header.Get("Set-Cookie"); got != "a=1" {
+		t.Errorf("Set-Cookie[0] = %q, want 'a=1'", got)
+	}
+	// http.Header.Values returns all values (requires Go 1.22+) — the
+	// canonical way to verify multi-value headers is to check the raw map.
+	cookies := req.Header["Set-Cookie"]
+	if len(cookies) != 2 || cookies[0] != "a=1" || cookies[1] != "b=2" {
+		t.Errorf("Set-Cookie values = %v, want [a=1 b=2]", cookies)
+	}
+}
+
+func TestApplyHeadersInvalidJSON(t *testing.T) {
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	if err := applyHeaders(req, "not-json"); err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Parameter validation tests
 // ---------------------------------------------------------------------------
@@ -86,12 +132,12 @@ func TestExecuteInvalidHeadersJSON(t *testing.T) {
 	}
 }
 
-func TestExecuteAutoPrependsHTTPS(t *testing.T) {
-	// When the URL has no scheme, execute auto-prepends "https://".
-	// Verify the transformation via a real HTTPS server.
-	cfgSaved := config.Get().TLSSkipVerify
-	config.Get().TLSSkipVerify = true
-	defer func() { config.Get().TLSSkipVerify = cfgSaved }()
+func TestExecuteURLSchemeAutoPrepend(t *testing.T) {
+	// Verify that a bare "host:port" gets "https://" auto-prepended.
+	// Use an HTTPS test server + the test hook to avoid touching global config.
+	prev := testTLSInsecure
+	testTLSInsecure = true
+	t.Cleanup(func() { testTLSInsecure = prev })
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil {
@@ -102,6 +148,7 @@ func TestExecuteAutoPrependsHTTPS(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// Pass the URL without scheme.
 	host := strings.TrimPrefix(server.URL, "https://")
 	result, err := execute(map[string]string{"url": host})
 	if err != nil {
@@ -149,7 +196,6 @@ func TestExecuteTimeoutParsing(t *testing.T) {
 func TestExecuteFollowRedirectsParsing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("done"))
 	}))
 	defer server.Close()
 
@@ -207,11 +253,13 @@ func TestExecuteMethodAndHeaders(t *testing.T) {
 
 func TestExecuteRequestBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := make([]byte, 1024)
-		n, _ := r.Body.Read(body)
-		got := string(body[:n])
-		if got != "hello world" {
-			t.Errorf("body = %q, want 'hello world'", got)
+		// Use io.ReadAll to reliably read the full body, avoiding short reads.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if string(body) != "hello world" {
+			t.Errorf("body = %q, want 'hello world'", string(body))
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -263,6 +311,28 @@ func TestExecuteCustomUserAgent(t *testing.T) {
 	}
 }
 
+func TestExecuteNumericAndMultiValueHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Port"); got != "8080" {
+			t.Errorf("X-Port = %q, want '8080'", got)
+		}
+		cookies := r.Header["Set-Cookie"]
+		if len(cookies) != 2 || cookies[0] != "a=1" || cookies[1] != "b=2" {
+			t.Errorf("Set-Cookie = %v, want [a=1 b=2]", cookies)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	_, err := execute(map[string]string{
+		"url":     server.URL,
+		"headers": `{"X-Port":8080,"Set-Cookie":["a=1","b=2"]}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Response handling tests
 // ---------------------------------------------------------------------------
@@ -298,7 +368,6 @@ func TestExecuteAllHTTPMethods(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(method))
 		}))
-		// Can't defer in loop, close explicitly.
 		result, err := execute(map[string]string{"url": server.URL, "method": method})
 		server.Close()
 		if err != nil {
@@ -326,7 +395,6 @@ func TestExecuteStatusCodeRelay(t *testing.T) {
 			expected = "OK"
 		}
 		if !strings.Contains(result.Output, expected) && !strings.Contains(result.Output, "301") {
-			// For 301 the status text is not always standard.
 			if code == 301 && !strings.Contains(result.Output, "301") {
 				t.Fatalf("code %d: output = %s", code, result.Output)
 			}
@@ -392,7 +460,6 @@ func TestExecuteRedirectWithoutFollowing(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteConnectionRefused(t *testing.T) {
-	// Pick a port that is very unlikely to be in use.
 	_, err := execute(map[string]string{
 		"url":     "http://127.0.0.1:1/",
 		"timeout": "1",
@@ -429,7 +496,7 @@ func TestExecuteBodyTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Output) > maxBodyBytes+4096 { // generous margin for headers + truncation note
+	if len(result.Output) > maxBodyBytes+4096 {
 		t.Fatalf("output len=%d exceeds expected max around %d", len(result.Output), maxBodyBytes)
 	}
 	if !strings.Contains(result.Output, "[Body truncated at 50 KB]") {
@@ -440,7 +507,7 @@ func TestExecuteBodyTruncation(t *testing.T) {
 func TestExecuteBinaryContentFlagged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		w.Write([]byte{0x89, 0x50, 0x4E, 0x47}) // PNG magic bytes
+		w.Write([]byte{0x89, 0x50, 0x4E, 0x47})
 	}))
 	defer server.Close()
 
@@ -448,8 +515,31 @@ func TestExecuteBinaryContentFlagged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if !strings.Contains(result.Output, "Response Body (binary)") {
+		t.Fatalf("expected 'Response Body (binary)' section: %s", result.Output)
+	}
 	if !strings.Contains(result.Output, "[binary content: image/png,") {
 		t.Fatalf("expected binary content marker: %s", result.Output)
+	}
+}
+
+func TestExecuteBinaryContentTruncationMarker(t *testing.T) {
+	bigBinary := make([]byte, maxBodyBytes+100)
+	for i := range bigBinary {
+		bigBinary[i] = byte(i % 256)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(bigBinary)
+	}))
+	defer server.Close()
+
+	result, err := execute(map[string]string{"url": server.URL})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Output, "50 KB+") {
+		t.Fatalf("expected '50 KB+' truncation marker for binary: %s", result.Output)
 	}
 }
 
@@ -572,13 +662,10 @@ func TestExecuteURLQueryParams(t *testing.T) {
 
 func TestExecuteURLFragmentPreserved(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Fragments are not sent by HTTP clients per RFC 7230,
-		// but we verify the URL parsing doesn't reject them.
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	// URL with fragment — url.Parse strips it, but the request should succeed.
 	_, err := execute(map[string]string{"url": server.URL + "#section"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -694,9 +781,9 @@ func TestExecuteNoRedirectLoop(t *testing.T) {
 	defer server.Close()
 
 	result, err := execute(map[string]string{
-		"url":               server.URL,
-		"follow_redirects":  "false",
-		"timeout":           "2",
+		"url":              server.URL,
+		"follow_redirects": "false",
+		"timeout":          "2",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
