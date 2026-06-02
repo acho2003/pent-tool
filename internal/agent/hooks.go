@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // ── Hook Events ──────────────────────────────────────────────────────────────
@@ -54,6 +55,14 @@ type ScanState struct {
 	ConsecutiveErrors  int
 	EmptyResponseCount int
 	NoToolCount        int
+
+	// CumulativeRateLimitWait tracks the total time spent parked in the
+	// provider-rate-limit backoff loop across the whole scan. It bounds an
+	// otherwise-indefinite stall: a persistently 429'd provider would
+	// otherwise keep the scan alive forever (the idle watchdog is kept
+	// alive on purpose during the wait), so we cap the total wait and fail
+	// the scan cleanly once the ceiling is reached.
+	CumulativeRateLimitWait time.Duration
 
 	// New enrichment hooks
 	WAFDetected          bool

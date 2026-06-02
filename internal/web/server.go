@@ -1211,18 +1211,6 @@ func (s *Server) loadQueueStateEntry(path string) (queueStateEntry, error) {
 	return queueStateEntry{state: &state, path: path, modTime: modTime}, nil
 }
 
-func (s *Server) loadQueueStateWithError() (*QueueState, error) {
-	paths := s.queueStatePaths()
-	if len(paths) == 0 {
-		return nil, fs.ErrNotExist
-	}
-	entry, err := s.loadQueueStateEntry(paths[0])
-	if err != nil {
-		return nil, err
-	}
-	return entry.state, nil
-}
-
 // loadQueueState loads queue state from disk if exists
 func (s *Server) loadQueueState() *QueueState {
 	entries := s.validQueueStateEntries(false)
@@ -1230,14 +1218,6 @@ func (s *Server) loadQueueState() *QueueState {
 		return nil
 	}
 	return entries[0].state
-}
-
-func (s *Server) validQueueState(clearInvalid bool) (*QueueState, string) {
-	entries := s.validQueueStateEntries(clearInvalid)
-	if len(entries) == 0 {
-		return nil, "missing_or_invalid"
-	}
-	return entries[0].state, ""
 }
 
 func (s *Server) validQueueStateEntries(clearInvalid bool) []queueStateEntry {
@@ -1561,6 +1541,8 @@ var dashboardRoutes = []string{
 	"/api/settings/rate-limit",
 	"/api/settings/agentmail",
 	"/api/settings/llm",
+	"/api/settings/llm/keys",
+	"/api/settings/llm/test-route",
 	"/api/settings/environment",
 	"/api/queue/status",
 	"/api/queue/resume",
@@ -1662,6 +1644,16 @@ type Server struct {
 	// handlers surface 503 so the rest of the dashboard keeps
 	// serving traffic. Validates: Requirements 6.x, 7.x, 8.x, 9.x.
 	oauthRegistry *auth.Registry
+
+	// llmKeyStore is the multi-provider API key store backing the
+	// /api/settings/llm/keys handlers. nil if construction failed at
+	// startup, in which case handleProviderKeys returns 503.
+	llmKeyStore *llm.KeyStore
+
+	// llmRouter resolves a model name to a provider endpoint using the
+	// catalog + llmKeyStore. Backs /api/settings/llm/test-route. nil
+	// when llmKeyStore is nil.
+	llmRouter *llm.Router
 }
 
 // NewServer creates a new web server.
@@ -1772,6 +1764,18 @@ func NewServer(cfg *config.Config, port int) *Server {
 		// device-code poller.
 		srv.oauthRegistry = auth.NewRegistry(store, http.DefaultClient, nil)
 		auth.RegisterDefaultDrivers(srv.oauthRegistry, nil)
+	}
+
+	// Multi-provider key store + model router (LiteLLM-style). The key
+	// store is file-backed under <dataDir>/llm_keys.json; a load failure
+	// is non-fatal — the provider-key handlers surface 503 and the rest
+	// of the dashboard keeps serving. The router shares the compiled-in
+	// catalog and is only built when the key store is live.
+	if ks, err := llm.NewKeyStore(dataDir); err != nil {
+		log.Printf("[llm] failed to load key store: %v (provider-key handlers will return 503)", err)
+	} else {
+		srv.llmKeyStore = ks
+		srv.llmRouter = llm.NewRouter(srv.catalog, ks)
 	}
 
 	// Rebuild instances map from disk so dashboard shows historical scans on startup
@@ -1913,12 +1917,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
 	// Serve uploaded logos
 	logosDir := filepath.Join(s.dataDir, "logos")
-	os.MkdirAll(logosDir, 0755)
+	os.MkdirAll(logosDir, 0700)
 	mux.Handle("/uploads/logos/", http.StripPrefix("/uploads/logos/", http.FileServer(http.Dir(logosDir))))
 	mux.HandleFunc("/api/report/", s.handleDownloadReport)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
 	mux.HandleFunc("/api/settings/agentmail", s.handleAgentMailSettings)
 	mux.HandleFunc("/api/settings/llm", s.handleLLMSettings)
+	mux.HandleFunc("/api/settings/llm/keys", s.handleProviderKeys)
+	mux.HandleFunc("/api/settings/llm/test-route", s.handleTestRoute)
 	mux.HandleFunc("/api/settings/environment", s.handleEnvironmentSettings)
 	mux.HandleFunc("/api/queue/status", s.handleQueueStatus)
 	mux.HandleFunc("/api/queue/resume", s.handleQueueResume)
@@ -2289,6 +2295,29 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 	normalizeScanRequestActivity(&req)
 
+	// Reject up front when every requested target is a local/internal IP or
+	// the dashboard's own listener. runMultiScan filters these out anyway,
+	// but without this check a fully-blocked request produces a "started"
+	// instance with zero effective targets that the operator must then
+	// clean up. Surface a 400 instead. Mixed requests (at least one allowed
+	// target) proceed and the blocked entries are filtered downstream.
+	if !req.SaveOnly {
+		allBlocked := true
+		for _, t := range req.Targets {
+			if strings.TrimSpace(t) == "" {
+				continue
+			}
+			if !s.isBlockedTarget(t) {
+				allBlocked = false
+				break
+			}
+		}
+		if allBlocked {
+			http.Error(w, "all targets are local/internal addresses or the dashboard's own listener; refusing to self-scan", http.StatusBadRequest)
+			return
+		}
+	}
+
 	// R11.6 precondition check: if the request names a
 	// provider_profile, fail fast with HTTP 400 BEFORE spawning a
 	// scan goroutine. Other resolver errors are intentionally NOT
@@ -2357,7 +2386,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		// Persist to disk so saved targets survive server restarts
 		targetStr := strings.Join(req.Targets, ", ")
 		savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
-		if err := os.MkdirAll(savedDir, 0755); err != nil {
+		if err := os.MkdirAll(savedDir, 0700); err != nil {
 			log.Printf("[ERROR] failed to create saved-target dir %s: %v", savedDir, err)
 		} else {
 			rec := &ScanRecord{
@@ -4389,7 +4418,7 @@ func (s *Server) makeScanDir(target string) string {
 	dateDir := time.Now().Format("2006-01-02")
 	scanDirName := fmt.Sprintf("%s_%s", sanitizeTarget(target), randomSlug())
 	scanDir := filepath.Join(s.dataDir, target, dateDir, scanDirName)
-	if err := os.MkdirAll(scanDir, 0755); err != nil {
+	if err := os.MkdirAll(scanDir, 0700); err != nil {
 		log.Printf("[ERROR] Failed to create scan directory %s: %v", scanDir, err)
 	}
 	return scanDir
@@ -4426,7 +4455,7 @@ func (s *Server) resumeScanDirOrNew(scanDir, target string) (string, bool) {
 		log.Printf("[AUTO-RESUME] Ignoring unsafe resume scan dir %q", scanDir)
 		return s.makeScanDir(target), false
 	}
-	if err := os.MkdirAll(cleanDir, 0755); err != nil {
+	if err := os.MkdirAll(cleanDir, 0700); err != nil {
 		log.Printf("[AUTO-RESUME] Failed to reuse scan dir %s: %v", cleanDir, err)
 		return s.makeScanDir(target), false
 	}
@@ -5585,7 +5614,7 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 
 	// Create logos directory
 	logosDir := filepath.Join(s.dataDir, "logos")
-	if err := os.MkdirAll(logosDir, 0755); err != nil {
+	if err := os.MkdirAll(logosDir, 0700); err != nil {
 		log.Printf("[ERROR] Failed to create logos directory: %v", err)
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return

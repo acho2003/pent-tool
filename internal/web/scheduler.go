@@ -51,7 +51,7 @@ func calculateNextRun(interval string, from time.Time) time.Time {
 // loadSchedulesFromDisk reads schedules directory and loads them into memory.
 func (s *Server) loadSchedulesFromDisk() {
 	dir := filepath.Join(s.dataDir, "_schedules")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		log.Printf("[SCHEDULER] Error creating schedules dir: %v", err)
 		return
 	}
@@ -86,7 +86,7 @@ func (s *Server) loadSchedulesFromDisk() {
 // saveScheduleToDisk writes a schedule to disk.
 func (s *Server) saveScheduleToDisk(sch *ScanSchedule) error {
 	dir := filepath.Join(s.dataDir, "_schedules")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
 	data, err := json.MarshalIndent(sch, "", "  ")

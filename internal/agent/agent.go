@@ -52,6 +52,12 @@ var toolHardTimeout = map[string]time.Duration{
 // tool not explicitly listed in toolHardTimeout.
 const defaultToolHardTimeout = 15 * time.Minute
 
+// maxCumulativeRateLimitWait bounds the total time the agent loop may spend
+// parked in the provider-rate-limit backoff. A persistently 429'd provider
+// would otherwise stall the scan indefinitely because touchActivity() keeps
+// the idle watchdog alive during the wait. Set to 0 to disable the ceiling.
+const maxCumulativeRateLimitWait = 6 * time.Hour
+
 // hardTimeoutFor returns the configured hard-timeout ceiling for the given
 // tool name, falling back to defaultToolHardTimeout when the tool is not
 // listed in toolHardTimeout.
@@ -1354,7 +1360,19 @@ func (a *Agent) Run(targets []string, instruction string) {
 			a.pruneMessages()
 		}
 
-		response, err := a.client.Chat(a.messages)
+		// Snapshot the message buffer under msgMu before handing it to the
+		// LLM client. Chat() ranges over the slice to serialize the request
+		// while SendMessage() (called from the web chat handler on another
+		// goroutine) may append concurrently. Reading a.messages directly
+		// here is a data race: a concurrent append can reallocate the backing
+		// array mid-serialization. Copying under the lock gives Chat a stable
+		// view; messages that arrive during the call are picked up next iter.
+		a.msgMu.Lock()
+		msgsSnapshot := make([]llm.Message, len(a.messages))
+		copy(msgsSnapshot, a.messages)
+		a.msgMu.Unlock()
+
+		response, err := a.client.Chat(msgsSnapshot)
 		// Update activity after LLM response
 		a.touchActivity()
 
@@ -1392,6 +1410,16 @@ func (a *Agent) Run(targets []string, instruction string) {
 				if a.state.ConsecutiveErrors < 0 {
 					a.state.ConsecutiveErrors = 0
 				}
+				// Bound the total time the scan may spend parked on provider
+				// rate limits. Without a ceiling a persistently 429'd provider
+				// keeps the scan alive forever (touchActivity defeats the idle
+				// watchdog on purpose during the wait). Once the cumulative
+				// wait exceeds maxCumulativeRateLimitWait, fail the scan cleanly.
+				if maxCumulativeRateLimitWait > 0 && a.state.CumulativeRateLimitWait >= maxCumulativeRateLimitWait {
+					a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Agent stopped: LLM provider rate limited for a cumulative %s without recovering.", a.state.CumulativeRateLimitWait), TotalTokens: tokenCount()})
+					a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: provider rate limited for a cumulative %s without recovering.", a.state.CumulativeRateLimitWait), TotalTokens: tokenCount()})
+					return
+				}
 				a.emit(Event{Type: "error", Content: "⏳ Rate limited by LLM provider — waiting 30 minutes before retrying (will NOT skip this target)", TotalTokens: tokenCount()})
 				// Sleep in 1-minute chunks so we can bail out if the agent is stopped
 				for waited := 0; waited < 30; waited++ {
@@ -1399,6 +1427,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 						break
 					}
 					time.Sleep(1 * time.Minute)
+					a.state.CumulativeRateLimitWait += 1 * time.Minute
 				}
 				a.touchActivity() // keep watchdog alive during long wait
 				continue
@@ -1634,10 +1663,15 @@ func (a *Agent) Stop() {
 	// user-initiated "Stop All" operations.
 }
 
-// SendMessage allows sending additional messages to the agent during a scan.
-// The message is injected into the conversation history and will be processed
-// on the agent's next iteration. This avoids concurrent LLM calls which would
-// corrupt the conversation history.
+// SendMessage injects an operator message into the running scan's
+// conversation history so the agent picks it up on its next iteration.
+// Routing it through the message buffer (instead of issuing a separate
+// LLM call) avoids concurrent Chat() calls that would corrupt history.
+//
+// This is fire-and-forget: the returned string is an acknowledgement
+// that the message was queued, NOT the agent's reply. The agent's
+// response to the message surfaces later as normal scan events on the
+// live feed. The error is non-nil only when the agent is already stopped.
 func (a *Agent) SendMessage(message string) (string, error) {
 	if a.stopped.Load() {
 		return "", fmt.Errorf("agent is not running")
