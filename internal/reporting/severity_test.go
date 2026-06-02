@@ -55,7 +55,7 @@ func TestRollupSeverities_FixedFindings(t *testing.T) {
 	}
 }
 
-// TestRollupSeverities_UnknownSeverityIsInfo asserts that unrecognised
+// TestRollupSeverities_UnknownSeverityIsInfo asserts that unrecognized
 // severity strings (custom labels, typos, integers-as-strings) all
 // roll up into the Info bucket rather than silently dropped. This is
 // the production-safety net the cover page relies on so the displayed

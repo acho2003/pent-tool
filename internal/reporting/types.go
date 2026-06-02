@@ -45,18 +45,18 @@ type Event struct {
 // metadata, status, timing, branding, methodology selection, and the
 // finding/event lists.
 type Scan struct {
-	ID           string
-	Name         string
-	Target       string
-	StartedAt    string
-	FinishedAt   string
-	Status       string
-	CompanyName  string
-	LogoPath     string
-	Phases       []int
-	Iterations   int
-	ToolCalls    int
-	TotalTokens  int
-	Vulns        []Vuln
-	Events       []Event
+	ID          string
+	Name        string
+	Target      string
+	StartedAt   string
+	FinishedAt  string
+	Status      string
+	CompanyName string
+	LogoPath    string
+	Phases      []int
+	Iterations  int
+	ToolCalls   int
+	TotalTokens int
+	Vulns       []Vuln
+	Events      []Event
 }

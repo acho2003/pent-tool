@@ -4,24 +4,24 @@
 // effective llm.Endpoint the scan will POST to, applying the four
 // precedence rules from Requirement 11:
 //
-//   1. R11.2: When ScanRequest.ProviderProfile is non-empty, look up
-//      the matching Auth_Profile in Profile_Store and the matching
-//      Catalog_Entry in Catalog_Service, build the URL via
-//      buildEndpoint, and populate (Auth, APIKey | AccessToken)
-//      from the profile.
-//   2. R11.3: When ProviderProfile is empty, defer to
-//      legacyOrCatalogDefaultEndpoint, which mirrors the existing
-//      Settings free-text path (legacy resolver when the catalog is
-//      empty AND XALGORIX_LLM matches Legacy_Provider_Shape;
-//      otherwise the catalog's first-entry / first-profile default).
-//   3. R11.4: Ad-hoc Model / APIKey / APIBase overrides take
-//      precedence over whatever step 1 or 2 produced. APIKey
-//      additionally forces Auth=AuthAPIKey so a pasted key never
-//      gets sent as an OAuth bearer token by mistake.
-//   4. R11.6: An unknown ProviderProfile (or profile referencing a
-//      missing catalog entry, or an uninitialized store) returns
-//      errUnknownProviderProfile so the /api/scan handler can map
-//      it to HTTP 400 BEFORE any scan goroutine spawns.
+//  1. R11.2: When ScanRequest.ProviderProfile is non-empty, look up
+//     the matching Auth_Profile in Profile_Store and the matching
+//     Catalog_Entry in Catalog_Service, build the URL via
+//     buildEndpoint, and populate (Auth, APIKey | AccessToken)
+//     from the profile.
+//  2. R11.3: When ProviderProfile is empty, defer to
+//     legacyOrCatalogDefaultEndpoint, which mirrors the existing
+//     Settings free-text path (legacy resolver when the catalog is
+//     empty AND XALGORIX_LLM matches Legacy_Provider_Shape;
+//     otherwise the catalog's first-entry / first-profile default).
+//  3. R11.4: Ad-hoc Model / APIKey / APIBase overrides take
+//     precedence over whatever step 1 or 2 produced. APIKey
+//     additionally forces Auth=AuthAPIKey so a pasted key never
+//     gets sent as an OAuth bearer token by mistake.
+//  4. R11.6: An unknown ProviderProfile (or profile referencing a
+//     missing catalog entry, or an uninitialized store) returns
+//     errUnknownProviderProfile so the /api/scan handler can map
+//     it to HTTP 400 BEFORE any scan goroutine spawns.
 //
 // The /api/scan handler calls resolveScanCredentials early as a
 // precondition check; the actual scan goroutine resolves through

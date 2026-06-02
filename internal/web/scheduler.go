@@ -95,11 +95,11 @@ func (s *Server) saveScheduleToDisk(sch *ScanSchedule) error {
 	}
 	path := filepath.Join(dir, sch.ID+".json")
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath) // best-effort cleanup
+		_ = os.Remove(tmpPath) // best-effort cleanup
 		return fmt.Errorf("rename: %w", err)
 	}
 	return nil

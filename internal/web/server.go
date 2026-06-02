@@ -101,7 +101,7 @@ func (rl *RateLimiter) Stop() {
 
 // cleanup walks the request map and discards entries whose timestamps have
 // all aged out of the active window. Done in two passes (collect → delete)
-// to minimise lock contention with Allow() under high churn.
+// to minimize lock contention with Allow() under high churn.
 func (rl *RateLimiter) cleanup() {
 	cutoff := time.Now().Add(-rl.window)
 
@@ -261,7 +261,7 @@ func canStartInstanceStatus(status string) bool {
 // logRecover is a deferred recovery helper used by best-effort cleanup
 // blocks. The previous pattern was `defer func() { recover() }()` which
 // silently swallowed panics — making cleanup bugs invisible in
-// production. logRecover preserves the original behaviour (don't crash
+// production. logRecover preserves the original behavior (don't crash
 // the server during shutdown) while emitting a stack trace so the bug
 // can be diagnosed.
 //
@@ -369,7 +369,7 @@ func loginRecordSuccess(ip string) {
 // clientIP extracts a comparable client identifier from the request. We
 // intentionally do not trust X-Forwarded-For; if you put xalgorix behind a
 // reverse proxy you should bind it to loopback and let the proxy enforce
-// auth, or extend this helper to honour a configured trusted-proxy list.
+// auth, or extend this helper to honor a configured trusted-proxy list.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -499,7 +499,7 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 				if !isCSRFSafe(r) {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusForbidden)
-					json.NewEncoder(w).Encode(map[string]string{
+					_ = json.NewEncoder(w).Encode(map[string]string{
 						"error": "CSRF check failed: request origin does not match server host",
 					})
 					return
@@ -532,7 +532,7 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if strings.HasPrefix(path, "/api/") || path == "/ws" {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error": "Authentication required",
 				})
 				return
@@ -583,7 +583,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if locked, retryAfter := loginIsLocked(ip); locked {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 		w.WriteHeader(http.StatusTooManyRequests)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error": fmt.Sprintf("Too many failed attempts. Try again in %ds.", retryAfter),
 		})
 		return
@@ -595,19 +595,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
 		return
 	}
 
 	// Constant-time username comparison; bcrypt for password. We always
 	// run the password compare even on a username miss so the work
-	// performed is independent of which side is wrong (timing-equalised).
+	// performed is independent of which side is wrong (timing-equalized).
 	userMatch := subtle.ConstantTimeCompare([]byte(creds.Username), []byte(s.cfg.Username)) == 1
 	passMatch := s.verifyPassword(creds.Password)
 	if !userMatch || !passMatch {
 		loginRecordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid credentials"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid credentials"})
 		return
 	}
 
@@ -618,7 +618,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("[auth] session token generation failed: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Internal error generating session"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Internal error generating session"})
 		return
 	}
 	authSessionsMu.Lock()
@@ -635,7 +635,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   isSecureRequest(r),
 	})
 
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // isSecureRequest returns true if the request is over TLS. Used to decide
@@ -645,7 +645,7 @@ func isSecureRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	// Honour an X-Forwarded-Proto header only when running behind a trusted
+	// Honor an X-Forwarded-Proto header only when running behind a trusted
 	// proxy; we keep it simple here and trust nothing by default. Operators
 	// behind a TLS-terminating proxy should set the cookie's Secure flag
 	// elsewhere if they need it.
@@ -676,7 +676,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "logged_out"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "logged_out"})
 }
 
 // handleAuthStatus handles GET /api/auth/status
@@ -694,7 +694,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"auth_enabled":  authEnabled,
 		"authenticated": authenticated,
 	})
@@ -745,7 +745,7 @@ type wsClient struct {
 	// authenticated is true when the WebSocket upgrade carried a valid
 	// session cookie (or auth is disabled and the connection is from
 	// loopback). Privileged scan-request fields like Model/APIKey/APIBase
-	// are only honoured for authenticated connections — otherwise a
+	// are only honored for authenticated connections — otherwise a
 	// client could pivot the LLM to an attacker-controlled endpoint.
 	authenticated bool
 	fromLoopback  bool
@@ -1124,7 +1124,7 @@ func (s *Server) saveQueueState(idx int, req ScanRequest, progress ...queueProgr
 		return
 	}
 	path := s.queueStatePathForInstance(req.InstanceID)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		log.Printf("Error: failed to save queue state: %v", err)
 	}
 }
@@ -1471,7 +1471,7 @@ func (s *Server) markQueueStatePaused(instanceID string) {
 		log.Printf("Error: failed to marshal paused queue state: %v", err)
 		return
 	}
-	if err := os.WriteFile(entry.path, data, 0644); err != nil {
+	if err := os.WriteFile(entry.path, data, 0600); err != nil {
 		log.Printf("Error: failed to mark queue state paused: %v", err)
 	}
 }
@@ -1917,7 +1917,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
 	// Serve uploaded logos
 	logosDir := filepath.Join(s.dataDir, "logos")
-	os.MkdirAll(logosDir, 0700)
+	_ = os.MkdirAll(logosDir, 0700)
 	mux.Handle("/uploads/logos/", http.StripPrefix("/uploads/logos/", http.FileServer(http.Dir(logosDir))))
 	mux.HandleFunc("/api/report/", s.handleDownloadReport)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
@@ -2105,6 +2105,10 @@ func (s *Server) Start() error {
 		// individual handlers). On panic it increments PanicsRecovered,
 		// emits a structured log line with stack trace, and returns 500.
 		Handler: safe.HTTPMiddleware(authMw(rlMiddleware(mux))),
+		// Bound the time spent reading request headers so a slow client
+		// cannot hold a connection open indefinitely (Slowloris). The
+		// dashboard serves interactive traffic, so keep this generous.
+		ReadHeaderTimeout: 30 * time.Second,
 	}
 
 	go func() {
@@ -2169,7 +2173,7 @@ func (s *Server) Start() error {
 	}()
 
 	err = httpServer.ListenAndServe()
-	if err == http.ErrServerClosed {
+	if errors.Is(err, http.ErrServerClosed) {
 		return nil // graceful shutdown
 	}
 	return err
@@ -2203,7 +2207,7 @@ func (s *Server) initDataDir() {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			os.RemoveAll(filepath.Join(s.dataDir, e.Name()))
+			_ = os.RemoveAll(filepath.Join(s.dataDir, e.Name()))
 			log.Printf("Cleaned up old scan: %s", e.Name())
 		}
 	}
@@ -2415,7 +2419,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			Content: instanceID,
 		})
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "saved", "instance_id": instanceID})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved", "instance_id": instanceID})
 		return
 	}
 
@@ -2428,7 +2432,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	go s.runMultiScan(req, &scanCfg, instanceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "started", "instance_id": instanceID})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "started", "instance_id": instanceID})
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
@@ -2476,7 +2480,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 	s.broadcast(WSEvent{Type: "stopped", Content: "All instances stopped by user"})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -2528,7 +2532,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// .kiro/specs/findings-consistency-and-pagination/tasks.md.
 	persistedVulns := s.totalPersistedVulnCount()
 
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"running":            s.running.Load() || runningCount > 0,
 		"scan_id":            scanID,
 		"instance_id":        runningInstanceID,
@@ -2625,7 +2629,7 @@ func (s *Server) handleFindingsSummary(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "no-cache")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"totals": totals,
 		"as_of":  asOf,
 		"etag":   etag,
@@ -2663,7 +2667,7 @@ func (s *Server) handleLegacyImportStatus(w http.ResponseWriter, r *http.Request
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"count":     count,
 			"dismissed": dismissed,
 		})
@@ -2676,7 +2680,7 @@ func (s *Server) handleLegacyImportStatus(w http.ResponseWriter, r *http.Request
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"count":     count,
 			"dismissed": dismissed,
 		})
@@ -2761,7 +2765,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 			"go_memory_limit_mb":       capacity.GoMemoryLimitMB,
 		},
 	}
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // handleInstanceAction handles per-instance operations (stop, etc)
@@ -2786,7 +2790,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	// GET /api/instances/{id} — return instance details
 	if r.Method == http.MethodGet && (len(parts) == 1 || parts[1] == "") {
 		inst.mu.RLock()
-		json.NewEncoder(w).Encode(inst)
+		_ = json.NewEncoder(w).Encode(inst)
 		inst.mu.RUnlock()
 		return
 	}
@@ -2813,7 +2817,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		// Broadcast update to dashboard clients
 		s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
 
-		json.NewEncoder(w).Encode(map[string]string{"status": "stopped", "instance_id": instanceID})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "stopped", "instance_id": instanceID})
 		return
 	}
 
@@ -2827,7 +2831,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		if currentStatus == "running" || currentStatus == "pending" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "cannot restart: instance is still " + currentStatus,
 			})
 			return
@@ -2869,7 +2873,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		scanCfg := *s.cfg // shallow copy
 		go s.runMultiScan(req, &scanCfg)
 
-		json.NewEncoder(w).Encode(map[string]string{"status": "restarted"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "restarted"})
 		return
 	}
 
@@ -2881,7 +2885,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		inst.mu.RUnlock()
 		if !canStartInstanceStatus(currentStatus) {
 			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "cannot start: instance is " + currentStatus,
 			})
 			return
@@ -2913,7 +2917,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			s.instancesMu.Unlock()
 
 			savedDir := filepath.Join(s.dataDir, "_saved", instanceID)
-			os.RemoveAll(savedDir)
+			_ = os.RemoveAll(savedDir)
 		}
 
 		s.stopReq.Store(false)
@@ -2922,7 +2926,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		go s.runMultiScan(req, &scanCfg, newID)
 
 		s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
-		json.NewEncoder(w).Encode(map[string]string{"status": "started", "instance_id": newID})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started", "instance_id": newID})
 		return
 	}
 
@@ -2932,7 +2936,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		if inst.Status != "running" {
 			inst.mu.Unlock()
 			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "cannot pause: instance is " + inst.Status,
 			})
 			return
@@ -2949,7 +2953,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 		s.broadcastToInstance(instanceID, WSEvent{Type: "paused", Content: "Scan paused by user"})
 		s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
-		json.NewEncoder(w).Encode(map[string]string{"status": "paused", "instance_id": instanceID})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "paused", "instance_id": instanceID})
 		return
 	}
 
@@ -2960,7 +2964,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		inst.mu.RUnlock()
 		if currentStatus != "paused" {
 			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "cannot resume: instance is " + currentStatus + ", expected paused",
 			})
 			return
@@ -2969,7 +2973,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		req, ok, reason := s.scanRequestForPausedInstance(instanceID, inst)
 		if !ok {
 			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "cannot resume: " + reason,
 			})
 			return
@@ -2987,7 +2991,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 		s.broadcastToInstance(instanceID, WSEvent{Type: "resumed", Content: "Scan resumed"})
 		s.broadcastDashboard(WSEvent{Type: "instance_updated", Content: instanceID})
-		json.NewEncoder(w).Encode(map[string]string{"status": "resumed", "instance_id": newID})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "resumed", "instance_id": newID})
 		return
 	}
 
@@ -2997,7 +3001,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		events := make([]WSEvent, len(inst.events))
 		copy(events, inst.events)
 		inst.mu.RUnlock()
-		json.NewEncoder(w).Encode(events)
+		_ = json.NewEncoder(w).Encode(events)
 		return
 	}
 
@@ -5423,7 +5427,7 @@ func (s *Server) collectSubdomains(scanDir, target, contextID string) []string {
 
 	// Layer 2: Walk scan directory tree for any matching files
 	if len(subdomains) == 0 {
-		filepath.WalkDir(scanDir, func(path string, d fs.DirEntry, err error) error {
+		_ = filepath.WalkDir(scanDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
@@ -5548,7 +5552,7 @@ func (s *Server) handleUploadTargets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"targets": targets,
 		"count":   len(targets),
 	})
@@ -5579,7 +5583,7 @@ func (s *Server) handleUploadInstructions(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"content": string(data),
 	})
 }
@@ -5649,7 +5653,7 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Logo uploaded: %s → %s", header.Filename, servingPath)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"path":     servingPath,
 		"filename": originalName,
 	})
@@ -5851,7 +5855,7 @@ func (s *Server) saveScanRecordTo(rec *ScanRecord, scanDir string) {
 		log.Printf("Error: failed to marshal scan record: %v", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(scanDir, "scan.json"), data, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(scanDir, "scan.json"), data, 0600); err != nil {
 		log.Printf("Error: failed to save scan record to %s: %v", scanDir, err)
 		s.broadcast(WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Failed to save scan data: %v", err)})
 	}
@@ -5863,7 +5867,7 @@ func diskAvailable(path string) uint64 {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return 0
 	}
-	return stat.Bavail * uint64(stat.Bsize)
+	return stat.Bavail * uint64(stat.Bsize) //nolint:gosec // G115: filesystem block size is small and non-negative
 }
 
 // vulnToSummary converts a reporting.Vulnerability to a VulnSummary with all fields.
@@ -5969,7 +5973,7 @@ type scanEntry struct {
 // Structure: dataDir/target/date/slug/scan.json
 func (s *Server) findAllScans() []scanEntry {
 	var results []scanEntry
-	filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -6254,7 +6258,7 @@ func (s *Server) attachWildcardSubScans(rec *ScanRecord) {
 			if summary.FinishedAt != "" {
 				existing.FinishedAt = summary.FinishedAt
 			}
-			if summary.Status != "" && !(isFinishedSubScanStatus(existing.Status) && strings.EqualFold(summary.Status, "running")) {
+			if summary.Status != "" && (!isFinishedSubScanStatus(existing.Status) || !strings.EqualFold(summary.Status, "running")) {
 				existing.Status = summary.Status
 			}
 			if summary.VulnCount > 0 {
@@ -6521,7 +6525,7 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(scans)
+	_ = json.NewEncoder(w).Encode(scans)
 }
 
 // handleDownloadReport serves the PDF report for a scan.
@@ -6591,7 +6595,7 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		// Return current rate limit settings
-		json.NewEncoder(w).Encode(map[string]int{
+		_ = json.NewEncoder(w).Encode(map[string]int{
 			"requests": s.cfg.RateLimitRequests,
 			"window":   s.cfg.RateLimitWindow,
 		})
@@ -6630,7 +6634,7 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		json.NewEncoder(w).Encode(map[string]int{
+		_ = json.NewEncoder(w).Encode(map[string]int{
 			"requests": s.cfg.RateLimitRequests,
 			"window":   s.cfg.RateLimitWindow,
 		})
@@ -6662,7 +6666,7 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 	switch r.Method {
 	case "GET":
 		// Return current AgentMail settings (without exposing the full API key)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"pod":       s.cfg.AgentMailPod,
 			"apiKey":    maskAgentMailKey(s.cfg.AgentMailAPIKey),
 			"hasApiKey": s.cfg.AgentMailAPIKey != "",
@@ -6697,7 +6701,7 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 
 		log.Printf("AgentMail settings updated: pod=%s", req.Pod)
 
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"pod":       req.Pod,
 			"apiKey":    maskAgentMailKey(effectiveAPIKey),
 			"hasApiKey": effectiveAPIKey != "",
@@ -6711,7 +6715,7 @@ func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request)
 // handleVersion returns the current Xalgorix version
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version": Version,
 		"ai": map[string]any{
 			"configured": s.cfg.APIKey != "" && s.cfg.LLM != "",
@@ -6731,10 +6735,11 @@ func (s *Server) handleStopNotify(w http.ResponseWriter, r *http.Request) {
 		s.sendDiscord(0xff6b6b, "🛑 Xalgorix Stopped", "The Xalgorix service has been stopped by the user.")
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"status": "notified"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "notified"})
 }
 
-// handleChat allows users to send messages to the agent during a scan
+// ChatRequest is the payload for sending a message to a running scan's
+// agent via the chat endpoint.
 type ChatRequest struct {
 	Message    string `json:"message"`
 	InstanceID string `json:"instance_id,omitempty"`
@@ -6756,7 +6761,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if req.Message == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "message is required"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "message is required"})
 		return
 	}
 
@@ -6764,12 +6769,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"response": response,
 	})
 }
@@ -7020,7 +7025,7 @@ func (s *Server) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 		for _, entry := range entries {
 			totalRemaining += len(entry.state.Targets) - entry.state.CurrentIdx
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"available":                 true,
 			"queue_count":               len(entries),
 			"total_remaining":           totalRemaining,
@@ -7047,7 +7052,7 @@ func (s *Server) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 			"wildcard_subdomains_total": len(state.WildcardSubdomains),
 		})
 	} else {
-		json.NewEncoder(w).Encode(map[string]any{"available": false})
+		_ = json.NewEncoder(w).Encode(map[string]any{"available": false})
 	}
 }
 
@@ -7059,13 +7064,13 @@ func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 	defer s.queueResumeMu.Unlock()
 
 	if s.running.Load() || s.hasPendingOrRunningInstance() || s.hasQueueResumeLaunchingLocked() {
-		json.NewEncoder(w).Encode(map[string]string{"error": "A scan is already pending or running"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "A scan is already pending or running"})
 		return
 	}
 
 	entries := s.validQueueStateEntries(true)
 	if len(entries) == 0 {
-		json.NewEncoder(w).Encode(map[string]string{"error": "No interrupted queue found"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "No interrupted queue found"})
 		return
 	}
 
@@ -7087,7 +7092,7 @@ func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 		}(req, scanCfg, instanceID, resumeKey)
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":         "resumed",
 		"resumed_queues": len(entries),
 		"from_index":     firstIdx,
@@ -7099,7 +7104,7 @@ func (s *Server) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQueueClear(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	s.clearQueueState()
-	json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
 }
 
 // handleGetScan returns a specific scan's full data.
@@ -7141,7 +7146,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		// Try to find and delete from disk
 		dir, rec := s.findScanByID(scanID)
 		if dir != "" {
-			os.RemoveAll(dir)
+			_ = os.RemoveAll(dir)
 		}
 		if rec != nil {
 			for _, entry := range s.findAllScans() {
@@ -7149,7 +7154,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if isChildOfScan(rec, &entry.rec) {
-					os.RemoveAll(entry.dir)
+					_ = os.RemoveAll(entry.dir)
 				}
 			}
 		}
@@ -7287,7 +7292,7 @@ func (s *Server) handleDeleteVuln(w http.ResponseWriter, r *http.Request) {
 	s.instancesMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "deleted", "removed": removed, "remaining": len(filtered)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "deleted", "removed": removed, "remaining": len(filtered)})
 }
 
 // logMemStats logs current memory usage and goroutine count.
@@ -7545,7 +7550,7 @@ func (s *Server) sendDiscordWithFile(color int, title, description, filePath str
 		log.Printf("Error: failed to write file data for Discord: %v", err)
 		return
 	}
-	writer.Close()
+	_ = writer.Close()
 
 	// Capture content type before goroutine to avoid fragile writer capture
 	contentType := writer.FormDataContentType()
@@ -7648,7 +7653,7 @@ func startCaidoProxy() {
 	// Check if something is already listening on the Caido port
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 1*time.Second)
 	if err == nil {
-		conn.Close()
+		_ = conn.Close()
 		log.Printf("Caido proxy already running on port %d", port)
 		return
 	}
@@ -7672,7 +7677,7 @@ func startCaidoProxy() {
 
 	// Don't wait for the process — let it run in background
 	go func() {
-		cmd.Wait() // Reap zombie process
+		_ = cmd.Wait() // Reap zombie process
 	}()
 
 	log.Printf("✅ Caido proxy started on port %d (PID: %d)", port, cmd.Process.Pid)
@@ -7684,7 +7689,8 @@ var scheduleIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // handleSchedules handles GET /api/schedules and POST /api/schedules
 func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method == http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
 		s.schedulesMu.RLock()
 		defer s.schedulesMu.RUnlock()
 		list := make([]*ScanSchedule, 0, len(s.schedules))
@@ -7695,9 +7701,9 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(list, func(i, j int) bool {
 			return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
 		})
-		json.NewEncoder(w).Encode(list)
+		_ = json.NewEncoder(w).Encode(list)
 		return
-	} else if r.Method == http.MethodPost {
+	case http.MethodPost:
 		var req ScanSchedule
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -7728,7 +7734,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to save schedule: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(req)
+		_ = json.NewEncoder(w).Encode(req)
 		return
 	}
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -7793,15 +7799,17 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		sch.LastRun = time.Now()
 		diskCopy := *sch // snapshot under lock for race-free disk write
 		s.schedulesMu.Unlock()
-		s.saveScheduleToDisk(&diskCopy)
+		if err := s.saveScheduleToDisk(&diskCopy); err != nil {
+			log.Printf("[SCHEDULER] Failed to persist schedule %s after manual trigger: %v", diskCopy.ID, err)
+		}
 
-		json.NewEncoder(w).Encode(map[string]string{"status": "triggered", "instance_id": instanceID})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "triggered", "instance_id": instanceID})
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		json.NewEncoder(w).Encode(sch)
+		_ = json.NewEncoder(w).Encode(sch)
 		return
 
 	case http.MethodPut:
@@ -7847,7 +7855,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to save schedule: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(&diskCopy)
+		_ = json.NewEncoder(w).Encode(&diskCopy)
 		return
 
 	case http.MethodDelete:
@@ -7859,7 +7867,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to delete schedule: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 		return
 	}
 

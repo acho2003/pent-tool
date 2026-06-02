@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -193,7 +194,8 @@ func TestRouter_Route_NoKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing key")
 	}
-	if _, ok := err.(*ConfigError); !ok {
+	configError := &ConfigError{}
+	if !errors.As(err, &configError) {
 		t.Errorf("expected *ConfigError, got %T", err)
 	}
 }

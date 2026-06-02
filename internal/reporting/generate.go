@@ -18,7 +18,7 @@ import (
 // ScanDir is the per-scan working directory. When non-empty the report
 // is written to <ScanDir>/<filename>; otherwise it is written to
 // <FallbackDir>/<filename>. The naming and fallback rules match the
-// previous (*Server).generateReport behaviour exactly.
+// previous (*Server).generateReport behavior exactly.
 //
 // FallbackDir is consulted only when ScanDir is empty.
 type Options struct {
@@ -30,7 +30,7 @@ type Options struct {
 // Generate renders the branded PDF report for scan and writes it to disk.
 // It returns the absolute output path on success.
 //
-// Behaviour is byte-identical to the previous in-package implementation
+// Behavior is byte-identical to the previous in-package implementation
 // in internal/web/report.go — the function body was moved verbatim, with
 // only the Server-state references rewritten as Options fields and the
 // type names rewritten for the local Vuln / Event / Scan transport
@@ -605,7 +605,7 @@ func Generate(scan *Scan, opts Options) (string, error) {
 		pdf.SetFont("Helvetica", "", 8)
 		setColor(white)
 		pdf.SetX(10)
-		pdf.MultiCell(190, 4, "The following table summarises all findings with their security framework mappings (CWE, OWASP Top 10 2021). Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
+		pdf.MultiCell(190, 4, "The following table summarizes all findings with their security framework mappings (CWE, OWASP Top 10 2021). Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
 		pdf.Ln(4)
 
 		// Table header
@@ -1280,7 +1280,7 @@ https://github.com/xalgord/xalgorix`
 	}
 
 	// Save PDF — use ScanDir which is the actual scan directory.
-	// Mirrors the previous (*Server).generateReport behaviour exactly:
+	// Mirrors the previous (*Server).generateReport behavior exactly:
 	// reportID falls back to filepath.Base(ScanDir) and finally to "scan",
 	// and the file is written to ScanDir when set, FallbackDir otherwise.
 	reportID := scan.ID

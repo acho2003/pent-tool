@@ -149,7 +149,7 @@ func TestShouldBlockForOutOfScope_AllowsHostlessCommands(t *testing.T) {
 }
 
 // TestShouldBlockForOutOfScope_AllowsAnywhereWhenNoScope confirms
-// the gate's behaviour when no activity hosts are configured. The
+// the gate's behavior when no activity hosts are configured. The
 // guard is no longer "disabled" on empty scope; it just has no
 // Public_OOS_Host rule left to fire (engagement scope is not
 // consulted at all post-fix). Public_OOS_Host references therefore
@@ -311,7 +311,7 @@ func TestExtractHostsFromArgs_QueryParamRedirect(t *testing.T) {
 	// sub-cases above keep — the tokenizer still surfaces every
 	// embedded host — but the gating verdict on the wrapped OOS
 	// host flips from "blocked" to "allowed". The Local_Or_Listener
-	// behaviour for wrapped local IPs is exercised separately by
+	// behavior for wrapped local IPs is exercised separately by
 	// TestProperty_LocalOrListenerInvarianceUnderTokenizationShape.
 	t.Run("gated tool allowed on wrapped OOS host", func(t *testing.T) {
 		a := &Agent{}
@@ -1071,32 +1071,6 @@ func TestBugCondition_PublicOOSHostPassThrough(t *testing.T) {
 // oracle = allow (unchanged across the spec) and lets task 3.11
 // reconcile the production divergence post-fix.
 
-// preservationCounterResolver wraps a stub resolver with a per-host
-// call counter so the DNS-lookup-count sub-property can assert
-// exactly one resolution per host-shaped argument. Today the agent
-// guard does no DNS (only the web guard does), so this counter is
-// observed via the agent oracle's own oracleLookupHost var. After
-// task 3 migrates the agent guard to scopeguard.LookupHost the same
-// counter shape is reused via that var.
-type preservationCounterResolver struct {
-	calls   int
-	perHost map[string]int
-	stub    func(string) ([]string, error)
-}
-
-func newPreservationCounterResolver(stub func(string) ([]string, error)) *preservationCounterResolver {
-	return &preservationCounterResolver{
-		perHost: make(map[string]int),
-		stub:    stub,
-	}
-}
-
-func (r *preservationCounterResolver) lookup(host string) ([]string, error) {
-	r.calls++
-	r.perHost[host]++
-	return r.stub(host)
-}
-
 // withOracleLookupHost swaps oracleLookupHost (the agent oracle's
 // frozen resolver indirection) for the duration of a single test.
 // Restoration runs via t.Cleanup so the original binding is
@@ -1768,7 +1742,7 @@ func TestShouldBlockForOutOfScope_LocalGuardActiveWithEmptyScope(t *testing.T) {
 // scoped deterministic case 4 from design.md → "Exploratory Bug
 // Condition Checking → Test Cases" — an add_note call carrying
 // OOS-host text in `key` and `value` reaches the gate, the gate
-// recognises add_note as non-gated, and `key` / `value` reach the
+// recognizes add_note as non-gated, and `key` / `value` reach the
 // handler byte-identical.
 //
 // Validates: Requirements 2.4, 3.9.
@@ -1884,7 +1858,7 @@ func TestShouldBlockForOutOfScope_ReportVulnerabilityLocalOrListener(t *testing.
 // ways (bare host / host:port / scheme://host / userinfo URL /
 // inside redirect query parameters) MUST reject identically.
 //
-// NOTE: This is the post-fix rejection-side analogue of
+// NOTE: This is the post-fix rejection-side analog of
 // TestPreservation_LocalOrListenerInvarianceUnderTokenizationShape
 // (task 2). The preservation version asserts oracle-vs-production
 // agreement on shape invariance; this version asserts the

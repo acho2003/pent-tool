@@ -60,7 +60,7 @@ func FormatDuration(startTime, endTime time.Time) string {
 
 // DisplayText collapses runs of whitespace, falls back to a placeholder
 // when empty, and rune-truncates to max characters with an ellipsis. The
-// behaviour is byte-identical to the previous reportDisplayText helper.
+// behavior is byte-identical to the previous reportDisplayText helper.
 func DisplayText(value string, fallback string, max int) string {
 	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 	if value == "" {

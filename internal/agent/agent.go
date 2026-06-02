@@ -767,7 +767,7 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (r
 
 		case <-tcCtx.Done():
 			// Distinguish hard-timeout from parent cancellation. When the
-			// parent (a.ctx) is cancelled, tcCtx.Err() is context.Canceled;
+			// parent (a.ctx) is canceled, tcCtx.Err() is context.Canceled;
 			// when our own deadline elapses it is context.DeadlineExceeded.
 			if tcCtx.Err() == context.DeadlineExceeded {
 				a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Tool '%s' timed out after %s. Force-returning to prevent infinite hang.", toolName, hardTimeoutDuration)})
@@ -779,8 +779,8 @@ func (a *Agent) executeToolAsync(toolName string, toolArgs map[string]string) (r
 				}
 				return tools.Result{Error: fmt.Sprintf("[TIMEOUT exceeded %s]", hardTimeoutDuration)}, nil
 			}
-			// Parent cancelled (agent stopped).
-			return tools.Result{Error: "Agent stopped during tool execution"}, fmt.Errorf("agent cancelled")
+			// Parent canceled (agent stopped).
+			return tools.Result{Error: "Agent stopped during tool execution"}, fmt.Errorf("agent canceled")
 		}
 	}
 }
@@ -1086,7 +1086,7 @@ func isVersionLike(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !(r == '.' || (r >= '0' && r <= '9')) {
+		if r != '.' && (r < '0' || r > '9') {
 			return false
 		}
 	}
@@ -1721,8 +1721,8 @@ func getToolSuggestion(toolName, errorMsg string) string {
 		if strings.Contains(lower, "permission denied") || strings.Contains(lower, "access denied") {
 			return "Suggestion: Permission denied. Try running with elevated privileges or use a different method.\n"
 		}
-		if strings.Contains(lower, "cancelled") || strings.Contains(lower, "canceled") {
-			return "Suggestion: Command was cancelled. The agent may have been stopped or the command was taking too long.\n"
+		if strings.Contains(lower, "cancel") {
+			return "Suggestion: Command was canceled. The agent may have been stopped or the command was taking too long.\n"
 		}
 		if strings.Contains(lower, "connection") || strings.Contains(lower, "network") {
 			return "Suggestion: Network error. Check the target URL and try again.\n"
@@ -1782,7 +1782,7 @@ func alignPruneCutoff(messages []llm.Message, start int) int {
 // pruneThresholdBytes is the serialized message-buffer ceiling used by
 // shouldPruneBeforeLLM. ~800 KiB ≈ ~200K tokens at ~4 bytes per token,
 // safely below the smallest provider context window we target while
-// leaving headroom for the system prompt + a multi-turn tool dialogue.
+// leaving headroom for the system prompt + a multi-turn tool dialog.
 const pruneThresholdBytes = 800 * 1024
 
 // perMessageOverheadBytes accounts for role tags, JSON delimiters, and
@@ -2054,9 +2054,10 @@ func (a *Agent) emit(evt Event) {
 				log.Printf("⚠️ CRITICAL: Failed sending %s event (channel closed or full for 10s)", evt.Type)
 			}
 		} else {
-			if !safeSend(a.events, evt, 0) {
-				// Channel closed or full — silently drop non-critical events
-			}
+			// Non-critical event: best-effort non-blocking send. A closed or
+			// full channel simply drops the event, so the boolean result is
+			// intentionally ignored.
+			_ = safeSend(a.events, evt, 0)
 		}
 	}
 }

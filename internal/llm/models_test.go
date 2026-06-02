@@ -6,10 +6,10 @@ import (
 
 func TestResolveProvider_ExplicitPrefix(t *testing.T) {
 	tests := []struct {
-		model      string
-		wantPID    string
-		wantModel  string
-		wantOK     bool
+		model     string
+		wantPID   string
+		wantModel string
+		wantOK    bool
 	}{
 		{"openai/gpt-4o", "openai", "gpt-4o", true},
 		{"anthropic/claude-sonnet-4-20250514", "anthropic", "claude-sonnet-4-20250514", true},

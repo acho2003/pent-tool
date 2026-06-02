@@ -36,15 +36,6 @@ jobs:
     name: Lint (make lint + golangci-lint)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # NON-BLOCKING (advisory). golangci-lint had never run in CI before this
-    # workflow existed, so the codebase carries a large pre-existing lint
-    # backlog (~425 findings across the shipped tree: errcheck, gosec,
-    # misspell, etc.). Burning that down is its own work item, tracked in
-    # TODO(lint-backlog): https://github.com/xalgord/xalgorix/issues — until
-    # then the linter stays VISIBLE in CI (so regressions are noticed) but
-    # does not block merges. Flip continue-on-error to false once the backlog
-    # is cleared.
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,10 +56,10 @@ jobs:
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --config .golangci.yml
-          # Surface new findings prominently even while the job is advisory.
-          # The WIP cloud tree is excluded in .golangci.yml until it
-          # stabilizes; see the continue-on-error note above for the backlog.
-          only-new-issues: true
+          # The shipped tree is lint-clean and this job is blocking. The WIP
+          # multi-tenant cloud tree (internal/cloud, cmd/xalgorix-cloud) is
+          # excluded in .golangci.yml until it stabilizes and gets its own
+          # lint/CI pass.
 
   test:
     name: Unit tests

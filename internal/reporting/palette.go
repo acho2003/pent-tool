@@ -2,7 +2,7 @@ package reporting
 
 // Palette holds the RGB triples used by the branded PDF report. The values
 // are byte-identical to the previous internal/web in-line palette so the
-// generated artefact is unchanged.
+// generated artifact is unchanged.
 type Palette struct {
 	BG       [3]int
 	Card     [3]int
@@ -20,7 +20,7 @@ type Palette struct {
 }
 
 // ThemePalette returns the dark-theme palette baked into every Xalgorix
-// report. The hex comments next to each colour mirror the original
+// report. The hex comments next to each color mirror the original
 // reference values from internal/web/report.go.
 func ThemePalette() Palette {
 	return Palette{
