@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -573,6 +574,19 @@ func (s *Server) handleOAuthComplete(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	// UX: the paste flow asks the operator to copy the value the browser
+	// landed on after sign-in. That value may be the full redirect URL
+	// (http://localhost:1455/auth/callback?code=...&state=...), a bare
+	// "code=...&state=..." query fragment, or just the code. Normalize all
+	// three so the operator never has to hand-split code from state. An
+	// explicitly-provided state in the request still wins.
+	if code, state, ok := parsePastedAuthCode(req.AuthorizationCode); ok {
+		req.AuthorizationCode = code
+		if strings.TrimSpace(req.State) == "" && state != "" {
+			req.State = state
+		}
+	}
 	if strings.TrimSpace(req.Provider) == "" {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{
 			"error": "provider is required",
@@ -609,6 +623,54 @@ func (s *Server) handleOAuthComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSONStatus(w, http.StatusOK, maskProfile(prof))
+}
+
+// parsePastedAuthCode normalizes whatever the operator pasted into the
+// paste-flow "code" field into a bare authorization code (and state when
+// present). It accepts three shapes:
+//
+//   - a full redirect URL: http://localhost:1455/auth/callback?code=X&state=Y
+//   - a bare query fragment: code=X&state=Y (with or without a leading '?')
+//   - a bare code: X
+//
+// Returns (code, state, true) when it extracted a code, or ("","",false)
+// when the input contained no recognizable code (the caller then leaves the
+// original value untouched). Whitespace is trimmed throughout because
+// copy-paste often drags a trailing newline along.
+func parsePastedAuthCode(raw string) (code, state string, ok bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", "", false
+	}
+
+	// Full URL form. url.Parse accepts bare tokens too, so gate on a scheme
+	// or a path+query marker before trusting it as a URL.
+	if strings.Contains(v, "://") {
+		if u, err := url.Parse(v); err == nil {
+			q := u.Query()
+			if c := strings.TrimSpace(q.Get("code")); c != "" {
+				return c, strings.TrimSpace(q.Get("state")), true
+			}
+		}
+	}
+
+	// Query-fragment form: "code=...&state=..." possibly with a leading '?'.
+	if strings.Contains(v, "code=") {
+		frag := strings.TrimPrefix(v, "?")
+		if q, err := url.ParseQuery(frag); err == nil {
+			if c := strings.TrimSpace(q.Get("code")); c != "" {
+				return c, strings.TrimSpace(q.Get("state")), true
+			}
+		}
+	}
+
+	// Bare code: return as-is (no state available). Only treat single-token
+	// input as a code — anything with spaces is more likely an accidental
+	// paste of unrelated text, so we decline rather than send garbage.
+	if !strings.ContainsAny(v, " \t\r\n") {
+		return v, "", true
+	}
+	return "", "", false
 }
 
 // Compile-time assertion that the handlers satisfy http.HandlerFunc.

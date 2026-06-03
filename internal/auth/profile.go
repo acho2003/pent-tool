@@ -68,6 +68,14 @@ type Profile struct {
 	Scopes       []string  `json:"scopes,omitempty"`
 	TokenType    string    `json:"tokenType,omitempty"`
 
+	// AccountID carries a provider-specific account identifier that
+	// some subscription backends require alongside the bearer token.
+	// For the OpenAI Codex / ChatGPT-subscription flow this is the
+	// `chatgpt_account_id` claim extracted from the OAuth access token;
+	// it is sent as the `chatgpt-account-id` request header. Empty for
+	// providers that don't need it.
+	AccountID string `json:"accountId,omitempty"`
+
 	// RequiresReauth is set by Driver.Refresh when the upstream
 	// refresh attempt returned invalid_grant — the caller (the
 	// /api/scan path or the dashboard refresh button) sees this

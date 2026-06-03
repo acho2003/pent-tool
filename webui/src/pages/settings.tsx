@@ -283,13 +283,14 @@ export default function SettingsPage() {
 
   async function saveLLMSettings() {
     setSavedLLM(false);
+    const profileId = llmForm.profileId || "default";
     const req: LLMSettingsRequest = {
       provider: llmForm.provider,
       authMethod: (llmForm.authMethod || "api_key") as
         | "api_key"
         | "oauth"
         | "none",
-      profileId: llmForm.profileId || "default",
+      profileId,
       model: llmForm.model,
       reasoningEffort: llmForm.reasoningEffort,
       llmMaxRetries: llmForm.llmMaxRetries,
@@ -309,6 +310,16 @@ export default function SettingsPage() {
       if (selectedProvider?.id === "custom" && llmForm.apiBase) {
         req.apiBase = llmForm.apiBase;
       }
+    }
+    if (llmForm.authMethod === "oauth" && llmForm.provider) {
+      // OAuth providers (e.g. Codex ChatGPT subscription) finish their
+      // sign-in through the OAuth modal, which persists a profile keyed
+      // "<provider>:<profileId>". Saving the LLM tab must point the active
+      // credential pointer (XALGORIX_LLM_PROFILE) at that profile —
+      // otherwise the backend keeps the previous (legacy) provider and only
+      // the model changes. Prefer an explicitly-selected profile key.
+      req.activeProfileKey =
+        llmForm.activeProfileKey || `${llmForm.provider}:${profileId}`;
     }
     if (!isMaskedSettingValue(llmForm.geminiApiKey)) {
       req.geminiApiKey = llmForm.geminiApiKey;

@@ -104,13 +104,20 @@ var builtinList = []Entry{
 	},
 	{
 		ID:          "codex",
-		DisplayName: "Codex",
-		BaseURL:     "",
-		HeaderStyle: "openai",
-		AuthMethods: []string{"api_key", "oauth"},
-		Flow:        "pkce",
-		Models:      []string{"codex-1"},
-		Notes:       "OAuth flow is beta — endpoints are not publicly documented yet; API key path is fully tested.",
+		DisplayName: "Codex (ChatGPT Subscription)",
+		BaseURL:     "https://chatgpt.com/backend-api/codex",
+		HeaderStyle: "openai_responses",
+		AuthMethods: []string{"oauth", "api_key"},
+		Flow:        "codex_cli_reuse",
+		// Reuses the official Codex CLI sign-in: run `codex login` once on
+		// this host, then import here. Endpoints below are used for silent
+		// token refresh. ClientID is the public Codex CLI OAuth client.
+		ClientID:              "app_EMoamEEZ73f0CkXaXp7hrann",
+		AuthorizationEndpoint: "https://auth.openai.com/oauth/authorize",
+		TokenEndpoint:         "https://auth.openai.com/oauth/token",
+		Scopes:                []string{"openid", "profile", "email", "offline_access"},
+		Models:                []string{"gpt-5.5", "gpt-5.5-codex", "gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex", "gpt-5.2"},
+		Notes:                 "ChatGPT Plus/Pro subscription. Run `codex login` (official OpenAI Codex CLI) on this host, then click Import below. Talks the Responses API at chatgpt.com/backend-api/codex. Personal-use only per OpenAI's terms.",
 	},
 	{
 		ID:          "copilot",
@@ -275,13 +282,12 @@ var builtinList = []Entry{
 	},
 	{
 		ID:          "openai",
-		DisplayName: "OpenAI (ChatGPT/Codex)",
+		DisplayName: "OpenAI (API Key)",
 		BaseURL:     "https://api.openai.com/v1",
 		HeaderStyle: "openai",
-		AuthMethods: []string{"api_key", "oauth"},
-		Flow:        "pkce",
-		Models:      []string{"gpt-4o", "gpt-4o-mini", "o1", "gpt-5"},
-		Notes:       "OAuth flow is beta — OpenAI's public ChatGPT sign-in endpoints are not stable yet; API key path is fully tested.",
+		AuthMethods: []string{"api_key"},
+		Models:      []string{"gpt-5.5", "gpt-5.5-pro", "gpt-5.2", "gpt-5.1", "gpt-4o"},
+		Notes:       "OpenAI Platform API via API key (chat-completions). For ChatGPT Plus/Pro subscription access to Codex models, use the 'Codex (ChatGPT Subscription)' provider instead.",
 	},
 	{
 		ID:          "opencode",

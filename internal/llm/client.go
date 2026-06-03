@@ -313,9 +313,9 @@ func applyAuthHeaders(req *http.Request, ep Endpoint) {
 				req.Header.Set("Authorization", "Bearer "+ep.AccessToken)
 			}
 		}
-	case "openai", "":
-		// "openai" or unspecified — apply the OpenAI-compatible
-		// Bearer header for both auth modes.
+	case "openai", "openai_responses", "":
+		// "openai" / "openai_responses" / unspecified — apply the
+		// OpenAI-compatible Bearer header for both auth modes.
 		switch ep.Auth {
 		case AuthAPIKey:
 			if ep.APIKey != "" {
@@ -608,6 +608,12 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 			ch <- StreamChunk{Err: err}
 			return
 		}
+		// OpenAI Responses API (Codex / ChatGPT subscription) uses a
+		// distinct streaming contract — delegate and stop here.
+		if ep.HeaderStyle == headerStyleResponses {
+			c.streamResponses(streamCtx, ep, messages, ch)
+			return
+		}
 		endpoint, model := ep.URL, ep.Model
 		isGoogle := ep.HeaderStyle == "gemini"
 		isAnthropic := ep.HeaderStyle == "anthropic"
@@ -826,6 +832,12 @@ func (c *Client) doChat(messages []Message) (out string, err error) {
 	}
 	endpoint, model := ep.URL, ep.Model
 	log.Printf("[llm] Request → URL=%s model=%s apiModel=%s cfgLLM=%s cfgAPIBase=%s", endpoint, model, c.apiModel, c.cfg.LLM, c.cfg.APIBase)
+
+	// OpenAI Responses API (Codex / ChatGPT subscription backend) has its
+	// own request/response contract — delegate to the dedicated path.
+	if ep.HeaderStyle == headerStyleResponses {
+		return c.doResponses(reqCtx, ep, messages)
+	}
 
 	isGoogle := ep.HeaderStyle == "gemini"
 	isAnthropic := ep.HeaderStyle == "anthropic"

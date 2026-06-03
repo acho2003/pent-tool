@@ -238,6 +238,24 @@ export default function OAuthModal({
     }
   }
 
+  // confirm-and-import flows (claude_cli_reuse / codex_cli_reuse):
+  // the credential file is already on disk, so Complete takes no
+  // operator input — clicking Import just posts the flowId and the
+  // driver reads the file directly.
+  async function onSubmitImport() {
+    if (!startResult) return;
+    setError(null);
+    try {
+      await complete.mutateAsync({
+        provider,
+        flowId: startResult.flowId,
+      });
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   return (
     <Dialog
       open={open}
@@ -357,15 +375,25 @@ export default function OAuthModal({
           startResult?.mode === "paste" &&
           !startResult.submode &&
           !startResult.authURL && (
-            <div className="rounded-md border border-border bg-muted/30 p-4 text-sm">
+            <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4 text-sm">
               <p>
                 xalgorix will read the credential file already present on
-                this host and persist a profile under{" "}
+                this host (created by the official CLI sign-in) and persist a
+                profile under{" "}
                 <code className="font-mono">
                   {provider}:{profileId || "default"}
                 </code>
-                . No further input required.
+                . The token never leaves this host.
               </p>
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  onClick={onSubmitImport}
+                  disabled={complete.isPending}
+                >
+                  {complete.isPending ? "Importing…" : "Import credential"}
+                </Button>
+              </div>
             </div>
           )}
 
@@ -481,8 +509,8 @@ function PasteBody({
       {startResult.authURL && (
         <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
           <p className="mb-2 text-xs text-muted-foreground">
-            Open the authorization page in a browser, complete sign-in, and
-            paste the code returned in the redirect URL below.
+            Open the authorization page, complete sign-in, then copy the URL
+            your browser lands on and paste it below.
           </p>
           <a
             href={startResult.authURL}
@@ -492,30 +520,46 @@ function PasteBody({
           >
             Open authorization page <ExternalLink className="h-3.5 w-3.5" />
           </a>
+          <p className="mt-2 text-xs text-muted-foreground">
+            After sign-in your browser will try to open{" "}
+            <code className="font-mono">localhost:1455</code> and may show a
+            “this site can’t be reached” error. That is expected on a remote or
+            headless host — just copy the full address-bar URL (it contains{" "}
+            <code className="font-mono">?code=…</code>) and paste it here.
+          </p>
         </div>
       )}
       <div className="space-y-2">
-        <Label htmlFor="oauth-paste-code">Authorization code</Label>
+        <Label htmlFor="oauth-paste-code">Redirect URL or code</Label>
         <Textarea
           id="oauth-paste-code"
           value={code}
           onChange={(e) => setCode(e.target.value)}
           rows={3}
           required
-          placeholder="Paste the code returned by the provider"
+          placeholder="Paste the full http://localhost:1455/auth/callback?code=… URL (or just the code)"
           className="font-mono text-xs"
         />
+        <p className="text-xs text-muted-foreground">
+          Pasting the whole redirect URL is easiest — the state value is
+          extracted automatically.
+        </p>
       </div>
-      <div className="space-y-2">
-        <Label htmlFor="oauth-paste-state">State (optional)</Label>
-        <Input
-          id="oauth-paste-state"
-          value={stateValue}
-          onChange={(e) => setStateValue(e.target.value)}
-          placeholder="Returned `state` parameter, when applicable"
-          className="font-mono text-xs"
-        />
-      </div>
+      <details className="text-xs">
+        <summary className="cursor-pointer text-muted-foreground">
+          Advanced: enter state manually
+        </summary>
+        <div className="mt-2 space-y-2">
+          <Label htmlFor="oauth-paste-state">State (optional)</Label>
+          <Input
+            id="oauth-paste-state"
+            value={stateValue}
+            onChange={(e) => setStateValue(e.target.value)}
+            placeholder="Returned `state` parameter, when not pasting the full URL"
+            className="font-mono text-xs"
+          />
+        </div>
+      </details>
       <div className="flex justify-end">
         <Button
           type="submit"

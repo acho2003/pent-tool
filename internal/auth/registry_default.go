@@ -15,8 +15,8 @@
 // production registry has every flow handler attached.
 package auth
 
-// RegisterDefaultDrivers attaches the four built-in OAuth drivers
-// (pkce, device_code, setup_token, claude_cli_reuse) to r. Each
+// RegisterDefaultDrivers attaches the five built-in OAuth drivers
+// (pkce, device_code, setup_token, claude_cli_reuse, codex_cli_reuse) to r. Each
 // driver is constructed against r.Store() and r.HTTP(); the
 // device_code driver additionally consumes a Clock so its poller
 // can advance virtualized time in tests.
@@ -44,4 +44,5 @@ func RegisterDefaultDrivers(r *Registry, clock Clock) {
 	r.Register(newDeviceCodeDriver(r.Store(), r.HTTP(), clock))
 	r.Register(newSetupTokenDriver(r.Store(), r.HTTP()))
 	r.Register(newClaudeReuseDriver(r.Store(), r.HTTP()))
+	r.Register(newCodexReuseDriver(r.Store(), r.HTTP()))
 }
