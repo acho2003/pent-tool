@@ -28,6 +28,7 @@ package llm
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	"github.com/xalgord/xalgorix/v4/internal/auth"
@@ -316,11 +317,30 @@ func (cr *catalogResolver) Resolve(ctx context.Context) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	entry := pick.entry
-	prof := pick.profile
+	return BuildCatalogEndpoint(pick.entry, pick.profile, "")
+}
 
-	model := ""
-	if len(entry.Models) > 0 {
+// BuildCatalogEndpoint assembles the outbound Endpoint for one
+// (catalog Entry, credential Profile) pair. It is the single source
+// of truth for catalog-driven endpoint construction: both the
+// composite resolver (catalogResolver.Resolve) and the per-scan
+// resolver in internal/web/scan_resolve.go call it, so the URL
+// shape, auth wiring, and vendor-specific headers can never diverge
+// between the "default provider" path and the "per-scan profile"
+// path (the divergence that previously sent Codex traffic to the
+// wrong /v1/chat/completions path without the ChatGPT headers).
+//
+// preferModel overrides the catalog's default model (entry.Models[0])
+// when non-empty — used by the active-profile path so the operator's
+// typed model wins over the catalog default. An empty preferModel
+// preserves the "first catalog model" behavior.
+//
+// An unrecognized HeaderStyle returns a *ConfigError so a corrupt
+// catalog entry surfaces as "no provider configured" rather than
+// silently POSTing to a guessed path.
+func BuildCatalogEndpoint(entry providers.Entry, prof auth.Profile, preferModel string) (Endpoint, error) {
+	model := strings.TrimSpace(preferModel)
+	if model == "" && len(entry.Models) > 0 {
 		model = entry.Models[0]
 	}
 
@@ -349,6 +369,14 @@ func (cr *catalogResolver) Resolve(ctx context.Context) (Endpoint, error) {
 			}
 			url += "/chat/completions"
 		}
+	case "openai_responses":
+		// OpenAI Responses API (Codex / ChatGPT subscription backend).
+		// The base URL already encodes the backend root (e.g.
+		// https://chatgpt.com/backend-api/codex or https://api.openai.com/v1);
+		// append the /responses path when the base doesn't already end in it.
+		if !strings.HasSuffix(strings.ToLower(url), "/responses") {
+			url += "/responses"
+		}
 	default:
 		return Endpoint{}, &ConfigError{
 			Msg: "catalog resolver: unsupported headerStyle " + entry.HeaderStyle + " for entry " + entry.ID,
@@ -366,6 +394,22 @@ func (cr *catalogResolver) Resolve(ctx context.Context) (Endpoint, error) {
 	} else {
 		ep.Auth = AuthAPIKey
 		ep.APIKey = prof.APIKey
+	}
+
+	// The Codex / ChatGPT subscription backend requires extra headers
+	// beyond the bearer token: the account id and the Codex CLI
+	// originator/beta markers. Attach them via VendorOverride so the
+	// client's header switch stays provider-agnostic. These are only
+	// meaningful for the openai_responses style; harmless otherwise.
+	if entry.HeaderStyle == "openai_responses" {
+		accountID := prof.AccountID
+		ep.VendorOverride = func(req *http.Request) {
+			if accountID != "" {
+				req.Header.Set("chatgpt-account-id", accountID)
+			}
+			req.Header.Set("OpenAI-Beta", "responses=experimental")
+			req.Header.Set("originator", "codex_cli_rs")
+		}
 	}
 	return ep, nil
 }

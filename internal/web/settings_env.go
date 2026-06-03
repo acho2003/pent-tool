@@ -326,6 +326,17 @@ func (s *Server) applyCatalogLLMSettings(ctx context.Context, req llmSettingsReq
 	// list, or both fields are empty (auth_method=none / oauth-
 	// only flow) and we leave the pointer alone.
 	if activeProfileKey != "" {
+		// Guard against pointing the resolver at a profile that was never
+		// persisted (e.g. the operator clicked Save before completing the
+		// OAuth sign-in). Without this, XALGORIX_LLM_PROFILE would name a
+		// missing profile and every scan would fail the credential lookup.
+		if s.profiles != nil {
+			if _, ok, err := s.profiles.Get(ctx, activeProfileKey); err != nil {
+				return fmt.Errorf("look up profile %q: %w", activeProfileKey, err)
+			} else if !ok {
+				return fmt.Errorf("no saved credential for %q — complete the OAuth sign-in (or save an API key) before selecting it", activeProfileKey)
+			}
+		}
 		updates["XALGORIX_LLM_PROFILE"] = activeProfileKey
 	}
 

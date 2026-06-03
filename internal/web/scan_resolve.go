@@ -38,10 +38,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/auth"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
-	"github.com/xalgord/xalgorix/v4/internal/providers"
 )
 
 // errUnknownProviderProfile is returned by resolveScanCredentials
@@ -94,19 +92,17 @@ func (s *Server) resolveScanCredentials(ctx context.Context, req ScanRequest, cf
 			// to an outbound endpoint.
 			return llm.Endpoint{}, errUnknownProviderProfile
 		}
-		url, model, headerStyle := buildEndpoint(entry, prof)
-		ep = llm.Endpoint{
-			URL:         url,
-			Model:       model,
-			HeaderStyle: headerStyle,
+		// Shared catalog endpoint builder (llm.BuildCatalogEndpoint)
+		// — the single source of truth for URL shape, auth wiring,
+		// and vendor headers. Using it here keeps the per-scan path
+		// byte-identical to the composite resolver, including the
+		// openai_responses (Codex / ChatGPT) path + its required
+		// chatgpt-account-id / OpenAI-Beta / originator headers.
+		built, berr := llm.BuildCatalogEndpoint(entry, prof, "")
+		if berr != nil {
+			return llm.Endpoint{}, berr
 		}
-		if prof.Type == auth.OAuth {
-			ep.Auth = llm.AuthOAuthBearer
-			ep.AccessToken = prof.AccessToken
-		} else {
-			ep.Auth = llm.AuthAPIKey
-			ep.APIKey = prof.APIKey
-		}
+		ep = built
 	} else {
 		// No provider_profile → legacy / catalog-default path
 		// (Requirement 11.3). The helper returns a zero Endpoint
@@ -235,75 +231,6 @@ func bareModelFromConfigLLM(llmValue string) string {
 	return strings.TrimSpace(model)
 }
 
-// buildEndpoint assembles the (url, model, headerStyle) tuple for a
-// single (Catalog_Entry, Auth_Profile) pair. The URL builder mirrors
-// the three header-style branches in internal/llm/resolver.go's
-// catalogResolver so profile-driven scans hit the same outbound URLs
-// the catalog resolver would have built for a default pick.
-//
-// API_Key_Profile records honor APIBaseOverride per Requirement 4.5
-// — that's the per-profile escape hatch for proxying through a
-// custom gateway without touching the catalog entry's BaseURL.
-// OAuth_Profile records do not expose a base override because the
-// access token is bound to the catalog entry's authorization server.
-//
-// Validates: Requirements 2.3 (preserved endpoint shape), 11.2.
-func buildEndpoint(entry providers.Entry, prof auth.Profile) (url, model, headerStyle string) {
-	return buildEndpointWithModel(entry, prof, "")
-}
-
-// buildEndpointWithModel is buildEndpoint with an explicit preferred
-// model. When preferModel is non-empty it overrides the catalog
-// entry's default model (entry.Models[0]) — used by the active-
-// profile path so the operator's typed model (cfg.LLM bare form)
-// wins over the catalog default while still borrowing the profile's
-// provider routing + credentials. An empty preferModel preserves the
-// historical "first catalog model" behavior.
-func buildEndpointWithModel(entry providers.Entry, prof auth.Profile, preferModel string) (url, model, headerStyle string) {
-	base := entry.BaseURL
-	if prof.Type == auth.APIKey && prof.APIBaseOverride != "" {
-		base = prof.APIBaseOverride
-	}
-	base = strings.TrimRight(base, "/")
-	headerStyle = entry.HeaderStyle
-	if strings.TrimSpace(preferModel) != "" {
-		model = strings.TrimSpace(preferModel)
-	} else if len(entry.Models) > 0 {
-		model = entry.Models[0]
-	}
-
-	switch headerStyle {
-	case "anthropic":
-		// Anthropic uses /v1/messages. Append /v1 only when the
-		// configured base does not already include a version
-		// segment.
-		if !strings.HasSuffix(strings.ToLower(base), "/messages") {
-			if !strings.HasSuffix(base, "/v1") && !strings.Contains(base, "/v1/") {
-				base += "/v1"
-			}
-			base += "/messages"
-		}
-	case "gemini":
-		// Google Gemini uses /v1beta/models/MODEL:generateContent.
-		// Strip any trailing /v1 first so we don't produce
-		// /v1/v1beta when the base URL was configured with the
-		// version segment baked in.
-		base = strings.TrimSuffix(base, "/v1")
-		base += "/v1beta/models/" + model + ":generateContent"
-	default:
-		// "openai" (and any future OpenAI-compatible header style
-		// validateEntry happens to allow): /v1/chat/completions.
-		if !strings.HasSuffix(strings.ToLower(base), "/chat/completions") {
-			if !strings.HasSuffix(base, "/v1") && !strings.Contains(base, "/v1/") {
-				base += "/v1"
-			}
-			base += "/chat/completions"
-		}
-	}
-	url = base
-	return
-}
-
 // legacyOrCatalogDefaultEndpoint is the fallback resolver consulted
 // when ScanRequest.ProviderProfile is empty. The selection order
 // mirrors the LLM client's composite resolver (Wave D task 4.1):
@@ -344,20 +271,9 @@ func (s *Server) legacyOrCatalogDefaultEndpoint(ctx context.Context, cfg *config
 				// routes to gemini-test-model rather than the
 				// catalog's first listed model.
 				preferModel := bareModelFromConfigLLM(cfg.LLM)
-				url, model, headerStyle := buildEndpointWithModel(entry, prof, preferModel)
-				ep := llm.Endpoint{
-					URL:         url,
-					Model:       model,
-					HeaderStyle: headerStyle,
+				if ep, berr := llm.BuildCatalogEndpoint(entry, prof, preferModel); berr == nil {
+					return ep
 				}
-				if prof.Type == auth.OAuth {
-					ep.Auth = llm.AuthOAuthBearer
-					ep.AccessToken = prof.AccessToken
-				} else {
-					ep.Auth = llm.AuthAPIKey
-					ep.APIKey = prof.APIKey
-				}
-				return ep
 			}
 		}
 	}
@@ -374,20 +290,9 @@ func (s *Server) legacyOrCatalogDefaultEndpoint(ctx context.Context, cfg *config
 						if p.Provider != entry.ID {
 							continue
 						}
-						url, model, headerStyle := buildEndpoint(entry, p)
-						ep := llm.Endpoint{
-							URL:         url,
-							Model:       model,
-							HeaderStyle: headerStyle,
+						if ep, berr := llm.BuildCatalogEndpoint(entry, p, ""); berr == nil {
+							return ep
 						}
-						if p.Type == auth.OAuth {
-							ep.Auth = llm.AuthOAuthBearer
-							ep.AccessToken = p.AccessToken
-						} else {
-							ep.Auth = llm.AuthAPIKey
-							ep.APIKey = p.APIKey
-						}
-						return ep
 					}
 				}
 			}

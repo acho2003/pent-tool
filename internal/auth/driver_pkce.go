@@ -167,11 +167,16 @@ type pkceFlow struct {
 	mu       sync.Mutex
 	listener net.Listener
 	server   *http.Server
-	timer    *time.Timer
-	redirect string
-	done     chan error
-	cleanup  sync.Once
-	flowID   string
+	// extraListeners holds additional listeners the same server serves on
+	// — used by the Codex flow to bind BOTH loopback families (127.0.0.1
+	// and ::1) on port 1455, since the browser may resolve "localhost" to
+	// either. Closed alongside the primary listener in expireFlow.
+	extraListeners []net.Listener
+	timer          *time.Timer
+	redirect       string
+	done           chan error
+	cleanup        sync.Once
+	flowID         string
 }
 
 // pkceTokenResponse models the OAuth 2.0 token-endpoint response
@@ -281,7 +286,15 @@ func (d *pkceDriver) Start(ctx context.Context, e providers.Entry, opts StartOpt
 	// BindAddr forces paste per R13.2.
 	usePaste := opts.PreferPaste || !pkceIsLoopbackBind(opts.BindAddr)
 	if usePaste {
-		flow.redirect = pkceOOBRedirect
+		// The Codex OAuth client only accepts its registered loopback
+		// redirect, so even in paste mode the authorize URL must carry the
+		// fixed redirect (the operator pastes the code/URL back). Other
+		// providers use the OOB redirect placeholder.
+		if isCodexEntry(e) {
+			flow.redirect = codexRedirectURI
+		} else {
+			flow.redirect = pkceOOBRedirect
+		}
 		d.flows.Store(flowID, flow)
 		// AfterFunc still arms in paste mode so a stale flow
 		// is reaped — otherwise an operator who abandons the
@@ -309,8 +322,25 @@ func (d *pkceDriver) Start(ctx context.Context, e providers.Entry, opts StartOpt
 	// matches the listener exactly. A net.TCPAddr type
 	// assertion is safe here because we explicitly asked for
 	// "tcp" / "127.0.0.1:0".
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	//
+	// Exception — the Codex flow: the OAuth client is registered against a
+	// FIXED redirect (http://127.0.0.1:1455/auth/callback). Bind that exact
+	// port/path instead of an ephemeral one, or the authorization server
+	// rejects the redirect_uri.
+	listenAddr := "127.0.0.1:0"
+	callbackPath := pkceCallbackPath
+	fixedRedirect := ""
+	if isCodexEntry(e) {
+		listenAddr = codexFixedRedirectHost
+		callbackPath = codexCallbackPath
+		fixedRedirect = codexRedirectURI
+	}
+
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
+		if isCodexEntry(e) {
+			return StartResult{}, fmt.Errorf("auth/pkce: bind %s for Codex callback (is another sign-in or the codex CLI already using port 1455?): %w", listenAddr, err)
+		}
 		return StartResult{}, fmt.Errorf("auth/pkce: bind loopback: %w", err)
 	}
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
@@ -319,15 +349,31 @@ func (d *pkceDriver) Start(ctx context.Context, e providers.Entry, opts StartOpt
 		return StartResult{}, fmt.Errorf("auth/pkce: unexpected listener address type %T", listener.Addr())
 	}
 	port := tcpAddr.Port
-	redirect := fmt.Sprintf("http://127.0.0.1:%d%s", port, pkceCallbackPath)
+	redirect := fmt.Sprintf("http://127.0.0.1:%d%s", port, callbackPath)
+	if fixedRedirect != "" {
+		redirect = fixedRedirect
+	}
 	flow.listener = listener
 	flow.redirect = redirect
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(pkceCallbackPath, d.callbackHandler(flow))
+	mux.HandleFunc(callbackPath, d.callbackHandler(flow))
 	flow.server = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	// Codex flow: the redirect_uri advertises the "localhost" hostname,
+	// which the browser may resolve to either 127.0.0.1 (IPv4) or ::1
+	// (IPv6) depending on the host's /etc/hosts ordering. The primary
+	// listener above is bound to 127.0.0.1; also bind ::1 best-effort so
+	// the callback lands regardless of which family "localhost" resolves
+	// to. A failure to bind the IPv6 loopback (e.g. IPv6 disabled) is
+	// non-fatal — the IPv4 listener still covers the common case.
+	if isCodexEntry(e) {
+		if l6, err6 := net.Listen("tcp", "[::1]:1455"); err6 == nil {
+			flow.extraListeners = append(flow.extraListeners, l6)
+		}
 	}
 
 	d.flows.Store(flowID, flow)
@@ -338,6 +384,12 @@ func (d *pkceDriver) Start(ctx context.Context, e providers.Entry, opts StartOpt
 	go func() {
 		_ = flow.server.Serve(listener)
 	}()
+	// Serve the same handler on any extra listeners (Codex dual-stack).
+	for _, extra := range flow.extraListeners {
+		go func(l net.Listener) {
+			_ = flow.server.Serve(l)
+		}(extra)
+	}
 
 	// Hold flow.mu across the timer assignment so the
 	// AfterFunc-spawned callback cannot read flow.timer before
@@ -622,6 +674,12 @@ func (d *pkceDriver) exchange(ctx context.Context, flow *pkceFlow, code string) 
 		Scopes:       scopes,
 		TokenType:    tok.TokenType,
 	}
+	// Codex / ChatGPT-subscription tokens carry the chatgpt_account_id
+	// claim that the ChatGPT backend requires as a request header. Extract
+	// it now so the resolver can attach the chatgpt-account-id header.
+	if isCodexEntry(flow.entry) {
+		p.AccountID = extractChatGPTAccountID(tok.AccessToken)
+	}
 	if err := d.store.Put(ctx, p); err != nil {
 		return Profile{}, fmt.Errorf("auth/pkce: persist profile: %w", err)
 	}
@@ -674,6 +732,14 @@ func (d *pkceDriver) exchangeRefresh(ctx context.Context, e providers.Entry, cur
 	}
 	if tok.Scope != "" {
 		next.Scopes = strings.Fields(tok.Scope)
+	}
+	// For Codex profiles, the rotated access token may carry an updated
+	// chatgpt_account_id claim — re-extract it, but keep the prior value
+	// if the new token omits it (don't blank out a working account id).
+	if isCodexEntry(e) {
+		if id := extractChatGPTAccountID(tok.AccessToken); id != "" {
+			next.AccountID = id
+		}
 	}
 	// Successful refresh clears any previously-set requires_reauth
 	// flag — the operator's stored credential is good again.
@@ -770,6 +836,7 @@ func (d *pkceDriver) expireFlow(flowID string, err error) {
 		timer := flow.timer
 		server := flow.server
 		listener := flow.listener
+		extras := flow.extraListeners
 		flow.mu.Unlock()
 		if timer != nil {
 			timer.Stop()
@@ -781,6 +848,11 @@ func (d *pkceDriver) expireFlow(flowID string, err error) {
 		}
 		if listener != nil {
 			_ = listener.Close()
+		}
+		for _, l := range extras {
+			if l != nil {
+				_ = l.Close()
+			}
 		}
 		// Non-blocking send — done has cap=1 so this only
 		// races against itself, and sync.Once already
@@ -826,6 +898,11 @@ func pkceBuildAuthURL(e providers.Entry, redirect, state, challenge string) stri
 	}
 	if e.Audience != "" {
 		q.Set("audience", e.Audience)
+	}
+	// Provider-specific extra params (e.g. the Codex flow's
+	// codex_cli_simplified_flow / id_token_add_organizations / originator).
+	for k, v := range codexAuthParams(e) {
+		q.Set(k, v)
 	}
 	sep := "?"
 	if strings.Contains(e.AuthorizationEndpoint, "?") {

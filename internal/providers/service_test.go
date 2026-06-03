@@ -56,9 +56,10 @@ func TestBuiltin_AlphabeticalAndUnique(t *testing.T) {
 // by the UI.
 func TestBuiltin_RequiredFields(t *testing.T) {
 	allowed := map[string]struct{}{
-		"openai":    {},
-		"anthropic": {},
-		"gemini":    {},
+		"openai":           {},
+		"openai_responses": {},
+		"anthropic":        {},
+		"gemini":           {},
 	}
 	for _, e := range Builtin() {
 		if strings.TrimSpace(e.ID) == "" {
@@ -69,7 +70,7 @@ func TestBuiltin_RequiredFields(t *testing.T) {
 			t.Errorf("entry %q has empty DisplayName", e.ID)
 		}
 		if _, ok := allowed[e.HeaderStyle]; !ok {
-			t.Errorf("entry %q has invalid HeaderStyle %q (want openai|anthropic|gemini)", e.ID, e.HeaderStyle)
+			t.Errorf("entry %q has invalid HeaderStyle %q (want openai|openai_responses|anthropic|gemini)", e.ID, e.HeaderStyle)
 		}
 	}
 }
