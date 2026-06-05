@@ -196,6 +196,20 @@ func (c *compositeResolver) Resolve(ctx context.Context) (Endpoint, error) {
 		cr := &catalogResolver{cat: c.cat, prof: c.prof, pick: c.pick}
 		ep, err := cr.Resolve(ctx)
 		if err == nil {
+			// Custom Provider and LiteLLM catalog entries have
+			// empty Models lists, so BuildCatalogEndpoint returns
+			// an endpoint with Model="". Fall back to the
+			// operator's configured model (XALGORIX_LLM) stripped
+			// of any "provider/" prefix — mirrors the same logic
+			// in scan_resolve.go legacyOrCatalogDefaultEndpoint
+			// Branch 0.
+			if ep.Model == "" && c.cfg.LLM != "" {
+				model := c.cfg.LLM
+				if idx := strings.Index(model, "/"); idx >= 0 {
+					model = model[idx+1:]
+				}
+				ep.Model = strings.TrimSpace(model)
+			}
 			return ep, nil
 		}
 		// On catalog-branch failure (unknown profile, missing
