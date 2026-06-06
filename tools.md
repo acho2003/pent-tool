@@ -29,8 +29,8 @@ Complete list of **70+ security tools** included in Xalgorix - the most powerful
 | 1 | **httpx** | HTTP probing | `go install github.com/projectdiscovery/httpx/cmd/httpx@latest` |
 | 2 | **nuclei** | Vulnerability scanning | `go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest` |
 | 3 | **gobuster** | Directory busting | `go install github.com/OJ/gobuster/v3@latest` |
-| 4 | **ffuf** | Fuzzing | `go install github.com/ffuf/ffuf@latest` |
-| 5 | **feroxbuster** | Recursive fuzzing | `cargo install fuzzing --locked` |
+| 4 | **ffuf** | Fuzzing | `go install github.com/ffuf/ffuf/v2@latest` |
+| 5 | **feroxbuster** | Recursive fuzzing | `cargo install feroxbuster --locked` |
 | 6 | **dirsearch** | Web path scanning | `git clone https://github.com/maurosoria/dirsearch` |
 | 7 | **dirb** | Web scanning | `apt install dirb` |
 | 8 | **nikto** | Web server scanning | `apt install nikto` |
