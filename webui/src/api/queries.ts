@@ -1,14 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { ScanRequest, ScanSchedule } from "@/types/api";
+import type { ListParams, ScanRequest, ScanSchedule } from "@/types/api";
 
 export const qk = {
   authStatus: ["auth", "status"] as const,
   status: ["status"] as const,
   version: ["version"] as const,
   scans: ["scans"] as const,
+  // Paginated scans share the ["scans"] prefix so existing
+  // invalidateQueries({ queryKey: qk.scans }) calls refresh them too.
+  scansPage: (params: ListParams) => ["scans", "page", params] as const,
   scan: (id: string) => ["scan", id] as const,
   instances: ["instances"] as const,
+  // Paginated instances share the ["instances"] prefix for the same reason.
+  instancesPage: (params: ListParams) => ["instances", "page", params] as const,
   instance: (id: string) => ["instance", id] as const,
   instanceEvents: (id: string) => ["instance", id, "events"] as const,
   queue: ["queue"] as const,
@@ -60,6 +65,18 @@ export function useScansList() {
   });
 }
 
+// Server-side paginated + filtered scans, used by the /scans page. Keeps the
+// previous page's data visible while the next page loads (placeholderData) so
+// paging/filtering does not flash an empty table.
+export function useScansPage(params: ListParams) {
+  return useQuery({
+    queryKey: qk.scansPage(params),
+    queryFn: () => api.listScansPage(params),
+    refetchInterval: 15000,
+    placeholderData: (prev) => prev,
+  });
+}
+
 export function useScan(id?: string) {
   return useQuery({
     queryKey: id ? qk.scan(id) : ["scan", "none"],
@@ -81,6 +98,16 @@ export function useInstances() {
     queryKey: qk.instances,
     queryFn: api.instances,
     refetchInterval: 8000,
+  });
+}
+
+// Server-side paginated + filtered instances, used by the /instances page.
+export function useInstancesPage(params: ListParams) {
+  return useQuery({
+    queryKey: qk.instancesPage(params),
+    queryFn: () => api.instancesPage(params),
+    refetchInterval: 8000,
+    placeholderData: (prev) => prev,
   });
 }
 

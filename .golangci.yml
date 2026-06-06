@@ -71,6 +71,11 @@ linters:
       enable-all: true
     misspell:
       locale: US
+      # MITRE is a proper noun (MITRE ATT&CK), not a misspelling of "miter".
+      # It appears in skill directory names that are referenced as alias
+      # targets in skills.go.
+      ignore-rules:
+        - mitre
     revive:
       severity: warning
       rules:

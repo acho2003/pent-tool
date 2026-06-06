@@ -26,7 +26,8 @@ func TestIsBlockedCommand_DangerousAndObfuscatedInputs(t *testing.T) {
 		{"hex destructive", "726d202d7266202f", "hex"},
 		{"url destructive", "rm%20-rf%20%2F", "URL"},
 		{"blocked noisy scanner", "nikto -h https://example.test", "false positives"},
-		{"hex escape obfuscation", `echo \x72\x6d`, "obfuscated"},
+		{"hex escape decodes to destructive", `echo \x72\x6d\x20\x2d\x72\x66\x20\x2f`, "obfuscated"},
+		{"chr() decodes to destructive", `chr(114)chr(109)chr(32)chr(45)chr(114)chr(102)chr(32)chr(47)`, "obfuscated"},
 	}
 
 	for _, tc := range cases {
@@ -47,6 +48,11 @@ func TestIsBlockedCommand_AllowsBenignReconCommands(t *testing.T) {
 		"curl -I https://example.test",
 		"nmap -sV -p 443 example.test",
 		"python3 -c 'print(123)'",
+		// Benign hex payloads must NOT be blocked: NOP sled, null fuzz bytes.
+		`printf '\x90\x90\x90\x90' | nc target 9000`,
+		`python3 -c "print('\x00\x01\x02')"`,
+		// Benign chr() usage (does not decode to a destructive command).
+		`python3 -c "print(chr(65)+chr(66)+chr(67))"`,
 	} {
 		if got := isBlockedCommand(cmd); got != "" {
 			t.Fatalf("benign command %q was blocked: %s", cmd, got)

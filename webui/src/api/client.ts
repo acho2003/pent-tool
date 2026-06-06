@@ -7,7 +7,9 @@ import type {
   InstancesResponse,
   LLMSettings,
   LLMSettingsRequest,
+  ListParams,
   OAuthStartResponse,
+  Paginated,
   QueueStatus,
   RateLimitSettings,
   ScanInstance,
@@ -170,6 +172,21 @@ async function http<T>(
   return (await res.text()) as unknown as T;
 }
 
+/**
+ * Build a query string from list params, omitting empty/default values so
+ * the URL stays clean (e.g. `?page=2&size=50&q=foo&status=running`).
+ */
+function listQuery(params: ListParams): string {
+  const sp = new URLSearchParams();
+  if (params.page) sp.set("page", String(params.page));
+  if (params.size) sp.set("size", String(params.size));
+  if (params.q && params.q.trim()) sp.set("q", params.q.trim());
+  if (params.status && params.status !== "all") sp.set("status", params.status);
+  if (params.mode && params.mode !== "all") sp.set("mode", params.mode);
+  const qs = sp.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export const api = {
   authStatus: () => http<AuthStatus>("/api/auth/status"),
   login: (username: string, password: string) =>
@@ -183,6 +200,10 @@ export const api = {
   status: () => http<StatusResponse>("/api/status"),
   version: () => http<VersionInfo>("/api/version"),
   listScans: () => http<ScanListItem[] | null>("/api/scans"),
+  // Server-side paginated + filtered scan list. Returns the envelope shape
+  // { items, total, page, size }.
+  listScansPage: (params: ListParams) =>
+    http<Paginated<ScanListItem>>(`/api/scans${listQuery(params)}`),
   getScan: (id: string) => http<ScanRecord | null>(`/api/scans/${id}`),
   deleteScan: (id: string) =>
     http<{ status: string }>(`/api/scans/${id}`, { method: "DELETE" }),
@@ -193,6 +214,10 @@ export const api = {
     ),
 
   instances: () => http<InstancesResponse>("/api/instances"),
+  // Server-side paginated + filtered instances list. Resources and the
+  // distinct `modes` list are returned alongside the paged `instances`.
+  instancesPage: (params: ListParams) =>
+    http<InstancesResponse>(`/api/instances${listQuery(params)}`),
   instance: (id: string) => http<ScanInstance>(`/api/instances/${id}`),
   instanceEvents: (id: string) =>
     http<WSEvent[]>(`/api/instances/${id}/events`),

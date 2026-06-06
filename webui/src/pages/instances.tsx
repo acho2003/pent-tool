@@ -1,20 +1,30 @@
-import type { ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState, ErrorState } from "@/components/states"
 import {
-  useInstances,
+  useInstancesPage,
   useStopInstance,
   useStartSavedInstance,
   useRestartInstance,
 } from "@/api/queries"
 import { ScanStatusPill } from "@/components/scan-status-pill"
 import { PhaseProgress } from "@/components/phase-progress"
+import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination"
+import { useDebounced } from "@/lib/use-debounced"
 import { timeAgo, formatDuration, shortId } from "@/lib/utils"
-import type { ScanInstance } from "@/types/api"
+import type { InstancesResponse, ScanInstance } from "@/types/api"
 import {
   Cpu,
   MemoryStick,
@@ -26,10 +36,40 @@ import {
   Coins,
   ShieldAlert,
   ExternalLink,
+  Search,
 } from "lucide-react"
 
 export default function InstancesPage() {
-  const { data, isLoading, error, refetch } = useInstances()
+  const [q, setQ] = useState("")
+  const [status, setStatus] = useState<string>("all")
+  const [mode, setMode] = useState<string>("all")
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE)
+  const debouncedQ = useDebounced(q, 300)
+
+  // Reset to the first page whenever the filters change.
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedQ, status, mode, pageSize])
+
+  const { data, isLoading, error, refetch } = useInstancesPage({
+    page,
+    size: pageSize,
+    q: debouncedQ,
+    status,
+    mode,
+  })
+
+  // Server returns the current page (already filtered), the total match count,
+  // and the full distinct-mode list for the dropdown.
+  const instances = data?.instances ?? []
+  const total = data?.total ?? 0
+  const modeOptions = data?.modes ?? []
+  const filtersActive =
+    debouncedQ.trim() !== "" || status !== "all" || mode !== "all"
+  // Show the filter bar whenever there are matches OR a filter is active (so
+  // the user can always relax a filter that returned nothing).
+  const showFilterBar = total > 0 || filtersActive
 
   return (
     <div className="space-y-6">
@@ -55,17 +95,79 @@ export default function InstancesPage() {
       ) : (
         <>
           {data?.resources && <ResourcesBar resources={data.resources} />}
-          {!data || !data.instances || data.instances.length === 0 ? (
+          {!showFilterBar ? (
             <EmptyState
               title="No instances"
               description="Start a scan to see it appear here as a running instance."
             />
           ) : (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {data.instances.map((inst) => (
-                <InstanceCard key={inst.id} instance={inst} />
-              ))}
-            </div>
+            <>
+              <Card>
+                <CardContent className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                      placeholder="Search name, target or instance id…"
+                      className="pl-9"
+                    />
+                  </div>
+                  <Select value={status} onValueChange={setStatus}>
+                    <SelectTrigger className="w-full sm:w-44">
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All statuses</SelectItem>
+                      <SelectItem value="running">Running</SelectItem>
+                      <SelectItem value="paused">Paused</SelectItem>
+                      <SelectItem value="saved">Saved</SelectItem>
+                      <SelectItem value="finished">Finished</SelectItem>
+                      <SelectItem value="stopped">Stopped</SelectItem>
+                      <SelectItem value="failed">Failed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={mode} onValueChange={setMode}>
+                    <SelectTrigger className="w-full sm:w-44">
+                      <SelectValue placeholder="All modes" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All modes</SelectItem>
+                      {modeOptions.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </CardContent>
+              </Card>
+
+              {total === 0 ? (
+                <EmptyState
+                  title="No instances match"
+                  description="Adjust the search or filters to see more."
+                />
+              ) : (
+                <>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {instances.map((inst) => (
+                      <InstanceCard key={inst.id} instance={inst} />
+                    ))}
+                  </div>
+                  <Card>
+                    <Pagination
+                      totalItems={total}
+                      page={page}
+                      pageSize={pageSize}
+                      onPageChange={setPage}
+                      onPageSizeChange={setPageSize}
+                      className="border-t-0"
+                    />
+                  </Card>
+                </>
+              )}
+            </>
           )}
         </>
       )}
@@ -73,7 +175,7 @@ export default function InstancesPage() {
   )
 }
 
-function ResourcesBar({ resources }: { resources: NonNullable<ReturnType<typeof useInstances>["data"]>["resources"] }) {
+function ResourcesBar({ resources }: { resources: InstancesResponse["resources"] }) {
   const cpu = Math.min(100, Math.round((resources.cpu_load_1m / Math.max(1, resources.cpu_cores)) * 100))
   const ramTotal = resources.ram_total_mb || 1
   const ramUsed = ramTotal - resources.ram_available_mb

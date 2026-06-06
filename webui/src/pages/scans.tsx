@@ -14,9 +14,11 @@ import {
 import { ScanStatusPill } from "@/components/scan-status-pill";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useDeleteScan, useScansList } from "@/api/queries";
+import { useDeleteScan, useScansPage } from "@/api/queries";
 import { cn, timeAgo, shortId, menuContentClass, menuItemClass } from "@/lib/utils";
+import { useDebounced } from "@/lib/use-debounced";
 import type { ScanListItem } from "@/types/api";
+import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination";
 import {
   ArrowUpDown,
   Download,
@@ -30,30 +32,29 @@ import {
 import NewScanDialog from "@/components/new-scan-dialog";
 
 export default function ScansPage() {
-  const { data, isLoading, error, refetch } = useScansList();
-  const del = useDeleteScan();
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [newOpen, setNewOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  const debouncedQ = useDebounced(q, 300);
 
-  const scans = useMemo<ScanListItem[]>(() => {
-    let list: ScanListItem[] = data ?? [];
-    if (status !== "all") list = list.filter((s) => s.status === status);
-    if (q.trim()) {
-      const needle = q.toLowerCase();
-      list = list.filter(
-        (s) =>
-          s.target.toLowerCase().includes(needle) ||
-          s.id.toLowerCase().includes(needle),
-      );
-    }
-    // newest first
-    return [...list].sort(
-      (a, b) =>
-        new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
-    );
-  }, [data, q, status]);
+  // Reset to the first page whenever the filters change shape.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQ, status, pageSize]);
+
+  const { data, isLoading, error, refetch } = useScansPage({
+    page,
+    size: pageSize,
+    q: debouncedQ,
+    status,
+  });
+  const del = useDeleteScan();
+
+  const scans = data?.items ?? [];
+  const totalItems = data?.total ?? 0;
 
   const visibleIds = useMemo(() => scans.map((s) => s.id), [scans]);
   const selectedVisibleCount = visibleIds.filter((id) =>
@@ -61,14 +62,6 @@ export default function ScansPage() {
   ).length;
   const allVisibleSelected =
     visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
-
-  useEffect(() => {
-    const allIds = new Set((data ?? []).map((s) => s.id));
-    setSelectedIds((current) => {
-      const next = new Set([...current].filter((id) => allIds.has(id)));
-      return next.size === current.size ? current : next;
-    });
-  }, [data]);
 
   function setSelected(id: string, checked: boolean) {
     setSelectedIds((current) => {
@@ -203,19 +196,31 @@ export default function ScansPage() {
           }
         />
       ) : (
-        <ScanTable
-          scans={scans}
-          selectedIds={selectedIds}
-          allSelected={allVisibleSelected}
-          partiallySelected={selectedVisibleCount > 0 && !allVisibleSelected}
-          deleting={del.isPending}
-          onSelect={setSelected}
-          onSelectAll={(checked) => {
-            if (checked) selectAllVisible();
-            else clearSelection();
-          }}
-          onDelete={(id) => void deleteScans([id])}
-        />
+        <>
+          <ScanTable
+            scans={scans}
+            selectedIds={selectedIds}
+            allSelected={allVisibleSelected}
+            partiallySelected={selectedVisibleCount > 0 && !allVisibleSelected}
+            deleting={del.isPending}
+            onSelect={setSelected}
+            onSelectAll={(checked) => {
+              if (checked) selectAllVisible();
+              else clearSelection();
+            }}
+            onDelete={(id) => void deleteScans([id])}
+          />
+          <Card>
+            <Pagination
+              totalItems={totalItems}
+              page={page}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              className="border-t-0"
+            />
+          </Card>
+        </>
       )}
 
       <NewScanDialog open={newOpen} onOpenChange={setNewOpen} />

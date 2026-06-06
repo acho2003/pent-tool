@@ -2001,25 +2001,59 @@ func extractCommands(cmd string) []string {
 	return result
 }
 
-// checkObfuscation detects common obfuscation techniques
+// hexEscapeRe matches a single \xNN hex-escape byte (e.g. \x72).
+var hexEscapeRe = regexp.MustCompile(`(?i)\\x([0-9a-f]{2})`)
+
+// chrCallRe matches chr(NN) / CHR( NN ) style character-code calls.
+var chrCallRe = regexp.MustCompile(`(?i)chr\s*\(\s*(\d{1,3})\s*\)`)
+
+// decodeHexEscapes replaces \xNN escape sequences with their literal byte
+// value, leaving the rest of the command untouched, so the decoded form can be
+// matched against the destructive-command denylist.
+func decodeHexEscapes(cmd string) string {
+	return hexEscapeRe.ReplaceAllStringFunc(cmd, func(m string) string {
+		b, err := decodeHex(m[2:])
+		if err != nil || len(b) != 1 {
+			return m
+		}
+		return string(b)
+	})
+}
+
+// decodeChrCalls replaces chr(NN) calls with their literal character.
+func decodeChrCalls(cmd string) string {
+	return chrCallRe.ReplaceAllStringFunc(cmd, func(m string) string {
+		sub := chrCallRe.FindStringSubmatch(m)
+		if len(sub) < 2 {
+			return m
+		}
+		n, err := strconv.Atoi(sub[1])
+		if err != nil || n < 0 || n > 255 {
+			return m
+		}
+		return string(rune(n))
+	})
+}
+
+// checkObfuscation detects obfuscation techniques that DECODE to a destructive
+// command. Earlier versions blanket-blocked any \xNN hex escape or chr() call
+// regardless of what it decoded to, which produced false positives on
+// legitimate pentest payloads (e.g. \x90 NOP sleds, \x00 fuzz bytes, SQL
+// injection CHAR()/CHR() expressions). We now decode the obfuscated bytes and
+// only block when the decoded text matches the destructive-command denylist.
+// Note: fully hex-encoded commands are already handled by tryHexDecode in
+// isBlockedCommand; this function covers \xNN / chr() escapes embedded inside a
+// larger command string.
 func checkObfuscation(cmd string) string {
-	lower := strings.ToLower(cmd)
-
-	// Check for character substitution obfuscation
-	// e.g., c'h'o'p, r\m -rf, etc.
-	obfuscationPatterns := []struct {
-		pattern string
-		reason  string
-	}{
-		{"chr\\s*\\(", "character code obfuscation"},
-		{"\\\\x[0-9a-f]{2}", "hex escape obfuscation"},
-	}
-
-	for _, op := range obfuscationPatterns {
-		if matched, _ := regexp.MatchString(op.pattern, lower); matched {
-			return "obfuscated command detected: " + op.reason
+	if decoded := decodeHexEscapes(cmd); decoded != cmd {
+		if reason := checkBlocked(decoded); reason != "" {
+			return "obfuscated command detected: " + reason + " (via hex escape decoding)"
 		}
 	}
-
+	if decoded := decodeChrCalls(cmd); decoded != cmd {
+		if reason := checkBlocked(decoded); reason != "" {
+			return "obfuscated command detected: " + reason + " (via chr() decoding)"
+		}
+	}
 	return ""
 }

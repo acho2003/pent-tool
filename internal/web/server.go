@@ -2744,6 +2744,76 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		return instances[i].StartedAt > instances[j].StartedAt
 	})
 
+	// Distinct scan modes across ALL instances, computed before filtering so
+	// the UI's mode dropdown always offers the full set of options.
+	modeSet := make(map[string]struct{})
+	for _, inst := range instances {
+		if inst.ScanMode != "" {
+			modeSet[inst.ScanMode] = struct{}{}
+		}
+	}
+	modes := make([]string, 0, len(modeSet))
+	for m := range modeSet {
+		modes = append(modes, m)
+	}
+	sort.Strings(modes)
+
+	// Optional server-side filtering (no-ops when the params are absent).
+	if q := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("q"))); q != "" {
+		filtered := make([]*ScanInstance, 0, len(instances))
+		for _, inst := range instances {
+			if strings.Contains(strings.ToLower(inst.Name), q) ||
+				strings.Contains(strings.ToLower(inst.Targets), q) ||
+				strings.Contains(strings.ToLower(inst.ID), q) {
+				filtered = append(filtered, inst)
+			}
+		}
+		instances = filtered
+	}
+	if st := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("status"))); st != "" && st != "all" {
+		filtered := make([]*ScanInstance, 0, len(instances))
+		for _, inst := range instances {
+			if strings.ToLower(inst.Status) == st {
+				filtered = append(filtered, inst)
+			}
+		}
+		instances = filtered
+	}
+	if mode := strings.TrimSpace(r.URL.Query().Get("mode")); mode != "" && mode != "all" {
+		filtered := make([]*ScanInstance, 0, len(instances))
+		for _, inst := range instances {
+			if inst.ScanMode == mode {
+				filtered = append(filtered, inst)
+			}
+		}
+		instances = filtered
+	}
+
+	// Pagination is opt-in: only slice when a page/size param is present, so
+	// the default GET /api/instances response still returns every instance.
+	total := len(instances)
+	pageStr := r.URL.Query().Get("page")
+	sizeStr := r.URL.Query().Get("size")
+	page, size := 1, 0
+	if pageStr != "" || sizeStr != "" {
+		page, size = parsePageParams(pageStr, sizeStr)
+		start := (page - 1) * size
+		if start < 0 {
+			start = 0
+		}
+		if start > total {
+			start = total
+		}
+		end := start + size
+		if end > total {
+			end = total
+		}
+		instances = instances[start:end]
+	}
+	if instances == nil {
+		instances = []*ScanInstance{}
+	}
+
 	// Include resource stats so the UI can explain why scans are pending
 	stats := resources.GetStats()
 	level, _ := resources.CurrentLevel()
@@ -2751,6 +2821,10 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	capacity := resources.Capacity()
 	response := map[string]any{
 		"instances": instances,
+		"total":     total,
+		"page":      page,
+		"size":      size,
+		"modes":     modes,
 		"resources": map[string]any{
 			"cpu_cores":                stats.CPUCores,
 			"cpu_load_1m":              stats.LoadAvg1m,
@@ -6491,6 +6565,24 @@ func (s *Server) rebuildInstancesFromDisk() {
 	}
 }
 
+// parsePageParams parses the `page` and `size` query parameters into a
+// 1-indexed page number and a bounded page size. Invalid or missing values
+// fall back to page 1 / size 50, and size is capped at 500 to protect the
+// server from absurd page sizes.
+func parsePageParams(pageStr, sizeStr string) (page, size int) {
+	page, size = 1, 50
+	if v, err := strconv.Atoi(strings.TrimSpace(pageStr)); err == nil && v >= 1 {
+		page = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(sizeStr)); err == nil && v >= 1 {
+		size = v
+		if size > 500 {
+			size = 500
+		}
+	}
+	return page, size
+}
+
 // handleListScans returns a list of all saved scans (sorted newest first).
 func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	type scanInfo struct {
@@ -6535,8 +6627,63 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 		return scans[i].StartedAt > scans[j].StartedAt
 	})
 
+	// Optional server-side filtering. These are no-ops when the query params
+	// are absent, so the default GET /api/scans response is unchanged.
+	if q := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("q"))); q != "" {
+		filtered := make([]scanInfo, 0, len(scans))
+		for _, sc := range scans {
+			if strings.Contains(strings.ToLower(sc.Target), q) ||
+				strings.Contains(strings.ToLower(sc.ID), q) {
+				filtered = append(filtered, sc)
+			}
+		}
+		scans = filtered
+	}
+	if st := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("status"))); st != "" && st != "all" {
+		filtered := make([]scanInfo, 0, len(scans))
+		for _, sc := range scans {
+			if strings.ToLower(sc.Status) == st {
+				filtered = append(filtered, sc)
+			}
+		}
+		scans = filtered
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(scans)
+
+	// Pagination is opt-in. Without a page/size query param we preserve the
+	// historical bare-array response for backward compatibility (public API
+	// consumers and existing callers). With it, we return a paginated
+	// envelope { items, total, page, size }.
+	pageStr := r.URL.Query().Get("page")
+	sizeStr := r.URL.Query().Get("size")
+	if pageStr == "" && sizeStr == "" {
+		_ = json.NewEncoder(w).Encode(scans)
+		return
+	}
+	page, size := parsePageParams(pageStr, sizeStr)
+	total := len(scans)
+	start := (page - 1) * size
+	if start < 0 {
+		start = 0
+	}
+	if start > total {
+		start = total
+	}
+	end := start + size
+	if end > total {
+		end = total
+	}
+	items := scans[start:end]
+	if items == nil {
+		items = []scanInfo{}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"items": items,
+		"total": total,
+		"page":  page,
+		"size":  size,
+	})
 }
 
 // handleDownloadReport serves the PDF report for a scan.
