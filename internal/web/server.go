@@ -1526,6 +1526,7 @@ var dashboardRoutes = []string{
 	// Existing scan / status / report / settings surface (unchanged).
 	"/api/scan",
 	"/api/stop",
+	"/api/restart",
 	"/api/status",
 	"/api/findings/summary",
 	"/api/legacy-import/status",
@@ -1580,6 +1581,7 @@ type Server struct {
 	running              atomic.Bool
 	stopReq              atomic.Bool
 	restartWhenIdle      atomic.Bool // SIGUSR1 sets this; a watcher restarts once scans drain
+	httpServer           *http.Server // set in Start; used to trigger graceful restart from the API
 	dataDir              string
 	currentScanDir       string
 	currentScanID        string
@@ -1911,6 +1913,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	mux.HandleFunc("/api/scan", s.handleScan)
 	mux.HandleFunc("/api/stop", s.handleStop)
+	mux.HandleFunc("/api/restart", s.handleRestart)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/findings/summary", s.handleFindingsSummary)
 	mux.HandleFunc("/api/legacy-import/status", s.handleLegacyImportStatus)
@@ -2127,6 +2130,9 @@ func (s *Server) Start() error {
 		// dashboard serves interactive traffic, so keep this generous.
 		ReadHeaderTimeout: 30 * time.Second,
 	}
+	// Expose the server so the /api/restart handler can trigger a graceful
+	// restart-when-idle through the same path as the SIGUSR1 watcher.
+	s.httpServer = httpServer
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -2198,16 +2204,9 @@ func (s *Server) Start() error {
 		usrCh := make(chan os.Signal, 1)
 		signal.Notify(usrCh, syscall.SIGUSR1)
 		for range usrCh {
-			if s.restartWhenIdle.Swap(true) {
+			if !s.scheduleGracefulRestart() {
 				log.Printf("[RESTART] Graceful restart already pending — ignoring duplicate SIGUSR1")
-				continue
 			}
-			log.Printf("[RESTART] Graceful restart requested (SIGUSR1) — will restart once all scans finish")
-			if s.discordWebhook != "" {
-				s.sendDiscord(0x4dabf7, "🕓 Xalgorix Restart Scheduled",
-					"A restart was requested. Xalgorix will restart automatically once all running scans finish and no tools are active.")
-			}
-			go s.restartWhenIdleWatcher(httpServer)
 		}
 	}()
 
@@ -2218,8 +2217,25 @@ func (s *Server) Start() error {
 	return err
 }
 
-// scannerIdle reports whether it is safe to restart: no scan instance is
-// active (running/pending/paused/queued/starting) and no terminal tool is
+// scheduleGracefulRestart marks the server for a restart-when-idle and starts
+// the watcher that performs the restart once no scan/instance is active. It is
+// the shared entry point for both the SIGUSR1 signal and the POST /api/restart
+// endpoint. Returns false if a restart was already pending (idempotent), so
+// duplicate requests don't spawn multiple watchers.
+func (s *Server) scheduleGracefulRestart() bool {
+	if s.restartWhenIdle.Swap(true) {
+		return false
+	}
+	log.Printf("[RESTART] Graceful restart requested — will restart once all scans finish")
+	if s.discordWebhook != "" {
+		s.sendDiscord(0x4dabf7, "🕓 Xalgorix Restart Scheduled",
+			"A restart was requested. Xalgorix will restart automatically once all running scans finish and no tools are active.")
+	}
+	go s.restartWhenIdleWatcher(s.httpServer)
+	return true
+}
+
+// scannerIdle reports whether it is safe to restart: no scan instance is// active (running/pending/paused/queued/starting) and no terminal tool is
 // currently leased. Completed/stopped/failed instances are historical and
 // do not block a restart.
 func (s *Server) scannerIdle() bool {
@@ -2288,8 +2304,10 @@ func (s *Server) restartNow(httpServer *http.Server) {
 	// Release the listening socket so the restarted process can rebind.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("[RESTART] HTTP shutdown error: %v", err)
+	if httpServer != nil {
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("[RESTART] HTTP shutdown error: %v", err)
+		}
 	}
 
 	// systemd-managed: INVOCATION_ID is set by systemd for service units.
@@ -2613,6 +2631,34 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.broadcast(WSEvent{Type: "stopped", Content: "All instances stopped by user"})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+}
+
+// handleRestart schedules a graceful restart of the backend. The restart is
+// never immediate while work is in flight: it waits until no scan instance is
+// active and no tool process is leased, then restarts cleanly (in-flight scans
+// auto-resume afterwards). This is the HTTP equivalent of
+// `xalgorix --restart-when-idle` (SIGUSR1) and shares the same watcher.
+//
+// POST /api/restart  → { "status": "scheduled"|"already_pending", "idle": bool }
+func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	idle := s.scannerIdle()
+	scheduled := s.scheduleGracefulRestart()
+
+	status := "scheduled"
+	if !scheduled {
+		status = "already_pending"
+	}
+	log.Printf("[RESTART] /api/restart requested (idle=%v, status=%s)", idle, status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": status,
+		"idle":   idle,
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
