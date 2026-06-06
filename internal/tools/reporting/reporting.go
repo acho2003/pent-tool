@@ -561,12 +561,15 @@ func checkFalsePositive(title, description, severity, proof string) string {
 		return "❌ REJECTED: Analytics API writeKey bypass is NOT a vulnerability. writeKeys are PUBLIC client-side tokens shipped in JavaScript (Segment, Amplitude, Mixpanel, etc.). They are designed to be exposed. Bug bounty programs mark this as N/A or Informational. Do not report."
 	}
 
-	// Pattern 13: Rate limiting / brute force — almost always informational
+	// Pattern 13: Rate limiting / brute force — informational EXCEPT on sensitive endpoints
 	rateLimitKeywords := []string{"rate limit", "rate-limit", "no rate limit", "brute force", "brute-force",
 		"account lockout", "missing rate limit", "unlimited requests", "no lockout", "login throttling"}
 	for _, kw := range rateLimitKeywords {
 		if strings.Contains(lower, kw) && isHighSev {
-			return "❌ REJECTED: Missing rate limiting / brute force is INFORMATIONAL on HackerOne. Most programs explicitly exclude this. Re-report as 'info' at most."
+			// Exception: rate limiting on sensitive/auth endpoints is a real vuln
+			if !isSensitiveEndpointContext(lower, strings.ToLower(proof)) {
+				return "❌ REJECTED: Missing rate limiting / brute force is INFORMATIONAL on most endpoints. Re-report as 'info' — unless this is on a sensitive endpoint (login, password reset, OTP, 2FA, signup). If so, mention the sensitive endpoint clearly in the title/description."
+			}
 		}
 	}
 
@@ -954,8 +957,8 @@ func classifySeverity(title, description, severity, proof string) (string, strin
 			"DNS zone transfer is informational in most contexts"},
 		{[]string{"writekey", "write_key", "write key", "analytics key", "segment key", "analytics api key"},
 			"Analytics writeKeys are public client-side tokens — not a security vulnerability"},
-		{[]string{"rate limit", "rate-limit", "no rate limit", "brute force", "account lockout", "missing rate limit"},
-			"Missing rate limiting is informational — most bug bounty programs exclude this"},
+		// NOTE: rate limit findings are handled separately below (low-cap with
+		// sensitive-endpoint exception) instead of blanket info-only.
 		{[]string{"sentry dsn", "ingest.sentry.io", "sentry.io/api"},
 			"Sentry DSN is a public client-side key — not a vulnerability"},
 		{[]string{"public_env", "next_public_", "react_app_", "window.__singletons"},
@@ -1034,6 +1037,13 @@ func classifySeverity(title, description, severity, proof string) (string, strin
 				return false
 			},
 			"Host header injection is low severity (CVSS 2.0-3.9) per HackerOne — needs password reset poisoning or cache poisoning chain for higher"},
+		// Rate limiting: low unless on sensitive auth endpoints
+		{[]string{"rate limit", "rate-limit", "no rate limit", "brute force", "brute-force",
+			"account lockout", "missing rate limit", "unlimited requests", "no lockout"},
+			func() bool {
+				return isSensitiveEndpointContext(lower, lowerProof)
+			},
+			"Missing rate limiting is low severity (CVSS 2.0-3.9) on non-sensitive endpoints — on login/password-reset/OTP/2FA endpoints it can be higher"},
 	}
 
 	for _, p := range lowCapPatterns {
@@ -1190,6 +1200,48 @@ func classifySeverity(title, description, severity, proof string) (string, strin
 	}
 
 	return severity, "" // no cap needed
+}
+
+// isSensitiveEndpointContext returns true when the title+description or proof
+// text indicates the rate-limit issue targets a security-sensitive endpoint
+// (login, password reset, OTP/2FA verification, signup, account recovery, etc.).
+// These are areas where missing rate limiting can lead to credential stuffing,
+// brute-force attacks, or OTP bypass — making the finding genuinely impactful.
+func isSensitiveEndpointContext(lowerText, lowerProof string) bool {
+	combined := lowerText + " " + lowerProof
+	sensitiveKeywords := []string{
+		// Authentication
+		"login", "signin", "sign-in", "sign in", "authenticate",
+		"authentication", "credential", "credential stuffing",
+		// Password reset / recovery
+		"password reset", "forgot password", "reset password",
+		"password recovery", "account recovery", "reset token",
+		"reset link",
+		// OTP / 2FA / MFA
+		"otp", "one-time password", "one time password",
+		"2fa", "two-factor", "two factor", "mfa", "multi-factor",
+		"multi factor", "verification code", "sms code",
+		"totp", "authenticator code", "magic link",
+		// Signup / registration
+		"signup", "sign-up", "sign up", "registration", "register",
+		"create account", "new account",
+		// Email / phone verification
+		"email verification", "phone verification", "verify email",
+		"verify phone", "confirmation code",
+		// Sensitive API endpoints
+		"/auth", "/login", "/signin", "/signup", "/register",
+		"/reset", "/forgot", "/otp", "/verify", "/2fa", "/mfa",
+		"/token", "/session",
+		// Payment / financial
+		"payment", "checkout", "transaction", "purchase",
+		"coupon", "promo code", "discount code", "gift card",
+	}
+	for _, kw := range sensitiveKeywords {
+		if strings.Contains(combined, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractVulnType extracts a canonical vulnerability type from title/description
