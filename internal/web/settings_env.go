@@ -299,25 +299,72 @@ func (s *Server) applyCatalogLLMSettings(ctx context.Context, req llmSettingsReq
 	// legacy XALGORIX_LLM / XALGORIX_API_KEY / XALGORIX_API_BASE
 	// trio so anyone still consuming those env vars (legacy
 	// scripts, the legacyResolver fallback) keeps working.
-	if authMethod == "api_key" && provider != "" && !isMaskedSettingValue(req.APIKey) && strings.TrimSpace(req.APIKey) != "" {
+	//
+	// The pointer must move whenever the operator switches provider —
+	// even if they leave the masked **** key in place (the UI tells them
+	// to keep it to preserve the saved key). Previously this whole branch
+	// was gated on a freshly-typed key, so switching provider with a
+	// masked key updated only the model env var and the provider reverted
+	// to the stale profile on reload.
+	if authMethod == "api_key" && provider != "" {
 		if s.profiles == nil {
 			return fmt.Errorf("profile store not initialized")
 		}
-		baseOverride := strings.TrimSpace(req.APIBaseOverride)
-		if baseOverride == "" {
-			baseOverride = strings.TrimSpace(req.APIBase)
+		typedKey := strings.TrimSpace(req.APIKey)
+		hasTypedKey := typedKey != "" && !isMaskedSettingValue(req.APIKey)
+		if hasTypedKey {
+			// New key supplied: create/update the profile for this provider.
+			baseOverride := strings.TrimSpace(req.APIBaseOverride)
+			if baseOverride == "" {
+				baseOverride = strings.TrimSpace(req.APIBase)
+			}
+			prof := auth.Profile{
+				Provider:        provider,
+				ProfileID:       profileID,
+				Type:            auth.APIKey,
+				APIKey:          typedKey,
+				APIBaseOverride: baseOverride,
+			}
+			if err := s.profiles.Put(ctx, prof); err != nil {
+				return fmt.Errorf("save profile: %w", err)
+			}
+			activeProfileKey = prof.Key()
+		} else if activeProfileKey == "" {
+			// Masked/empty key and no explicit profile selected. Persist the
+			// provider switch without rewriting any credential:
+			//   1. If a profile already exists for <provider>:<profileId>,
+			//      point at it (preserving its stored key/base).
+			//   2. Otherwise carry over the current saved key (the masked
+			//      value the UI is showing == cfg.APIKey, or the active
+			//      profile's key) into a new profile for this provider so the
+			//      selection sticks.
+			target := auth.Profile{Provider: provider, ProfileID: profileID}
+			if existing, ok, err := s.profiles.Get(ctx, target.Key()); err != nil {
+				return fmt.Errorf("look up profile %q: %w", target.Key(), err)
+			} else if ok {
+				activeProfileKey = existing.Key()
+			} else {
+				carry := strings.TrimSpace(s.cfg.APIKey)
+				if carry == "" && strings.TrimSpace(s.cfg.LLMProfile) != "" {
+					if prof, ok, err := s.profiles.Get(ctx, strings.TrimSpace(s.cfg.LLMProfile)); err == nil && ok {
+						carry = strings.TrimSpace(prof.APIKey)
+					}
+				}
+				if carry != "" {
+					prof := auth.Profile{
+						Provider:        provider,
+						ProfileID:       profileID,
+						Type:            auth.APIKey,
+						APIKey:          carry,
+						APIBaseOverride: strings.TrimSpace(req.APIBaseOverride),
+					}
+					if err := s.profiles.Put(ctx, prof); err != nil {
+						return fmt.Errorf("save profile: %w", err)
+					}
+					activeProfileKey = prof.Key()
+				}
+			}
 		}
-		prof := auth.Profile{
-			Provider:        provider,
-			ProfileID:       profileID,
-			Type:            auth.APIKey,
-			APIKey:          strings.TrimSpace(req.APIKey),
-			APIBaseOverride: baseOverride,
-		}
-		if err := s.profiles.Put(ctx, prof); err != nil {
-			return fmt.Errorf("save profile: %w", err)
-		}
-		activeProfileKey = prof.Key()
 	}
 
 	// activeProfileKey wins as the source of truth for
