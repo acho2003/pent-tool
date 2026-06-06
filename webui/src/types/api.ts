@@ -126,8 +126,31 @@ export interface ScanListItem {
   sub_scan_remaining?: number;
 }
 
+/** Generic server-side pagination envelope: { items, total, page, size }. */
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** Query params accepted by the paginated list endpoints. */
+export interface ListParams {
+  page: number;
+  size: number;
+  q?: string;
+  status?: string;
+  mode?: string;
+}
+
 export interface InstancesResponse {
   instances: ScanInstance[];
+  // Present when the request used server-side pagination/filtering.
+  total?: number;
+  page?: number;
+  size?: number;
+  /** Distinct scan modes across all instances, for the filter dropdown. */
+  modes?: string[];
   resources: {
     cpu_cores: number;
     cpu_load_1m: number;
