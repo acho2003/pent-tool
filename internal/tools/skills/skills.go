@@ -95,10 +95,102 @@ var skillAliases = map[string]string{
 	"clickjacking":                     "performing-clickjacking-attack-test",
 	"deserialization":                  "exploiting-insecure-deserialization",
 	"insecure-deserialization":         "exploiting-insecure-deserialization",
-	"race-condition":                   "exploiting-race-condition-vulnerabilities",
-	"mass-assignment":                  "exploiting-mass-assignment-in-rest-apis",
-	"api-injection":                    "exploiting-api-injection-vulnerabilities",
-	"command-injection":                "detecting-modbus-command-injection-attacks",
+
+	// ── Additional web skills (reachability aliases) ─────────────────
+	"prototype-pollution":     "exploiting-prototype-pollution-in-javascript",
+	"type-juggling":           "exploiting-type-juggling-vulnerabilities",
+	"websocket":               "exploiting-websocket-vulnerabilities",
+	"request-smuggling":       "exploiting-http-request-smuggling",
+	"http-request-smuggling":  "exploiting-http-request-smuggling",
+	"broken-access-control":   "testing-for-broken-access-control",
+	"bac":                     "testing-for-broken-access-control",
+	"business-logic":          "testing-for-business-logic-vulnerabilities",
+	"host-header-injection":   "testing-for-host-header-injection",
+	"hpp":                     "performing-http-parameter-pollution-attack",
+	"parameter-pollution":     "performing-http-parameter-pollution-attack",
+	"graphql":                 "performing-graphql-security-assessment",
+	"web-cache-poisoning":     "performing-web-cache-poisoning-attack",
+	"web-cache-deception":     "performing-web-cache-deception-attack",
+	"csp-bypass":              "performing-content-security-policy-bypass",
+	"waf-bypass":              "performing-web-application-firewall-bypass",
+	"second-order-sqli":       "performing-second-order-sql-injection",
+	"sensitive-data-exposure": "testing-for-sensitive-data-exposure",
+	"xml-injection":           "testing-for-xml-injection-vulnerabilities",
+	"email-header-injection":  "testing-for-email-header-injection",
+	"broken-link-hijacking":   "exploiting-broken-link-hijacking",
+
+	// ── Auth / session / account flows (checklist-derived skills) ────
+	"session":              "testing-session-management-flaws",
+	"session-management":   "testing-session-management-flaws",
+	"session-fixation":     "testing-session-management-flaws",
+	"cookie-security":      "exploiting-cookie-based-vulnerabilities",
+	"2fa":                  "bypassing-two-factor-and-otp",
+	"mfa":                  "bypassing-two-factor-and-otp",
+	"otp":                  "bypassing-two-factor-and-otp",
+	"2fa-bypass":           "bypassing-two-factor-and-otp",
+	"mfa-bypass":           "bypassing-two-factor-and-otp",
+	"otp-bypass":           "bypassing-two-factor-and-otp",
+	"password-reset":       "testing-password-reset-flaws",
+	"forgot-password":      "testing-password-reset-flaws",
+	"reset-password":       "testing-password-reset-flaws",
+	"account-recovery":     "testing-password-reset-flaws",
+	"registration":         "testing-registration-and-account-flaws",
+	"signup":               "testing-registration-and-account-flaws",
+	"account-takeover":     "performing-account-takeover-attacks",
+	"ato":                  "performing-account-takeover-attacks",
+	"pre-account-takeover": "performing-account-takeover-attacks",
+
+	// ── Injection / misc / business logic (checklist-derived) ────────
+	"csv-injection":           "exploiting-csv-formula-injection",
+	"formula-injection":       "exploiting-csv-formula-injection",
+	"excel-injection":         "exploiting-csv-formula-injection",
+	"dde":                     "exploiting-csv-formula-injection",
+	"rfd":                     "performing-reflected-file-download",
+	"reflected-file-download": "performing-reflected-file-download",
+	"captcha":                 "bypassing-captcha-protections",
+	"captcha-bypass":          "bypassing-captcha-protections",
+	"recaptcha":               "bypassing-captcha-protections",
+	"saml":                    "exploiting-saml-authentication-flaws",
+	"saml-bypass":             "exploiting-saml-authentication-flaws",
+	"xsw":                     "exploiting-saml-authentication-flaws",
+	"signature-wrapping":      "exploiting-saml-authentication-flaws",
+	"ecommerce":               "testing-ecommerce-and-payment-logic",
+	"payment":                 "testing-ecommerce-and-payment-logic",
+	"payment-logic":           "testing-ecommerce-and-payment-logic",
+	"price-tampering":         "testing-ecommerce-and-payment-logic",
+	"voucher":                 "testing-ecommerce-and-payment-logic",
+	"checkout":                "testing-ecommerce-and-payment-logic",
+	"shopping-cart":           "testing-ecommerce-and-payment-logic",
+	"race-condition":          "exploiting-race-condition-vulnerabilities",
+	"mass-assignment":         "exploiting-mass-assignment-in-rest-apis",
+	"api-injection":           "exploiting-api-injection-vulnerabilities",
+
+	// ── Path traversal / LFI / RFI ───────────────────────────────────
+	// The directory-traversal skill is the canonical LFI/path-traversal
+	// reference. Without these aliases the agent's natural lookups
+	// (read_skill name=lfi / path-traversal) silently failed, which is a
+	// frequent cause of missed file-read findings (e.g. //etc/passwd).
+	"lfi":                   "performing-directory-traversal-testing",
+	"local-file-inclusion":  "performing-directory-traversal-testing",
+	"rfi":                   "performing-directory-traversal-testing",
+	"remote-file-inclusion": "performing-directory-traversal-testing",
+	"path-traversal":        "performing-directory-traversal-testing",
+	"directory-traversal":   "performing-directory-traversal-testing",
+	"file-read":             "performing-directory-traversal-testing",
+	"arbitrary-file-read":   "performing-directory-traversal-testing",
+	"etc-passwd":            "performing-directory-traversal-testing",
+
+	// ── OS command injection / RCE ───────────────────────────────────
+	// "command-injection" previously resolved to a Modbus/ICS detection
+	// skill, which is wrong for web testing. Point the web-facing terms at
+	// the dedicated web command-injection skill; keep the ICS one reachable
+	// under an explicit modbus alias.
+	"command-injection":        "exploiting-os-command-injection",
+	"os-command-injection":     "exploiting-os-command-injection",
+	"rce":                      "exploiting-os-command-injection",
+	"remote-code-execution":    "exploiting-os-command-injection",
+	"shell-injection":          "exploiting-os-command-injection",
+	"modbus-command-injection": "detecting-modbus-command-injection-attacks",
 
 	// ── Authentication & authorization ───────────────────────────────
 	"jwt":               "exploiting-jwt-algorithm-confusion-attack",
@@ -221,6 +313,163 @@ var skillAliases = map[string]string{
 	// ── Misc ─────────────────────────────────────────────────────────
 	"darkweb": "monitoring-darkweb-sources",
 	"dmarc":   "performing-dmarc-policy-enforcement-rollout",
+
+	// ── New web vuln-class skills (HackTricks-derived) ───────────────
+	"crlf":                           "testing-for-crlf-injection",
+	"crlf-injection":                 "testing-for-crlf-injection",
+	"http-header-injection":          "testing-for-crlf-injection",
+	"response-splitting":             "testing-for-crlf-injection",
+	"ldap-injection":                 "exploiting-ldap-injection",
+	"ldapi":                          "exploiting-ldap-injection",
+	"xpath-injection":                "exploiting-xpath-injection",
+	"xpath":                          "exploiting-xpath-injection",
+	"xslt-injection":                 "exploiting-xslt-server-side-injection",
+	"xslt":                           "exploiting-xslt-server-side-injection",
+	"client-side-path-traversal":     "exploiting-client-side-path-traversal",
+	"cspt":                           "exploiting-client-side-path-traversal",
+	"osrf":                           "exploiting-client-side-path-traversal",
+	"csti":                           "exploiting-client-side-template-injection",
+	"client-side-template-injection": "exploiting-client-side-template-injection",
+	"ssi-injection":                  "exploiting-server-side-includes-esi-injection",
+	"ssi":                            "exploiting-server-side-includes-esi-injection",
+	"esi-injection":                  "exploiting-server-side-includes-esi-injection",
+	"esi":                            "exploiting-server-side-includes-esi-injection",
+	"orm-injection":                  "exploiting-orm-injection",
+	"orm-leak":                       "exploiting-orm-injection",
+	"dependency-confusion":           "exploiting-dependency-confusion",
+	"dep-confusion":                  "exploiting-dependency-confusion",
+	"postmessage":                    "exploiting-postmessage-vulnerabilities",
+	"post-message":                   "exploiting-postmessage-vulnerabilities",
+	"redos":                          "testing-for-regex-dos-redos",
+	"regex-dos":                      "testing-for-regex-dos-redos",
+	"cookie-hacking":                 "exploiting-cookie-based-vulnerabilities",
+	"hop-by-hop":                     "abusing-hop-by-hop-headers",
+	"hop-by-hop-headers":             "abusing-hop-by-hop-headers",
+	"xs-search":                      "performing-xs-search-attacks",
+	"xs-leaks":                       "performing-xs-search-attacks",
+	"xsleaks":                        "performing-xs-search-attacks",
+	"xssi":                           "exploiting-cross-site-script-inclusion-xssi",
+	"reverse-tabnabbing":             "exploiting-reverse-tab-nabbing",
+	"tabnabbing":                     "exploiting-reverse-tab-nabbing",
+	"dangling-markup":                "exploiting-dangling-markup-injection",
+	"scriptless-injection":           "exploiting-dangling-markup-injection",
+
+	// ── Network-services-pentesting (per-service skills) ─────────────
+	"ftp":             "pentesting-ftp",
+	"ssh":             "pentesting-ssh",
+	"telnet":          "pentesting-telnet",
+	"smtp":            "pentesting-smtp",
+	"imap":            "pentesting-imap",
+	"pop3":            "pentesting-pop3",
+	"pop":             "pentesting-pop3",
+	"rsync":           "pentesting-rsync",
+	"nfs":             "pentesting-nfs",
+	"tftp":            "pentesting-tftp",
+	"mysql":           "pentesting-mysql",
+	"mssql":           "pentesting-mssql",
+	"sql-server":      "pentesting-mssql",
+	"postgresql":      "pentesting-postgresql",
+	"postgres":        "pentesting-postgresql",
+	"oracle":          "pentesting-oracle",
+	"oracle-tns":      "pentesting-oracle",
+	"redis":           "pentesting-redis",
+	"mongodb":         "pentesting-mongodb",
+	"mongo":           "pentesting-mongodb",
+	"elasticsearch":   "pentesting-elasticsearch",
+	"couchdb":         "pentesting-couchdb",
+	"memcached":       "pentesting-memcached",
+	"memcache":        "pentesting-memcached",
+	"smb":             "pentesting-smb",
+	"cifs":            "pentesting-smb",
+	"netbios":         "pentesting-netbios",
+	"msrpc":           "pentesting-msrpc",
+	"rpc":             "pentesting-msrpc",
+	"kerberos":        "pentesting-kerberos",
+	"ldap-service":    "pentesting-ldap",
+	"rdp":             "pentesting-rdp",
+	"vnc":             "pentesting-vnc",
+	"winrm":           "pentesting-winrm",
+	"x11":             "pentesting-x11",
+	"snmp":            "pentesting-snmp",
+	"ntp":             "pentesting-ntp",
+	"dns":             "pentesting-dns",
+	"ipmi":            "pentesting-ipmi",
+	"bmc":             "pentesting-ipmi",
+	"docker-api":      "pentesting-docker",
+	"docker-daemon":   "pentesting-docker",
+	"docker-registry": "pentesting-docker-registry",
+	"ajp":             "pentesting-ajp",
+	"ghostcat":        "pentesting-ajp",
+	"rabbitmq":        "pentesting-rabbitmq",
+	"amqp":            "pentesting-rabbitmq",
+	"voip":            "pentesting-voip",
+	"sip":             "pentesting-voip",
+
+	// ── Binary exploitation (HackTricks-derived) ─────────────────────
+	"stack-overflow":       "exploiting-stack-buffer-overflows",
+	"buffer-overflow":      "exploiting-stack-buffer-overflows",
+	"bof":                  "exploiting-stack-buffer-overflows",
+	"format-string":        "exploiting-format-string-vulnerabilities",
+	"fmtstr":               "exploiting-format-string-vulnerabilities",
+	"rop":                  "performing-return-oriented-programming",
+	"ret2libc":             "performing-return-oriented-programming",
+	"mitigation-bypass":    "bypassing-binary-exploitation-mitigations",
+	"aslr-bypass":          "bypassing-binary-exploitation-mitigations",
+	"nx-bypass":            "bypassing-binary-exploitation-mitigations",
+	"canary-bypass":        "bypassing-binary-exploitation-mitigations",
+	"heap-exploitation":    "exploiting-glibc-heap-vulnerabilities",
+	"glibc-heap":           "exploiting-glibc-heap-vulnerabilities",
+	"tcache":               "exploiting-glibc-heap-vulnerabilities",
+	"integer-overflow":     "exploiting-integer-overflow-vulnerabilities",
+	"kernel-exploitation":  "exploiting-linux-kernel-vulnerabilities",
+	"linux-kernel-exploit": "exploiting-linux-kernel-vulnerabilities",
+	"windows-exploitation": "performing-windows-binary-exploitation",
+	"seh-overflow":         "performing-windows-binary-exploitation",
+	"arbitrary-write":      "exploiting-arbitrary-write-to-execution",
+	"write-what-where":     "exploiting-arbitrary-write-to-execution",
+	"got-overwrite":        "exploiting-arbitrary-write-to-execution",
+
+	// ── macOS security ───────────────────────────────────────────────
+	"macos-privesc":     "performing-macos-privilege-escalation",
+	"macos-red-team":    "performing-macos-red-teaming",
+	"gatekeeper":        "bypassing-macos-gatekeeper-tcc-and-sip",
+	"tcc":               "bypassing-macos-gatekeeper-tcc-and-sip",
+	"macos-sip":         "bypassing-macos-gatekeeper-tcc-and-sip",
+	"macos-persistence": "analyzing-macos-persistence-and-autostart",
+	"dyld-hijacking":    "exploiting-macos-dyld-hijacking-and-process-injection",
+	"dylib-hijacking":   "exploiting-macos-dyld-hijacking-and-process-injection",
+
+	// ── Linux hardening / post-exploitation ──────────────────────────
+	"restricted-shell":        "bypassing-restricted-shells",
+	"rbash":                   "bypassing-restricted-shells",
+	"shell-escape":            "bypassing-restricted-shells",
+	"linux-capabilities":      "exploiting-linux-capabilities",
+	"capabilities":            "exploiting-linux-capabilities",
+	"sudo-privesc":            "exploiting-sudo-suid-and-cron-misconfigurations",
+	"suid":                    "exploiting-sudo-suid-and-cron-misconfigurations",
+	"gtfobins":                "exploiting-sudo-suid-and-cron-misconfigurations",
+	"linux-privesc":           "exploiting-sudo-suid-and-cron-misconfigurations",
+	"linux-post-exploitation": "performing-linux-post-exploitation",
+	"freeipa":                 "pentesting-freeipa",
+	"dbus":                    "exploiting-dbus-and-socket-command-injection",
+	"socket-injection":        "exploiting-dbus-and-socket-command-injection",
+	"pivoting":                "performing-network-pivoting-and-tunneling",
+	"tunneling":               "performing-network-pivoting-and-tunneling",
+	"port-forwarding":         "performing-network-pivoting-and-tunneling",
+	"container-escape":        "exploiting-container-escapes",
+	"docker-escape":           "exploiting-container-escapes",
+	"container-breakout":      "exploiting-container-escapes",
+
+	// ── AI / LLM offensive security ──────────────────────────────────
+	"model-rce":             "exploiting-ai-model-file-rce",
+	"pickle-rce":            "exploiting-ai-model-file-rce",
+	"model-deserialization": "exploiting-ai-model-file-rce",
+	"prompt-injection":      "testing-llm-prompt-injection-and-jailbreaks",
+	"jailbreak":             "testing-llm-prompt-injection-and-jailbreaks",
+	"llm-injection":         "testing-llm-prompt-injection-and-jailbreaks",
+	"mcp":                   "testing-mcp-server-security",
+	"mcp-security":          "testing-mcp-server-security",
+	"tool-poisoning":        "testing-mcp-server-security",
 }
 
 // resolveAlias returns the canonical skill name for a shorthand alias.
@@ -256,25 +505,18 @@ func makeReadSkill(fsys fs.FS) func(args map[string]string) (tools.Result, error
 		}
 
 		// Resolve common shorthand aliases (e.g. "xss" → full skill name).
-		name = resolveAlias(name)
-
-		// If a category was specified, look there first.
-		if category != "" {
-			skillPath := category + "/" + name + "/SKILL.md"
-			if data, err := fs.ReadFile(fsys, skillPath); err == nil {
-				return tools.Result{Output: string(data)}, nil
-			}
+		// Lookup is literal-first, alias-fallback: if a real skill matches the
+		// name as given we use it; only when no literal match exists do we
+		// resolve an alias and retry. This keeps short aliases (lfi, sqli,
+		// graphql, rce, …) working without shadowing any skill whose directory
+		// name happens to equal an alias key.
+		if out, where, ok := lookupSkill(fsys, category, name); ok {
+			return tools.Result{Output: noteIfCrossCategory(category, where, out)}, nil
 		}
-
-		// Fallback: scan every category. With ~754 entries this is still fast
-		// because fs.ReadFile on an embedded FS is O(1) per lookup.
-		if found, where := searchAllCategories(fsys, name); found != "" {
-			out := found
-			if category != "" && where != category {
-				out = fmt.Sprintf("Note: skill not found in category '%s'; loaded from '%s'.\n\n%s",
-					category, where, found)
+		if alias := resolveAlias(name); alias != name {
+			if out, where, ok := lookupSkill(fsys, category, alias); ok {
+				return tools.Result{Output: noteIfCrossCategory(category, where, out)}, nil
 			}
-			return tools.Result{Output: out}, nil
 		}
 
 		// Best-effort hint when the user has a near-match name.
@@ -285,6 +527,31 @@ func makeReadSkill(fsys fs.FS) func(args map[string]string) (tools.Result, error
 		}
 		return tools.Result{Error: errMsg}, nil
 	}
+}
+
+// lookupSkill resolves <name>/SKILL.md, preferring the supplied category and
+// falling back to a scan of every category. Returns the file contents, the
+// category it was found under, and whether it was found.
+func lookupSkill(fsys fs.FS, category, name string) (string, string, bool) {
+	if category != "" {
+		if data, err := fs.ReadFile(fsys, category+"/"+name+"/SKILL.md"); err == nil {
+			return string(data), category, true
+		}
+	}
+	if found, where := searchAllCategories(fsys, name); found != "" {
+		return found, where, true
+	}
+	return "", "", false
+}
+
+// noteIfCrossCategory prepends an informational note when a skill requested
+// under one category was actually found in another.
+func noteIfCrossCategory(requested, found, out string) string {
+	if requested != "" && found != requested {
+		return fmt.Sprintf("Note: skill not found in category '%s'; loaded from '%s'.\n\n%s",
+			requested, found, out)
+	}
+	return out
 }
 
 // sanitizeSlug keeps only alphanumerics, dash, and underscore. This both

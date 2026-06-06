@@ -64,3 +64,4 @@ webui/.turbo/
 # not part of the published source.
 .kiro/
 node_modules
+research/
