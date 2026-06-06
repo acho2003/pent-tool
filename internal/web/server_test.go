@@ -2625,3 +2625,47 @@ func TestIntegration_WebFetcherCrossCheckMatchesAgentGuardOracle(t *testing.T) {
 		})
 	}
 }
+
+// TestScannerIdle covers the restart-when-idle gate: a restart may only fire
+// when no scan instance is active and the server is not mid-scan.
+func TestScannerIdle(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	// Fresh server, no instances → idle.
+	if !s.scannerIdle() {
+		t.Fatalf("fresh server should be idle")
+	}
+
+	// Active instance statuses block a restart.
+	for _, st := range []string{"running", "pending", "paused", "queued", "starting"} {
+		s.instancesMu.Lock()
+		s.instances = map[string]*ScanInstance{"i": {ID: "i", Status: st}}
+		s.instancesMu.Unlock()
+		if s.scannerIdle() {
+			t.Fatalf("status %q should NOT be idle", st)
+		}
+	}
+
+	// Terminal statuses are historical and do not block a restart.
+	for _, st := range []string{"finished", "stopped", "failed"} {
+		s.instancesMu.Lock()
+		s.instances = map[string]*ScanInstance{"i": {ID: "i", Status: st}}
+		s.instancesMu.Unlock()
+		if !s.scannerIdle() {
+			t.Fatalf("status %q should be idle", st)
+		}
+	}
+
+	// The global running flag also blocks a restart.
+	s.instancesMu.Lock()
+	s.instances = map[string]*ScanInstance{}
+	s.instancesMu.Unlock()
+	s.running.Store(true)
+	if s.scannerIdle() {
+		t.Fatalf("server with running=true should NOT be idle")
+	}
+	s.running.Store(false)
+	if !s.scannerIdle() {
+		t.Fatalf("server should be idle after running cleared")
+	}
+}

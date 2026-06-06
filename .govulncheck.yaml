@@ -1,6 +1,5 @@
 # govulncheck configuration for xalgorix.
 #
-# Implements task 0.3 of the xalgorix-saas spec (Requirement 20.11).
 # govulncheck (golang.org/x/vuln/cmd/govulncheck) does not yet support a
 # native config file; this YAML is read by the `make sec` target and the
 # security CI workflow as a declarative source of truth for:

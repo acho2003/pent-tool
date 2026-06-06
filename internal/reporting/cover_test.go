@@ -254,11 +254,8 @@ func TestCoverPage_SeverityRollupRendered(t *testing.T) {
 }
 
 // TestCoverPage_FreePlanWatermarkPresent asserts that when the cover
-// page is rendered with a Free-plan watermarked company name (the
-// shape Cloud_Platform's worker wrapper produces for `plan=free`), the
-// trial watermark text lands in the rendered PDF bytes.
-//
-// Validates: Requirements 6.5, 6.11.
+// page is rendered with a watermarked company name, the trial watermark
+// text lands in the rendered PDF bytes.
 func TestCoverPage_FreePlanWatermarkPresent(t *testing.T) {
 	freezeFPDF(t)
 

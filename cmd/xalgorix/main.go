@@ -31,7 +31,7 @@ import (
 // The hardcoded fallback is only used when developers `go run` the package
 // without ldflags. It is a `var` (not `const`) precisely so ldflags can
 // rewrite it.
-var version = "4.5.2"
+var version = "4.5.3"
 
 const defaultWebPort = 9137
 
@@ -79,6 +79,12 @@ func main() {
 	// Handle restart command
 	if args.restart {
 		handleRestart()
+		os.Exit(0)
+	}
+
+	// Handle deferred restart-when-idle command
+	if args.restartIdle {
+		handleRestartWhenIdle()
 		os.Exit(0)
 	}
 
@@ -274,6 +280,7 @@ type cliArgs struct {
 	start       bool
 	stop        bool
 	restart     bool
+	restartIdle bool
 	uninstall   bool
 }
 
@@ -325,6 +332,8 @@ func parseArgs() cliArgs {
 			args.stop = true
 		case "--restart":
 			args.restart = true
+		case "--restart-when-idle", "--restart-idle":
+			args.restartIdle = true
 		case "--uninstall":
 			args.uninstall = true
 		case "--help", "-h":
@@ -368,6 +377,7 @@ func printUsage() {
 	fmt.Println("  --start                   Install and start as systemd service")
 	fmt.Println("  --stop                    Stop the service")
 	fmt.Println("  --restart                 Restart the service")
+	fmt.Println("  --restart-when-idle       Restart once all scans finish and no tools run")
 	fmt.Println("  --uninstall               Remove from system")
 	fmt.Println()
 	fmt.Println("CLI Flags:")
@@ -582,6 +592,36 @@ func handleRestart() {
 
 	fmt.Println("✅ Xalgorix restarted!")
 	printServiceAccessInfo(config.Get(), defaultWebPort)
+}
+
+// handleRestartWhenIdle asks a running xalgorix --web process to restart once
+// it is idle (all scans finished, no tools running) by sending it SIGUSR1.
+// The actual restart is performed by the server's restart-when-idle watcher.
+func handleRestartWhenIdle() {
+	// pkill -f matches against the full command line. The current process is
+	// "xalgorix --restart-when-idle" (no "--web"), so it never signals itself.
+	const pattern = "xalgorix.*--web"
+	signalCmds := [][]string{
+		{"pkill", "--signal", "USR1", "-f", pattern},
+		{"sudo", "pkill", "--signal", "USR1", "-f", pattern},
+	}
+	var signaled bool
+	for _, c := range signalCmds {
+		if err := exec.Command(c[0], c[1:]...).Run(); err == nil {
+			signaled = true
+			break
+		}
+	}
+	if !signaled {
+		fmt.Fprintln(os.Stderr, "❌ No running xalgorix --web process found to signal (or insufficient permissions).")
+		fmt.Fprintln(os.Stderr, "   Start the service first with: xalgorix --start")
+		os.Exit(1)
+	}
+	fmt.Println("✅ Graceful restart scheduled.")
+	fmt.Println("   Xalgorix will restart automatically once all running scans finish")
+	fmt.Println("   and no tools are active. Watch progress with:")
+	fmt.Println("     journalctl -u xalgorix -f      (systemd)")
+	fmt.Println("     tail -f /tmp/xalgorix.log      (background mode)")
 }
 
 func printServiceAccessInfo(cfg *config.Config, port int) {

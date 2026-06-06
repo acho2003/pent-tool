@@ -118,12 +118,6 @@ linters:
           - revive
         text: should have comment
     paths:
-      # WIP multi-tenant SaaS surface. It is not part of the shipped
-      # self-hosted binary (cmd/xalgorix) and carries a large pre-existing
-      # lint backlog; lint it separately once it stabilizes. The rest of the
-      # module is held lint-clean.
-      - internal/cloud
-      - cmd/xalgorix-cloud
       - webui/node_modules
       - webui/dist
       - webui/build
@@ -143,8 +137,6 @@ formatters:
   exclusions:
     generated: lax
     paths:
-      - internal/cloud
-      - cmd/xalgorix-cloud
       - webui/node_modules
       - webui/dist
       - webui/build
