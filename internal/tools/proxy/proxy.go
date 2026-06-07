@@ -176,7 +176,7 @@ func sendRequest(args map[string]string) (tools.Result, error) {
 		h := sha256.Sum256([]byte(method + " " + targetURL))
 		hash := hex.EncodeToString(h[:8])
 		savedPath = "/tmp/send_request_" + hash + ".txt"
-		if err := os.WriteFile(savedPath, respBody, 0644); err != nil {
+		if err := os.WriteFile(savedPath, respBody, 0600); err != nil {
 			// If file write fails, fall back to truncation.
 			savedPath = ""
 		}
