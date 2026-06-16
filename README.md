@@ -7,6 +7,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux-111111?style=for-the-badge&logo=linux&logoColor=white)](#installation)
+[![Hosted](https://img.shields.io/badge/Hosted-www.xalgorix.com-6d28d9?style=for-the-badge&logo=icloud&logoColor=white)](https://www.xalgorix.com/)
 
 Self-hosted AI security testing with a local Web UI, live agent telemetry, verified findings, and branded PDF reports.
 
@@ -40,6 +41,9 @@ Open `http://127.0.0.1:9137`.
 
 > [!IMPORTANT]
 > Use Xalgorix only on systems you own or have explicit permission to test.
+
+> [!TIP]
+> Prefer not to self-host? A fully managed version is available at [www.xalgorix.com](https://www.xalgorix.com/) — click-to-scan, no install or API keys required.
 
 ## Contents
 
@@ -550,6 +554,7 @@ Xalgorix is released under the MIT License. See [LICENSE](LICENSE).
 
 | Resource      | Link                                                                             |
 | ------------- | -------------------------------------------------------------------------------- |
+| Hosted (Cloud) | [www.xalgorix.com](https://www.xalgorix.com/)                                   |
 | Documentation | [docs.xalgorix.com](https://docs.xalgorix.com)                                   |
 | Issues        | [github.com/xalgord/xalgorix/issues](https://github.com/xalgord/xalgorix/issues) |
 | Support       | [buymeacoffee.com/xalgord](https://buymeacoffee.com/xalgord)                     |
