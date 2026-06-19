@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -571,6 +572,18 @@ func (c *Client) chatWithRetry(messages []Message) (string, error) {
 			return result, nil
 		}
 		lastErr = err
+
+		// Configuration errors are deterministic — a missing base
+		// URL, unknown provider, or unset profile will never succeed
+		// on retry. Surface them immediately instead of running the
+		// full backoff loop (issue #122: a custom provider with no
+		// base URL produced `unsupported protocol scheme ""` and was
+		// retried 5 times, making a config bug look transient).
+		var cfgErr *ConfigError
+		if errors.As(err, &cfgErr) {
+			log.Printf("[llm] Non-retryable config error, returning immediately: %v", err)
+			return "", fmt.Errorf("LLM request failed: %w", err)
+		}
 
 		// Non-retryable errors: context window overflow, malformed request, etc.
 		// These will never succeed on retry — return immediately so the caller

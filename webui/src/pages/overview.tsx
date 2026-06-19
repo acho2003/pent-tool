@@ -231,11 +231,6 @@ export default function OverviewPage() {
             Command center for scans, findings, and live activity.
           </p>
         </div>
-        <Button asChild>
-          <Link to="/scans/new">
-            <Plus className="h-3.5 w-3.5" /> New Scan
-          </Link>
-        </Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

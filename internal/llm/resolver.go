@@ -29,6 +29,8 @@ package llm
 import (
 	"context"
 	"net/http"
+	url2 "net/url"
+	"strconv"
 	"strings"
 
 	"github.com/xalgord/xalgorix/v4/internal/auth"
@@ -90,6 +92,13 @@ type catalogResolver struct {
 	cat  *providers.Service
 	prof *auth.Store
 	pick func(ctx context.Context) (catalogPick, error)
+	// fallbackBase is the operator-configured base URL
+	// (cfg.APIBase / XALGORIX_API_BASE) used when neither the
+	// catalog Entry nor the credential Profile carries one — the
+	// "custom" provider case, where Entry.BaseURL is empty by
+	// design. Without it a custom provider with an empty profile
+	// override would build a relative request path (issue #122).
+	fallbackBase string
 }
 
 // compositeResolver dispatches between catalogResolver and
@@ -193,7 +202,7 @@ func defaultCatalogPick(c *compositeResolver) func(ctx context.Context) (catalog
 func (c *compositeResolver) Resolve(ctx context.Context) (Endpoint, error) {
 	// Branch 1 — explicit active credential pointer wins.
 	if c.cfg != nil && strings.TrimSpace(c.cfg.LLMProfile) != "" && c.cat != nil && c.prof != nil {
-		cr := &catalogResolver{cat: c.cat, prof: c.prof, pick: c.pick}
+		cr := &catalogResolver{cat: c.cat, prof: c.prof, pick: c.pick, fallbackBase: c.cfg.APIBase}
 		ep, err := cr.Resolve(ctx)
 		if err == nil {
 			// Custom Provider and LiteLLM catalog entries have
@@ -331,7 +340,7 @@ func (cr *catalogResolver) Resolve(ctx context.Context) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	return BuildCatalogEndpoint(pick.entry, pick.profile, "")
+	return BuildCatalogEndpoint(pick.entry, pick.profile, "", cr.fallbackBase)
 }
 
 // BuildCatalogEndpoint assembles the outbound Endpoint for one
@@ -349,10 +358,21 @@ func (cr *catalogResolver) Resolve(ctx context.Context) (Endpoint, error) {
 // typed model wins over the catalog default. An empty preferModel
 // preserves the "first catalog model" behavior.
 //
+// fallbackBase is the operator-configured base URL (cfg.APIBase /
+// XALGORIX_API_BASE) consulted only when neither the catalog Entry
+// nor the credential Profile supplies one. This is what keeps the
+// "custom" provider working: its catalog Entry.BaseURL is empty by
+// design, so without this fallback a profile missing its
+// APIBaseOverride would build a relative request path and the HTTP
+// client would fail with `unsupported protocol scheme ""` (#122).
+//
 // An unrecognized HeaderStyle returns a *ConfigError so a corrupt
 // catalog entry surfaces as "no provider configured" rather than
-// silently POSTing to a guessed path.
-func BuildCatalogEndpoint(entry providers.Entry, prof auth.Profile, preferModel string) (Endpoint, error) {
+// silently POSTing to a guessed path. Likewise, a non-absolute
+// final URL (missing scheme/host) returns a *ConfigError so a
+// missing base URL fails fast as a config error instead of being
+// retried as a transient provider failure.
+func BuildCatalogEndpoint(entry providers.Entry, prof auth.Profile, preferModel, fallbackBase string) (Endpoint, error) {
 	model := strings.TrimSpace(preferModel)
 	if model == "" && len(entry.Models) > 0 {
 		model = entry.Models[0]
@@ -361,6 +381,13 @@ func BuildCatalogEndpoint(entry providers.Entry, prof auth.Profile, preferModel 
 	apiBase := entry.BaseURL
 	if prof.Type == auth.APIKey && prof.APIBaseOverride != "" {
 		apiBase = prof.APIBaseOverride
+	}
+	if strings.TrimSpace(apiBase) == "" {
+		// Neither the catalog entry nor the profile carry a base
+		// URL (the "custom" provider shape). Fall back to the
+		// operator-configured base so the request is never sent
+		// with a relative path (#122).
+		apiBase = strings.TrimSpace(fallbackBase)
 	}
 	apiBase = strings.TrimRight(apiBase, "/")
 
@@ -394,6 +421,20 @@ func BuildCatalogEndpoint(entry providers.Entry, prof auth.Profile, preferModel 
 	default:
 		return Endpoint{}, &ConfigError{
 			Msg: "catalog resolver: unsupported headerStyle " + entry.HeaderStyle + " for entry " + entry.ID,
+		}
+	}
+
+	// Fail fast when the assembled URL is not absolute (missing
+	// scheme or host). This is the deterministic config bug behind
+	// #122: a "custom" provider with no base URL anywhere produces a
+	// relative path like "/v1/chat/completions", which the HTTP
+	// client rejects with `unsupported protocol scheme ""`. Surfacing
+	// it as a *ConfigError here means the LLM retry loop treats it as
+	// a non-retryable configuration error instead of hammering the
+	// request 5 times.
+	if parsed, perr := url2.Parse(url); perr != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return Endpoint{}, &ConfigError{
+			Msg: "catalog resolver: provider " + entry.ID + " has no base URL — set the Base URL for the Custom Provider (or XALGORIX_API_BASE); built non-absolute request URL " + strconv.Quote(url),
 		}
 	}
 

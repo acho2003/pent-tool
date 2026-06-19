@@ -65,6 +65,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { LiveFeed, type FeedFilter } from "@/components/live-feed";
+import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination";
 import type { SubScanSummary, VulnSummary } from "@/types/api";
 
 export default function ScanDetailPage() {
@@ -478,6 +479,23 @@ function RiskBreakdown({ vulns }: { vulns: VulnSummary[] }) {
 }
 
 function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+
+  const total = subScans.length;
+  // Clamp the current page when the list shrinks/grows (it grows live during a
+  // wildcard scan) so we never strand the user on an empty page.
+  const totalPages = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  useEffect(() => {
+    if (safePage !== page) setPage(safePage);
+  }, [safePage, page]);
+
+  const paged = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return subScans.slice(start, start + pageSize);
+  }, [subScans, safePage, pageSize]);
+
   if (subScans.length === 0) {
     return (
       <EmptyState
@@ -502,7 +520,7 @@ function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
               </tr>
             </thead>
             <tbody>
-              {subScans.map((sub) => (
+              {paged.map((sub) => (
                 <tr
                   key={sub.id || sub.target}
                   className="border-b border-border/60 last:border-0"
@@ -530,6 +548,13 @@ function SubdomainsTab({ subScans }: { subScans: SubScanSummary[] }) {
             </tbody>
           </table>
         </div>
+        <Pagination
+          totalItems={total}
+          page={safePage}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </CardContent>
     </Card>
   );

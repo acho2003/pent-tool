@@ -31,7 +31,7 @@ func TestBuildCatalogEndpoint_CodexResponses(t *testing.T) {
 		AccountID:   "acct_codex_77",
 	}
 
-	ep, err := BuildCatalogEndpoint(entry, prof, "")
+	ep, err := BuildCatalogEndpoint(entry, prof, "", "")
 	if err != nil {
 		t.Fatalf("BuildCatalogEndpoint: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestBuildCatalogEndpoint_PreferModel(t *testing.T) {
 		Models:      []string{"gpt-5.5"},
 	}
 	prof := auth.Profile{Provider: "codex", ProfileID: "default", Type: auth.OAuth, AccessToken: "t"}
-	ep, err := BuildCatalogEndpoint(entry, prof, "gpt-5.5-codex")
+	ep, err := BuildCatalogEndpoint(entry, prof, "gpt-5.5-codex", "")
 	if err != nil {
 		t.Fatalf("BuildCatalogEndpoint: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestBuildCatalogEndpoint_OpenAIAndUnknown(t *testing.T) {
 		Models:      []string{"gpt-5.5"},
 	}
 	keyProf := auth.Profile{Provider: "openai", ProfileID: "default", Type: auth.APIKey, APIKey: "sk-x"}
-	ep, err := BuildCatalogEndpoint(openai, keyProf, "")
+	ep, err := BuildCatalogEndpoint(openai, keyProf, "", "")
 	if err != nil {
 		t.Fatalf("openai BuildCatalogEndpoint: %v", err)
 	}
@@ -111,7 +111,45 @@ func TestBuildCatalogEndpoint_OpenAIAndUnknown(t *testing.T) {
 	}
 
 	bad := providers.Entry{ID: "weird", BaseURL: "https://x", HeaderStyle: "made-up"}
-	if _, err := BuildCatalogEndpoint(bad, keyProf, ""); err == nil {
+	if _, err := BuildCatalogEndpoint(bad, keyProf, "", ""); err == nil {
 		t.Error("expected error for unsupported header style, got nil")
+	}
+}
+
+// TestBuildCatalogEndpoint_CustomProviderFallbackBase is the regression
+// guard for issue #122: a "custom" provider has an empty catalog
+// Entry.BaseURL, so when the credential profile is also missing its
+// APIBaseOverride the builder must fall back to the operator-configured
+// base URL (cfg.APIBase / XALGORIX_API_BASE) instead of emitting a
+// relative "/v1/chat/completions" path.
+func TestBuildCatalogEndpoint_CustomProviderFallbackBase(t *testing.T) {
+	custom := providers.Entry{
+		ID:          "custom",
+		DisplayName: "Custom Provider",
+		BaseURL:     "",
+		HeaderStyle: "openai",
+	}
+	// Profile carries the key but NO APIBaseOverride — the exact
+	// shape that previously produced a relative request URL.
+	prof := auth.Profile{Provider: "custom", ProfileID: "default", Type: auth.APIKey, APIKey: "sk-x"}
+
+	ep, err := BuildCatalogEndpoint(custom, prof, "router-gpt-5.5-xhigh", "http://10.0.0.201:20128/v1")
+	if err != nil {
+		t.Fatalf("custom BuildCatalogEndpoint: %v", err)
+	}
+	if ep.URL != "http://10.0.0.201:20128/v1/chat/completions" {
+		t.Errorf("URL = %q, want http://10.0.0.201:20128/v1/chat/completions", ep.URL)
+	}
+	if ep.Model != "router-gpt-5.5-xhigh" {
+		t.Errorf("model = %q, want router-gpt-5.5-xhigh", ep.Model)
+	}
+
+	// With no base URL anywhere, the builder must fail fast with a
+	// *ConfigError rather than returning a relative path that the
+	// HTTP client would reject with `unsupported protocol scheme ""`.
+	if _, err := BuildCatalogEndpoint(custom, prof, "router-gpt-5.5-xhigh", ""); err == nil {
+		t.Error("expected ConfigError for custom provider with no base URL, got nil")
+	} else if _, ok := err.(*ConfigError); !ok {
+		t.Errorf("error type = %T, want *ConfigError", err)
 	}
 }

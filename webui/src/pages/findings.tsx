@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
-  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -35,9 +34,8 @@ import {
   PAGE_SIZE_OPTIONS,
   Pagination,
 } from "@/components/Pagination";
-import { useDeleteVuln, useScansList, qk } from "@/api/queries";
-import { api } from "@/api/client";
-import type { FindingsSummaryResponse, ScanRecord } from "@/types/api";
+import { useDeleteVuln, useScansList, useFindingsList, qk } from "@/api/queries";
+import type { FindingsSummaryResponse } from "@/types/api";
 import { dedupFindings, type FlatFinding } from "@/lib/findings";
 import {
   cn,
@@ -59,54 +57,20 @@ export default function FindingsPage() {
   const qc = useQueryClient();
   const { data: scans } = useScansList();
   const del = useDeleteVuln();
-  // Pagination + de-flicker (Task 2.3): query EVERY scan returned by
-  // useScansList(), not just the first 30. Pagination is applied to the
-  // already-deduped + sorted list further below.
+  // Scan ids are kept only for the "across N scans" header label and as the
+  // refresh-target count. The findings themselves no longer fan out one
+  // getScan() request per scan; they come from a single server-side walk.
   const ids = useMemo(() => (scans ?? []).map((s) => s.id), [scans]);
 
-  const scanQueries = useQueries({
-    queries: ids.map((id) => ({
-      queryKey: ["scan", id],
-      queryFn: () => api.getScan(id),
-      // 30s is fine even with the slice cap removed because each query
-      // has its own cache entry and refetches in parallel; the original
-      // flicker bug came from `staleTime: 30s` combined with `useQueries`
-      // dropping `data` to undefined during a refetch, not from the
-      // cache window itself. `placeholderData: keepPreviousData` below
-      // keeps the prior result during refetches so the reducer never
-      // sees `undefined`.
-      staleTime: 30_000,
-      placeholderData: keepPreviousData,
-    })),
-  });
+  const findingsQuery = useFindingsList();
+  const isLoading = findingsQuery.isLoading;
 
-  const isLoading = scanQueries.some((q) => q.isLoading);
-
-  const findings = useMemo<FlatFinding[]>(() => {
-    const out: FlatFinding[] = [];
-    scanQueries.forEach((q) => {
-      const rec = q.data as ScanRecord | undefined;
-      // Skip ONLY on initial-load `undefined`. Once a scan has produced
-      // any data, `placeholderData: keepPreviousData` keeps `q.data`
-      // populated across refetches so the contribution does not drop to
-      // zero. An empty `vulns` array is a legitimate value and must not
-      // be treated as missing.
-      if (!rec) return;
-      const vulns = rec.vulns ?? [];
-      vulns.forEach((v) =>
-        out.push({
-          ...v,
-          scan_id: rec.id,
-          scan_target: rec.target,
-          scan_started_at: rec.started_at,
-        }),
-      );
-    });
-    // Dedup by (target, endpoint, title, severity); sort by severity rank
-    // desc, then scan_started_at desc. The most-recent owning scan id is
-    // preserved so row click navigation and per-row delete stay correct.
-    return dedupFindings(out);
-  }, [scanQueries]);
+  const findings = useMemo<FlatFinding[]>(
+    // The server already dedups + sorts, but dedupFindings is idempotent and
+    // keeps the client resilient if the payload shape ever changes.
+    () => dedupFindings(findingsQuery.data ?? []),
+    [findingsQuery.data],
+  );
 
   // Stable on-disk totals from /api/findings/summary. Polled every 10s
   // and used both for the totals row and for the "updated Xs ago"
@@ -223,12 +187,10 @@ export default function FindingsPage() {
     });
   }
 
-  // Manual refresh: invalidate every per-scan query plus the summary
-  // query so the totals row and the list re-fetch in lockstep.
+  // Manual refresh: invalidate the findings list plus the summary query so
+  // the totals row and the list re-fetch in lockstep.
   function refreshAll() {
-    for (const id of ids) {
-      qc.invalidateQueries({ queryKey: ["scan", id] });
-    }
+    qc.invalidateQueries({ queryKey: qk.findingsList });
     qc.invalidateQueries({ queryKey: qk.findingsSummary });
   }
 
@@ -246,7 +208,7 @@ export default function FindingsPage() {
   }, [findings, summary.data]);
 
   const updatedLabel = summary.data?.as_of ? timeAgo(summary.data.as_of) : "—";
-  const isRefreshing = summary.isFetching || scanQueries.some((q) => q.isFetching);
+  const isRefreshing = summary.isFetching || findingsQuery.isFetching;
 
   return (
     <div className="space-y-6">

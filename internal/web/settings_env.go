@@ -351,12 +351,16 @@ func (s *Server) applyCatalogLLMSettings(ctx context.Context, req llmSettingsReq
 					}
 				}
 				if carry != "" {
+					baseOverride := strings.TrimSpace(req.APIBaseOverride)
+					if baseOverride == "" {
+						baseOverride = strings.TrimSpace(req.APIBase)
+					}
 					prof := auth.Profile{
 						Provider:        provider,
 						ProfileID:       profileID,
 						Type:            auth.APIKey,
 						APIKey:          carry,
-						APIBaseOverride: strings.TrimSpace(req.APIBaseOverride),
+						APIBaseOverride: baseOverride,
 					}
 					if err := s.profiles.Put(ctx, prof); err != nil {
 						return fmt.Errorf("save profile: %w", err)

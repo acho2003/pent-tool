@@ -21,6 +21,7 @@ import type {
   VersionInfo,
   WSEvent,
 } from "@/types/api";
+import type { FlatFinding } from "@/lib/findings";
 
 /**
  * Status of a single provider's API key as reported by
@@ -205,6 +206,9 @@ export const api = {
   listScansPage: (params: ListParams) =>
     http<Paginated<ScanListItem>>(`/api/scans${listQuery(params)}`),
   getScan: (id: string) => http<ScanRecord | null>(`/api/scans/${id}`),
+  // Flattened + deduped findings across all scans, computed server-side in a
+  // single walk. Replaces the previous per-scan getScan() fan-out.
+  listFindings: () => http<FlatFinding[] | null>("/api/findings"),
   deleteScan: (id: string) =>
     http<{ status: string }>(`/api/scans/${id}`, { method: "DELETE" }),
   deleteVuln: (scanId: string, vulnId: string) =>

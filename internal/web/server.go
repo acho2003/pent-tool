@@ -1603,6 +1603,13 @@ type Server struct {
 	scanListCacheMu sync.Mutex
 	scanListCache   []scanListItem
 	scanListCacheAt time.Time
+	// scanSummaryCache memoizes the per-file parsed (events-free) scan record
+	// keyed by file path. Finished scans' scan.json files are immutable, so
+	// after the first parse they are reused across walks without re-reading or
+	// re-parsing. Entries are validated by (modtime, size) so a running scan
+	// whose file changes is re-parsed. See findAllScanSummaries.
+	scanSummaryCacheMu sync.Mutex
+	scanSummaryCache   map[string]scanSummaryCacheEntry
 	// admissionWake is a buffered (len=1) channel used by runMultiScan's
 	// admission loop to wait fairly for a freed slot. A scan instance ending
 	// signals this channel non-blockingly in its defer cleanup, waking
@@ -1917,6 +1924,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/restart", s.handleRestart)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/findings/summary", s.handleFindingsSummary)
+	mux.HandleFunc("/api/findings", s.handleFindingsList)
 	mux.HandleFunc("/api/legacy-import/status", s.handleLegacyImportStatus)
 	mux.HandleFunc("/api/scans", s.handleListScans)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
@@ -2775,7 +2783,7 @@ func (s *Server) handleFindingsSummary(w http.ResponseWriter, r *http.Request) {
 	func() {
 		defer safe.Recover("findings-summary", "")
 		seen := make(map[string]struct{})
-		for _, entry := range s.findAllScans() {
+		for _, entry := range s.findAllScanSummaries() {
 			for _, v := range entry.rec.Vulns {
 				key := dedupFindingKey(entry.rec.Target, v)
 				if _, dup := seen[key]; dup {
@@ -2813,6 +2821,79 @@ func (s *Server) handleFindingsSummary(w http.ResponseWriter, r *http.Request) {
 		"as_of":  asOf,
 		"etag":   etag,
 	})
+}
+
+// flatFinding is a single vulnerability flattened across scans and augmented
+// with its owning scan's identity. The embedded VulnSummary inlines its JSON
+// fields, so the wire shape matches the WebUI's FlatFinding type exactly.
+type flatFinding struct {
+	VulnSummary
+	ScanID        string `json:"scan_id"`
+	ScanTarget    string `json:"scan_target"`
+	ScanStartedAt string `json:"scan_started_at"`
+}
+
+// severityRankValue mirrors the WebUI's severityRank so server-side ordering
+// matches the client (critical > high > medium > low > info).
+func severityRankValue(severity string) int {
+	switch normalizeSeverityBucket(severity) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// handleFindingsList returns every finding flattened across all scans, deduped
+// by (target, endpoint, title, severity) and sorted by severity desc then
+// scan_started_at desc. This replaces the previous WebUI behavior of fetching
+// every scan record individually (an N+1 of full-record requests, each
+// carrying the scan's entire event log) just to build the findings table.
+// One server-side walk returns only the vuln fields the table needs.
+func (s *Server) handleFindingsList(w http.ResponseWriter, r *http.Request) {
+	deduped := make(map[string]flatFinding)
+
+	func() {
+		defer safe.Recover("findings-list", "")
+		for _, entry := range s.findAllScanSummaries() {
+			rec := entry.rec
+			for _, v := range rec.Vulns {
+				key := dedupFindingKey(rec.Target, v)
+				candidate := flatFinding{
+					VulnSummary:   v,
+					ScanID:        rec.ID,
+					ScanTarget:    rec.Target,
+					ScanStartedAt: rec.StartedAt,
+				}
+				if existing, ok := deduped[key]; ok && existing.ScanStartedAt >= candidate.ScanStartedAt {
+					continue
+				}
+				deduped[key] = candidate
+			}
+		}
+	}()
+
+	findings := make([]flatFinding, 0, len(deduped))
+	for _, f := range deduped {
+		findings = append(findings, f)
+	}
+	sort.Slice(findings, func(i, j int) bool {
+		ri, rj := severityRankValue(findings[i].Severity), severityRankValue(findings[j].Severity)
+		if ri != rj {
+			return ri > rj
+		}
+		return findings[i].ScanStartedAt > findings[j].ScanStartedAt
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+	_ = json.NewEncoder(w).Encode(findings)
 }
 
 // handleLegacyImportStatus exposes the in-memory legacy import counter
@@ -3598,7 +3679,7 @@ func (s *Server) effectiveVulnCount(inst *ScanInstance, sess *scanSession) int {
 // ScanRecord.Vulns.
 func (s *Server) totalPersistedVulnCount() int {
 	seen := make(map[string]struct{})
-	for _, entry := range s.findAllScans() {
+	for _, entry := range s.findAllScanSummaries() {
 		for _, v := range entry.rec.Vulns {
 			key := dedupFindingKey(entry.rec.Target, v)
 			if _, dup := seen[key]; dup {
@@ -6248,6 +6329,89 @@ func (s *Server) findAllScans() []scanEntry {
 	return results
 }
 
+// scanSummaryCacheEntry is one memoized, events-free scan record plus the file
+// stat used to detect staleness.
+type scanSummaryCacheEntry struct {
+	modNano int64
+	size    int64
+	rec     ScanRecord
+}
+
+// scanRecordLite parses a scan.json while skipping the heavy events array.
+// The embedded ScanRecord carries every field; the shadow Events field — a
+// json.RawMessage at depth 0 — captures the "events" key so encoding/json
+// routes it here instead of unmarshaling thousands of WSEvent structs into the
+// embedded slice (encoding/json picks the shallowest field on a tag conflict).
+// The captured bytes are discarded: list, findings, and summary views never
+// read events, and skipping the per-event struct decode is the bulk of the
+// parse-cost saving.
+type scanRecordLite struct {
+	ScanRecord
+	Events json.RawMessage `json:"events"`
+}
+
+// findAllScanSummaries is the events-free, cached counterpart to findAllScans.
+// It walks the data dir, parses each scan.json without decoding its event log,
+// and memoizes the result per file keyed by (modtime, size). Subsequent walks
+// only stat each file and re-parse the few that changed, so warm rebuilds are
+// effectively free. Callers that need the event log (report generation,
+// scan-detail) must use findAllScans instead.
+func (s *Server) findAllScanSummaries() []scanEntry {
+	var results []scanEntry
+
+	s.scanSummaryCacheMu.Lock()
+	defer s.scanSummaryCacheMu.Unlock()
+	if s.scanSummaryCache == nil {
+		s.scanSummaryCache = make(map[string]scanSummaryCacheEntry)
+	}
+	seen := make(map[string]struct{})
+
+	_ = filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if d.Name() != "scan.json" {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
+		}
+		seen[path] = struct{}{}
+		modNano := info.ModTime().UnixNano()
+		size := info.Size()
+		if c, ok := s.scanSummaryCache[path]; ok && c.modNano == modNano && c.size == size {
+			results = append(results, scanEntry{dir: filepath.Dir(path), rec: c.rec})
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		var lite scanRecordLite
+		if json.Unmarshal(data, &lite) != nil {
+			return nil
+		}
+		rec := lite.ScanRecord
+		rec.Events = nil
+		s.scanSummaryCache[path] = scanSummaryCacheEntry{modNano: modNano, size: size, rec: rec}
+		results = append(results, scanEntry{dir: filepath.Dir(path), rec: rec})
+		return nil
+	})
+
+	// Drop cache entries for files that no longer exist so deleted scans
+	// don't leak memory across the process lifetime.
+	if len(s.scanSummaryCache) > len(seen) {
+		for p := range s.scanSummaryCache {
+			if _, ok := seen[p]; !ok {
+				delete(s.scanSummaryCache, p)
+			}
+		}
+	}
+
+	return results
+}
+
 // findScanByID searches for a scan by its AgentID (the slug dir name).
 func (s *Server) findScanByID(scanID string) (string, *ScanRecord) {
 	// Sanitize: prevent path traversal via ../
@@ -6484,7 +6648,22 @@ func (s *Server) applyInstanceSnapshot(rec *ScanRecord, includeEvents bool) {
 	}
 }
 
+// attachWildcardSubScans resolves a wildcard parent scan's child sub-scans by
+// walking the data dir. It is a thin wrapper around attachWildcardSubScansFrom
+// for callers that do not already hold a walked entry slice.
 func (s *Server) attachWildcardSubScans(rec *ScanRecord) {
+	if rec == nil || rec.ParentTarget != "" {
+		return
+	}
+	s.attachWildcardSubScansFrom(rec, s.findAllScans())
+}
+
+// attachWildcardSubScansFrom is the same as attachWildcardSubScans but reuses
+// a pre-walked slice of scan entries instead of calling findAllScans() itself.
+// This lets bulk callers (e.g. cachedScanList) walk the data dir ONCE and
+// resolve children for every parent from the same slice, instead of triggering
+// a full disk walk + parse per parent scan (previously O(parents × allScans)).
+func (s *Server) attachWildcardSubScansFrom(rec *ScanRecord, entries []scanEntry) {
 	if rec == nil || rec.ParentTarget != "" {
 		return
 	}
@@ -6539,7 +6718,7 @@ func (s *Server) attachWildcardSubScans(rec *ScanRecord) {
 		add(child.Target, child)
 	}
 
-	for _, entry := range s.findAllScans() {
+	for _, entry := range entries {
 		child := entry.rec
 		if !isChildOfScan(rec, &child) {
 			continue
@@ -6790,13 +6969,33 @@ func (s *Server) cachedScanList() []scanListItem {
 		return s.scanListCache
 	}
 	var scans []scanListItem
-	for _, entry := range s.findAllScans() {
+	// Walk the data dir ONCE (events-free + per-file cached) and reuse the
+	// entry slice for child resolution. Previously each top-level scan
+	// triggered its own findAllScans() walk via attachWildcardSubScans, making
+	// list rebuilds O(parents × allScans) in full disk reads + JSON parses
+	// (events included). Sharing one events-free walk makes it linear and skips
+	// the per-event decode entirely.
+	entries := s.findAllScanSummaries()
+	for _, entry := range entries {
 		if entry.rec.ParentTarget != "" {
 			continue
 		}
 		rec := entry.rec
+		// rec is a shallow copy of a cached, shared record. Detach the slices
+		// that the snapshot/sub-scan logic appends to so we never mutate the
+		// backing array held by scanSummaryCache (which other readers, e.g. the
+		// findings handlers, access concurrently).
+		rec.Vulns = append([]VulnSummary(nil), rec.Vulns...)
 		s.applyInstanceSnapshot(&rec, false)
-		s.attachWildcardSubScans(&rec)
+		// Only wildcard parents derive sub-scan progress from their own event
+		// stream, so restore just that one record's events (cheap: one file)
+		// rather than carrying events for every scan in the list.
+		if strings.EqualFold(rec.ScanMode, "wildcard") {
+			if full, ok := loadScanRecordFromDir(entry.dir); ok && full != nil {
+				rec.Events = full.Events
+			}
+		}
+		s.attachWildcardSubScansFrom(&rec, entries)
 		scans = append(scans, scanListItem{
 			ID:               rec.ID,
 			Target:           rec.Target,

@@ -98,7 +98,7 @@ func (s *Server) resolveScanCredentials(ctx context.Context, req ScanRequest, cf
 		// byte-identical to the composite resolver, including the
 		// openai_responses (Codex / ChatGPT) path + its required
 		// chatgpt-account-id / OpenAI-Beta / originator headers.
-		built, berr := llm.BuildCatalogEndpoint(entry, prof, "")
+		built, berr := llm.BuildCatalogEndpoint(entry, prof, "", cfg.APIBase)
 		if berr != nil {
 			return llm.Endpoint{}, berr
 		}
@@ -271,7 +271,7 @@ func (s *Server) legacyOrCatalogDefaultEndpoint(ctx context.Context, cfg *config
 				// routes to gemini-test-model rather than the
 				// catalog's first listed model.
 				preferModel := bareModelFromConfigLLM(cfg.LLM)
-				if ep, berr := llm.BuildCatalogEndpoint(entry, prof, preferModel); berr == nil {
+				if ep, berr := llm.BuildCatalogEndpoint(entry, prof, preferModel, cfg.APIBase); berr == nil {
 					return ep
 				}
 			}
@@ -290,7 +290,7 @@ func (s *Server) legacyOrCatalogDefaultEndpoint(ctx context.Context, cfg *config
 						if p.Provider != entry.ID {
 							continue
 						}
-						if ep, berr := llm.BuildCatalogEndpoint(entry, p, ""); berr == nil {
+						if ep, berr := llm.BuildCatalogEndpoint(entry, p, "", cfg.APIBase); berr == nil {
 							return ep
 						}
 					}

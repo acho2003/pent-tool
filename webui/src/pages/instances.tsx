@@ -18,6 +18,7 @@ import {
   useStopInstance,
   useStartSavedInstance,
   useRestartInstance,
+  useDeleteScan,
 } from "@/api/queries"
 import { ScanStatusPill } from "@/components/scan-status-pill"
 import { PhaseProgress } from "@/components/phase-progress"
@@ -37,6 +38,7 @@ import {
   ShieldAlert,
   ExternalLink,
   Search,
+  Trash2,
 } from "lucide-react"
 
 export default function InstancesPage() {
@@ -269,9 +271,19 @@ function InstanceCard({ instance }: { instance: ScanInstance }) {
   const stop = useStopInstance()
   const start = useStartSavedInstance()
   const restart = useRestartInstance()
+  const del = useDeleteScan()
   const status = (instance.status || "").toLowerCase()
   const canStop = status === "running" || status === "paused"
   const canStart = status === "saved" || status === "stopped" || status === "failed" || status === "finished"
+  const isActive = status === "running" || status === "pending" || status === "paused"
+
+  function handleDelete() {
+    const label = isActive
+      ? "This instance is still active. Deleting it will stop the scan and permanently remove the instance and its saved data. Continue?"
+      : "Permanently delete this instance and its saved data?"
+    if (!window.confirm(label)) return
+    del.mutate(instance.id)
+  }
 
   return (
     <Card>
@@ -357,6 +369,15 @@ function InstanceCard({ instance }: { instance: ScanInstance }) {
             onClick={() => restart.mutate(instance.id)}
           >
             <RotateCw className="mr-1 h-3.5 w-3.5" /> Restart
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
+            disabled={del.isPending}
+            onClick={handleDelete}
+          >
+            <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete
           </Button>
         </div>
       </CardContent>

@@ -31,6 +31,8 @@ export const qk = {
   // Shared between /findings and /overview so the totals widget
   // reads a single cache entry across both pages.
   findingsSummary: ["findings", "summary"] as const,
+  // Flattened + deduped findings list, computed server-side in one walk.
+  findingsList: ["findings", "list"] as const,
 };
 
 export function useAuthStatus() {
@@ -61,6 +63,18 @@ export function useScansList() {
   return useQuery({
     queryKey: qk.scans,
     queryFn: api.listScans,
+    refetchInterval: 15000,
+  });
+}
+
+// Flattened + deduped findings across all scans, served by GET /api/findings
+// in a single server-side walk. Replaces the per-scan getScan() fan-out the
+// findings page used to do (an N+1 that shipped every scan's full event log
+// to the browser just to render the findings table).
+export function useFindingsList() {
+  return useQuery({
+    queryKey: qk.findingsList,
+    queryFn: api.listFindings,
     refetchInterval: 15000,
   });
 }

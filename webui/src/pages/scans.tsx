@@ -113,13 +113,6 @@ export default function ScansPage() {
             All historical and in-flight scans.
           </p>
         </div>
-        <Button
-          onClick={() => setNewOpen(true)}
-          className="self-start sm:self-auto"
-        >
-          <Plus className="mr-1 h-4 w-4" />
-          New scan
-        </Button>
       </header>
 
       <Card>
