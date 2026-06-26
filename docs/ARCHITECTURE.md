@@ -11,8 +11,8 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              USER LAYER                                      │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-│  │  Web UI     │  │   CLI       │  │   API       │  │  Discord    │    │
-│  │  Dashboard  │  │  Terminal   │  │  Endpoints  │  │  Webhook    │    │
+│  │  Web UI     │  │   CLI       │  │   API       │  │  Discord /  │    │
+│  │  Dashboard  │  │  Terminal   │  │  Endpoints  │  │  Telegram  │    │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘    │
 │         │                │                │                │               │
 │         └────────────────┼────────────────┼────────────────┘               │
@@ -70,8 +70,8 @@
 │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘  │
 │                                                                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │  NIST NVD    │  │  Exploit-DB  │  │  Discord    │  │   Caido     │  │
-│  │  (CVE)       │  │  (Exploits)  │  │  Webhook    │  │   Proxy      │  │
+│  │  NIST NVD    │  │  Exploit-DB  │  │  Discord /  │  │   Caido     │  │
+│  │  (CVE)       │  │  (Exploits)  │  │  Telegram  │  │   Proxy      │  │
 │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘  │
 │                                                                             │
 │  Caido Integration:                                                       │
@@ -114,8 +114,9 @@ User Input ──► Web Server ──► Agent ──► Tools ──► Result
                   │            │              Reports/PDF
                   │            │
                   ▼            ▼
-            Discord       State File
-           Webhook        (JSON)
+            Discord /     State File
+            Telegram      (JSON)
+            Webhook / Bot
 
 
 CONFIGURATION

@@ -5,6 +5,7 @@ import {
   Mail,
   MessageSquare,
   Plug,
+  Send,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -41,6 +42,9 @@ export default function IntegrationsPage() {
   const usesVercelGateway = ai?.gateway === "vercel";
   const discordWebhook = environment.data?.variables.find(
     (variable) => variable.key === "XALGORIX_DISCORD_WEBHOOK",
+  );
+  const telegramToken = environment.data?.variables.find(
+    (variable) => variable.key === "XALGORIX_TELEGRAM_BOT_TOKEN",
   );
 
   const integrations: Integration[] = [
@@ -87,6 +91,21 @@ export default function IntegrationsPage() {
       detail: discordWebhook?.hasValue
         ? "Global webhook configured"
         : "Global default, with per-scan overrides available.",
+    },
+    {
+      key: "telegram",
+      name: "Telegram bot",
+      description:
+        "Receive scan events, severity-gated findings, and the finished PDF report in a Telegram chat or channel.",
+      category: "Notifications",
+      icon: Send,
+      configurePath: "/settings?tab=notifications",
+      configureLabel: "Configure",
+      external: "https://core.telegram.org/bots/api",
+      isConfigured: Boolean(telegramToken?.hasValue),
+      detail: telegramToken?.hasValue
+        ? "Bot token configured"
+        : "Set a bot token and chat ID to enable Telegram alerts.",
     },
     {
       key: "rate-limit",

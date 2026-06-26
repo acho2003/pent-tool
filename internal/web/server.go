@@ -979,6 +979,7 @@ type ScanRecord struct {
 	SeverityFilter           []string         `json:"severity_filter,omitempty"`            // severity filter for scan
 	DiscordWebhook           string           `json:"discord_webhook,omitempty"`            // discord notification webhook
 	DiscordWebhookConfigured bool             `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
+	TelegramConfigured       bool             `json:"telegram_configured,omitempty"`        // true when global Telegram notifications are configured (token never exposed)
 	ReconMode                string           `json:"recon_mode,omitempty"`                 // active or passive reconnaissance
 	ScanIntensity            string           `json:"scan_intensity,omitempty"`             // active or passive testing/scanning
 	Events                   []WSEvent        `json:"events"`
@@ -1588,6 +1589,9 @@ type Server struct {
 	currentScanID        string
 	discordWebhook       string
 	discordMinSeverity   string // minimum severity to send to Discord ("info", "low", "medium", "high", "critical")
+	telegramBotToken     string // XALGORIX_TELEGRAM_BOT_TOKEN (secret, never exposed via API)
+	telegramChatID       string // XALGORIX_TELEGRAM_CHAT_ID (numeric ID or @channelusername)
+	telegramMinSeverity string // minimum severity to send to Telegram ("info", "low", "medium", "high", "critical")
 	rateLimiter          *RateLimiter
 	settingsMu           sync.Mutex
 	instances            map[string]*ScanInstance // concurrent scan instances
@@ -1693,6 +1697,9 @@ func NewServer(cfg *config.Config, port int) *Server {
 		dataDir:              dataDir,
 		discordWebhook:       cfg.DiscordWebhook,
 		discordMinSeverity:   strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
+		telegramBotToken:     cfg.TelegramBotToken,
+		telegramChatID:       cfg.TelegramChatID,
+		telegramMinSeverity: strings.ToLower(strings.TrimSpace(cfg.TelegramMinSeverity)),
 		rateLimiter:          rl,
 		instances:            make(map[string]*ScanInstance),
 		queueResumeLaunching: make(map[string]bool),
@@ -2189,6 +2196,9 @@ func (s *Server) Start() error {
 		if s.discordWebhook != "" {
 			s.sendDiscord(0xff6b6b, "🔄 Xalgorix Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig.String()))
 		}
+		if s.telegramConfigured() {
+			s.sendTelegram(0xff6b6b, "🔄 Xalgorix Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig.String()))
+		}
 
 		// Give scans a moment to save their queue state
 		time.Sleep(2 * time.Second)
@@ -2238,6 +2248,10 @@ func (s *Server) scheduleGracefulRestart() bool {
 	log.Printf("[RESTART] Graceful restart requested — will restart once all scans finish")
 	if s.discordWebhook != "" {
 		s.sendDiscord(0x4dabf7, "🕓 Xalgorix Restart Scheduled",
+			"A restart was requested. Xalgorix will restart automatically once all running scans finish and no tools are active.")
+	}
+	if s.telegramConfigured() {
+		s.sendTelegram(0x4dabf7, "🕓 Xalgorix Restart Scheduled",
 			"A restart was requested. Xalgorix will restart automatically once all running scans finish and no tools are active.")
 	}
 	go s.restartWhenIdleWatcher(s.httpServer)
@@ -2305,6 +2319,9 @@ func (s *Server) restartNow(httpServer *http.Server) {
 	log.Printf("[RESTART] Scanner idle — restarting now")
 	if s.discordWebhook != "" {
 		s.sendDiscord(0x4dabf7, "🔄 Xalgorix Restarting", "Scanner is idle. Restarting now; interrupted work (if any) auto-resumes.")
+	}
+	if s.telegramConfigured() {
+		s.sendTelegram(0x4dabf7, "🔄 Xalgorix Restarting", "Scanner is idle. Restarting now; interrupted work (if any) auto-resumes.")
 	}
 
 	// Belt-and-suspenders: reap any stray tool processes before we go.
@@ -2565,11 +2582,12 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 				ReconMode:                req.ReconMode,
 				ScanIntensity:            req.ScanIntensity,
 				CurrentPhase:             firstSelectedPhase(req.Phases),
-				CompanyName:              req.CompanyName,
-				LogoPath:                 req.LogoPath,
-				DiscordWebhook:           req.DiscordWebhook,
-				DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
-			}
+			CompanyName:              req.CompanyName,
+			LogoPath:                 req.LogoPath,
+			DiscordWebhook:           req.DiscordWebhook,
+			DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
+			TelegramConfigured:       s.telegramConfigured(),
+		}
 			s.saveScanRecordTo(rec, savedDir)
 		}
 
@@ -3560,6 +3578,7 @@ func (s *Server) freshScanRecordForSession(sess *scanSession, startedAt string) 
 		SeverityFilter:           append([]string(nil), sess.severityFilter...),
 		DiscordWebhook:           sess.discordWebhook,
 		DiscordWebhookConfigured: sess.discordWebhook != "" || s.discordWebhook != "",
+		TelegramConfigured:       s.telegramConfigured(),
 		ReconMode:                normalizeActivityMode(sess.reconMode),
 		ScanIntensity:            normalizeActivityMode(sess.scanIntensity),
 		StartedAt:                startedAt,
@@ -3590,6 +3609,7 @@ func (s *Server) refreshResumedScanRecord(rec *ScanRecord, sess *scanSession, fa
 	rec.SeverityFilter = append([]string(nil), sess.severityFilter...)
 	rec.DiscordWebhook = sess.discordWebhook
 	rec.DiscordWebhookConfigured = sess.discordWebhook != "" || s.discordWebhook != ""
+	rec.TelegramConfigured = s.telegramConfigured()
 	rec.ReconMode = normalizeActivityMode(sess.reconMode)
 	rec.ScanIntensity = normalizeActivityMode(sess.scanIntensity)
 	if rec.StartedAt == "" {
@@ -3954,10 +3974,16 @@ func (s *Server) executeScanSession(sess *scanSession) {
 				desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found\n**Completed at:** %s",
 					sess.target, vulnCount, time.Now().Format("15:04:05 MST"))
 				s.sendDiscordWithFile(0x3b82f6, "✅ Scan Finished - Report Ready", desc, p)
+				if s.telegramConfigured() {
+					s.sendTelegramWithFile(0x3b82f6, "✅ Scan Finished - Report Ready", desc, p)
+				}
 			} else {
 				desc := fmt.Sprintf("**Target:** %s\n**Result:** No vulnerabilities found (clean scan)\n**Completed at:** %s",
 					sess.target, time.Now().Format("15:04:05 MST"))
 				s.sendDiscordWithFile(0x2dd4bf, "✅ Scan Finished - Clean Report", desc, p)
+				if s.telegramConfigured() {
+					s.sendTelegramWithFile(0x2dd4bf, "✅ Scan Finished - Clean Report", desc, p)
+				}
 			}
 			if sess.instanceID != "" {
 				reportEvt := WSEvent{Type: "report_ready", Content: fmt.Sprintf("/api/report/%s", sess.id)}
@@ -4065,12 +4091,18 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 							if vs.Remediation != "" {
 								details.WriteString(fmt.Sprintf("🛡️ **Remediation:**\n%s", vs.Remediation))
 							}
-							// Apply Discord minimum severity filter
-							if severityMeetsThreshold(vs.Severity, s.discordMinSeverity) {
-								s.sendDiscord(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
-							} else {
-								log.Printf("[DISCORD] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.discordMinSeverity)
-							}
+						// Apply Discord minimum severity filter
+						if severityMeetsThreshold(vs.Severity, s.discordMinSeverity) {
+							s.sendDiscord(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
+						} else {
+							log.Printf("[DISCORD] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.discordMinSeverity)
+						}
+						// Apply Telegram minimum severity filter (independent of Discord)
+						if s.telegramConfigured() && severityMeetsThreshold(vs.Severity, s.telegramMinSeverity) {
+							s.sendTelegram(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
+						} else if s.telegramConfigured() {
+							log.Printf("[TELEGRAM] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.telegramMinSeverity)
+						}
 						} else {
 							log.Printf("[VULN] Skipping duplicate vuln already present in session record: %s %s", vs.ID, vs.Title)
 						}
@@ -4668,6 +4700,10 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 
 	// Discord: scan started
 	s.sendDiscord(0x00ff88, "🚀 Scan Started", fmt.Sprintf("**Targets:** %s\n**Mode:** %s\n**Total:** %d target(s)", strings.Join(req.Targets, ", "), req.ScanMode, totalTargets))
+	// Telegram: scan started
+	if s.telegramConfigured() {
+		s.sendTelegram(0x00ff88, "🚀 Scan Started", fmt.Sprintf("**Targets:** %s\n**Mode:** %s\n**Total:** %d target(s)", strings.Join(req.Targets, ", "), req.ScanMode, totalTargets))
+	}
 
 	interruptedQueue := false
 	for i, target := range req.Targets {
@@ -4740,8 +4776,14 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	if vulnCount > 0 {
 		desc := fmt.Sprintf("**Targets:** %d completed\n**Vulnerabilities:** %d found\n**Completed at:** %s", totalTargets, vulnCount, time.Now().Format("15:04:05 MST"))
 		s.sendDiscord(0x3b82f6, "✅ Scan Finished - Vulnerabilities Found", desc)
+		if s.telegramConfigured() {
+			s.sendTelegram(0x3b82f6, "✅ Scan Finished - Vulnerabilities Found", desc)
+		}
 	} else {
 		s.sendDiscord(0x3b82f6, "✅ Scan Finished", fmt.Sprintf("**Targets:** %d completed\n**Vulnerabilities:** 0 found\n**Completed at:** %s", totalTargets, time.Now().Format("15:04:05 MST")))
+		if s.telegramConfigured() {
+			s.sendTelegram(0x3b82f6, "✅ Scan Finished", fmt.Sprintf("**Targets:** %d completed\n**Vulnerabilities:** 0 found\n**Completed at:** %s", totalTargets, time.Now().Format("15:04:05 MST")))
+		}
 	}
 
 	log.Printf("[INFO] runMultiScan main body complete")
@@ -5319,6 +5361,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 						SeverityFilter:           append([]string(nil), req.SeverityFilter...),
 						DiscordWebhook:           req.DiscordWebhook,
 						DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
+						TelegramConfigured:       s.telegramConfigured(),
 						ReconMode:                req.ReconMode,
 						ScanIntensity:            req.ScanIntensity,
 						StartedAt:                time.Now().Format(time.RFC3339),
@@ -5333,11 +5376,14 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 					for _, v := range newVulns {
 						subScanRecord.Vulns = append(subScanRecord.Vulns, vulnToSummary(v))
 					}
-					reportPath, err := s.generateReportAt(&subScanRecord, subScanDir)
-					if err == nil {
-						desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found", subdomain, len(newVulns))
-						s.sendDiscordWithFile(0x3b82f6, "🔴 Vulnerability Found - Report Ready", desc, reportPath)
+				reportPath, err := s.generateReportAt(&subScanRecord, subScanDir)
+				if err == nil {
+					desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found", subdomain, len(newVulns))
+					s.sendDiscordWithFile(0x3b82f6, "🔴 Vulnerability Found - Report Ready", desc, reportPath)
+					if s.telegramConfigured() {
+						s.sendTelegramWithFile(0x3b82f6, "🔴 Vulnerability Found - Report Ready", desc, reportPath)
 					}
+				}
 				}
 			}
 
@@ -6488,7 +6534,19 @@ func (s *Server) markDiscordWebhookConfigured(rec *ScanRecord) {
 		s.discordWebhook != ""
 }
 
-func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
+// markTelegramConfigured sets the TelegramConfigured flag on a scan
+// record when global Telegram notifications are enabled. Telegram is
+// global-only in v1 (no per-scan override), so the flag reflects the
+// server-wide configuration rather than any per-scan field. The bot
+// token itself is never written to the record (only the boolean).
+func (s *Server) markTelegramConfigured(rec *ScanRecord) {
+	if rec == nil {
+		return
+	}
+	rec.TelegramConfigured = s.telegramConfigured()
+}
+
+func (s *Server) scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 	if inst == nil {
 		return nil
 	}
@@ -6517,6 +6575,7 @@ func scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 		SeverityFilter:           severityFilter,
 		DiscordWebhook:           inst.DiscordWebhook,
 		DiscordWebhookConfigured: inst.DiscordWebhook != "",
+		TelegramConfigured:       s.telegramConfigured(),
 		ReconMode:                inst.ReconMode,
 		ScanIntensity:            inst.ScanIntensity,
 		Events:                   events,
@@ -6618,7 +6677,7 @@ func (s *Server) applyInstanceSnapshot(rec *ScanRecord, includeEvents bool) {
 	if inst == nil {
 		return
 	}
-	snapshot := scanRecordFromInstance(inst)
+	snapshot := s.scanRecordFromInstance(inst)
 	if snapshot == nil {
 		return
 	}
@@ -7108,7 +7167,7 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 		inst := s.instances[scanID]
 		s.instancesMu.RUnlock()
 		if inst != nil {
-			rec = scanRecordFromInstance(inst)
+			rec = s.scanRecordFromInstance(inst)
 			inst.mu.RLock()
 			scanDir = inst.scanDir
 			inst.mu.RUnlock()
@@ -7296,6 +7355,9 @@ func (s *Server) handleStopNotify(w http.ResponseWriter, r *http.Request) {
 	// Send Discord notification if webhook is configured
 	if s.discordWebhook != "" {
 		s.sendDiscord(0xff6b6b, "🛑 Xalgorix Stopped", "The Xalgorix service has been stopped by the user.")
+	}
+	if s.telegramConfigured() {
+		s.sendTelegram(0xff6b6b, "🛑 Xalgorix Stopped", "The Xalgorix service has been stopped by the user.")
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "notified"})
@@ -7696,6 +7758,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		s.attachWildcardSubScans(&rec)
 		finalizeScanRecordForResponse(&rec)
 		s.markDiscordWebhookConfigured(&rec)
+		s.markTelegramConfigured(&rec)
 		data, _ := json.Marshal(rec)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
@@ -7748,21 +7811,23 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		s.instancesMu.RLock()
 		inst := s.instances[scanID]
 		s.instancesMu.RUnlock()
-		if rec := scanRecordFromInstance(inst); rec != nil {
+		if rec := s.scanRecordFromInstance(inst); rec != nil {
 			if _, persisted := s.findScanByID(scanID); persisted != nil {
 				s.applyInstanceSnapshot(persisted, true)
 				s.attachWildcardSubScans(persisted)
 				finalizeScanRecordForResponse(persisted)
 				s.markDiscordWebhookConfigured(persisted)
+				s.markTelegramConfigured(persisted)
 				data, _ := json.Marshal(persisted)
 				w.Header().Set("Content-Type", "application/json")
 				w.Write(data)
 				return
 			}
-			s.attachWildcardSubScans(rec)
-			finalizeScanRecordForResponse(rec)
-			s.markDiscordWebhookConfigured(rec)
-			data, _ := json.Marshal(rec)
+		s.attachWildcardSubScans(rec)
+		finalizeScanRecordForResponse(rec)
+		s.markDiscordWebhookConfigured(rec)
+		s.markTelegramConfigured(rec)
+		data, _ := json.Marshal(rec)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(data)
 			return
@@ -7785,6 +7850,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	s.attachWildcardSubScans(rec)
 	finalizeScanRecordForResponse(rec)
 	s.markDiscordWebhookConfigured(rec)
+	s.markTelegramConfigured(rec)
 	data, _ := json.Marshal(rec)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -8204,6 +8270,176 @@ func severityMeetsThreshold(severity, minSeverity string) bool {
 		return true // unknown severity = send it
 	}
 	return vulnLevel >= minLevel
+}
+
+// telegramAPIBase is the fixed Telegram Bot API host. Pinned (not
+// operator-configurable) so an attacker-influenced base URL cannot
+// create an SSRF surface — the destination is always api.telegram.org
+// over HTTPS, matching the security model described in issue #157.
+// Declared as a var (not const) solely so tests can point it at a
+// local httptest.Server stub; production code never reassigns it.
+var telegramAPIBase = "https://api.telegram.org"
+
+// telegramConfigured reports whether Telegram notifications are
+// enabled (a bot token AND a chat ID are both set). Used by the
+// status/scan endpoints to surface a telegram_configured boolean
+// without exposing the token itself.
+func (s *Server) telegramConfigured() bool {
+	return s.telegramBotToken != "" && s.telegramChatID != ""
+}
+
+// telegramFormat builds an HTML-formatted message body from a
+// (title, description) pair, mirroring the (color, title, description)
+// shape Discord consumes. Telegram has no embed/color concept, so the
+// color is ignored; we emit a bold title followed by the description.
+// HTML parse_mode is used (rather than MarkdownV2) to avoid
+// Markdown-escaping pitfalls noted in issue #157.
+func telegramFormat(title, description string) string {
+	title = strings.TrimSpace(title)
+	description = strings.TrimSpace(description)
+	if title == "" {
+		return description
+	}
+	if description == "" {
+		return "<b>" + htmlEscape(title) + "</b>"
+	}
+	return "<b>" + htmlEscape(title) + "</b>\n" + htmlEscape(description)
+}
+
+// htmlEscape escapes the four characters Telegram's HTML parse_mode
+// treats specially (& < >), so operator/finding text cannot break out
+// of the message body or inject markup.
+func htmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
+}
+
+// sendTelegram sends a text notification to the configured Telegram
+// chat. It is the Telegram counterpart of sendDiscord. Fire-and-forget
+// in a goroutine with a 30s timeout, identical to sendSimpleEmbed; a
+// slow or blocked Telegram endpoint never stalls a scan. The color
+// argument is accepted for signature symmetry with sendDiscord but is
+// ignored (Telegram has no color concept).
+//
+// Early-returns when Telegram is not configured (no bot token or no
+// chat ID) so an unconfigured instance makes zero outbound requests.
+func (s *Server) sendTelegram(color int, title, description string) {
+	s.sendTelegramWithFile(color, title, description, "")
+}
+
+// sendTelegramWithFile sends a text notification with an optional file
+// attachment (the PDF report) to the configured Telegram chat. It is the
+// Telegram counterpart of sendDiscordWithFile. When filePath is empty it
+// sends a plain sendMessage; otherwise it sends a sendDocument
+// (multipart/form-data) with the file attached and a caption.
+//
+// Telegram returns HTTP 200 with {"ok": false, ...} on logical errors
+// (bad chat ID, bot not in channel, etc.), so in addition to non-2xx
+// status codes we log when the response body indicates ok:false.
+func (s *Server) sendTelegramWithFile(color int, title, description, filePath string) {
+	if !s.telegramConfigured() {
+		return
+	}
+
+	text := telegramFormat(title, description)
+
+	if filePath == "" {
+		// Plain text message via sendMessage.
+		payload := url.Values{
+			"chat_id":                  {s.telegramChatID},
+			"text":                     {text},
+			"parse_mode":               {"HTML"},
+			"disable_web_page_preview": {"true"},
+		}
+		endpoint := telegramAPIBase + "/bot" + s.telegramBotToken + "/sendMessage"
+
+		go func() {
+			defer safe.Recover("telegram.sendMessage", "")
+			client := &http.Client{Timeout: 30 * time.Second}
+			resp, err := client.PostForm(endpoint, payload)
+			if err != nil {
+				log.Printf("Telegram sendMessage error: %v", err)
+				return
+			}
+			defer resp.Body.Close()
+			s.logTelegramResponse(resp)
+		}()
+		return
+	}
+
+	// Message + file via sendDocument (multipart/form-data).
+	fileData, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("Failed to read file for Telegram: %v", err)
+		// Fall back to a plain text message noting the attachment failed.
+		s.sendTelegram(color, title, description+" (report delivery failed)")
+		return
+	}
+
+	var b bytes.Buffer
+	writer := multipart.NewWriter(&b)
+	if err := writer.WriteField("chat_id", s.telegramChatID); err != nil {
+		log.Printf("Error: failed to write Telegram chat_id field: %v", err)
+		return
+	}
+	if err := writer.WriteField("caption", text); err != nil {
+		log.Printf("Error: failed to write Telegram caption field: %v", err)
+		return
+	}
+	if err := writer.WriteField("parse_mode", "HTML"); err != nil {
+		log.Printf("Error: failed to write Telegram parse_mode field: %v", err)
+		return
+	}
+	part, err := writer.CreateFormFile("document", filepath.Base(filePath))
+	if err != nil {
+		log.Printf("Error: failed to create form file for Telegram: %v", err)
+		return
+	}
+	if _, err := part.Write(fileData); err != nil {
+		log.Printf("Error: failed to write file data for Telegram: %v", err)
+		return
+	}
+	_ = writer.Close()
+	contentType := writer.FormDataContentType()
+
+	endpoint := telegramAPIBase + "/bot" + s.telegramBotToken + "/sendDocument"
+	go func() {
+		defer safe.Recover("telegram.sendDocument", "")
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Post(endpoint, contentType, &b)
+		if err != nil {
+			log.Printf("Telegram sendDocument error: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+		s.logTelegramResponse(resp)
+	}()
+}
+
+// logTelegramResponse logs non-2xx responses and logical ok:false
+// bodies. Telegram returns 200 with {"ok": false, ...} on logical
+// errors (e.g. bot lacks permission, chat not found), so a status-code
+// check alone misses those. We read a bounded copy of the body and
+// inspect the "ok" field; non-2xx is logged regardless.
+func (s *Server) logTelegramResponse(resp *http.Response) {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10)) // 4 KiB cap
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("Telegram API error: HTTP %d %s", resp.StatusCode, string(body))
+		return
+	}
+	var parsed struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && !parsed.OK {
+		desc := parsed.Description
+		if desc == "" {
+			desc = string(body)
+		}
+		log.Printf("Telegram API logical error: ok=false %s", desc)
+	}
 }
 
 // startCaidoProxy launches Caido proxy in background if it's installed and not already running.

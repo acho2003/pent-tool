@@ -133,6 +133,9 @@ export default function SettingsPage() {
   const [notificationForm, setNotificationForm] = useState({
     webhook: "",
     minSeverity: "",
+    telegramBotToken: "",
+    telegramChatId: "",
+    telegramMinSeverity: "",
   });
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [envChanges, setEnvChanges] = useState<Record<string, string>>({});
@@ -192,7 +195,10 @@ export default function SettingsPage() {
   useEffect(() => {
     const webhook = envValue(environment.data, "XALGORIX_DISCORD_WEBHOOK");
     const minSeverity = envValue(environment.data, "XALGORIX_DISCORD_MIN_SEVERITY");
-    setNotificationForm({ webhook, minSeverity });
+    const telegramBotToken = envValue(environment.data, "XALGORIX_TELEGRAM_BOT_TOKEN");
+    const telegramChatId = envValue(environment.data, "XALGORIX_TELEGRAM_CHAT_ID");
+    const telegramMinSeverity = envValue(environment.data, "XALGORIX_TELEGRAM_MIN_SEVERITY");
+    setNotificationForm({ webhook, minSeverity, telegramBotToken, telegramChatId, telegramMinSeverity });
   }, [environment.data]);
 
   useEffect(() => {
@@ -858,6 +864,7 @@ export default function SettingsPage() {
               }
             />
           ) : (
+            <>
             <Card>
               <CardHeader>
                 <CardTitle>Discord notifications</CardTitle>
@@ -921,6 +928,9 @@ export default function SettingsPage() {
                       await updateEnvironment.mutateAsync({
                         XALGORIX_DISCORD_WEBHOOK: notificationForm.webhook,
                         XALGORIX_DISCORD_MIN_SEVERITY: notificationForm.minSeverity,
+                        XALGORIX_TELEGRAM_BOT_TOKEN: notificationForm.telegramBotToken,
+                        XALGORIX_TELEGRAM_CHAT_ID: notificationForm.telegramChatId,
+                        XALGORIX_TELEGRAM_MIN_SEVERITY: notificationForm.telegramMinSeverity,
                       });
                       setSavedNotifications(true);
                       setTimeout(() => setSavedNotifications(false), 2500);
@@ -932,6 +942,81 @@ export default function SettingsPage() {
                 </div>
               </CardContent>
             </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Telegram notifications</CardTitle>
+                <CardDescription>
+                  Send scan events and findings to a Telegram chat or channel.
+                  Configure a bot via @BotFather and add it to the target chat as an admin.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="grid gap-3 lg:grid-cols-[1fr_1fr_220px]">
+                  <div className="space-y-2">
+                    <Label htmlFor="telegram-bot-token">Bot token</Label>
+                    <Input
+                      id="telegram-bot-token"
+                      value={notificationForm.telegramBotToken}
+                      onChange={(e) =>
+                        setNotificationForm({
+                          ...notificationForm,
+                          telegramBotToken: e.target.value,
+                        })
+                      }
+                      placeholder="123456789:ABC-DEF..."
+                      className="font-mono"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Keep the masked value to preserve the saved token.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="telegram-chat-id">Chat ID</Label>
+                    <Input
+                      id="telegram-chat-id"
+                      value={notificationForm.telegramChatId}
+                      onChange={(e) =>
+                        setNotificationForm({
+                          ...notificationForm,
+                          telegramChatId: e.target.value,
+                        })
+                      }
+                      placeholder="-1001234567890 or @channelusername"
+                      className="font-mono"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Minimum severity</Label>
+                    <Select
+                      value={notificationForm.telegramMinSeverity || "__unset__"}
+                      onValueChange={(value) =>
+                        setNotificationForm({
+                          ...notificationForm,
+                          telegramMinSeverity: value === "__unset__" ? "" : value,
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__unset__">Default</SelectItem>
+                        {["info", "low", "medium", "high", "critical"].map((value) => (
+                          <SelectItem key={value} value={value}>
+                            {value}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Telegram is independent of Discord — configure one or both.
+                  The bot token is treated as a secret and never returned in API responses.
+                </p>
+              </CardContent>
+            </Card>
+            </>
           )}
         </TabsContent>
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased] — Telegram bot notifications (#157)
+
+### Added
+- **Telegram bot notifications** as a first-class notification channel alongside Discord. Operators configure a bot token + chat ID (`XALGORIX_TELEGRAM_BOT_TOKEN`, `XALGORIX_TELEGRAM_CHAT_ID`, `XALGORIX_TELEGRAM_MIN_SEVERITY`) and receive the same lifecycle and finding notifications Discord already receives: scan started, vulnerability found (severity-gated), scan finished, the completed PDF report delivered via `sendDocument`, and service restart/stop events. Telegram and Discord are independent and can be enabled together or separately.
+  - New `sendTelegram` / `sendTelegramWithFile` helpers in `internal/web/server.go` mirror `sendDiscord` / `sendDiscordWithFile` (fire-and-forget goroutine, 30s timeout, `safe.Recover` boundary, early-return when unconfigured). Text messages use HTML parse_mode; the PDF report is attached as a `sendDocument` multipart upload. Telegram logical `ok:false` responses (HTTP 200 with an error body) are logged without crashing the scan.
+  - The outbound host is pinned to `api.telegram.org` over HTTPS (not operator-configurable) so an attacker-influenced base URL cannot create an SSRF surface.
+  - The bot token is `Sensitive: true` in the settings registry and never returned by any `/api/...` response; only a `telegram_configured` boolean is surfaced on scan records (mirrors the existing `discord_webhook_configured` redaction pattern verified in `server_test.go`).
+  - Settings → Notifications tab now has a Telegram card (bot token, chat ID, minimum severity) and the Integrations page has a Telegram bot card.
+  - v1 is global-only (no per-scan Telegram override); per-scan parity with Discord is tracked as a future follow-up.
+
 ## [Unreleased] — Loop-breaker for repeated identical tool calls
 
 ### Fixed

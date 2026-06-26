@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png?v=4.5.36" alt="Xalgorix" width="860" />
+<img src="assets/banner.png?v=4.5.37" alt="Xalgorix" width="860" />
 
 <br />
 
@@ -92,8 +92,8 @@ The default experience is the Web UI. From one local dashboard you can start sca
 | Live telemetry | Tool calls, agent messages, findings, errors, HTTP activity, and LLM activity over WebSockets.                              |
 | Findings       | Scan detail pages, severity filters, CVSS details, finding index, and verified finding workflows.                           |
 | Reporting      | Branded PDF reports with target/company name, uploaded logo, report list, open/download/delete actions.                     |
-| Integrations   | AgentMail test inboxes, verification emails, OTP flows, email triage events, and Discord notifications.                     |
-| Configuration  | Dashboard settings for LLM, AgentMail, Discord, proxy, runtime, browser, auth, rate limits, and resources.                  |
+| Integrations   | AgentMail test inboxes, verification emails, OTP flows, email triage events, Discord and Telegram notifications.            |
+| Configuration  | Dashboard settings for LLM, AgentMail, Discord, Telegram, proxy, runtime, browser, auth, rate limits, and resources.       |
 | Runtime safety | Resource-aware instance limits and loopback-only binding unless external access is explicitly configured with auth.         |
 
 ## Installation
@@ -384,7 +384,7 @@ Most operational settings can be changed from the Web UI under Settings.
 | Engagement    | Dashboard request rate limits                                       |
 | LLM           | Model, API key, API base, reasoning effort, retries, max iterations |
 | AgentMail     | Pod and API key                                                     |
-| Notifications | Discord webhook and minimum severity                                |
+| Notifications | Discord webhook and minimum severity, Telegram bot token, chat ID, and minimum severity |
 | Proxy         | Proxy URL, proxy file, rotation, TLS verification                   |
 | Runtime       | Workspace, browser path, auto-install controls                      |
 | Security      | Dashboard username, password, password hash, bind address           |
@@ -425,6 +425,9 @@ Some settings require a restart because they affect process startup or server bi
 | `AGENTMAIL_API_KEY`             | none    | AgentMail API key.                       |
 | `XALGORIX_DISCORD_WEBHOOK`      | none    | Global Discord webhook.                  |
 | `XALGORIX_DISCORD_MIN_SEVERITY` | none    | Minimum severity sent to Discord.        |
+| `XALGORIX_TELEGRAM_BOT_TOKEN`   | none    | Telegram bot token from @BotFather.      |
+| `XALGORIX_TELEGRAM_CHAT_ID`      | none    | Telegram chat/channel ID (numeric or @username). |
+| `XALGORIX_TELEGRAM_MIN_SEVERITY`| none    | Minimum severity sent to Telegram.      |
 | `CAIDO_PORT`                    | `0`     | Caido proxy port. `0` means auto-detect. |
 | `CAIDO_API_TOKEN`               | none    | Caido API token.                         |
 
