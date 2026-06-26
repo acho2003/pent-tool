@@ -145,6 +145,9 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 		"AGENTMAIL_POD=am_test_pod",
 		"XALGORIX_DISCORD_WEBHOOK=https://discord.example/webhook",
 		"XALGORIX_DISCORD_MIN_SEVERITY=high",
+		"XALGORIX_TELEGRAM_BOT_TOKEN=123456:ABC-DEF",
+		"XALGORIX_TELEGRAM_CHAT_ID=-1001234567890",
+		"XALGORIX_TELEGRAM_MIN_SEVERITY=critical",
 		"XALGORIX_USERNAME=admin",
 		"XALGORIX_PASSWORD=password",
 		"XALGORIX_BROWSER_PATH=/opt/chrome",
@@ -180,6 +183,9 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 	}
 	if cfg.DiscordWebhook != "https://discord.example/webhook" || cfg.DiscordMinSeverity != "high" {
 		t.Fatalf("discord settings not loaded: %#v", cfg)
+	}
+	if cfg.TelegramBotToken != "123456:ABC-DEF" || cfg.TelegramChatID != "-1001234567890" || cfg.TelegramMinSeverity != "critical" {
+		t.Fatalf("telegram settings not loaded: %#v", cfg)
 	}
 	if cfg.Username != "admin" || cfg.Password != "password" || cfg.BrowserPath != "/opt/chrome" {
 		t.Fatalf("dashboard/browser settings not loaded: %#v", cfg)

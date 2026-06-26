@@ -68,6 +68,11 @@ type Config struct {
 	DiscordWebhook     string // XALGORIX_DISCORD_WEBHOOK - notification webhook URL
 	DiscordMinSeverity string // XALGORIX_DISCORD_MIN_SEVERITY - minimum severity to notify
 
+	// Telegram notifications
+	TelegramBotToken    string // XALGORIX_TELEGRAM_BOT_TOKEN - bot token from @BotFather (secret)
+	TelegramChatID      string // XALGORIX_TELEGRAM_CHAT_ID - target chat/channel ID (numeric or @username)
+	TelegramMinSeverity string // XALGORIX_TELEGRAM_MIN_SEVERITY - minimum severity to notify
+
 	// Dashboard auth
 	Username     string // XALGORIX_USERNAME - dashboard login username
 	Password     string // XALGORIX_PASSWORD - dashboard login password (DEPRECATED: prefer PasswordHash)
@@ -219,6 +224,11 @@ func load() *Config {
 		// Discord notifications
 		DiscordWebhook:     envOr("XALGORIX_DISCORD_WEBHOOK", ""),
 		DiscordMinSeverity: envOr("XALGORIX_DISCORD_MIN_SEVERITY", ""),
+
+		// Telegram notifications
+		TelegramBotToken:    envOr("XALGORIX_TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:      envOr("XALGORIX_TELEGRAM_CHAT_ID", ""),
+		TelegramMinSeverity: envOr("XALGORIX_TELEGRAM_MIN_SEVERITY", ""),
 
 		// Dashboard auth
 		Username:     envOr("XALGORIX_USERNAME", ""),

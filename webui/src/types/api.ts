@@ -94,6 +94,7 @@ export interface ScanRecord {
   severity_filter?: string[];
   discord_webhook?: string;
   discord_webhook_configured?: boolean;
+  telegram_configured?: boolean;
   recon_mode?: "active" | "passive";
   scan_intensity?: "active" | "passive";
   events: WSEvent[];
