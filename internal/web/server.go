@@ -38,6 +38,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/xalgord/xalgorix/v4/internal/agent"
+	"github.com/xalgord/xalgorix/v4/internal/attacksurface"
 	"github.com/xalgord/xalgorix/v4/internal/auth"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
@@ -877,6 +878,24 @@ type ScanRequest struct {
 	ScanIntensity  string   `json:"scan_intensity"`  // active or passive testing/scanning
 	CompanyName    string   `json:"company_name"`    // report branding: company name
 	LogoPath       string   `json:"logo_path"`       // report branding: logo file path
+	// TargetAuth carries per-scan authenticated-scanning material so the
+	// agent can exercise post-login attack surface. Format mirrors
+	// XALGORIX_TARGET_AUTH (see httpclient/sessionauth.go): a header/cookie
+	// spec applied automatically to http_request. Empty = unauthenticated.
+	TargetAuth string `json:"target_auth"`
+	// TargetAuthSecondary is a SECOND account's auth (same format as TargetAuth),
+	// surfaced to the agent to prove horizontal access-control flaws (IDOR/BOLA).
+	// Not auto-applied. Empty = single-account testing.
+	TargetAuthSecondary string `json:"target_auth_b"`
+	// SourceRepo enables whitebox/source-assisted scanning. It is either a
+	// git clone URL or a local path; the agent clones/opens it at scan
+	// start and exposes it via the code_search tool. Empty = blackbox.
+	SourceRepo string `json:"source_repo"`
+	// ScanContext is a path to operator-supplied context artifact(s) — an
+	// OpenAPI/Swagger spec, HAR capture, or Postman collection (file or dir).
+	// The engine parses them into a seeded attack surface (real endpoints +
+	// params) and harvests any captured auth. Empty = crawl-only discovery.
+	ScanContext string `json:"scan_context"`
 	// ProviderProfile is the optional "<provider>:<profileId>" key
 	// (e.g. "openai:default") that selects an Auth_Profile from
 	// Profile_Store for this scan. When set on a request from an
@@ -930,26 +949,28 @@ type WSEvent struct {
 
 // VulnSummary is a simplified vulnerability for the UI.
 type VulnSummary struct {
-	ID                 string  `json:"id"`
-	Title              string  `json:"title"`
-	Severity           string  `json:"severity"`
-	Target             string  `json:"target,omitempty"`
-	Endpoint           string  `json:"endpoint"`
-	CVSS               float64 `json:"cvss"`
-	CVSSVector         string  `json:"cvss_vector,omitempty"`
-	Description        string  `json:"description,omitempty"`
-	Impact             string  `json:"impact,omitempty"`
-	Method             string  `json:"method,omitempty"`
-	CVE                string  `json:"cve,omitempty"`
-	CWE                string  `json:"cwe_id,omitempty"`
-	OWASP              string  `json:"owasp,omitempty"`
-	TechnicalAnalysis  string  `json:"technical_analysis,omitempty"`
-	PoCDescription     string  `json:"poc_description,omitempty"`
-	PoCScript          string  `json:"poc_script,omitempty"`
-	Remediation        string  `json:"remediation,omitempty"`
-	ExploitationProof  string  `json:"exploitation_proof,omitempty"`
-	VerificationMethod string  `json:"verification_method,omitempty"`
-	Verified           bool    `json:"verified"`
+	ID                 string   `json:"id"`
+	Title              string   `json:"title"`
+	Severity           string   `json:"severity"`
+	Target             string   `json:"target,omitempty"`
+	Endpoint           string   `json:"endpoint"`
+	CVSS               float64  `json:"cvss"`
+	CVSSVector         string   `json:"cvss_vector,omitempty"`
+	Description        string   `json:"description,omitempty"`
+	Impact             string   `json:"impact,omitempty"`
+	Method             string   `json:"method,omitempty"`
+	CVE                string   `json:"cve,omitempty"`
+	CWE                string   `json:"cwe_id,omitempty"`
+	OWASP              string   `json:"owasp,omitempty"`
+	TechnicalAnalysis  string   `json:"technical_analysis,omitempty"`
+	PoCDescription     string   `json:"poc_description,omitempty"`
+	PoCScript          string   `json:"poc_script,omitempty"`
+	Remediation        string   `json:"remediation,omitempty"`
+	Fix                string   `json:"fix,omitempty"`
+	ExploitationProof  string   `json:"exploitation_proof,omitempty"`
+	VerificationMethod string   `json:"verification_method,omitempty"`
+	Verified           bool     `json:"verified"`
+	Tags               []string `json:"tags,omitempty"`
 }
 
 // SubScanSummary is a child target scanned as part of a wildcard parent scan.
@@ -1540,6 +1561,7 @@ var dashboardRoutes = []string{
 	"/api/upload-targets",
 	"/api/upload-instructions",
 	"/api/upload-logo",
+	"/api/upload-context",
 	"/uploads/logos/",
 	"/api/report/",
 	"/api/settings/rate-limit",
@@ -1582,7 +1604,7 @@ type Server struct {
 	cancelScan           context.CancelFunc      // cancels the current scan session context
 	running              atomic.Bool
 	stopReq              atomic.Bool
-	restartWhenIdle      atomic.Bool // SIGUSR1 sets this; a watcher restarts once scans drain
+	restartWhenIdle      atomic.Bool  // SIGUSR1 sets this; a watcher restarts once scans drain
 	httpServer           *http.Server // set in Start; used to trigger graceful restart from the API
 	dataDir              string
 	currentScanDir       string
@@ -1591,7 +1613,7 @@ type Server struct {
 	discordMinSeverity   string // minimum severity to send to Discord ("info", "low", "medium", "high", "critical")
 	telegramBotToken     string // XALGORIX_TELEGRAM_BOT_TOKEN (secret, never exposed via API)
 	telegramChatID       string // XALGORIX_TELEGRAM_CHAT_ID (numeric ID or @channelusername)
-	telegramMinSeverity string // minimum severity to send to Telegram ("info", "low", "medium", "high", "critical")
+	telegramMinSeverity  string // minimum severity to send to Telegram ("info", "low", "medium", "high", "critical")
 	rateLimiter          *RateLimiter
 	settingsMu           sync.Mutex
 	instances            map[string]*ScanInstance // concurrent scan instances
@@ -1699,7 +1721,7 @@ func NewServer(cfg *config.Config, port int) *Server {
 		discordMinSeverity:   strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
 		telegramBotToken:     cfg.TelegramBotToken,
 		telegramChatID:       cfg.TelegramChatID,
-		telegramMinSeverity: strings.ToLower(strings.TrimSpace(cfg.TelegramMinSeverity)),
+		telegramMinSeverity:  strings.ToLower(strings.TrimSpace(cfg.TelegramMinSeverity)),
 		rateLimiter:          rl,
 		instances:            make(map[string]*ScanInstance),
 		queueResumeLaunching: make(map[string]bool),
@@ -1951,6 +1973,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/upload-targets", s.handleUploadTargets)
 	mux.HandleFunc("/api/upload-instructions", s.handleUploadInstructions)
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
+	mux.HandleFunc("/api/upload-context", s.handleUploadContext)
 	// Serve uploaded logos
 	logosDir := filepath.Join(s.dataDir, "logos")
 	_ = os.MkdirAll(logosDir, 0700)
@@ -2582,12 +2605,12 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 				ReconMode:                req.ReconMode,
 				ScanIntensity:            req.ScanIntensity,
 				CurrentPhase:             firstSelectedPhase(req.Phases),
-			CompanyName:              req.CompanyName,
-			LogoPath:                 req.LogoPath,
-			DiscordWebhook:           req.DiscordWebhook,
-			DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
-			TelegramConfigured:       s.telegramConfigured(),
-		}
+				CompanyName:              req.CompanyName,
+				LogoPath:                 req.LogoPath,
+				DiscordWebhook:           req.DiscordWebhook,
+				DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
+				TelegramConfigured:       s.telegramConfigured(),
+			}
 			s.saveScanRecordTo(rec, savedDir)
 		}
 
@@ -3393,6 +3416,10 @@ type scanSession struct {
 	phases            []int                // selected methodology phases
 	reconMode         string               // active or passive reconnaissance
 	scanIntensity     string               // active or passive testing/scanning
+	targetAuth        string               // per-scan authenticated-scanning material (see ScanRequest.TargetAuth)
+	targetAuthB       string               // per-scan second account for IDOR/BOLA (see ScanRequest.TargetAuthSecondary)
+	sourceRepo        string               // per-scan whitebox source repo/path (see ScanRequest.SourceRepo)
+	scanContext       string               // per-scan attack-surface context path (see ScanRequest.ScanContext)
 
 	// llmClient, when non-nil, is a pre-built llm.Client carrying
 	// a per-scan endpoint resolver derived from the originating
@@ -3886,6 +3913,23 @@ func (s *Server) executeScanSession(sess *scanSession) {
 	if sess.discoveryMode || isReconReportOnlyPhaseSelection(sess.phases) {
 		agnt.SetDiscoveryMode(true)
 	}
+	// Per-scan authenticated scanning and whitebox source. Empty values are
+	// no-ops; non-empty values override the agent's cfg-derived defaults so
+	// each scan can carry its own credentials/source without leaking across
+	// sessions. SetSourceRepo only records intent — the clone/open happens
+	// lazily inside Run via prepareScanEnvironment.
+	if sess.targetAuth != "" {
+		agnt.SetTargetAuth(sess.targetAuth)
+	}
+	if sess.targetAuthB != "" {
+		agnt.SetTargetAuthSecondary(sess.targetAuthB)
+	}
+	if sess.sourceRepo != "" {
+		agnt.SetSourceRepo(sess.sourceRepo)
+	}
+	if sess.scanContext != "" {
+		agnt.SetScanContext(sess.scanContext)
+	}
 	sess.agent = agnt
 
 	// Store agent ref on server for handleStop/handleChat (under lock)
@@ -4102,18 +4146,18 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 							if vs.Remediation != "" {
 								details.WriteString(fmt.Sprintf("🛡️ **Remediation:**\n%s", vs.Remediation))
 							}
-						// Apply Discord minimum severity filter
-						if severityMeetsThreshold(vs.Severity, s.discordMinSeverity) {
-							s.sendDiscord(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
-						} else {
-							log.Printf("[DISCORD] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.discordMinSeverity)
-						}
-						// Apply Telegram minimum severity filter (independent of Discord)
-						if s.telegramConfigured() && severityMeetsThreshold(vs.Severity, s.telegramMinSeverity) {
-							s.sendTelegram(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
-						} else if s.telegramConfigured() {
-							log.Printf("[TELEGRAM] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.telegramMinSeverity)
-						}
+							// Apply Discord minimum severity filter
+							if severityMeetsThreshold(vs.Severity, s.discordMinSeverity) {
+								s.sendDiscord(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
+							} else {
+								log.Printf("[DISCORD] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.discordMinSeverity)
+							}
+							// Apply Telegram minimum severity filter (independent of Discord)
+							if s.telegramConfigured() && severityMeetsThreshold(vs.Severity, s.telegramMinSeverity) {
+								s.sendTelegram(sevColor, fmt.Sprintf("🐛 %s Vulnerability Found", strings.ToUpper(vs.Severity)), details.String())
+							} else if s.telegramConfigured() {
+								log.Printf("[TELEGRAM] Skipping %s vuln notification (min severity: %s)", vs.Severity, s.telegramMinSeverity)
+							}
 						}
 					} else {
 						log.Printf("[VULN] Skipping duplicate vuln already present in session record: %s %s", vs.ID, vs.Title)
@@ -4935,6 +4979,10 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 		phases:          req.Phases,
 		reconMode:       req.ReconMode,
 		scanIntensity:   req.ScanIntensity,
+		targetAuth:      req.TargetAuth,
+		targetAuthB:     req.TargetAuthSecondary,
+		sourceRepo:      req.SourceRepo,
+		scanContext:     req.ScanContext,
 		llmClient:       s.scanLLMClientForRequest(req, scanCfg),
 	}
 	s.executeScanSession(sess)
@@ -5001,6 +5049,10 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 		phases:          req.Phases,
 		reconMode:       req.ReconMode,
 		scanIntensity:   req.ScanIntensity,
+		targetAuth:      req.TargetAuth,
+		targetAuthB:     req.TargetAuthSecondary,
+		sourceRepo:      req.SourceRepo,
+		scanContext:     req.ScanContext,
 		llmClient:       s.scanLLMClientForRequest(req, scanCfg),
 	}
 	s.executeScanSession(sess)
@@ -5107,6 +5159,10 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 			phases:           req.Phases,
 			reconMode:        req.ReconMode,
 			scanIntensity:    req.ScanIntensity,
+			targetAuth:       req.TargetAuth,
+			targetAuthB:      req.TargetAuthSecondary,
+			sourceRepo:       req.SourceRepo,
+			scanContext:      req.ScanContext,
 			llmClient:        s.scanLLMClientForRequest(req, scanCfg),
 		}
 		s.executeScanSession(discoverySess)
@@ -5348,6 +5404,10 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				phases:               req.Phases,
 				reconMode:            req.ReconMode,
 				scanIntensity:        req.ScanIntensity,
+				targetAuth:           req.TargetAuth,
+				targetAuthB:          req.TargetAuthSecondary,
+				sourceRepo:           req.SourceRepo,
+				scanContext:          req.ScanContext,
 				llmClient:            s.scanLLMClientForRequest(req, scanCfg),
 			}
 			s.executeScanSession(subSess)
@@ -5388,14 +5448,14 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 					for _, v := range newVulns {
 						subScanRecord.Vulns = append(subScanRecord.Vulns, vulnToSummary(v))
 					}
-				reportPath, err := s.generateReportAt(&subScanRecord, subScanDir)
-				if err == nil {
-					desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found", subdomain, len(newVulns))
-					s.sendDiscordWithFile(0x3b82f6, "🔴 Vulnerability Found - Report Ready", desc, reportPath)
-					if s.telegramConfigured() {
-						s.sendTelegramWithFile(0x3b82f6, "🔴 Vulnerability Found - Report Ready", desc, reportPath)
+					reportPath, err := s.generateReportAt(&subScanRecord, subScanDir)
+					if err == nil {
+						desc := fmt.Sprintf("**Target:** %s\n**Vulnerabilities:** %d found", subdomain, len(newVulns))
+						s.sendDiscordWithFile(0x3b82f6, "🔴 Vulnerability Found - Report Ready", desc, reportPath)
+						if s.telegramConfigured() {
+							s.sendTelegramWithFile(0x3b82f6, "🔴 Vulnerability Found - Report Ready", desc, reportPath)
+						}
 					}
-				}
 				}
 			}
 
@@ -6051,6 +6111,84 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleUploadContext accepts a scan-context artifact (OpenAPI/Swagger spec,
+// HAR capture, or Postman collection) and saves it under the data dir. It
+// returns the ABSOLUTE filesystem path, which the caller passes back as
+// ScanRequest.scan_context so the engine can parse it into a seeded attack
+// surface at scan start.
+func (s *Server) handleUploadContext(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseMultipartForm(150 << 20); err != nil { // 150MB max (APKs get large)
+		http.Error(w, "failed to parse multipart form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	originalName := filepath.Base(header.Filename)
+	ext := strings.ToLower(filepath.Ext(originalName))
+	allowedExts := map[string]bool{".json": true, ".yaml": true, ".yml": true, ".har": true, ".xml": true, ".apk": true, ".txt": true}
+	if !allowedExts[ext] {
+		http.Error(w, "unsupported context format: "+ext+" (allowed: json, yaml, yml, har, xml, apk, txt — OpenAPI/Swagger, HAR, Postman, Burp, or Android APK)", http.StatusBadRequest)
+		return
+	}
+
+	contextDir := filepath.Join(s.dataDir, "context")
+	if err := os.MkdirAll(contextDir, 0700); err != nil {
+		log.Printf("[ERROR] Failed to create context directory: %v", err)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	nameOnly := strings.TrimSuffix(originalName, filepath.Ext(originalName))
+	safeName := regexp.MustCompile(`[^a-zA-Z0-9._-]+`).ReplaceAllString(nameOnly, "_")
+	safeName = strings.Trim(safeName, "._-")
+	if safeName == "" {
+		safeName = "context"
+	}
+	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixMilli(), safeName, ext)
+	dstPath := filepath.Join(contextDir, fileName)
+
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create context file: %v", err)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, file); err != nil {
+		log.Printf("[ERROR] Failed to write context file: %v", err)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Best-effort parse so we can report how many endpoints were seeded and
+	// reject an unusable file early with a clear message.
+	res, perr := attacksurface.LoadFromPath(dstPath)
+	if perr != nil {
+		_ = os.Remove(dstPath)
+		http.Error(w, "could not parse context: "+perr.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("Scan context uploaded: %s → %s (%d endpoints)", header.Filename, dstPath, len(res.Endpoints))
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"path":      dstPath,
+		"filename":  originalName,
+		"endpoints": len(res.Endpoints),
+		"formats":   res.Formats,
+		"has_auth":  len(res.AuthHeaders) > 0,
+	})
+}
+
 // randomSlug generates a short random hex string for scan IDs.
 func randomSlug() string {
 	b := make([]byte, 4)
@@ -6282,9 +6420,11 @@ func vulnToSummary(v reporting.Vulnerability) VulnSummary {
 		PoCDescription:     v.PoCDescription,
 		PoCScript:          v.PoCScript,
 		Remediation:        v.Remediation,
+		Fix:                v.Fix,
 		ExploitationProof:  v.ExploitationProof,
 		VerificationMethod: v.VerificationMethod,
 		Verified:           v.Verified,
+		Tags:               v.Tags,
 	}
 }
 
@@ -7835,11 +7975,11 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 				w.Write(data)
 				return
 			}
-		s.attachWildcardSubScans(rec)
-		finalizeScanRecordForResponse(rec)
-		s.markDiscordWebhookConfigured(rec)
-		s.markTelegramConfigured(rec)
-		data, _ := json.Marshal(rec)
+			s.attachWildcardSubScans(rec)
+			finalizeScanRecordForResponse(rec)
+			s.markDiscordWebhookConfigured(rec)
+			s.markTelegramConfigured(rec)
+			data, _ := json.Marshal(rec)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(data)
 			return

@@ -499,7 +499,7 @@ func TestExecuteBodyTruncation(t *testing.T) {
 	if len(result.Output) > maxBodyBytes+4096 {
 		t.Fatalf("output len=%d exceeds expected max around %d", len(result.Output), maxBodyBytes)
 	}
-	if !strings.Contains(result.Output, "[Body truncated at 50 KB]") {
+	if !strings.Contains(result.Output, "[Body truncated at 50 KB") {
 		t.Fatal("expected truncation marker in output")
 	}
 }
@@ -578,8 +578,8 @@ func TestRegister(t *testing.T) {
 	if tool.Name != "http_request" {
 		t.Fatalf("tool name = %q", tool.Name)
 	}
-	if len(tool.Parameters) != 6 {
-		t.Fatalf("expected 6 parameters, got %d", len(tool.Parameters))
+	if len(tool.Parameters) != 7 {
+		t.Fatalf("expected 7 parameters, got %d", len(tool.Parameters))
 	}
 
 	required := map[string]bool{}

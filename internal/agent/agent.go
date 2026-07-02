@@ -7,9 +7,12 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/xalgord/xalgorix/v4/internal/attacksurface"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/llm"
 	"github.com/xalgord/xalgorix/v4/internal/safe"
@@ -26,10 +30,12 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentmail"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
 	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
+	"github.com/xalgord/xalgorix/v4/internal/tools/codesearch"
 	"github.com/xalgord/xalgorix/v4/internal/tools/fileedit"
 	"github.com/xalgord/xalgorix/v4/internal/tools/finish"
 	"github.com/xalgord/xalgorix/v4/internal/tools/httpclient"
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
+	oobtool "github.com/xalgord/xalgorix/v4/internal/tools/oob"
 	"github.com/xalgord/xalgorix/v4/internal/tools/pageagent"
 	"github.com/xalgord/xalgorix/v4/internal/tools/proxy"
 	"github.com/xalgord/xalgorix/v4/internal/tools/python"
@@ -117,6 +123,20 @@ type Agent struct {
 	hooks                      *HookRegistry     // extensible lifecycle hooks
 	state                      *ScanState        // shared mutable scan state for hooks
 	localGuard                 scopeguard.Config // operator's listener identity, consulted by shouldBlockForOutOfScope to detect Local_Or_Listener_Host references in Gated_Tool args
+
+	// Per-scan whitebox/auth config. Default to the global cfg values but can
+	// be overridden PER SCAN via SetTargetAuth/SetSourceRepo before Run() so a
+	// multi-tenant host never shares one target's credentials/source with
+	// another target's scan.
+	targetAuth   string
+	targetAuthB  string // optional SECOND account, for horizontal IDOR/BOLA proof
+	sourceRepo   string
+	scanContext  string   // path to OpenAPI/HAR/Postman artifact(s) seeding the attack surface
+	secretValues []string // auth values to redact from emitted telemetry
+
+	// scanContextBriefing is built from scanContext in prepareScanEnvironment
+	// and injected as a high-priority user message at the start of Run.
+	scanContextBriefing string
 }
 
 // AgentOption configures optional behavior on a *Agent. The
@@ -219,6 +239,8 @@ func NewAgent(cfg *config.Config, name string, events chan Event, localGuard sco
 	websearch.Register(reg)
 	agentmail.Register(reg)
 	skillstool.Register(reg, cfg.SkillsDir)
+	oobtool.Register(reg)
+	codesearch.Register(reg)
 
 	hookReg := NewHookRegistry()
 	RegisterDefaultHooks(hookReg)
@@ -237,6 +259,10 @@ func NewAgent(cfg *config.Config, name string, events chan Event, localGuard sco
 		hooks:        hookReg,
 		state:        NewScanState(),
 		localGuard:   localGuard,
+		targetAuth:   cfg.TargetAuth,
+		targetAuthB:  cfg.TargetAuthSecondary,
+		sourceRepo:   cfg.SourceRepo,
+		scanContext:  cfg.ScanContext,
 	}
 
 	// Apply per-call AgentOption values (e.g. WithLLMClient). Options
@@ -262,6 +288,13 @@ func NewAgent(cfg *config.Config, name string, events chan Event, localGuard sco
 		subAgent := NewAgent(cfg, subName, subEvents, a.localGuard, sctx)
 		subAgent.SetPhaseRestrictions(a.allowedPhases)
 		subAgent.SetActivityPolicy(a.reconMode, a.scanIntensity, a.activityHosts)
+		// Propagate per-scan auth/source overrides so the sub-agent's prompt
+		// guidance and secret redaction match the parent (tool access is
+		// already shared via the scan-context-keyed stores).
+		subAgent.SetTargetAuth(a.targetAuth)
+		subAgent.SetTargetAuthSecondary(a.targetAuthB)
+		subAgent.SetSourceRepo(a.sourceRepo)
+		subAgent.SetScanContext(a.scanContext)
 		if a.discoveryMode {
 			subAgent.SetDiscoveryMode(true)
 		}
@@ -1297,6 +1330,9 @@ func containsActiveAccessPattern(text string) bool {
 // Run starts the agent loop with the given targets and instructions.
 func (a *Agent) Run(targets []string, instruction string) {
 	a.scanStart = time.Now()
+	// Wire per-scan auth + whitebox source here (in the scan goroutine) so a
+	// slow git clone never blocks scan creation or the HTTP handler.
+	a.prepareScanEnvironment()
 	ratePolicy := EffectiveRequestRatePolicy(a.cfg, instruction)
 	if a.scanCtx != nil {
 		a.scanCtx.SetRequestRatePolicy(ratePolicy)
@@ -1314,6 +1350,13 @@ func (a *Agent) Run(targets []string, instruction string) {
 	userMsg := a.buildInitialUserMessage(targets, instruction)
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: userMsg})
 
+	// Inject the seeded attack surface (from OpenAPI/HAR/Postman context) as a
+	// high-priority follow-up so the agent tests the target's REAL endpoints
+	// instead of relying solely on crawl-based discovery.
+	if a.scanContextBriefing != "" {
+		a.messages = append(a.messages, llm.Message{Role: "user", Content: a.scanContextBriefing})
+	}
+
 	// Initialize scan state for hooks (replaces 17+ local tracking variables)
 	a.state = NewScanState()
 	a.state.DiscoveryMode = a.discoveryMode
@@ -1330,10 +1373,22 @@ func (a *Agent) Run(targets []string, instruction string) {
 		return total
 	}
 
+	// Running total of tool calls, for the optional resource budget.
+	toolCallsTotal := 0
+
 	for iter := 0; (a.maxIter == 0 || iter < a.maxIter) && !a.stopped.Load() && (a.ctx == nil || a.ctx.Err() == nil); iter++ {
 		// Reset activity watchdog on each iteration — IMMEDIATELY, no delay
 		a.touchActivity()
 		a.state.Iteration = iter
+
+		// ── Resource budget / early-stopping (MAPTA §2.7/§3.3) ──
+		// Halt cleanly if a configured cap is hit. Findings already reported
+		// are persisted, so this is a graceful teardown, not a data loss.
+		if over, why := a.overBudget(toolCallsTotal); over {
+			a.emit(Event{Type: "message", Content: fmt.Sprintf("⏱️ Resource budget reached (%s) — stopping and finalizing. Findings reported so far are preserved.", why), TotalTokens: tokenCount()})
+			a.emit(Event{Type: "finished", Content: fmt.Sprintf("Scan stopped: resource budget reached (%s).", why), TotalTokens: tokenCount()})
+			return
+		}
 		if guardMsg := a.maybeCompletePassiveReconGuardAtIterationStart(iter); guardMsg != "" {
 			a.msgMu.Lock()
 			a.messages = append(a.messages, llm.Message{Role: "user", Content: guardMsg})
@@ -1492,6 +1547,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 		a.msgMu.Unlock()
 
 		toolCalls := llm.ParseToolCalls(responseClean)
+		toolCallsTotal += len(toolCalls)
 
 		// ── Hook: OnNoToolResponse ──
 		if len(toolCalls) == 0 {
@@ -2073,6 +2129,17 @@ func compactMessages(msgs []llm.Message) string {
 func (a *Agent) emit(evt Event) {
 	evt.AgentID = a.ID
 	evt.Timestamp = time.Now()
+	// Redact operator-supplied auth secrets from telemetry so credentials
+	// don't leak into the live event stream, scan logs, or PDF reports.
+	if len(a.secretValues) > 0 {
+		evt.Content = a.redactSecrets(evt.Content)
+		if evt.ToolResult.Output != "" {
+			evt.ToolResult.Output = a.redactSecrets(evt.ToolResult.Output)
+		}
+		if evt.ToolResult.Error != "" {
+			evt.ToolResult.Error = a.redactSecrets(evt.ToolResult.Error)
+		}
+	}
 	if a.events != nil {
 		// Critical events (finished, error) must never be dropped — use blocking send with timeout
 		if evt.Type == "finished" || evt.Type == "error" {
@@ -2288,6 +2355,17 @@ When you stumble onto a related-but-not-authorized host while doing recon:
 
 **Never accept "this is probably secure" — verify it.**
 
+## DEPTH-FIRST DOCTRINE (how the best hunters actually win)
+
+Breadth is a trap. Running one payload against twenty endpoints finds nothing; fully exploiting ONE real weakness wins the bounty. Empirically, successful assessments are FAST and FOCUSED — they lock onto a promising signal and drive it all the way to a working proof-of-concept. Failed ones sprawl across many tools without ever landing an exploit.
+
+- After recon, RANK the attack surface by exploitability and pick the single most promising lead (an anomaly: odd error, reflected value, auth boundary, id you can tamper, a parser that behaves strangely). Go DEEP on it before moving on.
+- Push one lead to a CONCRETE OUTCOME (extracted data, an oob_callback hit, a state change, code execution) before starting the next. A half-tested endpoint is worth nothing.
+- Prefer precise, hand-crafted requests (http_request / curl / python) over spraying automated scanners. Scanners are for surface mapping, not for winning.
+- Blind class? Confirm it out-of-band with the oob_callback tool — do NOT report it unproven; the pipeline will drop unproven findings.
+- If a lead is truly dead after a genuine, multi-technique effort, drop it and move to the next-ranked lead. Don't thrash on the same failed idea.
+- The goal is validated impact, not coverage counters.
+
 ## CRITICAL RULES — FOLLOW THESE OR FAIL
 
 ### Execution Rules
@@ -2320,7 +2398,7 @@ When you stumble onto a related-but-not-authorized host while doing recon:
 A finding is only real when the EVIDENCE matches the CLAIM. Detection ≠ proof. Before reporting, it MUST pass all four checks:
 
 1. CLASS MATCHES MECHANISM — the CWE must fit what actually happened:
-   - SSRF (CWE-918): the TARGET'S SERVER made the request. Proof = an out-of-band callback (interact.sh/collaborator) or an internal-only resource (e.g. 169.254.169.254) returned BY THE TARGET. A request made by the victim's browser/JS is NOT SSRF.
+   - SSRF (CWE-918): the TARGET'S SERVER made the request. Proof = an out-of-band callback (use the built-in oob_callback tool: generate a URL, plant it, then poll for the hit) or an internal-only resource (e.g. 169.254.169.254) returned BY THE TARGET. A request made by the victim's browser/JS is NOT SSRF.
    - XSS (CWE-79): the script EXECUTED. Proof = alert(document.domain) firing, an OOB callback, or a screenshot. Reflection alone is NOT XSS.
    - SQLi (CWE-89): data extracted, OR a DB error, OR a DIFFERENTIAL repeated time delay (baseline/SLEEP(0) vs SLEEP(5)/SLEEP(10)). A single slow response is NOT proof.
    - Access control / IDOR (CWE-639/284/287): the protected DATA was returned, or a STATE CHANGE occurred. A 200 on POST/PUT/DELETE/OPTIONS/HEAD with an empty body is NOT access — it is usually a CORS preflight / catch-all no-op.
@@ -3627,10 +3705,186 @@ START with a quick technology fingerprint (curl -sI, whatweb), then load relevan
 }
 
 func (a *Agent) buildInitialUserMessage(targets []string, instruction string) string {
+	briefing := a.authGuidance() + a.whiteboxGuidance()
 	if instruction != "" {
-		return fmt.Sprintf("Your PRIMARY MISSION: %s\n\nTarget(s): %s\n\nStart by loading the relevant skills (read_skill), doing a quick technology fingerprint (curl -sI), then immediately focus on the vulnerability class described in your mission. Use the terminal_execute tool to start.", instruction, strings.Join(targets, ", "))
+		return fmt.Sprintf("Your PRIMARY MISSION: %s\n\nTarget(s): %s\n%s\nStart by loading the relevant skills (read_skill), doing a quick technology fingerprint (curl -sI), then immediately focus on the vulnerability class described in your mission. Use the terminal_execute tool to start.", instruction, strings.Join(targets, ", "), briefing)
 	}
-	return fmt.Sprintf("Begin security assessment of: %s\nUse the terminal_execute tool to start.", strings.Join(targets, ", "))
+	return fmt.Sprintf("Begin security assessment of: %s\n%s\nUse the terminal_execute tool to start.", strings.Join(targets, ", "), briefing)
+}
+
+// whiteboxGuidance returns a source-assisted methodology briefing when the
+// target's source has been resolved for this scan, or "" otherwise. Source
+// access is where the high-severity classes (RCE, command/deserialization
+// injection, secret exposure, SSRF) are actually found.
+func (a *Agent) whiteboxGuidance() string {
+	if a.scanCtx == nil {
+		return ""
+	}
+	root := codesearch.GetSourceRoot(a.scanCtx.ID)
+	if root == "" {
+		return ""
+	}
+	return fmt.Sprintf(`
+## WHITEBOX MODE — you have the target's SOURCE CODE (at %s)
+This is your biggest advantage: you can SEE the vulnerable code, not just guess from responses. Methodology:
+1. MAP: identify the framework, routing, and how user input enters (route handlers, params, body, headers).
+2. HUNT SINKS: use the code_search tool (sinks=rce|cmdi|sqli|deserialization|ssrf|fileio|template|secrets|auth|redirect|crypto) to locate dangerous calls, and grep for hardcoded secrets/keys.
+3. TRACE REACHABILITY: for each sink, trace BACKWARD to a user-reachable HTTP route and confirm the tainted input reaches it without sanitization. Note the exact route + parameter.
+4. EXPLOIT ON THE LIVE TARGET: build a concrete PoC against the running target and prove impact (extracted data, oob_callback hit, state change, command output). Source proves the bug EXISTS; the live PoC proves it's EXPLOITABLE — you need both.
+5. Prioritize: RCE / command & template injection / insecure deserialization / hardcoded secrets / SSRF / auth bypass — the classes source access finds that black-box misses.
+Report findings ONLY with a working live-target PoC (the verifier will re-test).
+`, root)
+}
+
+// redactSecrets replaces operator-supplied auth values in s with a marker.
+func (a *Agent) redactSecrets(s string) string {
+	if s == "" {
+		return s
+	}
+	for _, secret := range a.secretValues {
+		if secret != "" && strings.Contains(s, secret) {
+			s = strings.ReplaceAll(s, secret, "***REDACTED***")
+		}
+	}
+	return s
+}
+
+// SetTargetAuth sets per-scan authenticated-session credentials, overriding
+// the global default. Call before Run(). Empty string clears it.
+func (a *Agent) SetTargetAuth(s string) { a.targetAuth = strings.TrimSpace(s) }
+
+// SetTargetAuthSecondary sets a per-scan SECOND account's credentials (for
+// horizontal IDOR/BOLA proof). Call before Run(). Empty string clears it.
+func (a *Agent) SetTargetAuthSecondary(s string) { a.targetAuthB = strings.TrimSpace(s) }
+
+// SetSourceRepo sets the per-scan whitebox source (git URL or local path),
+// overriding the global default. Call before Run().
+func (a *Agent) SetSourceRepo(s string) { a.sourceRepo = strings.TrimSpace(s) }
+
+// SetScanContext sets the per-scan context artifact path (OpenAPI/HAR/Postman
+// file or directory) used to seed the attack surface. Call before Run().
+func (a *Agent) SetScanContext(s string) { a.scanContext = strings.TrimSpace(s) }
+
+// prepareScanEnvironment wires per-scan authenticated-session credentials and
+// whitebox source into the shared scan context. Runs at the start of Run()
+// (in the scan's own goroutine, so a slow git clone never blocks scan
+// creation / the HTTP handler). Idempotent and safe for sub-agents: the source
+// clone is guarded so only the first agent for a context resolves it.
+func (a *Agent) prepareScanEnvironment() {
+	if a.scanCtx == nil {
+		return
+	}
+	// Authenticated session → applied to http_request for this scan context.
+	if headers := httpclient.ParseAuthHeaders(a.targetAuth); len(headers) > 0 {
+		httpclient.SetSessionAuth(a.scanCtx.ID, headers)
+		for _, v := range headers {
+			if len(strings.TrimSpace(v)) >= 4 { // avoid redacting trivially short values
+				a.secretValues = append(a.secretValues, v)
+			}
+		}
+	}
+	// Second account (B) is NOT auto-applied — the agent uses it manually to
+	// prove horizontal access control. Still redact its values from telemetry.
+	for _, v := range httpclient.ParseAuthHeaders(a.targetAuthB) {
+		if len(strings.TrimSpace(v)) >= 4 {
+			a.secretValues = append(a.secretValues, v)
+		}
+	}
+	// Whitebox source (git clone / local path). Resolve once per scan context.
+	if a.sourceRepo != "" && codesearch.GetSourceRoot(a.scanCtx.ID) == "" {
+		dest := a.scanCtx.ScanDir
+		if dest == "" {
+			dest = os.TempDir()
+		}
+		dest = filepath.Join(dest, "source")
+		a.emit(Event{Type: "message", Content: fmt.Sprintf("📦 Whitebox: resolving source (%s)…", a.sourceRepo)})
+		if root, err := codesearch.ResolveSource(a.sourceRepo, dest); err != nil {
+			a.emit(Event{Type: "error", Content: "Whitebox source unavailable: " + err.Error() + " — continuing black-box."})
+			log.Printf("[agent] whitebox source unavailable (%s): %v", a.sourceRepo, err)
+		} else if root != "" {
+			codesearch.SetSourceRoot(a.scanCtx.ID, root)
+			a.emit(Event{Type: "message", Content: "📦 Whitebox source ready — use code_search to hunt sinks."})
+			log.Printf("[agent] whitebox source ready at %s", root)
+		}
+	}
+	// Attack-surface seeding (OpenAPI / HAR / Postman). Parse the operator's
+	// context artifacts into a real endpoint surface + any captured auth, so the
+	// scan starts informed instead of blindly crawling.
+	if a.scanContext != "" && a.scanContextBriefing == "" {
+		if res, err := attacksurface.LoadFromPath(a.scanContext); err != nil {
+			a.emit(Event{Type: "error", Content: "Scan context unavailable: " + err.Error() + " — continuing without seeded surface."})
+			log.Printf("[agent] scan context unavailable (%s): %v", a.scanContext, err)
+		} else if res != nil {
+			a.scanContextBriefing = res.Briefing()
+			// Harvest auth captured in real requests (HAR/Postman) when the
+			// operator didn't already supply explicit target auth.
+			if len(res.AuthHeaders) > 0 && len(httpclient.ParseAuthHeaders(a.targetAuth)) == 0 {
+				httpclient.SetSessionAuth(a.scanCtx.ID, res.AuthHeaders)
+				for _, v := range res.AuthHeaders {
+					if len(strings.TrimSpace(v)) >= 4 {
+						a.secretValues = append(a.secretValues, v)
+					}
+				}
+			}
+			if a.scanContextBriefing != "" {
+				a.emit(Event{Type: "message", Content: fmt.Sprintf("🗺️ Attack surface seeded from context (%d endpoints).", len(res.Endpoints))})
+			}
+		}
+	}
+}
+
+// authGuidance returns an authenticated-session briefing when the operator
+// supplied target credentials, or "" otherwise. Post-auth surface (IDOR/BOLA,
+// privilege escalation, business logic) is where the high-value bugs live, so
+// the agent must know it is authenticated and must diff authed vs unauthed.
+func (a *Agent) authGuidance() string {
+	headers := httpclient.ParseAuthHeaders(a.targetAuth)
+	if len(headers) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(headers))
+	for k := range headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	var curlHdrs strings.Builder
+	for _, n := range names {
+		curlHdrs.WriteString(fmt.Sprintf(" -H %q", n+": "+headers[n]))
+	}
+	return fmt.Sprintf(`
+## AUTHENTICATED SESSION (operator-supplied)
+You have VALID authenticated credentials for this target. They are applied AUTOMATICALLY to every http_request call (%s), so your requests are authenticated by default.
+- For terminal tools (curl/ffuf/sqlmap/etc.) add these headers explicitly, e.g.: curl%s <url>
+- HUNT THE POST-AUTH SURFACE — this is where the money is: IDOR/BOLA (swap ids/uuids to reach OTHER users' data), broken function-level auth (BFLA), privilege escalation (low-priv → admin actions), tenant isolation, and multi-step business-logic flaws.
+- ALWAYS DIFF authenticated vs unauthenticated: replay the same request with the auth headers REMOVED (pass an empty value for that header in http_request) — if protected data/actions still work unauthenticated, that is a broken-access-control finding.
+%s`, strings.Join(names, ", "), curlHdrs.String(), a.secondAccountGuidance())
+}
+
+// secondAccountGuidance returns the horizontal-access-control (IDOR/BOLA)
+// playbook when a second account is configured, or "" otherwise. Two valid
+// sessions let the agent PROVE cross-user access with concrete evidence.
+func (a *Agent) secondAccountGuidance() string {
+	headers := httpclient.ParseAuthHeaders(a.targetAuthB)
+	if len(headers) == 0 {
+		return "- If you can obtain a SECOND account, compare horizontal access (user A's token reaching user B's objects).\n"
+	}
+	names := make([]string, 0, len(headers))
+	for k := range headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	var curlHdrs strings.Builder
+	for _, n := range names {
+		curlHdrs.WriteString(fmt.Sprintf(" -H %q", n+": "+headers[n]))
+	}
+	return fmt.Sprintf(`
+## SECOND ACCOUNT (operator-supplied) — PROVE IDOR/BOLA
+You ALSO have a DISTINCT second account (account B). Its headers (%s) are NOT applied automatically — pass them explicitly to prove horizontal access control:
+- With account B in curl: curl%s <url>
+- METHODOLOGY: (1) as account A, create/enumerate an object and note its id/uuid (e.g. GET /api/orders → id=1001, owned by A); (2) request that SAME object as account B (curl with B's headers, or http_request with B's headers overriding the session); (3) if B can READ or MODIFY A's object, that is CONFIRMED BOLA/IDOR — capture both responses as proof.
+- Do this for every object-scoped endpoint from the attack surface. Also test BFLA: can a low-privilege account reach an admin-only function?
+- The strongest evidence is B receiving A's private data (or successfully mutating A's resource). Report with verification_method=data_extracted and paste BOTH requests/responses.
+`, strings.Join(names, ", "), curlHdrs.String())
 }
 
 func truncStr(s string, max int) string {
@@ -3638,6 +3892,29 @@ func truncStr(s string, max int) string {
 		return s[:max] + "..."
 	}
 	return s
+}
+
+// overBudget reports whether any configured per-scan resource cap has been
+// reached (MAPTA §2.7/§3.3). All caps default to 0 = unlimited, so this is a
+// no-op unless the operator opts in. Returns a human-readable reason.
+func (a *Agent) overBudget(toolCallsTotal int) (bool, string) {
+	if a.cfg == nil {
+		return false, ""
+	}
+	if a.cfg.MaxDurationSec > 0 && !a.scanStart.IsZero() {
+		if elapsed := time.Since(a.scanStart); elapsed >= time.Duration(a.cfg.MaxDurationSec)*time.Second {
+			return true, fmt.Sprintf("time %s ≥ cap %ds", elapsed.Round(time.Second), a.cfg.MaxDurationSec)
+		}
+	}
+	if a.cfg.MaxToolCalls > 0 && toolCallsTotal >= a.cfg.MaxToolCalls {
+		return true, fmt.Sprintf("%d tool calls ≥ cap %d", toolCallsTotal, a.cfg.MaxToolCalls)
+	}
+	if a.cfg.MaxTokens > 0 && a.client != nil {
+		if _, _, total := a.client.GetTokens(); total >= a.cfg.MaxTokens {
+			return true, fmt.Sprintf("%d tokens ≥ cap %d", total, a.cfg.MaxTokens)
+		}
+	}
+	return false, ""
 }
 
 var httpxFixOnce sync.Once

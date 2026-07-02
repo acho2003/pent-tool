@@ -28,14 +28,20 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
 	"github.com/xalgord/xalgorix/v4/internal/tools/httpclient"
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
+	oobtool "github.com/xalgord/xalgorix/v4/internal/tools/oob"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 	"github.com/xalgord/xalgorix/v4/internal/tools/websearch"
 )
 
 const (
-	verifierMaxTurns = 16
-	verifierDeadline = 8 * time.Minute
+	// Turn/time budget for the independent verifier. Kept comfortably under
+	// report_vulnerability's 15-minute tool watchdog. Bumped from 16/8m because
+	// real re-tests (baseline control + exploit + read the result) were running
+	// out of turns and returning a budget-exhaustion "inconclusive", which then
+	// dropped genuinely-proven findings.
+	verifierMaxTurns = 24
+	verifierDeadline = 10 * time.Minute
 )
 
 // verifyFinding is the FindingVerifier installed into the reporting package.
@@ -57,6 +63,7 @@ func (a *Agent) verifyFinding(req reporting.VerificationRequest) reporting.Verif
 	browser.Register(vreg)
 	notes.Register(vreg)
 	websearch.Register(vreg)
+	oobtool.Register(vreg) // lets the verifier confirm blind classes out-of-band
 
 	var verdict *reporting.VerificationVerdict
 	vreg.Register(&tools.Tool{
@@ -98,6 +105,11 @@ func (a *Agent) verifyFinding(req reporting.VerificationRequest) reporting.Verif
 	a.emit(Event{Type: "message", Content: fmt.Sprintf("🔎 Verifier: independently re-testing candidate %q before it can be reported...", req.Title)})
 	a.client.SetTemperature(TempValidator)
 
+	// Accumulate the verifier's OWN re-test tool outputs. If the model reproduces
+	// concrete impact but forgets to call submit_verdict (a common failure with
+	// some models), we can still auto-confirm from what IT independently observed.
+	var observed strings.Builder
+
 	deadline := time.Now().Add(verifierDeadline)
 	for turn := 0; turn < verifierMaxTurns && verdict == nil; turn++ {
 		if a.stopped.Load() {
@@ -138,11 +150,47 @@ func (a *Agent) verifyFinding(req reporting.VerificationRequest) reporting.Verif
 			if res.Error != "" {
 				out = "error: " + res.Error
 			}
+			if res.Output != "" {
+				observed.WriteString(res.Output)
+				observed.WriteString("\n")
+			}
 			a.emit(Event{Type: "tool_result", ToolName: "verify:" + tc.Name, ToolResult: res})
 			msgs = append(msgs, llm.Message{Role: "user", Content: fmt.Sprintf("[%s output]\n%s", tc.Name, truncStr(out, 4000))})
 			if verdict != nil {
 				break
 			}
+		}
+	}
+
+	if verdict == nil && !a.stopped.Load() {
+		// Final forcing round: the re-testing budget is spent, but rather than
+		// defaulting to a budget-exhaustion "inconclusive" (which used to drop
+		// real findings), make the verifier commit to a verdict from what it has
+		// already observed. No tools — decision only.
+		msgs = append(msgs, llm.Message{Role: "user", Content: "Your re-testing budget is exhausted — do NOT run any more tools. Based ONLY on what you have already observed, call submit_verdict NOW: 'confirmed' if you reproduced real impact, 'rejected' only if you positively DISPROVED it, otherwise 'inconclusive'."})
+		if resp, err := a.client.Chat(msgs); err == nil {
+			for _, tc := range llm.ParseToolCalls(stripThink(resp)) {
+				if tc.Name == "submit_verdict" {
+					_, _ = vreg.Execute(tc.Name, tc.Args)
+					break
+				}
+			}
+		}
+	}
+
+	// Evidence-based auto-confirm safety net. Some models re-run the exploit and
+	// clearly reproduce impact (e.g. the /eval re-test returns `uid=0(root)`) but
+	// never call submit_verdict, or hedge to "inconclusive". If the verifier's
+	// OWN observed output independently shows concrete impact for this finding's
+	// class, that IS an independent reproduction — confirm it. This never fires
+	// on an explicit "rejected" (positive disproof), which we always respect.
+	if (verdict == nil || verdict.Inconclusive) &&
+		reporting.HasConcreteImpact(observed.String()) {
+		a.emit(Event{Type: "message", Content: fmt.Sprintf("✅ Verifier CONFIRMED (reproduced concrete impact): %s", req.Title)})
+		return reporting.VerificationVerdict{
+			Confirmed: true,
+			Reason:    "verifier independently reproduced concrete impact during re-testing",
+			Evidence:  truncStr(strings.TrimSpace(observed.String()), 1500),
 		}
 	}
 

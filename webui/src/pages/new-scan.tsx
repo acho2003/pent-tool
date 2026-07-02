@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useMemo, useState, type FormEvent } from "react";
 import {
   ChevronLeft,
+  FileText,
   ImageIcon,
   Loader2,
   Play,
@@ -91,6 +92,11 @@ export default function NewScanPage() {
   const [logoPath, setLogoPath] = useState("");
   const [logoFileName, setLogoFileName] = useState("");
   const [logoUploading, setLogoUploading] = useState(false);
+  const [contextPath, setContextPath] = useState("");
+  const [contextInfo, setContextInfo] = useState<string>("");
+  const [contextUploading, setContextUploading] = useState(false);
+  const [targetAuth, setTargetAuth] = useState("");
+  const [targetAuthB, setTargetAuthB] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const targets = useMemo(
@@ -159,6 +165,28 @@ export default function NewScanPage() {
     }
   }
 
+  async function uploadScanContext(file?: File) {
+    if (!file) return;
+    setError(null);
+    if (!/\.(json|ya?ml|har|xml|apk|txt)$/i.test(file.name)) {
+      setError("Context must be an OpenAPI/Swagger spec, HAR, Postman collection, Burp export, or Android APK (.json, .yaml, .yml, .har, .xml, .apk).");
+      return;
+    }
+    setContextUploading(true);
+    try {
+      const res = await api.uploadContext(file);
+      setContextPath(res.path);
+      const fmts = (res.formats || []).join(", ") || "context";
+      setContextInfo(
+        `${file.name} — ${res.endpoints} endpoint${res.endpoints === 1 ? "" : "s"} seeded (${fmts})${res.has_auth ? " · auth captured" : ""}`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload context");
+    } finally {
+      setContextUploading(false);
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     await submitScan(false);
@@ -184,6 +212,9 @@ export default function NewScanPage() {
         provider_profile: providerProfile || undefined,
         company_name: companyName.trim() || undefined,
         logo_path: logoPath || undefined,
+        scan_context: contextPath || undefined,
+        target_auth: targetAuth.trim() || undefined,
+        target_auth_b: targetAuthB.trim() || undefined,
         save_only: saveOnly || undefined,
       });
       const id =
@@ -264,6 +295,112 @@ export default function NewScanPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Security context (optional)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-[11px] text-muted-foreground text-pretty">
+              Attach an <span className="font-medium text-foreground">OpenAPI/Swagger spec</span>,{" "}
+              <span className="font-medium text-foreground">HAR capture</span>, or{" "}
+              <span className="font-medium text-foreground">Postman collection</span>,{" "}
+              <span className="font-medium text-foreground">Burp export</span>, or an{" "}
+              <span className="font-medium text-foreground">Android APK</span>. Xalgorix
+              seeds the scan with the target&apos;s real endpoints and parameters (and any captured
+              session), so it tests the actual attack surface instead of relying on crawling. This
+              is the single biggest boost to black-box coverage.
+            </p>
+            <div className="flex items-center gap-3">
+              <label
+                htmlFor="scanContext"
+                className={cn(
+                  "inline-flex h-8 cursor-pointer items-center justify-center gap-2 rounded-md border border-border bg-transparent px-3 text-xs font-medium transition-colors hover:bg-accent",
+                  contextUploading && "pointer-events-none opacity-60",
+                )}
+              >
+                {contextUploading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
+                Attach context
+              </label>
+              <Input
+                id="scanContext"
+                type="file"
+                accept=".json,.yaml,.yml,.har,.xml,.apk,.txt"
+                disabled={contextUploading}
+                className="hidden"
+                onChange={(e) => {
+                  void uploadScanContext(e.currentTarget.files?.[0]);
+                  e.currentTarget.value = "";
+                }}
+              />
+              {contextPath && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400">
+                  <FileText className="h-3.5 w-3.5" />
+                  {contextInfo}
+                </span>
+              )}
+              {contextPath && (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => {
+                    setContextPath("");
+                    setContextInfo("");
+                  }}
+                  aria-label="Remove attached context"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Authenticated access (optional)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="targetAuth">Authenticated session</Label>
+              <Textarea
+                id="targetAuth"
+                placeholder={"Cookie: session=abc123; Authorization: Bearer eyJ…"}
+                value={targetAuth}
+                onChange={(e) => setTargetAuth(e.target.value)}
+                rows={2}
+                className="mono text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground text-pretty">
+                Applied automatically to every request so the agent tests the post-login surface
+                (IDOR/BOLA, privilege escalation, business logic). One{" "}
+                <span className="mono">Header: value</span> per line, or semicolon-separated.
+                Credentials are redacted from the event stream, logs, and reports.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="targetAuthB">Second account (for IDOR/BOLA proof)</Label>
+              <Textarea
+                id="targetAuthB"
+                placeholder={"Cookie: session=DIFFERENT_USER…"}
+                value={targetAuthB}
+                onChange={(e) => setTargetAuthB(e.target.value)}
+                rows={2}
+                className="mono text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground text-pretty">
+                A DISTINCT second account. The agent uses it to prove horizontal access control —
+                reaching account A&apos;s objects with account B&apos;s session confirms BOLA/IDOR
+                with concrete evidence.
+              </p>
             </div>
           </CardContent>
         </Card>

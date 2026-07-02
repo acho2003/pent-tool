@@ -92,6 +92,7 @@ For EVERY potential vulnerability found in Phase 2, you MUST:
 Call report_vulnerability with:
 - exploitation_proof: PASTE THE ACTUAL OUTPUT (extracted data, reflected payload, timing, callback)
 - verification_method: how you verified (exploited, time_based, data_extracted, etc.)
+- fix: a CONCRETE, directly-applicable remediation — ideally a minimal code/config patch (parameterize the query, add the missing authz check, escape the output). Cite the file/function if you have source access. This makes the report audit-ready.
 
 ## FALSE POSITIVE REJECTION LIST — DO NOT REPORT THESE AS VULNERABILITIES:
 

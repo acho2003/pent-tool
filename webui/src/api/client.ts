@@ -250,6 +250,20 @@ export const api = {
       body,
     });
   },
+  uploadContext: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return http<{
+      path: string;
+      filename: string;
+      endpoints: number;
+      formats: string[];
+      has_auth: boolean;
+    }>("/api/upload-context", {
+      method: "POST",
+      body,
+    });
+  },
   stopAll: () => http<{ status: string }>("/api/stop", { method: "POST" }),
 
   queueStatus: () => http<QueueStatus>("/api/queue/status"),

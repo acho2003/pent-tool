@@ -35,6 +35,64 @@ type Config struct {
 	DisableBrowser bool   // XALGORIX_DISABLE_BROWSER
 	MaxIterations  int    // XALGORIX_MAX_ITERATIONS — 0 = unlimited
 
+	// TargetAuth carries operator-supplied authenticated-session credentials
+	// for the target(s), so the agent can test post-authentication attack
+	// surface (IDOR/BOLA, privilege escalation, business logic) — where the
+	// high-value bugs live. Format: one "Header-Name: value" per line or
+	// separated by ';'. e.g. "Cookie: session=abc; Authorization: Bearer xyz".
+	// XALGORIX_TARGET_AUTH. Applied automatically to the http_request tool and
+	// surfaced to the agent for use with curl/other tools.
+	TargetAuth string
+
+	// TargetAuthSecondary is a SECOND account's credentials (same format as
+	// TargetAuth). It is NOT auto-applied — it is surfaced to the agent so it
+	// can prove horizontal access-control flaws (IDOR/BOLA): reach an object
+	// created by account A using account B's session. XALGORIX_TARGET_AUTH_B.
+	TargetAuthSecondary string
+
+	// Out-of-band (OAST) callback infrastructure for confirming blind
+	// vulnerabilities (blind SSRF/RCE/XSS/XXE). OOBPublicURL is the address
+	// targets can reach (e.g. https://oob.xalgorix.com), OOBPort is the local
+	// listener port. OOB is enabled only when OOBPublicURL is set.
+	// XALGORIX_OOB_PUBLIC_URL / XALGORIX_OOB_PORT.
+	OOBPublicURL string
+	OOBPort      int
+
+	// Interactsh (ProjectDiscovery OAST) is the zero-config OOB backend used
+	// automatically when no self-hosted OOBPublicURL is set. It captures
+	// DNS/HTTP/SMTP callbacks via public servers (oast.pro, oast.live, …) so
+	// blind-vuln confirmation works without the operator exposing a listener.
+	// InteractshServer overrides the server list (comma-separated) and
+	// InteractshToken authenticates a self-hosted interactsh server. Set
+	// OOBDisable=true to turn OOB off entirely.
+	// XALGORIX_INTERACTSH_SERVER / XALGORIX_INTERACTSH_TOKEN / XALGORIX_OOB_DISABLE.
+	InteractshServer string
+	InteractshToken  string
+	OOBDisable       bool
+
+	// SourceRepo enables whitebox / source-assisted assessment: the agent
+	// reads the target's source code and reasons code → dangerous sink →
+	// exploit against the live target. Accepts a Git URL (shallow-cloned into
+	// the scan workspace) or an existing local directory path. When set, the
+	// code_search tool and a whitebox methodology are activated.
+	// XALGORIX_SOURCE_REPO.
+	SourceRepo string
+
+	// ScanContext points at operator-supplied context artifacts — an OpenAPI /
+	// Swagger spec, a HAR capture, or a Postman collection (a single file or a
+	// directory of them). The engine parses them into a seeded attack surface
+	// (real endpoints + params + example bodies) and harvests any auth material,
+	// turning a blind black-box scan into an informed one. XALGORIX_SCAN_CONTEXT.
+	ScanContext string
+
+	// Per-scan resource budgets with graceful early-stopping (MAPTA §2.7/§3.3).
+	// A scan halts cleanly (keeping findings already reported) once any cap is
+	// hit. 0 = unlimited (default), so behavior is unchanged unless configured.
+	// XALGORIX_MAX_TOOL_CALLS / XALGORIX_MAX_DURATION (seconds) / XALGORIX_MAX_TOKENS.
+	MaxToolCalls   int
+	MaxDurationSec int
+	MaxTokens      int
+
 	// ScanRetentionDays controls automatic pruning of old scan output
 	// directories under DataDir. XALGORIX_SCAN_RETENTION_DAYS — when > 0, a
 	// background job deletes scan directories whose finished/started time is
@@ -190,13 +248,25 @@ func load() *Config {
 		MemCompTimeout:  envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),
 
 		// Runtime
-		RuntimeBackend: "native", // Always native in Go version
-		Workspace:      workspace,
-		DataDir:        dataDir,
-		WorkspaceRoot:  dataDir,
-		legacyCWD:      cwd,
-		DisableBrowser: envOrBool("XALGORIX_DISABLE_BROWSER", false),
-		MaxIterations:  envOrInt("XALGORIX_MAX_ITERATIONS", 0),
+		RuntimeBackend:      "native", // Always native in Go version
+		Workspace:           workspace,
+		DataDir:             dataDir,
+		WorkspaceRoot:       dataDir,
+		legacyCWD:           cwd,
+		DisableBrowser:      envOrBool("XALGORIX_DISABLE_BROWSER", false),
+		MaxIterations:       envOrInt("XALGORIX_MAX_ITERATIONS", 0),
+		TargetAuth:          envOr("XALGORIX_TARGET_AUTH", ""),
+		TargetAuthSecondary: envOr("XALGORIX_TARGET_AUTH_B", ""),
+		OOBPublicURL:        envOr("XALGORIX_OOB_PUBLIC_URL", ""),
+		OOBPort:             envOrInt("XALGORIX_OOB_PORT", 0),
+		InteractshServer:    envOr("XALGORIX_INTERACTSH_SERVER", ""),
+		InteractshToken:     envOr("XALGORIX_INTERACTSH_TOKEN", ""),
+		OOBDisable:          envOrBool("XALGORIX_OOB_DISABLE", false),
+		SourceRepo:          envOr("XALGORIX_SOURCE_REPO", ""),
+		ScanContext:         envOr("XALGORIX_SCAN_CONTEXT", ""),
+		MaxToolCalls:        envOrInt("XALGORIX_MAX_TOOL_CALLS", 0),
+		MaxDurationSec:      envOrInt("XALGORIX_MAX_DURATION", 0),
+		MaxTokens:           envOrInt("XALGORIX_MAX_TOKENS", 0),
 
 		// Scan retention: 0 disables automatic pruning (keep forever).
 		ScanRetentionDays: envOrInt("XALGORIX_SCAN_RETENTION_DAYS", 0),
@@ -340,7 +410,7 @@ func CheckEnvFile() error {
 	envPath := filepath.Join(home, ".xalgorix.env")
 
 	if _, err := os.Stat(envPath); os.IsNotExist(err) {
-		return fmt.Errorf("configuration file not found: %s\n\nPlease create it with:\n  XALGORIX_LLM=minimax/MiniMax-M2.7\n  XALGORIX_API_KEY=your_api_key\n\nOr run: xalgorix --setup", envPath)
+		return fmt.Errorf("configuration file not found: %s\n\nPlease create it with:\n  XALGORIX_LLM=minimax/MiniMax-M3\n  XALGORIX_API_KEY=your_api_key\n\nOr run: xalgorix --setup", envPath)
 	}
 
 	llm := ""
@@ -375,7 +445,7 @@ func CheckEnvFile() error {
 	}
 
 	if llm == "" || apiKey == "" {
-		return fmt.Errorf("configuration file is invalid or missing required variables\n\nPlease add to %s:\n  XALGORIX_LLM=minimax/MiniMax-M2.7\n  XALGORIX_API_KEY=your_api_key", envPath)
+		return fmt.Errorf("configuration file is invalid or missing required variables\n\nPlease add to %s:\n  XALGORIX_LLM=minimax/MiniMax-M3\n  XALGORIX_API_KEY=your_api_key", envPath)
 	}
 
 	return nil

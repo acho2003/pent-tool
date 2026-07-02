@@ -22,6 +22,7 @@ type Vuln struct {
 	PoCDescription     string
 	PoCScript          string
 	Remediation        string
+	Fix                string
 	ExploitationProof  string
 	VerificationMethod string
 	Verified           bool

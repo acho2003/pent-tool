@@ -544,6 +544,9 @@ func TestReportVuln_IndependentVerifierGate(t *testing.T) {
 		if len(vulns) != 1 || !vulns[0].Verified {
 			t.Fatalf("expected 1 verified vuln, got %d (verified=%v)", len(vulns), len(vulns) == 1 && vulns[0].Verified)
 		}
+		if !containsTag(vulns[0].Tags, TagVerified) {
+			t.Fatalf("expected TagVerified on a confirmed finding, got tags=%v", vulns[0].Tags)
+		}
 	})
 
 	t.Run("rejected drops the finding", func(t *testing.T) {
@@ -566,12 +569,16 @@ func TestReportVuln_IndependentVerifierGate(t *testing.T) {
 		}
 	})
 
-	t.Run("inconclusive persists as unverified", func(t *testing.T) {
-		ctx := "verifier-inconclusive"
+	t.Run("inconclusive with strong first-party proof is kept as UNVERIFIED", func(t *testing.T) {
+		// The verifier could not re-confirm (e.g. it ran out of turn/time budget
+		// or hit an LLM error), but the agent's own proof is concrete (data
+		// extraction). Dropping this loses a real bug, so it is preserved and
+		// flagged Unverified rather than discarded. base() carries strong proof.
+		ctx := "verifier-inconclusive-strong"
 		CleanupContext(ctx)
 		defer CleanupContext(ctx)
 		SetFindingVerifier(ctx, func(VerificationRequest) VerificationVerdict {
-			return VerificationVerdict{Inconclusive: true, Reason: "verifier LLM error"}
+			return VerificationVerdict{Inconclusive: true, Reason: "verifier did not reach a verdict within the turn budget"}
 		})
 
 		res, err := reportVulnWithContextID(ctx, base())
@@ -580,13 +587,59 @@ func TestReportVuln_IndependentVerifierGate(t *testing.T) {
 		}
 		vulns := GetVulnerabilitiesForContext(ctx)
 		if len(vulns) != 1 {
-			t.Fatalf("expected 1 vuln stored on inconclusive, got %d (%s)", len(vulns), res.Output)
+			t.Fatalf("expected 1 vuln preserved on strong-evidence inconclusive, got %d (%s)", len(vulns), res.Output)
 		}
 		if vulns[0].Verified {
 			t.Fatalf("inconclusive finding must NOT be marked Verified")
 		}
-		if !strings.Contains(res.Output, "INCONCLUSIVE") {
-			t.Fatalf("expected inconclusive notice, got: %s", res.Output)
+		if !containsTag(vulns[0].Tags, TagManualReview) {
+			t.Fatalf("expected TagManualReview on an inconclusive finding, got tags=%v", vulns[0].Tags)
+		}
+		if !strings.Contains(res.Output, "RECORDED as UNVERIFIED") {
+			t.Fatalf("expected 'RECORDED as UNVERIFIED' notice, got: %s", res.Output)
+		}
+	})
+
+	t.Run("inconclusive with weak proof is KEPT and flagged for manual verification", func(t *testing.T) {
+		// Product decision: never silently drop an inconclusive finding — the
+		// operator reviews it. It is preserved, marked Unverified, and tagged
+		// needs-manual-verification (NOT dropped as a false positive).
+		ctx := "verifier-inconclusive-weak"
+		CleanupContext(ctx)
+		defer CleanupContext(ctx)
+		SetFindingVerifier(ctx, func(VerificationRequest) VerificationVerdict {
+			return VerificationVerdict{Inconclusive: true, Reason: "could not reproduce"}
+		})
+
+		weak := map[string]string{
+			"title":               "Business logic flaw in cart quantity handling",
+			"severity":            "medium",
+			"description":         "The checkout endpoint accepts a negative quantity without rejecting the request.",
+			"exploitation_proof":  "sent a negative quantity value and the endpoint returned HTTP 200 accepting the request",
+			"verification_method": "exploited",
+			"impact":              "Potential mispricing of an order.",
+			"target":              "https://example.com",
+			"endpoint":            "https://example.com/checkout",
+			"method":              "POST",
+			"cvss":                "5.3",
+			"cvss_vector":         "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+		}
+		res, err := reportVulnWithContextID(ctx, weak)
+		if err != nil {
+			t.Fatalf("report error: %v", err)
+		}
+		vulns := GetVulnerabilitiesForContext(ctx)
+		if len(vulns) != 1 {
+			t.Fatalf("expected 1 vuln preserved on weak-evidence inconclusive, got %d (%s)", len(vulns), res.Output)
+		}
+		if vulns[0].Verified {
+			t.Fatalf("inconclusive finding must NOT be marked Verified")
+		}
+		if !containsTag(vulns[0].Tags, TagManualReview) {
+			t.Fatalf("expected TagManualReview, got tags=%v", vulns[0].Tags)
+		}
+		if !strings.Contains(res.Output, "RECORDED as UNVERIFIED") {
+			t.Fatalf("expected 'RECORDED as UNVERIFIED' notice, got: %s", res.Output)
 		}
 	})
 
@@ -1023,6 +1076,15 @@ func TestReportVulnConcurrentDuplicatesOnlyAppendOnce(t *testing.T) {
 	if got := len(GetVulnerabilitiesForContext(contextID)); got != 1 {
 		t.Fatalf("stored vulnerabilities after concurrent duplicates = %d, want 1", got)
 	}
+}
+
+func containsTag(tags []string, want string) bool {
+	for _, t := range tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
 
 func validReportArgs() map[string]string {
@@ -1468,5 +1530,30 @@ func TestClassifySeverity_VulnTypeFallback(t *testing.T) {
 					tt.title, tt.desc, tt.severity, got, reason, tt.want)
 			}
 		})
+	}
+}
+
+func TestHasConcreteImpact(t *testing.T) {
+	// Concrete outcomes → true.
+	for _, s := range []string{
+		"HTTP/1.1 200 OK\n{\"message\":\"uid=0(root) gid=0(root)\"}",
+		"dumped 42 rows including password hash values",
+		"interactsh callback received from target IP",
+		"union select confirmed data extraction",
+	} {
+		if !HasConcreteImpact(s) {
+			t.Errorf("expected concrete impact for %q", s)
+		}
+	}
+	// No concrete outcome → false (must NOT auto-confirm on these).
+	for _, s := range []string{
+		"",
+		"the endpoint returned HTTP 200 accepting the request",
+		"reflected the input value in the response body",
+		"server responded with a generic error page",
+	} {
+		if HasConcreteImpact(s) {
+			t.Errorf("did NOT expect concrete impact for %q", s)
+		}
 	}
 }

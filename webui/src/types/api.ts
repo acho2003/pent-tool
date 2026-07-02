@@ -19,8 +19,14 @@ export interface VulnSummary {
   poc_description?: string;
   poc_script?: string;
   remediation?: string;
+  fix?: string;
   exploitation_proof?: string;
   verification_method?: string;
+  verified?: boolean;
+  // Machine-readable labels. Always carries a verification tag:
+  // "verified" (independently reproduced) or "needs-manual-verification"
+  // (preserved but not confirmed — a human must review it).
+  tags?: string[];
 }
 
 export interface WSEvent {
@@ -218,6 +224,16 @@ export interface ScanRequest {
   scan_intensity?: "active" | "passive";
   company_name?: string;
   logo_path?: string;
+  // Server-side path to an uploaded context artifact (OpenAPI/Swagger, HAR, or
+  // Postman collection). The engine parses it into a seeded attack surface and
+  // harvests any captured auth. Set via POST /api/upload-context.
+  scan_context?: string;
+  // Authenticated-session material applied automatically to http_request
+  // ("Cookie: …; Authorization: Bearer …"). Enables post-login testing.
+  target_auth?: string;
+  // A SECOND account's auth (same format), surfaced to the agent to prove
+  // horizontal access-control flaws (IDOR/BOLA). Not auto-applied.
+  target_auth_b?: string;
   // Optional "<provider>:<profileId>" key naming the AuthProfile to
   // use for this scan. When unset the legacy / catalog-default path
   // applies. Mirrors the Go ScanRequest.ProviderProfile field on

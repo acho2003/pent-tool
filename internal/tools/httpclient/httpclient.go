@@ -20,7 +20,8 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
-const maxBodyBytes = 50 * 1024 // 50 KB — keep context window manageable
+const maxBodyBytes = 50 * 1024      // default cap — keeps the context window manageable
+const maxBodyBytesHard = 512 * 1024 // hard ceiling when a caller raises max_bytes (e.g. to read JS bundles)
 
 // Register adds the http_request tool to the registry.
 func Register(r *tools.Registry) {
@@ -34,12 +35,19 @@ func Register(r *tools.Registry) {
 			{Name: "body", Description: "Request body (for POST/PUT/PATCH). Pass the raw string to send.", Required: false},
 			{Name: "follow_redirects", Description: "Follow HTTP redirects (default: true). Set to false to inspect 3xx responses directly — useful for open redirect and SSRF testing.", Required: false},
 			{Name: "timeout", Description: "Request timeout in seconds (default: 30, max: 60)", Required: false},
+			{Name: "max_bytes", Description: "Max response body bytes to return (default 51200, max 524288). Raise it to read large client-side JS bundles when hunting hidden API endpoints, routes, and secrets on SPAs.", Required: false},
 		},
-		Execute: execute,
+		Execute: func(args map[string]string) (tools.Result, error) {
+			return executeWithContext(r.GetScanContextID(), args)
+		},
 	})
 }
 
 func execute(args map[string]string) (tools.Result, error) {
+	return executeWithContext("", args)
+}
+
+func executeWithContext(contextID string, args map[string]string) (tools.Result, error) {
 	targetURL := strings.TrimSpace(args["url"])
 	if targetURL == "" {
 		return tools.Result{}, fmt.Errorf("url is required")
@@ -94,10 +102,34 @@ func execute(args map[string]string) (tools.Result, error) {
 
 	// Parse and set custom headers. Accepts map[string]any so callers can
 	// pass string, numeric, or []string values.
+	hdrsProvided := map[string]struct{}{}
 	headersStr := strings.TrimSpace(args["headers"])
 	if headersStr != "" {
 		if err := applyHeaders(req, headersStr); err != nil {
 			return tools.Result{}, err
+		}
+		// Record which headers the caller set explicitly, so authenticated-
+		// session credentials never clobber a deliberate override.
+		var rawHdrs map[string]any
+		if json.Unmarshal([]byte(headersStr), &rawHdrs) == nil {
+			for k := range rawHdrs {
+				hdrsProvided[strings.ToLower(strings.TrimSpace(k))] = struct{}{}
+			}
+		}
+	}
+
+	// Apply authenticated-session credentials for this scan, but never
+	// override a header the caller set explicitly — so the agent can still
+	// send the SAME request unauthenticated (e.g. to prove an IDOR / auth
+	// bypass) by passing an empty/blank value for that header.
+	if contextID != "" {
+		for name, val := range getSessionAuth(contextID) {
+			if _, explicit := hdrsProvided[strings.ToLower(name)]; explicit {
+				continue
+			}
+			if req.Header.Get(name) == "" {
+				req.Header.Set(name, val)
+			}
 		}
 	}
 
@@ -129,16 +161,27 @@ func execute(args map[string]string) (tools.Result, error) {
 		}
 	}
 
-	// Read body (capped). Use LimitReader + io.ReadAll so we always get
-	// the full (truncated) content without short reads.
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
+	// Read body (capped). Callers can raise the cap (up to maxBodyBytesHard)
+	// to read large JS bundles when hunting hidden endpoints/secrets on SPAs.
+	bodyCap := maxBodyBytes
+	if s := strings.TrimSpace(args["max_bytes"]); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			bodyCap = n
+			if bodyCap > maxBodyBytesHard {
+				bodyCap = maxBodyBytesHard
+			}
+		}
+	}
+	// Use LimitReader + io.ReadAll so we always get the full (truncated)
+	// content without short reads.
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(bodyCap)+1))
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("failed to read response body: %w", err)
 	}
-	truncated := len(bodyBytes) > maxBodyBytes
-	bodyLen := len(bodyBytes) // original length (may be maxBodyBytes+1)
+	truncated := len(bodyBytes) > bodyCap
+	bodyLen := len(bodyBytes) // original length (may be bodyCap+1)
 	if truncated {
-		bodyBytes = bodyBytes[:maxBodyBytes]
+		bodyBytes = bodyBytes[:bodyCap]
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -148,14 +191,14 @@ func execute(args map[string]string) (tools.Result, error) {
 		out.WriteString("\n--- Response Body (binary) ---\n")
 		sizeNote := fmt.Sprintf("%d bytes", bodyLen)
 		if truncated {
-			sizeNote = fmt.Sprintf("50 KB+ (%d bytes before truncation)", bodyLen)
+			sizeNote = fmt.Sprintf("%d KB+ (truncated)", bodyCap/1024)
 		}
 		out.WriteString(fmt.Sprintf("[binary content: %s, %s]\n", contentType, sizeNote))
 	} else {
 		out.WriteString("\n--- Response Body (text) ---\n")
 		out.WriteString(string(bodyBytes))
 		if truncated {
-			out.WriteString("\n\n[Body truncated at 50 KB]")
+			out.WriteString(fmt.Sprintf("\n\n[Body truncated at %d KB — raise max_bytes to read more (e.g. a full JS bundle)]", bodyCap/1024))
 		}
 	}
 
