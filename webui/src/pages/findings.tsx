@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SeverityBadge } from "@/components/severity-badge";
+import { VerificationBadge } from "@/components/verification-badge";
 import { EmptyState } from "@/components/states";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -376,6 +377,7 @@ export default function FindingsPage() {
                             {f.owasp}
                           </Badge>
                         )}
+                        <VerificationBadge verified={f.verified} tags={f.tags} />
                         {typeof f.cvss === "number" && f.cvss > 0 && (
                           <span className="mono">CVSS {f.cvss.toFixed(1)}</span>
                         )}

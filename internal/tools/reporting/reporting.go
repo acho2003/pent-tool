@@ -45,30 +45,46 @@ var evidenceKeywords = map[string][]string{
 
 // Vulnerability represents a found vulnerability.
 type Vulnerability struct {
-	ID                 string  `json:"id"`
-	Title              string  `json:"title"`
-	Severity           string  `json:"severity"`
-	OriginalSeverity   string  `json:"original_severity,omitempty"` // if auto-downgraded
-	Description        string  `json:"description"`
-	Impact             string  `json:"impact"`
-	Target             string  `json:"target"`
-	Endpoint           string  `json:"endpoint"`
-	Method             string  `json:"method"`
-	CVE                string  `json:"cve"`
-	CWE                string  `json:"cwe_id,omitempty"` // e.g. "CWE-79"
-	OWASP              string  `json:"owasp,omitempty"`  // e.g. "A03"
-	CVSS               float64 `json:"cvss"`
-	CVSSVector         string  `json:"cvss_vector,omitempty"` // CVSS 3.1 vector string
-	TechnicalAnalysis  string  `json:"technical_analysis"`
-	PoCDescription     string  `json:"poc_description"`
-	PoCScript          string  `json:"poc_script_code"`
-	Remediation        string  `json:"remediation_steps"`
-	ExploitationProof  string  `json:"exploitation_proof"`
-	VerificationMethod string  `json:"verification_method"`
-	Verified           bool    `json:"verified"`
-	Timestamp          string  `json:"timestamp"`
-	AgentName          string  `json:"agent_name"`
+	ID                string  `json:"id"`
+	Title             string  `json:"title"`
+	Severity          string  `json:"severity"`
+	OriginalSeverity  string  `json:"original_severity,omitempty"` // if auto-downgraded
+	Description       string  `json:"description"`
+	Impact            string  `json:"impact"`
+	Target            string  `json:"target"`
+	Endpoint          string  `json:"endpoint"`
+	Method            string  `json:"method"`
+	CVE               string  `json:"cve"`
+	CWE               string  `json:"cwe_id,omitempty"` // e.g. "CWE-79"
+	OWASP             string  `json:"owasp,omitempty"`  // e.g. "A03"
+	CVSS              float64 `json:"cvss"`
+	CVSSVector        string  `json:"cvss_vector,omitempty"` // CVSS 3.1 vector string
+	TechnicalAnalysis string  `json:"technical_analysis"`
+	PoCDescription    string  `json:"poc_description"`
+	PoCScript         string  `json:"poc_script_code"`
+	Remediation       string  `json:"remediation_steps"`
+	// Fix is a CONCRETE remediation patch — ideally a minimal code/config diff
+	// (e.g. parameterize a query, add an authz check, escape output). This is
+	// what makes a report actionable/audit-ready, and mirrors the inline-patch
+	// suggestion of leading platforms. Distinct from the prose Remediation.
+	Fix                string `json:"fix,omitempty"`
+	ExploitationProof  string `json:"exploitation_proof"`
+	VerificationMethod string `json:"verification_method"`
+	Verified           bool   `json:"verified"`
+	// Tags are machine-readable labels surfaced in the UI and report. The
+	// verification dimension is always present: TagVerified when the
+	// independent verifier reproduced the finding, otherwise TagManualReview
+	// (the finding is preserved, not dropped, but must be human-confirmed).
+	Tags      []string `json:"tags,omitempty"`
+	Timestamp string   `json:"timestamp"`
+	AgentName string   `json:"agent_name"`
 }
+
+// Finding tags (verification dimension).
+const (
+	TagVerified     = "verified"                  // independently reproduced by the Verifier
+	TagManualReview = "needs-manual-verification" // preserved but not independently confirmed
+)
 
 // ── Independent finding verification ──
 // A dedicated, distinct-purpose Verifier agent (injected by the agent package
@@ -265,6 +281,7 @@ func Register(r *tools.Registry) {
 			{Name: "poc_description", Description: "Step-by-step PoC description", Required: false},
 			{Name: "poc_script_code", Description: "Reproducible PoC code (curl, python, etc.)", Required: false},
 			{Name: "remediation_steps", Description: "Remediation recommendations", Required: false},
+			{Name: "fix", Description: "CONCRETE fix — ideally a minimal code/config patch or diff the developer can apply directly (e.g. replace string-concatenated SQL with a parameterized query, add the missing authorization check, HTML-escape the output). Include the file/function when known from source. This is what makes the report actionable.", Required: false},
 			{Name: "cwe_id", Description: "CWE identifier if known, e.g. CWE-79 for XSS, CWE-89 for SQLi, CWE-78 for command injection", Required: false},
 			{Name: "owasp", Description: "OWASP Top 10 (2021) category if known, e.g. A03 for Injection, A01 for Broken Access Control", Required: false},
 		},
@@ -312,9 +329,12 @@ func reportVulnWithContextID(contextID string, args map[string]string) (tools.Re
 		}, nil
 	}
 
-	// ── Gate 2: Require exploitation proof for medium+ severity ──
+	// ── Gate 2: Require exploitation proof for every real vulnerability ──
+	// MAPTA principle: mandatory proof-of-concept for ALL findings. Only 'info'
+	// (advisory, non-exploitable) is exempt from the proof + verifier pipeline.
 	isHighSeverity := severity == "critical" || severity == "high" || severity == "medium"
-	if isHighSeverity && (proof == "" || len(proof) < 20) {
+	requiresValidation := severity != "" && severity != "info"
+	if requiresValidation && (proof == "" || len(proof) < 20) {
 		return tools.Result{
 			Output: fmt.Sprintf(`❌ REJECTED: '%s' reported as %s but has NO exploitation proof.
 
@@ -359,8 +379,12 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 	// Inconclusive → persist but flagged Unverified (never claimed as validated).
 	// No lock is held here: verification is slow (LLM + re-testing).
 	verifierConfirmed := false
-	verifierInconclusive := false
 	verifierRan := false
+	verifierInconclusiveKept := false // inconclusive verdict but strong first-party proof → keep as Unverified
+	// The full independent Verifier is expensive (a bounded LLM re-test agent),
+	// so it runs for medium+ findings — the ones that carry real impact and
+	// bounty value. Low findings still require proof (Gate 2) but are not put
+	// through full re-execution. (Proof is required for all severities ≥ low.)
 	if isHighSeverity {
 		if vf := getFindingVerifier(contextID); vf != nil {
 			verifierRan = true
@@ -380,7 +404,17 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 			case verdict.Confirmed:
 				verifierConfirmed = true
 			case verdict.Inconclusive:
-				verifierInconclusive = true
+				// The verifier did NOT disprove the finding — it simply could not
+				// independently reproduce it (it ran out of turn/time budget, hit an
+				// LLM error, or the class needs state/timing/OOB it lacks). Dropping
+				// here loses REAL bugs (e.g. an RCE whose own proof shows
+				// `uid=0(root)`) and buries findings the operator should review. So
+				// the finding is ALWAYS preserved and explicitly flagged for manual
+				// verification (TagManualReview) rather than discarded as a false
+				// positive. Only an explicit "rejected" verdict (positive disproof)
+				// drops a finding.
+				verifierInconclusiveKept = true
+				// fall through to persistence (Verified=false, tagged manual-review)
 			default:
 				return tools.Result{
 					Output: fmt.Sprintf("❌ REJECTED by independent verifier: %s\n\n%s\n\nThe finding could NOT be independently reproduced. Re-test with a control/baseline and only report again if it genuinely holds. If it is by-design or unexploitable, drop it.",
@@ -472,6 +506,15 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		verifiedFlag = verifierConfirmed
 	}
 
+	// Verification tag: every finding carries one so the UI/report can show at a
+	// glance whether it was independently confirmed or still needs human review.
+	tags := make([]string, 0, 1)
+	if verifiedFlag {
+		tags = append(tags, TagVerified)
+	} else {
+		tags = append(tags, TagManualReview)
+	}
+
 	vuln := Vulnerability{
 		ID:                 fmt.Sprintf("XALG-%d", len(store.vulns)+1),
 		Title:              title,
@@ -493,7 +536,9 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 		ExploitationProof:  proof,
 		VerificationMethod: method,
 		Verified:           verifiedFlag,
+		Tags:               tags,
 		Remediation:        args["remediation_steps"],
+		Fix:                strings.TrimSpace(args["fix"]),
 		Timestamp:          time.Now().Format(time.RFC3339),
 	}
 
@@ -508,8 +553,8 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 	msg := fmt.Sprintf("✅ Vulnerability reported: [%s] %s (%s | CVSS %.1f) — Verified: %v", vuln.ID, vuln.Title, strings.ToUpper(vuln.Severity), vuln.CVSS, vuln.Verified)
 	if verifierConfirmed {
 		msg += "\n✅ Independently CONFIRMED by the verifier."
-	} else if verifierInconclusive {
-		msg += "\n⚠️ Verification INCONCLUSIVE — stored as UNVERIFIED (manual review required); not counted as a validated finding."
+	} else if verifierInconclusiveKept {
+		msg += "\n⚠️ RECORDED as UNVERIFIED (flagged for manual review): the independent verifier could not re-confirm it within its budget, but your first-party proof is concrete, so the finding is preserved rather than dropped. Do NOT re-report this — it is already saved. If you can strengthen the proof (e.g. an OOB callback hit or extracted data), add it via add_note."
 	}
 	if originalSeverity != "" {
 		if cvss > 0 {
@@ -1190,6 +1235,42 @@ func checkFalsePositive(title, description, severity, proof string) string {
 	return ""
 }
 
+// concreteImpactIndicators are unambiguous exploitation OUTCOMES. Unlike the
+// loose per-severity keyword lists, a match here means the target actually
+// produced impact (command output, extracted data, an OOB hit) — so it is safe
+// to auto-confirm a finding when the VERIFIER'S own re-test output contains one.
+// Deliberately excludes incidental tokens (status codes, bare "internal",
+// "localhost", generic timing words) that match almost any HTTP response.
+var concreteImpactIndicators = []string{
+	// Data exfiltration outcome
+	"extracted", "dumped", "exfiltrated",
+	// System file / command-execution output
+	"root:", "uid=", "gid=", "/etc/passwd", "/etc/shadow", "/proc/self",
+	"password hash", "/bin/bash",
+	// SQL data extraction
+	"union select", "information_schema", "@@version", "sqlmap",
+	// Credential / session theft (concrete)
+	"set-cookie:", "document.cookie", "session_id=", "access_token", "refresh_token",
+	// SSRF / internal access (concrete targets/content)
+	"169.254.169.254", "/latest/meta-data", "metadata.google.internal",
+	// Out-of-band callbacks
+	"callback received", "dns query", "burp collaborator",
+	"interact.sh", "interactsh", "oast", "http request received", "pingback",
+}
+
+// HasConcreteImpact reports whether text contains an unambiguous exploitation
+// outcome (see concreteImpactIndicators). The verifier uses this — NOT the
+// looser HasStrongEvidence — to auto-confirm from its own re-test output.
+func HasConcreteImpact(text string) bool {
+	lower := strings.ToLower(text)
+	for _, ind := range concreteImpactIndicators {
+		if strings.Contains(lower, ind) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasStrongEvidence checks if the proof actually contains meaningful exploitation evidence.
 // Uses impact-based analysis rather than just keyword matching.
 func hasStrongEvidence(severity, proof, description string) bool {
@@ -1213,27 +1294,7 @@ func hasStrongEvidence(severity, proof, description string) bool {
 	}
 
 	// Impact-based indicators — concrete exploitation OUTCOMES only.
-	// Deliberately excludes incidental tokens (status codes, "http", "@",
-	// "email", bare "account"/"internal"/"localhost", generic timing words)
-	// that match almost any HTTP response and previously made this gate a
-	// no-op — letting severity-inflated findings through the auto-downgrade.
-	impactIndicators := []string{
-		// Data exfiltration outcome
-		"extracted", "dumped", "exfiltrated",
-		// System file / command-execution output
-		"root:", "uid=", "gid=", "/etc/passwd", "/etc/shadow", "/proc/self",
-		"password hash", "/bin/bash",
-		// SQL data extraction
-		"union select", "information_schema", "@@version", "sqlmap",
-		// Credential / session theft (concrete)
-		"set-cookie:", "document.cookie", "session_id=", "access_token", "refresh_token",
-		// SSRF / internal access (concrete targets/content)
-		"169.254.169.254", "/latest/meta-data", "metadata.google.internal",
-		// Out-of-band callbacks
-		"callback received", "dns query", "burp collaborator",
-		"interact.sh", "interactsh", "oast", "http request received", "pingback",
-	}
-	for _, ind := range impactIndicators {
+	for _, ind := range concreteImpactIndicators {
 		if strings.Contains(lowerProof, ind) {
 			return true
 		}

@@ -1361,6 +1361,9 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			if v.Remediation != "" {
 				sections = append(sections, section{"REMEDIATION", v.Remediation})
 			}
+			if v.Fix != "" {
+				sections = append(sections, section{"SUGGESTED FIX", v.Fix})
+			}
 
 			for _, sec := range sections {
 				if pdf.GetY() > 250 {

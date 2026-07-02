@@ -22,6 +22,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { ScanStatusPill } from "@/components/scan-status-pill";
 import { SeverityBadge } from "@/components/severity-badge";
+import { VerificationBadge } from "@/components/verification-badge";
 import { PhaseProgress, PHASES } from "@/components/phase-progress";
 import { CopyButton } from "@/components/copy-button";
 import { ErrorState, EmptyState } from "@/components/states";
@@ -726,6 +727,7 @@ function FindingsTab({
                           {f.owasp}
                         </Badge>
                       )}
+                      <VerificationBadge verified={f.verified} tags={f.tags} />
                     </div>
                     {f.description && (
                       <p className="text-sm leading-relaxed text-muted-foreground line-clamp-3">
@@ -900,6 +902,7 @@ function FindingDetailsDialog({
                     {finding.owasp}
                   </Badge>
                 )}
+                <VerificationBadge verified={finding.verified} tags={finding.tags} />
               </div>
               <DialogTitle className="pr-8 text-lg">
                 {finding.title}
@@ -951,6 +954,9 @@ function FindingDetailsDialog({
                 />
               )}
               <DetailSection title="Remediation" value={finding.remediation} />
+              {finding.fix && (
+                <DetailSection title="Suggested fix" value={finding.fix} code />
+              )}
             </div>
           </>
         )}
