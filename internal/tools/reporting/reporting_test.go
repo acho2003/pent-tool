@@ -569,6 +569,71 @@ func TestReportVuln_IndependentVerifierGate(t *testing.T) {
 		}
 	})
 
+	t.Run("low severity is also independently verified (rejection drops it)", func(t *testing.T) {
+		// Regression: low findings previously skipped the independent verifier
+		// (only medium+ was gated). A low claim is still a claim, so it must be
+		// re-tested too — only 'info' is exempt.
+		ctx := "verifier-low"
+		CleanupContext(ctx)
+		defer CleanupContext(ctx)
+		called := false
+		SetFindingVerifier(ctx, func(VerificationRequest) VerificationVerdict {
+			called = true
+			return VerificationVerdict{Confirmed: false, Reason: "could not reproduce"}
+		})
+		low := map[string]string{
+			"title":               "Verbose error discloses stack trace",
+			"severity":            "low",
+			"description":         "An unhandled error returns a full stack trace including internal file paths and framework version.",
+			"exploitation_proof":  "sent a malformed id and the endpoint returned HTTP 500 with a full stack trace in the body, including internal file paths and the framework version",
+			"verification_method": "error_based",
+			"target":              "https://example.com",
+			"endpoint":            "https://example.com/api/item?id=x",
+			"method":              "GET",
+			"cvss":                "3.1",
+		}
+		res, err := reportVulnWithContextID(ctx, low)
+		if err != nil {
+			t.Fatalf("report error: %v", err)
+		}
+		if !called {
+			t.Fatalf("verifier was NOT invoked for a low-severity finding — it must be")
+		}
+		if !strings.Contains(res.Output, "REJECTED by independent verifier") {
+			t.Fatalf("expected verifier rejection for low finding, got: %s", res.Output)
+		}
+		if got := len(GetVulnerabilitiesForContext(ctx)); got != 0 {
+			t.Fatalf("expected 0 vulns after low verifier rejection, got %d", got)
+		}
+	})
+
+	t.Run("info severity is exempt from the verifier", func(t *testing.T) {
+		ctx := "verifier-info"
+		CleanupContext(ctx)
+		defer CleanupContext(ctx)
+		called := false
+		SetFindingVerifier(ctx, func(VerificationRequest) VerificationVerdict {
+			called = true
+			return VerificationVerdict{Confirmed: false, Reason: "should not run for info"}
+		})
+		info := map[string]string{
+			"title":               "Server version disclosed in response header",
+			"severity":            "info",
+			"description":         "The server responds with a Server header revealing the exact software version.",
+			"verification_method": "manual_verified",
+			"target":              "https://example.com",
+			"endpoint":            "https://example.com/",
+			"method":              "GET",
+			"cvss":                "0.0",
+		}
+		if _, err := reportVulnWithContextID(ctx, info); err != nil {
+			t.Fatalf("report error: %v", err)
+		}
+		if called {
+			t.Fatalf("verifier ran for an info finding — info must remain exempt")
+		}
+	})
+
 	t.Run("inconclusive with strong first-party proof is kept as UNVERIFIED", func(t *testing.T) {
 		// The verifier could not re-confirm (e.g. it ran out of turn/time budget
 		// or hit an LLM error), but the agent's own proof is concrete (data
