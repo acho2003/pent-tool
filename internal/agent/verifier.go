@@ -4,9 +4,10 @@
 // finding and decide whether it is a real, reproducible vulnerability.
 //
 // The Verifier is wired into the reporting choke point (report_vulnerability):
-// every medium+ candidate must survive independent re-testing before it is
-// persisted as a validated finding. This is what backs the product promise —
-// "real validation, not just detection."
+// every actionable candidate (low severity and above; 'info' is exempt) must
+// survive independent re-testing before it is persisted as a validated
+// finding. This is what backs the product promise — "real validation, not
+// just detection."
 //
 // Design constraints:
 //   - Distinct purpose: skeptical triager, NOT a hunter.

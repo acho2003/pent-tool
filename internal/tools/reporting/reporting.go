@@ -88,10 +88,11 @@ const (
 
 // ── Independent finding verification ──
 // A dedicated, distinct-purpose Verifier agent (injected by the agent package
-// to avoid an import cycle) independently re-tests every medium+ candidate
-// finding BEFORE it is persisted. This is the core of Xalgorix's "real
-// validation, not just detection" guarantee: a finding that the verifier
-// cannot independently reproduce is never presented as validated.
+// to avoid an import cycle) independently re-tests every actionable candidate
+// finding (low severity and above; only 'info' is exempt) BEFORE it is
+// persisted. This is the core of Xalgorix's "real validation, not just
+// detection" guarantee: a finding that the verifier cannot independently
+// reproduce is never presented as validated.
 
 // VerificationRequest is the candidate finding handed to the verifier.
 type VerificationRequest struct {
@@ -373,7 +374,7 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 	}
 	store.mu.RUnlock()
 
-	// ── Gate 4.5: Independent verification (always-on for medium+) ──
+	// ── Gate 4.5: Independent verification (always-on for every actionable finding) ──
 	// Hand the candidate to the dedicated Verifier agent, which re-tests it
 	// from scratch. Explicit rejection → drop. Confirmed → mark Verified.
 	// Inconclusive → persist but flagged Unverified (never claimed as validated).
@@ -381,11 +382,13 @@ If you cannot exploit it, downgrade severity to 'info' and report as information
 	verifierConfirmed := false
 	verifierRan := false
 	verifierInconclusiveKept := false // inconclusive verdict but strong first-party proof → keep as Unverified
-	// The full independent Verifier is expensive (a bounded LLM re-test agent),
-	// so it runs for medium+ findings — the ones that carry real impact and
-	// bounty value. Low findings still require proof (Gate 2) but are not put
-	// through full re-execution. (Proof is required for all severities ≥ low.)
-	if isHighSeverity {
+	// The independent Verifier runs for EVERY actionable finding — critical,
+	// high, medium AND low. A low-severity claim is still a claim, and "real
+	// validation, not just detection" has to hold across the board, so low
+	// findings are re-tested too rather than reported on the agent's say-so.
+	// Only 'info' (advisory, non-exploitable) is exempt — requiresValidation is
+	// false for it — matching the Gate 2 proof requirement.
+	if requiresValidation {
 		if vf := getFindingVerifier(contextID); vf != nil {
 			verifierRan = true
 			verdict := vf(VerificationRequest{
