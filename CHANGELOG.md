@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased] — Markdown rendering in finding details
+
+### Fixed
+- **Finding text rendered raw Markdown in the dashboard.** The finding detail dialog showed `description`, `impact`, `technical_analysis`, and `remediation` as plain text, so the LLM-emitted Markdown (`##` headings, `**bold**`, fenced code, lists) appeared as literal characters. Added a small dependency-free Markdown renderer (`webui/src/components/markdown.tsx`) and use it for all non-code sections; the full description now renders as its own section. Code fields (PoC script, exploitation proof, suggested fix) stay verbatim in `<pre>`.
+
 ## [Unreleased] — Recognize command-injection RCE as proven
 
 ### Fixed
