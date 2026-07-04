@@ -22,6 +22,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { ScanStatusPill } from "@/components/scan-status-pill";
 import { SeverityBadge } from "@/components/severity-badge";
+import { Markdown } from "@/components/markdown";
 import { VerificationBadge } from "@/components/verification-badge";
 import { PhaseProgress, PHASES } from "@/components/phase-progress";
 import { CopyButton } from "@/components/copy-button";
@@ -908,8 +909,7 @@ function FindingDetailsDialog({
                 {finding.title}
               </DialogTitle>
               <DialogDescription>
-                {finding.description ||
-                  "Detailed vulnerability record from this scan."}
+                Detailed vulnerability record from this scan.
               </DialogDescription>
             </DialogHeader>
 
@@ -930,6 +930,7 @@ function FindingDetailsDialog({
             <Separator />
 
             <div className="space-y-4">
+              <DetailSection title="Description" value={finding.description} />
               <DetailSection title="Impact" value={finding.impact} />
               <DetailSection
                 title="Technical analysis"
@@ -1007,13 +1008,11 @@ function DetailSection({
         {title}
       </h4>
       {code ? (
-        <pre className="max-h-64 overflow-auto rounded-md border border-border bg-black/40 p-3 text-xs leading-relaxed text-foreground">
+        <pre className="max-h-64 overflow-auto rounded-md border border-border bg-black/40 p-3 text-xs leading-relaxed text-foreground whitespace-pre-wrap break-words">
           <code>{value}</code>
         </pre>
       ) : (
-        <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-          {value}
-        </p>
+        <Markdown source={value} />
       )}
     </section>
   );
