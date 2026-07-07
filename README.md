@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png?v=4.5.47" alt="Xalgorix" width="860" />
+<img src="assets/banner.png?v=4.5.47" alt="Xalgorix — AI Autonomous Penetration Testing Platform" width="860" />
 
 <br />
 
@@ -8,10 +8,25 @@
 [![License](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux-111111?style=for-the-badge&logo=linux&logoColor=white)](#installation)
 [![Hosted](https://img.shields.io/badge/Hosted-www.xalgorix.com-6d28d9?style=for-the-badge&logo=icloud&logoColor=white)](https://www.xalgorix.com/)
-
-Self-hosted AI security testing with a local Web UI, live agent telemetry, verified findings, and branded PDF reports.
+[![GitHub stars](https://img.shields.io/github/stars/xalgord/xalgorix?style=for-the-badge&logo=github&color=yellow)](https://github.com/xalgord/xalgorix/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/xalgord/xalgorix?style=for-the-badge&logo=github&color=blue)](https://github.com/xalgord/xalgorix/network/members)
+[![GitHub release](https://img.shields.io/github/v/release/xalgord/xalgorix?style=for-the-badge&logo=github&color=green)](https://github.com/xalgord/xalgorix/releases)
 
 </div>
+
+<h1 align="center">Xalgorix — AI Autonomous Penetration Testing</h1>
+
+<p align="center">
+  <strong>Self-hosted AI pentesting platform</strong> with an LLM-driven agent, browser automation, a 22-phase testing methodology, live WebSocket telemetry, verified findings, and branded PDF reports. Built in Go and TypeScript. Runs on your infrastructure — no cloud dependency, no data leaves your machine.
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#use-cases">Use Cases</a> ·
+  <a href="https://www.xalgorix.com/">Hosted Cloud</a> ·
+  <a href="https://docs.xalgorix.com">Docs</a>
+</p>
 
 ---
 
@@ -49,6 +64,7 @@ Open `http://127.0.0.1:9137`.
 
 - [Quick Start](#quick-start)
 - [Overview](#overview)
+- [Use Cases](#use-cases)
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Installation](#installation)
@@ -73,9 +89,22 @@ Open `http://127.0.0.1:9137`.
 
 ## Overview
 
-Xalgorix is a self-hosted AI security testing platform for authorized penetration testing and bug bounty workflows. It combines an LLM-driven agent, browser automation, terminal tooling, a 22-phase testing methodology, live WebSocket events, finding management, report generation, and integrations for AgentMail and Discord.
+Xalgorix is a self-hosted AI penetration testing platform for authorized security testing, vulnerability assessment, and bug bounty workflows. It combines an LLM-driven autonomous agent, browser automation, terminal tooling, a comprehensive 22-phase testing methodology, live WebSocket telemetry, finding management with CVSS scoring, branded PDF report generation, and integrations for AgentMail, Discord, and Telegram.
+
+Unlike cloud-only DAST scanners, Xalgorix runs entirely on your machine. You bring your own LLM provider (OpenAI, Anthropic, DeepSeek, Gemini, Groq, Ollama, MiniMax) and control the model, reasoning effort, rate limits, and proxy configuration. No scan data, API keys, or target information leaves your infrastructure.
 
 The default experience is the Web UI. From one local dashboard you can start scans, monitor active runs, inspect findings, configure model/provider settings, manage environment variables, generate branded PDF reports, and delete or resume historical scans.
+
+## Use Cases
+
+| Use Case | How Xalgorix helps |
+| -------- | ------------------ |
+| **Penetration testing** | Run a full 22-phase methodology against authorized targets. The AI agent handles reconnaissance, vulnerability discovery, injection testing, SSRF, IDOR, auth bypass, race conditions, and more — then verifies findings before reporting. |
+| **Bug bounty hunting** | Point Xalgorix at an in-scope target and let the agent enumerate the attack surface, test for common vulnerability classes, and surface verified findings with CVSS scores and proof-of-concept evidence. |
+| **Red team operations** | Use wildcard and multi-target scan modes to map an organization's external attack surface. Browser-assisted DAST handles auth flows, forms, and runtime behavior that static scanners miss. |
+| **Security research** | The novel-vulnerability-discovery phase pushes the agent beyond known template matching. Bring your own LLM (OpenAI, Anthropic, DeepSeek, Gemini, Ollama, MiniMax) to control reasoning depth and cost. |
+| **Continuous security testing** | Run as a system service with `xalgorix --start`. Scan on a schedule, stream findings to Discord or Telegram, and generate branded PDF reports for stakeholders. |
+| **DAST automation** | Browser-driven testing for web applications — auth flows, forms, JavaScript-rendered content, and runtime behavior. Integrates with Caido for proxy traffic inspection. |
 
 ## Screenshots
 
