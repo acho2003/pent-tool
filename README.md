@@ -46,7 +46,7 @@ curl -sSL https://www.xalgorix.com/install | bash
 This downloads the prebuilt binary for your platform (Linux amd64/arm64) from the latest release. Then point it at your LLM provider in `~/.xalgorix.env`:
 
 ```bash
-XALGORIX_LLM=minimax/MiniMax-M2.7
+XALGORIX_LLM=minimax/MiniMax-M3
 XALGORIX_API_KEY=your_provider_api_key
 ```
 
@@ -60,7 +60,7 @@ xalgorix --web
 
 ```bash
 docker run --rm -p 9137:9137 \
-  -e XALGORIX_LLM=minimax/MiniMax-M2.7 \
+  -e XALGORIX_LLM=minimax/MiniMax-M3 \
   -e XALGORIX_API_KEY=your_provider_api_key \
   -v xalgorix-data:/data \
   ghcr.io/xalgord/xalgorix:latest
@@ -195,7 +195,7 @@ Downloads the latest release binary for your platform (Linux `amd64`/`arm64`) an
 
 ```bash
 docker run --rm -p 9137:9137 \
-  -e XALGORIX_LLM=minimax/MiniMax-M2.7 \
+  -e XALGORIX_LLM=minimax/MiniMax-M3 \
   -e XALGORIX_API_KEY=your_provider_api_key \
   -v xalgorix-data:/data \
   ghcr.io/xalgord/xalgorix:latest
@@ -257,7 +257,7 @@ nano ~/.xalgorix.env
 ### Minimal Config
 
 ```bash
-XALGORIX_LLM=minimax/MiniMax-M2.7
+XALGORIX_LLM=minimax/MiniMax-M3
 XALGORIX_API_KEY=your_provider_api_key
 ```
 

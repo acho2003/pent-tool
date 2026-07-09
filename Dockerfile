@@ -16,7 +16,7 @@
 #
 # Build:  docker build -t xalgorix .
 # Run:    docker run --rm -p 9137:9137 \
-#           -e XALGORIX_LLM=minimax/MiniMax-M2.7 \
+#           -e XALGORIX_LLM=minimax/MiniMax-M3 \
 #           -e XALGORIX_API_KEY=your_provider_api_key \
 #           -v xalgorix-data:/data \
 #           ghcr.io/xalgord/xalgorix:latest

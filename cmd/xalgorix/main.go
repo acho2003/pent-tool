@@ -271,7 +271,7 @@ func main() {
 
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %s\n\n", err)
-		fmt.Fprintf(os.Stderr, "Set your model:     export XALGORIX_LLM='minimax/MiniMax-M2.7'\n")
+		fmt.Fprintf(os.Stderr, "Set your model:     export XALGORIX_LLM='minimax/MiniMax-M3'\n")
 		fmt.Fprintf(os.Stderr, "Set your API key:    export XALGORIX_API_KEY='sk-...'\n")
 		os.Exit(1)
 	}
@@ -442,7 +442,7 @@ func printUsage() {
 	fmt.Println("  xalgorix --uninstall  Remove xalgorix from system")
 	fmt.Println()
 	fmt.Println("Environment:")
-	fmt.Println("  XALGORIX_LLM              Model name (e.g. minimax/MiniMax-M2.7)")
+	fmt.Println("  XALGORIX_LLM              Model name (e.g. minimax/MiniMax-M3)")
 	fmt.Println("  XALGORIX_API_KEY           API key")
 	fmt.Println("  XALGORIX_API_BASE          API base URL")
 	fmt.Println("  XALGORIX_MAX_ITERATIONS    Max iterations (0 = unlimited)")
