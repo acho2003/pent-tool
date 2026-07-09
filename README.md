@@ -54,7 +54,7 @@ Launch the dashboard and open `http://127.0.0.1:9137`:
 xalgorix --web
 ```
 
-**Or run with Docker — no toolchain needed:**
+**Or run with Docker — batteries included, no toolchain needed:**
 
 ```bash
 docker run --rm -p 9137:9137 \
@@ -63,6 +63,8 @@ docker run --rm -p 9137:9137 \
   -v xalgorix-data:/data \
   ghcr.io/xalgord/xalgorix:latest
 ```
+
+The image ships an extensive offensive-security toolset preinstalled (nmap, nuclei, httpx, subfinder, katana, ffuf, gobuster, sqlmap, masscan, dalfox, feroxbuster, and more) **and** keeps every package manager (apt, go, cargo, pipx, npm) available so the agent can still auto-install anything missing at runtime. It runs as root inside the container by design — treat the container as a disposable, network-isolated scanning sandbox and never expose the dashboard without auth. (amd64 image; the installer above covers arm64.)
 
 **Or build from source** (needs Go 1.25+ and Node.js):
 
@@ -197,7 +199,9 @@ docker run --rm -p 9137:9137 \
   ghcr.io/xalgord/xalgorix:latest
 ```
 
-The image bundles Chromium for browser-assisted DAST and persists scan data to the `/data` volume. It binds to `0.0.0.0` inside the container; set `XALGORIX_USERNAME`/`XALGORIX_PASSWORD` before exposing it beyond localhost.
+The image is **batteries-included**: an extensive offensive-security toolset is preinstalled (nmap, nuclei, httpx, subfinder, dnsx, naabu, katana, ffuf, gobuster, dalfox, feroxbuster, sqlmap, masscan, nikto, whatweb, hydra, and more), plus Chromium for browser-assisted DAST. It also keeps the full package-manager set (apt, go, cargo, pipx, npm) available, so the agent auto-installs anything missing at runtime. Scan data persists to the `/data` volume, and the server binds `0.0.0.0` inside the container — set `XALGORIX_USERNAME`/`XALGORIX_PASSWORD` before exposing it beyond localhost.
+
+The container runs as root by design (the engine only enables runtime auto-install for uid 0, and apt/go/cargo installs need system write access). Treat it as a disposable, network-isolated scanning sandbox. It's published for `amd64`; use the one-line installer for arm64 hosts.
 
 ### Requirements (build from source)
 
