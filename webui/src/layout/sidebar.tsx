@@ -15,8 +15,32 @@ import {
   Star,
   Target,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useVersion } from "@/api/queries";
+
+const GITHUB_REPO = "xalgord/xalgorix";
+
+// Live stargazer count for the sidebar "Star" button. Unauthenticated GitHub
+// API (60 req/hr/IP) is plenty for a self-hosted dashboard; cached for an hour
+// and never retried, and the button still renders (without a count) on failure.
+async function fetchGitHubStars(): Promise<number | null> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}`, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { stargazers_count?: number };
+    return typeof data.stargazers_count === "number" ? data.stargazers_count : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatStars(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "")}k`;
+  return String(n);
+}
 
 const NAV: { to: string; label: string; icon: typeof LayoutGrid; end?: boolean }[] = [
   { to: "/", label: "Overview", icon: LayoutGrid, end: true },
@@ -34,6 +58,14 @@ const NAV: { to: string; label: string; icon: typeof LayoutGrid; end?: boolean }
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { data: version } = useVersion();
+  const { data: stars } = useQuery({
+    queryKey: ["github-stars", GITHUB_REPO],
+    queryFn: fetchGitHubStars,
+    staleTime: 60 * 60 * 1000, // 1 hour
+    gcTime: 6 * 60 * 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-card">
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
@@ -76,18 +108,24 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
       <div className="px-2 pb-2 pt-1">
         <a
-          href="https://github.com/xalgord/xalgorix"
+          href={`https://github.com/${GITHUB_REPO}`}
           target="_blank"
           rel="noreferrer"
           onClick={onNavigate}
-          className="group flex items-center justify-center gap-2 rounded-md border border-border bg-background px-2.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-amber-400/50 hover:text-foreground"
+          className="group flex items-center justify-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:border-amber-400/50 hover:text-foreground"
           title="Star Xalgorix on GitHub"
         >
-          <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
+          <svg viewBox="0 0 16 16" className="h-4 w-4" fill="currentColor" aria-hidden>
             <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
           </svg>
-          <span>Star on GitHub</span>
-          <Star className="h-3.5 w-3.5 text-amber-400 transition-transform group-hover:scale-110" aria-hidden />
+          <span>Star</span>
+          <Star
+            className="h-4 w-4 text-amber-400 transition-transform group-hover:scale-110"
+            aria-hidden
+          />
+          {typeof stars === "number" && (
+            <span className="tabular-nums font-semibold text-foreground">{formatStars(stars)}</span>
+          )}
         </a>
       </div>
       <div className="border-t border-border px-4 py-3 text-[10px] text-muted-foreground mono">
