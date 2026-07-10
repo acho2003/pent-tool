@@ -955,6 +955,42 @@ func checkFalsePositive(title, description, severity, proof string) string {
 		}
 	}
 
+	// Pattern 11c: Host header injection / Host header poisoning. Reflecting the
+	// Host header (into a link, redirect, or absolute URL) is NOT a
+	// vulnerability on its own — it only matters with demonstrated impact:
+	// web-cache poisoning, password-reset-link poisoning, routing to an
+	// attacker-controlled host, or SSRF. Unlike the medium+ gates, this is
+	// enforced at low+ too (bare Host-header reflection is INFO, not even LOW).
+	isHostHeader := strings.Contains(lower, "host header injection") ||
+		strings.Contains(lower, "host header poison") ||
+		strings.Contains(lower, "host header attack") ||
+		(strings.Contains(lower, "host header") &&
+			(strings.Contains(lower, "inject") || strings.Contains(lower, "poison") ||
+				strings.Contains(lower, "spoof") || strings.Contains(lower, "override")))
+	if isHostHeader {
+		sev := strings.ToLower(strings.TrimSpace(severity))
+		if sev != "" && sev != "info" && sev != "informational" {
+			lowerProof := strings.ToLower(proof + " " + description)
+			impactKeywords := []string{
+				"cache poison", "web cache", "cache key", "poisoned response",
+				"password reset", "reset link", "reset token", "reset email",
+				"account takeover", "ato", "ssrf", "169.254", "metadata endpoint",
+				"internal host", "attacker-controlled host", "attacker controlled host",
+				"received the request", "oob", "interactsh", "collaborator", "out-of-band",
+			}
+			hasImpact := false
+			for _, kw := range impactKeywords {
+				if strings.Contains(lowerProof, kw) {
+					hasImpact = true
+					break
+				}
+			}
+			if !hasImpact {
+				return "❌ REJECTED: Host header injection with no demonstrated impact is INFORMATIONAL — reflecting/overriding the Host header is not a vulnerability by itself. To report as low+, prove concrete impact: web-cache poisoning, password-reset-link poisoning, routing to an attacker-controlled host (with an OOB callback), or SSRF — and include the evidence. Otherwise re-report as 'info'."
+			}
+		}
+	}
+
 	// Pattern 12: Analytics API writeKey "bypass" — these are public client-side tokens by design
 	analyticsKeywords := []string{"writekey", "write_key", "write key", "analytics key", "segment key", "analytics api"}
 	analyticsEndpoints := []string{"/v1/i", "/v1/t", "/v1/p", "/v1/batch", "/v1/identify", "/v1/track", "/v1/page", "/v1/screen", "/v1/group", "/v1/alias"}

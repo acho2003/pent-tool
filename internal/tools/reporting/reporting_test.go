@@ -82,6 +82,57 @@ func TestCheckFalsePositive_UsernameEnumeration(t *testing.T) {
 	}
 }
 
+func TestCheckFalsePositive_HostHeaderInjection(t *testing.T) {
+	tests := []struct {
+		name       string
+		title      string
+		desc       string
+		severity   string
+		proof      string
+		wantReject bool
+	}{
+		{
+			"bare host header injection at low → rejected",
+			"Host Header Injection Nintendo Redirect Engine",
+			"The Host header is reflected in the response.",
+			"low", "changed Host header and it appeared in the redirect", true,
+		},
+		{
+			"host header injection at medium no impact → rejected",
+			"Host Header Injection on login",
+			"Host header reflected into an absolute URL.",
+			"medium", "sent evil.com as Host, saw it echoed", true,
+		},
+		{
+			"host header → password reset poisoning → allowed",
+			"Host Header Injection enabling password-reset poisoning",
+			"The reset email link is built from the Host header.",
+			"high", "set Host to attacker.com; the password reset link in the email pointed to attacker.com", false,
+		},
+		{
+			"host header → cache poisoning → allowed",
+			"Host Header Injection leads to web cache poisoning",
+			"Response is cached with attacker Host.",
+			"high", "poisoned the web cache so other users received the attacker host", false,
+		},
+		{
+			"host header reported as info → not rejected",
+			"Host Header Injection",
+			"Host header reflected.",
+			"info", "", false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := checkFalsePositive(tt.title, tt.desc, tt.severity, tt.proof)
+			gotReject := result != ""
+			if gotReject != tt.wantReject {
+				t.Errorf("wantReject=%v gotReject=%v (msg=%s)", tt.wantReject, gotReject, result)
+			}
+		})
+	}
+}
+
 func TestCheckFalsePositive_VersionDisclosure(t *testing.T) {
 	tests := []struct {
 		title      string
