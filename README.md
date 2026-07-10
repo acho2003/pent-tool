@@ -149,7 +149,7 @@ Most scanners **detect**. Xalgorix **proves**. An autonomous agent works through
 - 🧠 **An AI agent, not a template engine** — reasons about auth flows, business logic, IDOR/BOLA, and chained exploits that signature scanners miss.
 - ✅ **Exploit-verified findings** — a separate verifier independently reproduces each finding; inconclusive ones are flagged for review, never dressed up as confirmed.
 - 🔒 **Self-hosted and private** — runs on your machine with your own LLM key; no target data, keys, or findings leave your infrastructure.
-- 🧩 **Bring your own LLM** — OpenAI, Anthropic, DeepSeek, Gemini, Groq, Ollama, or MiniMax. You control model, reasoning effort, and cost.
+- 🧩 **Bring your own LLM** — OpenAI, Anthropic, DeepSeek, Gemini, Groq, Ollama, or MiniMax — or any OpenAI-compatible gateway like [LiteLLM](#litellm--openai-compatible-gateways-github-copilot-claude-opus-codex-openrouter-azure-local-models) (GitHub Copilot, Codex, OpenRouter, Azure). You control model, reasoning effort, and cost.
 - 📄 **Audit-ready reports** — branded PDFs with CVSS scores, proof-of-concept, and remediation.
 
 ### How it compares
@@ -299,6 +299,38 @@ XALGORIX_LLM=custom/security-model
 XALGORIX_API_BASE=https://your-provider.example/v1
 XALGORIX_API_KEY=your_provider_api_key
 ```
+
+#### LiteLLM / OpenAI-compatible gateways (GitHub Copilot, Claude Opus, Codex, OpenRouter, Azure, local models)
+
+Because `XALGORIX_API_BASE` accepts any OpenAI-compatible `/v1/chat/completions` endpoint,
+Xalgorix works with a [LiteLLM](https://docs.litellm.ai/) proxy out of the box — no
+Xalgorix-side changes needed. LiteLLM handles the upstream provider auth (Copilot device
+login, Azure keys, OpenRouter, Ollama, etc.); Xalgorix just talks OpenAI to the gateway.
+
+Run LiteLLM (example `config.yaml`):
+
+```yaml
+model_list:
+  - model_name: claude-opus-4-8
+    litellm_params:
+      model: github_copilot/claude-opus-4.8   # or openrouter/…, azure/…, ollama/…
+general_settings:
+  master_key: sk-local-litellm-key
+```
+
+Point Xalgorix at it — use the `custom/` prefix so the model name is sent verbatim and the
+OpenAI chat-completions protocol is used:
+
+```bash
+XALGORIX_LLM=custom/claude-opus-4-8            # the LiteLLM model_name
+XALGORIX_API_BASE=http://localhost:4000/v1     # your LiteLLM proxy
+XALGORIX_API_KEY=sk-local-litellm-key          # LiteLLM master_key / virtual key
+```
+
+The same pattern covers GitHub Copilot Business/CLI, Claude Opus, Codex-style models,
+OpenRouter, Azure OpenAI, and local Ollama models — anything LiteLLM can route. Keep the
+`custom/` (or `openai/`) prefix and a non-Anthropic/Gemini `XALGORIX_API_BASE` so Xalgorix
+uses the standard OpenAI request shape that LiteLLM expects.
 
 ### Optional Integrations
 
