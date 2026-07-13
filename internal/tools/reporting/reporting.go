@@ -277,14 +277,14 @@ func Register(r *tools.Registry) {
 			{Name: "title", Description: "Vulnerability title", Required: true},
 			{Name: "severity", Description: "Severity per HackerOne CVSS ranges: critical (CVSS 9.0-10.0), high (7.0-8.9), medium (4.0-6.9), low (0.1-3.9), info (0.0). Must match your CVSS score.", Required: true},
 			{Name: "description", Description: "Detailed description of the vulnerability", Required: true},
-			{Name: "exploitation_proof", Description: "REQUIRED for medium+. Concrete evidence of exploitation: extracted data, reflected payload text, command output, timing measurement, callback confirmation. Paste actual output here.", Required: true},
-			{Name: "verification_method", Description: "How you verified: exploited, time_based, data_extracted, callback_received, error_based, blind_confirmed, reflected, authenticated, manual_verified", Required: true},
+			{Name: "exploitation_proof", Description: "REQUIRED for medium+. Concrete evidence of exploitation: extracted data, reflected payload text, command output, timing measurement, callback confirmation. Paste actual output here.", Required: false},
+			{Name: "verification_method", Description: "How you verified: exploited, time_based, data_extracted, callback_received, error_based, blind_confirmed, reflected, authenticated, manual_verified", Required: false},
 			{Name: "impact", Description: "Real-world impact assessment", Required: false},
 			{Name: "target", Description: "Target URL/host", Required: false},
 			{Name: "endpoint", Description: "Affected endpoint", Required: false},
 			{Name: "method", Description: "HTTP method", Required: false},
 			{Name: "cve", Description: "CVE identifier if known", Required: false},
-			{Name: "cvss", Description: "CVSS 3.1 base score (0.0-10.0). MUST match severity: critical=9.0-10.0, high=7.0-8.9, medium=4.0-6.9, low=0.1-3.9, info=0.0", Required: true},
+			{Name: "cvss", Description: "CVSS 3.1 base score (0.0-10.0). MUST match severity: critical=9.0-10.0, high=7.0-8.9, medium=4.0-6.9, low=0.1-3.9, info=0.0. If omitted, a default is derived from severity.", Required: false},
 			{Name: "cvss_vector", Description: "CVSS 3.1 vector string, e.g. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H. Components: AV(Attack Vector):N/A/L/P, AC(Attack Complexity):L/H, PR(Privileges Required):N/L/H, UI(User Interaction):N/R, S(Scope):U/C, C(Confidentiality):N/L/H, I(Integrity):N/L/H, A(Availability):N/L/H", Required: false},
 			{Name: "technical_analysis", Description: "Technical details of the vulnerability", Required: false},
 			{Name: "poc_description", Description: "Step-by-step PoC description", Required: false},
@@ -331,7 +331,17 @@ func reportVulnWithContextID(contextID string, args map[string]string) (tools.Re
 	store.mu.RUnlock()
 
 	// ── Gate 1: Validate verification method ──
-	if method == "" || !validVerificationMethods[method] {
+	// verification_method is no longer a registry-required param (so the registry
+	// doesn't batch-reject before this richer, severity-aware gate runs). A real
+	// (non-info) finding must still declare HOW it was verified; info findings are
+	// advisory and may omit it. Any method that IS provided must be valid.
+	if severity != "info" && method == "" {
+		return tools.Result{
+			Output: fmt.Sprintf("❌ REJECTED: '%s' reported as %s but has NO verification_method. Exploit the vulnerability first, then report HOW you verified it (one of: %s). If it is not exploitable, downgrade severity to 'info'.",
+				title, strings.ToUpper(severity), formatValidMethods()),
+		}, nil
+	}
+	if method != "" && !validVerificationMethods[method] {
 		return tools.Result{
 			Output: fmt.Sprintf("❌ REJECTED: Invalid verification_method '%s'. Must be one of: %s\n\nYou must EXPLOIT the vulnerability first, then report with the correct verification method.",
 				method, formatValidMethods()),

@@ -123,6 +123,7 @@ func allEnvSettingDefinitions() []envSettingDefinition {
 		{Key: "XALGORIX_LLM_PROFILE", Label: "Active LLM profile", Category: "LLM", Description: "Active credential pointer (\"<provider>:<profileId>\"). Set by the LLM Settings tab; takes precedence over XALGORIX_API_KEY/XALGORIX_LLM when present.", Placeholder: "openai:default", InputType: "text"},
 		{Key: "XALGORIX_REASONING_EFFORT", Label: "Reasoning effort", Category: "LLM", Description: "Reasoning depth for providers that support it.", DefaultValue: "high", InputType: "select", Options: []string{"low", "medium", "high", "xhigh"}},
 		{Key: "XALGORIX_LLM_MAX_RETRIES", Label: "LLM max retries", Category: "LLM", Description: "Retry count for transient LLM provider failures.", DefaultValue: "5", InputType: "number"},
+		{Key: "XALGORIX_MAX_OUTPUT_TOKENS", Label: "Max output tokens", Category: "LLM", Description: "Per-call completion cap (max_tokens). Reasoning models spend part of this on hidden thinking before a tool call, so a small provider default can truncate large calls. Clamped to a 1024 floor.", DefaultValue: "8192", InputType: "number"},
 		{Key: "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", Label: "Memory compressor timeout", Category: "LLM", Description: "Timeout in seconds for context compression.", DefaultValue: "30", InputType: "number"},
 		{Key: "XALGORIX_MAX_ITERATIONS", Label: "Max iterations", Category: "Runtime", Description: "Maximum agent iterations per scan. 0 means unlimited.", DefaultValue: "0", InputType: "number"},
 		{Key: "XALGORIX_MAX_TOOL_CALLS", Label: "Max tool calls (budget)", Category: "Runtime", Description: "Per-scan tool-call cap; the scan stops cleanly when reached (findings preserved). 0 = unlimited.", DefaultValue: "0", InputType: "number", RequiresRestart: true},
@@ -675,6 +676,8 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 			s.cfg.ReasoningEffort = valueOrDefault(value, "high")
 		case "XALGORIX_LLM_MAX_RETRIES":
 			s.cfg.LLMMaxRetries = parseIntSetting(value, 5)
+		case "XALGORIX_MAX_OUTPUT_TOKENS":
+			s.cfg.MaxOutputTokens = parseIntSetting(value, 8192)
 		case "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT":
 			s.cfg.MemCompTimeout = parseIntSetting(value, 30)
 		case "XALGORIX_MAX_ITERATIONS":
@@ -777,6 +780,8 @@ func (s *Server) envSettingValue(key string) string {
 		return valueOrDefault(s.cfg.ReasoningEffort, "high")
 	case "XALGORIX_LLM_MAX_RETRIES":
 		return strconv.Itoa(s.cfg.LLMMaxRetries)
+	case "XALGORIX_MAX_OUTPUT_TOKENS":
+		return strconv.Itoa(s.cfg.MaxOutputTokens)
 	case "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT":
 		return strconv.Itoa(s.cfg.MemCompTimeout)
 	case "XALGORIX_MAX_ITERATIONS":
@@ -1010,6 +1015,8 @@ func normalizeEnvSettingValue(def envSettingDefinition, value string) (string, e
 		return strconv.Itoa(clampInt(parseIntSetting(value, 60), 10, 3600)), nil
 	case "XALGORIX_LLM_MAX_RETRIES":
 		return strconv.Itoa(clampInt(parseIntSetting(value, 5), 0, 20)), nil
+	case "XALGORIX_MAX_OUTPUT_TOKENS":
+		return strconv.Itoa(clampInt(parseIntSetting(value, 8192), 1024, 200000)), nil
 	case "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT":
 		return strconv.Itoa(clampInt(parseIntSetting(value, 30), 5, 600)), nil
 	case "XALGORIX_MAX_ITERATIONS":

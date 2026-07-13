@@ -25,6 +25,13 @@ type Config struct {
 	Temperature     *float64 // XALGORIX_TEMPERATURE — LLM temperature (0.0-2.0), default 0.2; pointer to distinguish unset from 0.0
 	LLMMaxRetries   int      // XALGORIX_LLM_MAX_RETRIES
 	MemCompTimeout  int      // XALGORIX_MEMORY_COMPRESSOR_TIMEOUT
+	// MaxOutputTokens caps the model's completion length per call (the
+	// OpenAI-compatible `max_tokens` / Anthropic `max_tokens`). Reasoning
+	// models (e.g. MiniMax-M3) spend part of this budget on hidden thinking
+	// BEFORE emitting a tool call, so a small provider default truncates large
+	// calls like report_vulnerability mid-stream. Set an explicit, generous
+	// budget so the full call fits. XALGORIX_MAX_OUTPUT_TOKENS, default 8192.
+	MaxOutputTokens int
 
 	// Runtime settings
 	RuntimeBackend string // XALGORIX_RUNTIME_BACKEND — always "native"
@@ -245,6 +252,7 @@ func load() *Config {
 		ReasoningEffort: envOr("XALGORIX_REASONING_EFFORT", "high"),
 		Temperature:     envOrFloatPtr("XALGORIX_TEMPERATURE", 0.2),
 		LLMMaxRetries:   envOrInt("XALGORIX_LLM_MAX_RETRIES", 5),
+		MaxOutputTokens: envOrInt("XALGORIX_MAX_OUTPUT_TOKENS", 8192),
 		MemCompTimeout:  envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),
 
 		// Runtime

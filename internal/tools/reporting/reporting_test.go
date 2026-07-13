@@ -1763,3 +1763,86 @@ func TestHasConcreteImpact(t *testing.T) {
 		}
 	}
 }
+
+// TestReportVuln_OptionalParamsHandledByGates verifies that after demoting
+// exploitation_proof / verification_method / cvss from registry-required to
+// optional, the tool's own severity-aware gates take over:
+//   - an info finding with NO verification_method and NO cvss is accepted;
+//   - a non-info finding with NO verification_method is rejected by Gate 1;
+//   - any provided verification_method is still validated;
+//   - a finding with NO cvss gets a default derived from its severity.
+func TestReportVuln_OptionalParamsHandledByGates(t *testing.T) {
+	t.Run("info finding without method/cvss is accepted", func(t *testing.T) {
+		ctx := "opt-info-no-method"
+		CleanupContext(ctx)
+		defer CleanupContext(ctx)
+		info := map[string]string{
+			"title":       "Server version disclosed in response header",
+			"severity":    "info",
+			"description": "The server responds with a Server header revealing the exact software version.",
+			"target":      "https://example.com",
+			"endpoint":    "https://example.com/",
+			"method":      "GET",
+		}
+		res, err := reportVulnWithContextID(ctx, info)
+		if err != nil {
+			t.Fatalf("report error: %v", err)
+		}
+		if strings.Contains(res.Output, "REJECTED") {
+			t.Fatalf("info finding without verification_method must NOT be rejected, got: %s", res.Output)
+		}
+	})
+
+	t.Run("non-info finding without method is rejected by Gate 1", func(t *testing.T) {
+		ctx := "opt-high-no-method"
+		CleanupContext(ctx)
+		defer CleanupContext(ctx)
+		args := validReportArgs()
+		delete(args, "verification_method")
+		res, err := reportVulnWithContextID(ctx, args)
+		if err != nil {
+			t.Fatalf("report error: %v", err)
+		}
+		if !strings.Contains(res.Output, "REJECTED") || !strings.Contains(res.Output, "verification_method") {
+			t.Fatalf("high finding without verification_method must be rejected by Gate 1, got: %s", res.Output)
+		}
+	})
+
+	t.Run("invalid provided method is rejected", func(t *testing.T) {
+		ctx := "opt-invalid-method"
+		CleanupContext(ctx)
+		defer CleanupContext(ctx)
+		args := validReportArgs()
+		args["verification_method"] = "totally_made_up"
+		res, err := reportVulnWithContextID(ctx, args)
+		if err != nil {
+			t.Fatalf("report error: %v", err)
+		}
+		if !strings.Contains(res.Output, "REJECTED") || !strings.Contains(res.Output, "Invalid verification_method") {
+			t.Fatalf("invalid verification_method must be rejected, got: %s", res.Output)
+		}
+	})
+
+	t.Run("missing cvss gets a default derived from severity", func(t *testing.T) {
+		ctx := "opt-no-cvss"
+		CleanupContext(ctx)
+		defer CleanupContext(ctx)
+		args := validReportArgs()
+		delete(args, "cvss")
+		delete(args, "cvss_vector")
+		res, err := reportVulnWithContextID(ctx, args)
+		if err != nil {
+			t.Fatalf("report error: %v", err)
+		}
+		if strings.Contains(res.Output, "REJECTED") {
+			t.Fatalf("finding without cvss must not be rejected, got: %s", res.Output)
+		}
+		v := GetVulnerabilitiesForContext(ctx)
+		if len(v) != 1 {
+			t.Fatalf("expected 1 stored vuln, got %d", len(v))
+		}
+		if v[0].CVSS <= 0 {
+			t.Fatalf("expected a default CVSS derived from severity, got %v", v[0].CVSS)
+		}
+	})
+}

@@ -949,3 +949,29 @@ func TestClient_HeaderSwitch_Matrix(t *testing.T) {
 		})
 	}
 }
+
+// TestMaxOutputTokens verifies the per-call completion cap: the configured
+// value is used, an unset (0) value falls back to the 8192 default, and a
+// misconfigured tiny value is clamped up to the 1024 floor so no call is
+// starved.
+func TestMaxOutputTokens(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  int
+		want int
+	}{
+		{"explicit large value", 32000, 32000},
+		{"unset falls back to default", 0, 8192},
+		{"negative falls back to default", -5, 8192},
+		{"tiny value clamped to floor", 100, 1024},
+		{"floor boundary kept", 1024, 1024},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewClient(&config.Config{LLM: "openai/gpt-5.4", APIKey: "k", MaxOutputTokens: tc.cfg})
+			if got := c.maxOutputTokens(); got != tc.want {
+				t.Fatalf("maxOutputTokens() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

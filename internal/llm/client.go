@@ -534,6 +534,23 @@ func (c *Client) effectiveTemperature() *float64 {
 	return c.cfg.Temperature
 }
 
+// maxOutputTokens returns the per-call completion cap (max_tokens). Reasoning
+// models spend part of this budget on hidden thinking before emitting a tool
+// call, so we send an explicit, generous value rather than relying on the
+// provider's unset default (which some OpenAI-compatible backends set very
+// low, truncating large calls like report_vulnerability mid-stream). Clamped
+// to a sane floor so a misconfigured tiny value can't starve every call.
+func (c *Client) maxOutputTokens() int {
+	n := c.cfg.MaxOutputTokens
+	if n <= 0 {
+		n = 8192
+	}
+	if n < 1024 {
+		n = 1024
+	}
+	return n
+}
+
 func (c *Client) chatWithRetry(messages []Message) (string, error) {
 	maxRetries := c.cfg.LLMMaxRetries
 	if maxRetries < 3 {
@@ -688,7 +705,7 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 					anthropicMsgs = append(anthropicMsgs, m)
 				}
 			}
-			maxTokens := 8192
+			maxTokens := c.maxOutputTokens()
 			anReq := anthropicRequest{
 				Model:     model,
 				Messages:  anthropicMsgs,
@@ -704,6 +721,7 @@ func (c *Client) ChatStream(messages []Message) <-chan StreamChunk {
 				Stream:        true,
 				StreamOptions: &streamOptions{IncludeUsage: true},
 				Temperature:   c.effectiveTemperature(),
+				MaxTokens:     c.maxOutputTokens(),
 			}
 			body, _ = json.Marshal(reqBody)
 		}
@@ -917,8 +935,8 @@ func (c *Client) doChat(messages []Message) (out string, err error) {
 				anthropicMsgs = append(anthropicMsgs, m)
 			}
 		}
-		// Default max_tokens; Anthropic requires this field
-		maxTokens := 8192
+		// Anthropic requires this field; use the configured budget.
+		maxTokens := c.maxOutputTokens()
 		anReq := anthropicRequest{
 			Model:     model,
 			Messages:  anthropicMsgs,
@@ -931,7 +949,7 @@ func (c *Client) doChat(messages []Message) (out string, err error) {
 			return "", fmt.Errorf("failed to marshal Anthropic request: %w", err)
 		}
 	} else {
-		reqBody := chatRequest{Model: model, Messages: messages, Stream: false, Temperature: c.effectiveTemperature()}
+		reqBody := chatRequest{Model: model, Messages: messages, Stream: false, Temperature: c.effectiveTemperature(), MaxTokens: c.maxOutputTokens()}
 		body, err = json.Marshal(reqBody)
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal request: %w", err)
