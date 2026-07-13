@@ -5,6 +5,33 @@ autonomous AI pentesting engine: a single Go binary (`xalgorix`) that serves
 an embedded React dashboard (`webui`) and runs scans locally. This document
 covers the local development workflow.
 
+By participating you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Where to start
+
+New here? These labels are the best entry points:
+
+- [`good first issue`](https://github.com/xalgord/xalgorix/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+  — small, well-scoped tasks that don't require deep knowledge of the codebase.
+- [`help wanted`](https://github.com/xalgord/xalgorix/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
+  — issues we'd love community help on.
+- [`documentation`](https://github.com/xalgord/xalgorix/issues?q=is%3Aissue+is%3Aopen+label%3Adocumentation)
+  — documentation improvements, great for a first PR.
+
+Comment on an issue to let us know you're picking it up so we don't double up.
+Small fixes (typos, docs, obvious bugs) don't need an issue first — just open a PR.
+
+## Contribution workflow
+
+1. **Fork** the repo and create a topic branch off `main`
+   (`git checkout -b fix/short-description`).
+2. Make your change with tests. Keep the tree `gofmt`-clean and lint-clean.
+3. Run the gates locally (see below) before pushing.
+4. Open a PR against `main` using the PR template. CI runs `make lint`,
+   `golangci-lint`, `go vet`, and the test suite on every PR — all must pass.
+5. A maintainer reviews and merges. `main` is branch-protected; PRs are the
+   only way in.
+
 ## Prerequisites
 
 Install the following on your workstation:

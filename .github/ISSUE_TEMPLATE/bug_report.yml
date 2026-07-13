@@ -1,0 +1,74 @@
+name: 🐛 Bug report
+description: Something isn't working as expected.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please search existing issues first to avoid duplicates.
+
+        ⚠️ **Do not report security vulnerabilities here.** Follow the process in
+        [SECURITY.md](https://github.com/xalgord/xalgorix/security/policy).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including expected vs. actual behavior.
+      placeholder: When I run a scan with X, I expected Y but got Z.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps so we can reproduce it.
+      placeholder: |
+        1. Configure XALGORIX_LLM=...
+        2. Start with `xalgorix --web`
+        3. Launch a scan against ...
+        4. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: Paste console/scan logs. Redact secrets, API keys, and target data.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Xalgorix version
+      description: Output of `xalgorix --version` (or the Docker tag).
+      placeholder: v4.5.56
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options:
+        - Prebuilt binary (installer)
+        - Docker
+        - Built from source
+        - Hosted (www.xalgorix.com)
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS / arch, and LLM provider if relevant.
+      placeholder: Ubuntu 24.04 amd64, MiniMax-M3
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: This is NOT a security vulnerability (those go through SECURITY.md).
+          required: true
+        - label: I only tested targets I'm authorized to test.
+          required: true
