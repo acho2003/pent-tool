@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
@@ -23,7 +24,7 @@ func Register(r *tools.Registry, _ string) {
 	}
 	r.Register(&tools.Tool{
 		Name:        "read_skill",
-		Description: "Load a structured cybersecurity skill to get deep testing/defense methodology, tooling commands, and verification steps. Use this BEFORE attempting work in a specific domain (e.g., read_skill name=analyzing-active-directory-acl-abuse). The skill catalog is sourced from the agentskills.io standard and covers offensive testing, threat hunting, DFIR, cloud, mobile, OT/ICS, AI security, and more. Run list_skills first to discover what's available.",
+		Description: "Load a structured cybersecurity skill to get deep testing/defense methodology, tooling commands, and verification steps. Use this BEFORE attempting work in a specific domain (e.g., read_skill name=analyzing-active-directory-acl-abuse). The skill catalog is sourced from the agentskills.io standard and covers offensive testing, threat hunting, DFIR, cloud, mobile, OT/ICS, AI security, and more. Don't know the exact name? Use search_skills query='<concept>' to find the right skill, or list_skills to browse categories.",
 		Parameters: []tools.Parameter{
 			{Name: "name", Description: "Kebab-case skill name without extension (e.g., performing-memory-forensics-with-volatility3, analyzing-active-directory-acl-abuse). Use list_skills to discover names.", Required: true},
 			{Name: "category", Description: "Optional category to disambiguate (e.g., web-application-security, threat-hunting, reconnaissance). If omitted, all categories are searched.", Required: false},
@@ -39,6 +40,197 @@ func Register(r *tools.Registry, _ string) {
 		},
 		Execute: makeListSkills(subFS),
 	})
+
+	r.Register(&tools.Tool{
+		Name:        "search_skills",
+		Description: "Search the skill catalog by keywords/concept and get the most relevant skills ranked, each with its category, name, and description. Use this when you don't know a skill's exact name — e.g. search_skills query='oauth token theft' or query='payment price tampering'. Then load the best match with read_skill. Far faster than scanning list_skills across 800+ skills.",
+		Parameters: []tools.Parameter{
+			{Name: "query", Description: "Keywords or a short phrase describing what you want (e.g. 'graphql batching', 'reset password poisoning', 'kubernetes pod escape').", Required: true},
+			{Name: "category", Description: "Optional category filter (e.g., web-application-security, cloud-security).", Required: false},
+			{Name: "max", Description: "Max results to return (default 10, hard cap 25).", Required: false},
+		},
+		Execute: makeSearchSkills(subFS),
+	})
+}
+
+// skillMeta is one indexed skill: its category, canonical name, a
+// human-readable description, and a lowercased haystack (name + description +
+// tags + category) used for keyword scoring.
+type skillMeta struct {
+	category    string
+	name        string
+	description string
+	haystack    string
+}
+
+var (
+	skillIndexOnce sync.Once
+	skillIndex     []skillMeta
+)
+
+// buildSkillIndex walks the embedded skill tree once and parses each
+// SKILL.md's YAML frontmatter (name/description/tags) into a searchable
+// record. Cached for the process lifetime; the embedded FS is immutable.
+func buildSkillIndex(fsys fs.FS) []skillMeta {
+	skillIndexOnce.Do(func() {
+		cats := listCategories(fsys)
+		for _, cat := range cats {
+			entries, err := fs.ReadDir(fsys, cat)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				name := e.Name()
+				data, err := fs.ReadFile(fsys, cat+"/"+name+"/SKILL.md")
+				if err != nil {
+					continue
+				}
+				desc, fm := parseSkillFrontmatter(string(data))
+				hay := strings.ToLower(name + " " + cat + " " + fm)
+				skillIndex = append(skillIndex, skillMeta{
+					category:    cat,
+					name:        name,
+					description: desc,
+					haystack:    hay,
+				})
+			}
+		}
+	})
+	return skillIndex
+}
+
+// parseSkillFrontmatter extracts the description value and the raw frontmatter
+// block (name/description/tags/…) from a SKILL.md. The description may be a
+// YAML folded scalar spanning several indented lines; those are joined. Returns
+// (description, frontmatterText). Degrades gracefully when there is no
+// frontmatter.
+func parseSkillFrontmatter(content string) (string, string) {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", ""
+	}
+	var fm []string
+	var descParts []string
+	inDesc := false
+	for _, raw := range lines[1:] {
+		if strings.TrimSpace(raw) == "---" {
+			break
+		}
+		fm = append(fm, raw)
+		if inDesc {
+			// Continuation of a folded description: indented, not a new key.
+			if strings.HasPrefix(raw, " ") || strings.HasPrefix(raw, "\t") {
+				descParts = append(descParts, strings.TrimSpace(raw))
+				continue
+			}
+			inDesc = false
+		}
+		if strings.HasPrefix(raw, "description:") {
+			v := strings.TrimSpace(strings.TrimPrefix(raw, "description:"))
+			if v != "" {
+				descParts = append(descParts, v)
+			}
+			inDesc = true
+		}
+	}
+	desc := strings.Join(descParts, " ")
+	if len(desc) > 300 {
+		desc = desc[:297] + "..."
+	}
+	return desc, strings.Join(fm, "\n")
+}
+
+func makeSearchSkills(fsys fs.FS) func(args map[string]string) (tools.Result, error) {
+	return func(args map[string]string) (tools.Result, error) {
+		query := strings.ToLower(strings.TrimSpace(args["query"]))
+		if query == "" {
+			return tools.Result{Output: "❌ Provide a 'query' (keywords or a short phrase), e.g. query='oauth token theft'."}, nil
+		}
+		filterCat := strings.TrimSpace(args["category"])
+		max := 10
+		if s := strings.TrimSpace(args["max"]); s != "" {
+			if n, err := parseIntSafe(s); err == nil && n > 0 {
+				max = n
+			}
+		}
+		if max > 25 {
+			max = 25
+		}
+
+		// Tokenize on whitespace and commas; drop very short noise tokens.
+		tokens := strings.FieldsFunc(query, func(r rune) bool {
+			return r == ' ' || r == ',' || r == '\t' || r == '\n' || r == '/'
+		})
+		terms := make([]string, 0, len(tokens))
+		for _, t := range tokens {
+			if len(t) >= 2 {
+				terms = append(terms, t)
+			}
+		}
+		if len(terms) == 0 {
+			terms = []string{query}
+		}
+
+		type scored struct {
+			m     skillMeta
+			score int
+		}
+		var results []scored
+		for _, m := range buildSkillIndex(fsys) {
+			if filterCat != "" && m.category != filterCat {
+				continue
+			}
+			score := 0
+			for _, term := range terms {
+				// Name matches are the strongest signal, then frontmatter
+				// (tags/description), then the whole exact phrase.
+				if strings.Contains(strings.ToLower(m.name), term) {
+					score += 3
+				}
+				if strings.Contains(m.haystack, term) {
+					score += 1
+				}
+			}
+			if strings.Contains(m.haystack, query) {
+				score += 2 // exact full-phrase bonus
+			}
+			if score > 0 {
+				results = append(results, scored{m: m, score: score})
+			}
+		}
+		if len(results) == 0 {
+			return tools.Result{Output: fmt.Sprintf("No skills matched %q. Try broader keywords, or list_skills to browse categories.", query)}, nil
+		}
+		sort.SliceStable(results, func(i, j int) bool {
+			if results[i].score != results[j].score {
+				return results[i].score > results[j].score
+			}
+			return results[i].m.name < results[j].m.name
+		})
+		if len(results) > max {
+			results = results[:max]
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Top %d skill match(es) for %q — load one with read_skill name=<name>:\n\n", len(results), query)
+		for _, r := range results {
+			fmt.Fprintf(&b, "• %s  [%s]\n", r.m.name, r.m.category)
+			if r.m.description != "" {
+				fmt.Fprintf(&b, "  %s\n", r.m.description)
+			}
+		}
+		return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+	}
+}
+
+// parseIntSafe parses a base-10 int, returning an error on any non-numeric
+// input. Small local helper so search_skills' `max` parsing has no deps.
+func parseIntSafe(s string) (int, error) {
+	n := 0
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }
 
 // listCategories returns the set of category directories that exist on the

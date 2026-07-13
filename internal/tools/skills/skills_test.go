@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -311,5 +312,52 @@ func TestReadSkill_Alias(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "SQL Injection") {
 		t.Errorf("underscore alias 'sql_injection' should resolve to full skill, got: %s", result.Output)
+	}
+}
+
+func TestSearchSkills_FindsByConcept(t *testing.T) {
+	subFS, err := fs.Sub(embeddedSkills, "data")
+	if err != nil {
+		t.Fatalf("fs.Sub: %v", err)
+	}
+	search := makeSearchSkills(subFS)
+
+	cases := []struct {
+		query     string
+		wantSkill string
+	}{
+		{"payment price tampering", "testing-ecommerce-and-payment-logic"},
+		{"reset password poisoning", "testing-password-reset-flaws"},
+		{"two factor otp bypass", "bypassing-two-factor-and-otp"},
+	}
+	for _, c := range cases {
+		t.Run(c.query, func(t *testing.T) {
+			res, err := search(map[string]string{"query": c.query})
+			if err != nil {
+				t.Fatalf("search error: %v", err)
+			}
+			if !strings.Contains(res.Output, c.wantSkill) {
+				t.Fatalf("query %q: expected %q in results, got:\n%s", c.query, c.wantSkill, res.Output)
+			}
+		})
+	}
+}
+
+func TestSearchSkills_EmptyQuery(t *testing.T) {
+	subFS, _ := fs.Sub(embeddedSkills, "data")
+	res, err := makeSearchSkills(subFS)(map[string]string{"query": "   "})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res.Output, "Provide a 'query'") {
+		t.Fatalf("expected guidance for empty query, got: %s", res.Output)
+	}
+}
+
+func TestSearchSkills_NoMatch(t *testing.T) {
+	subFS, _ := fs.Sub(embeddedSkills, "data")
+	res, _ := makeSearchSkills(subFS)(map[string]string{"query": "zzqqxx-nonexistent-topic"})
+	if !strings.Contains(res.Output, "No skills matched") {
+		t.Fatalf("expected no-match message, got: %s", res.Output)
 	}
 }

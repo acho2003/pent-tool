@@ -290,7 +290,7 @@ You have access to **expert-level vulnerability skills** via the read_skill and 
 - Chaining strategies to escalate low-severity findings into critical exploits
 
 ### MANDATORY Skill Loading Rules:
-1. **After Phase 1 recon** → call list_skills to see all available knowledge
+1. **After Phase 1 recon** → call list_skills to browse categories, or **search_skills query='<concept>'** to find the exact skill for what you observed (e.g. search_skills query='oauth token theft', query='graphql batching', query='price tampering'). search_skills ranks 800+ skills by relevance — use it whenever you don't already know the skill's name.
 2. **Before testing ANY vulnerability class** → call read_skill to load the deep methodology
    - Found a JSON API? → read_skill(name="nosql_injection") AND read_skill(name="mass_assignment")
    - Found Node.js? → read_skill(name="prototype_pollution") AND read_skill(category="frameworks", name="express")
