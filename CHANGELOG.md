@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased] — Provider model selector
+
+### Added
+- **Provider model selection across authentication methods.** Settings now renders one reusable model field for API-key, OAuth, and credential-free providers. Saved values retain the canonical `provider/model` routing prefix.
+- **Live provider model discovery.** Providers with compatible OpenAI, Anthropic, Gemini, or Ollama model-list endpoints automatically load the models available to the selected credential. Discovery runs server-side and keeps credentials out of the browser. The built-in catalog no longer hardcodes model examples; providers without discovery support use explicit manual entry.
+- **Novita AI provider.** The built-in catalog now includes Novita's OpenAI-compatible API endpoint and API-key authentication, with models loaded dynamically from Novita's API.
+
+## [Unreleased] — Provider-specific CLI credential errors
+
+### Fixed
+- **Codex sign-in incorrectly reported missing Claude credentials.** Both CLI-reuse drivers previously returned the Claude-specific `auth.ErrNotFound` sentinel, so OAuth completion responded with `claude cli credentials not found` when the Codex credential was unavailable. Codex now returns a dedicated sentinel and the API responds with `codex cli credentials not found`. The sign-in modal also identifies the expected Codex credential path and read-only Docker mount.
+
+## [Unreleased] — Per-scan live guidance
+
+### Added
+- **Operators can guide an agent while its scan is running.** The individual scan Events tab now includes a per-instance message composer with focused guidance suggestions, keyboard submission, delivery feedback, and responsive layout. Messages are routed to the exact running `instance_id`, queued for the agent's next iteration without interrupting its active work, and then surface in the same instance event stream. The WebUI client response type now also matches the existing `/api/chat` response contract.
+
 ## [Unreleased] — Markdown rendering in finding details
 
 ### Fixed

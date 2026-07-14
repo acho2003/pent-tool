@@ -343,7 +343,7 @@ export const api = {
     ),
 
   chat: (message: string, instanceId?: string) =>
-    http<{ reply?: string; error?: string }>("/api/chat", {
+    http<{ response: string }>("/api/chat", {
       method: "POST",
       json: { message, instance_id: instanceId },
     }),
@@ -377,6 +377,12 @@ export const api = {
   // ---------------------------------------------------------------
 
   listProviders: () => http<CatalogEntry[]>("/api/providers"),
+  discoverProviderModels: (provider: string, profile?: string) =>
+    http<{ models: string[]; source: "remote" }>(
+      `/api/providers/${encodeURIComponent(provider)}/models${
+        profile ? `?profile=${encodeURIComponent(profile)}` : ""
+      }`,
+    ),
 
   // ---------------------------------------------------------------
   // Multi-provider key store + model router (LiteLLM-style).
