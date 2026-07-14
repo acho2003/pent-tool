@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -594,16 +595,20 @@ var dashboardRoutes = []string{
 
 // Server is the web UI server.
 type Server struct {
-	cfg                  *config.Config
-	port                 int
-	clients              map[*wsClient]bool
-	mu                   sync.RWMutex
-	currentAgents        map[string]*agent.Agent // scanID → agent (replaces singleton currentAgent)
-	cancelScan           context.CancelFunc      // cancels the current scan session context
-	running              atomic.Bool
-	stopReq              atomic.Bool
-	restartWhenIdle      atomic.Bool  // SIGUSR1 sets this; a watcher restarts once scans drain
-	httpServer           *http.Server // set in Start; used to trigger graceful restart from the API
+	cfg             *config.Config
+	port            int
+	clients         map[*wsClient]bool
+	mu              sync.RWMutex
+	currentAgents   map[string]*agent.Agent // scanID → agent (replaces singleton currentAgent)
+	cancelScan      context.CancelFunc      // cancels the current scan session context
+	running         atomic.Bool
+	stopReq         atomic.Bool
+	restartWhenIdle atomic.Bool  // SIGUSR1 sets this; a watcher restarts once scans drain
+	httpServer      *http.Server // set in Start; used to trigger graceful restart from the API
+	// forceRestartFn performs an immediate restart for POST /api/restart?force=true.
+	// nil in production (the handler re-execs via restartNow); tests set it to a
+	// stub so the force path can be exercised without exec'ing the process.
+	forceRestartFn       func()
 	dataDir              string
 	currentScanDir       string
 	currentScanID        string
@@ -1648,13 +1653,19 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
 }
 
-// handleRestart schedules a graceful restart of the backend. The restart is
-// never immediate while work is in flight: it waits until no scan instance is
-// active and no tool process is leased, then restarts cleanly (in-flight scans
-// auto-resume afterwards). This is the HTTP equivalent of
-// `xalgorix --restart-when-idle` (SIGUSR1) and shares the same watcher.
+// handleRestart restarts the backend. By default the restart is graceful: it
+// waits until no scan instance is active and no tool process is leased, then
+// restarts cleanly (in-flight scans auto-resume afterwards). This is the HTTP
+// equivalent of `xalgorix --restart-when-idle` (SIGUSR1) and shares the watcher.
 //
-// POST /api/restart  → { "status": "scheduled"|"already_pending", "idle": bool }
+// With force=true (query param ?force=true or JSON body {"force":true}) the
+// restart is IMMEDIATE: it interrupts any in-flight scans/tools and restarts
+// right now. Interrupted scans are marked "stopped" (reason "server_restart")
+// when the process comes back and rebuilds instances from disk. Use force when
+// the scanner is wedged and would never reach idle on its own.
+//
+// POST /api/restart            → { "status": "scheduled"|"already_pending", "idle": bool }
+// POST /api/restart?force=true → { "status": "restarting", "idle": bool, "forced": true }
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -1663,6 +1674,40 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idle := s.scannerIdle()
+
+	if restartForceRequested(r) {
+		log.Printf("[RESTART] /api/restart FORCE requested (idle=%v) — restarting immediately, interrupting any in-flight work", idle)
+		if s.discordWebhook != "" {
+			s.sendDiscord(0xff6b6b, "🔁 Xalgorix Force Restart",
+				"An immediate restart was requested. Xalgorix is restarting now; any in-flight scans are interrupted and marked stopped.")
+		}
+		if s.telegramConfigured() {
+			s.sendTelegram(0xff6b6b, "🔁 Xalgorix Force Restart",
+				"An immediate restart was requested. Xalgorix is restarting now; any in-flight scans are interrupted and marked stopped.")
+		}
+		// Prevent an already-scheduled idle watcher from also firing.
+		s.restartWhenIdle.Store(true)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "restarting",
+			"idle":   idle,
+			"forced": true,
+		})
+		// Flush the response so the caller sees 200 BEFORE the process re-execs
+		// (restartNow replaces/exits the process), then restart out-of-band.
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if s.forceRestartFn != nil {
+			go s.forceRestartFn()
+			return
+		}
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			s.restartNow(s.httpServer)
+		}()
+		return
+	}
+
 	scheduled := s.scheduleGracefulRestart()
 
 	status := "scheduled"
@@ -1674,6 +1719,37 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		"status": status,
 		"idle":   idle,
 	})
+}
+
+// restartForceRequested reports whether the caller asked for an immediate
+// restart, via either the ?force=true query param or a JSON body {"force":true}.
+func restartForceRequested(r *http.Request) bool {
+	if isTrueish(r.URL.Query().Get("force")) {
+		return true
+	}
+	if r.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil || len(body) == 0 {
+		return false
+	}
+	var payload struct {
+		Force bool `json:"force"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return payload.Force
+}
+
+func isTrueish(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

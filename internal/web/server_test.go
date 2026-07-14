@@ -3133,3 +3133,91 @@ func TestAppendVulnSummaryUniqueIsFilterAgnostic(t *testing.T) {
 		t.Fatalf("expected 2 vulns (medium + critical), got %d: %#v", len(vulns), vulns)
 	}
 }
+
+// TestRestartForceRequested covers parsing of the force flag from either the
+// query string or a JSON body.
+func TestRestartForceRequested(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		body string
+		want bool
+	}{
+		{name: "no force", url: "/api/restart", want: false},
+		{name: "query true", url: "/api/restart?force=true", want: true},
+		{name: "query 1", url: "/api/restart?force=1", want: true},
+		{name: "query yes", url: "/api/restart?force=yes", want: true},
+		{name: "query false", url: "/api/restart?force=false", want: false},
+		{name: "body true", url: "/api/restart", body: `{"force":true}`, want: true},
+		{name: "body false", url: "/api/restart", body: `{"force":false}`, want: false},
+		{name: "empty body", url: "/api/restart", body: "", want: false},
+		{name: "garbage body", url: "/api/restart", body: "not json", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var r *http.Request
+			if tt.body != "" {
+				r = httptest.NewRequest(http.MethodPost, tt.url, strings.NewReader(tt.body))
+			} else {
+				r = httptest.NewRequest(http.MethodPost, tt.url, nil)
+			}
+			if got := restartForceRequested(r); got != tt.want {
+				t.Fatalf("restartForceRequested = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHandleRestart_ForceRestartsImmediately verifies that ?force=true triggers
+// the immediate-restart path (recorded via the injectable seam) rather than the
+// wait-for-idle scheduler — even when a scan is active.
+func TestHandleRestart_ForceRestartsImmediately(t *testing.T) {
+	s := newTestServer(t, nil)
+	// An active instance would normally block a graceful restart.
+	s.instancesMu.Lock()
+	s.instances = map[string]*ScanInstance{"inst-busy": {ID: "inst-busy", Status: "running"}}
+	s.instancesMu.Unlock()
+
+	done := make(chan struct{})
+	s.forceRestartFn = func() { close(done) }
+
+	rr := httptest.NewRecorder()
+	s.handleRestart(rr, httptest.NewRequest(http.MethodPost, "/api/restart?force=true", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"forced":true`) {
+		t.Fatalf("response missing forced marker: %s", rr.Body.String())
+	}
+	select {
+	case <-done:
+		// force restart fired
+	case <-time.After(2 * time.Second):
+		t.Fatal("force restart was not triggered")
+	}
+}
+
+// TestHandleRestart_DefaultSchedulesWhenBusy verifies the default (non-force)
+// path still only schedules a restart and does not fire immediately while a
+// scan is active.
+func TestHandleRestart_DefaultSchedulesWhenBusy(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.instancesMu.Lock()
+	s.instances = map[string]*ScanInstance{"inst-busy": {ID: "inst-busy", Status: "running"}}
+	s.instancesMu.Unlock()
+	s.forceRestartFn = func() { t.Fatal("force restart must not fire on the default path") }
+
+	rr := httptest.NewRecorder()
+	s.handleRestart(rr, httptest.NewRequest(http.MethodPost, "/api/restart", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"status":"scheduled"`) {
+		t.Fatalf("expected scheduled status, got: %s", rr.Body.String())
+	}
+	if got := rr.Body.String(); strings.Contains(got, `"idle":true`) {
+		t.Fatalf("scanner should report busy (idle=false), got: %s", got)
+	}
+}
