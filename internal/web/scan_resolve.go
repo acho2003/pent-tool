@@ -269,7 +269,7 @@ func (s *Server) legacyOrCatalogDefaultEndpoint(ctx context.Context, cfg *config
 				if strings.TrimSpace(cfg.APIBase) != "" {
 					entry.BaseURL = strings.TrimSpace(cfg.APIBase)
 				}
-				if ep, berr := llm.BuildCatalogEndpoint(entry, auth.Profile{}, strings.TrimSpace(cfg.LLM), cfg.APIBase); berr == nil {
+				if ep, berr := llm.BuildCatalogEndpoint(entry, auth.Profile{}, modelForConfiguredProvider(cfg.LLM, cfg.LLMProvider), cfg.APIBase); berr == nil {
 					return ep
 				}
 			}

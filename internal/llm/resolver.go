@@ -212,7 +212,7 @@ func (c *compositeResolver) Resolve(ctx context.Context) (Endpoint, error) {
 			if strings.TrimSpace(c.cfg.APIBase) != "" {
 				entry.BaseURL = strings.TrimSpace(c.cfg.APIBase)
 			}
-			return BuildCatalogEndpoint(entry, auth.Profile{}, strings.TrimSpace(c.cfg.LLM), c.cfg.APIBase)
+			return BuildCatalogEndpoint(entry, auth.Profile{}, modelForProvider(c.cfg.LLM, c.cfg.LLMProvider), c.cfg.APIBase)
 		}
 	}
 	// Branch 1 — explicit active credential pointer wins.

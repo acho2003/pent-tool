@@ -69,3 +69,25 @@ func TestResolveScanCredentialsUsesCredentialFreeProviderAndBareModel(t *testing
 		t.Fatalf("credential-free endpoint contains credentials")
 	}
 }
+
+// TestResolveScanCredentialsStripsLegacyPrefixForCredentialFreeProvider verifies
+// the no-auth branch strips a matching "<provider>/" prefix from a legacy
+// XALGORIX_LLM value (while still preserving provider-native slashes, since only
+// the matching provider prefix is removed).
+func TestResolveScanCredentialsStripsLegacyPrefixForCredentialFreeProvider(t *testing.T) {
+	s := &Server{catalog: providers.NewService()}
+	cfg := &config.Config{
+		LLMProvider: "ollama",
+		// Legacy-shaped value that carries the provider prefix; only the matching
+		// "ollama/" prefix should be stripped, leaving the native model id intact.
+		LLM:     "ollama/deepseek-v4-pro:cloud",
+		APIBase: "http://host.docker.internal:11434/v1",
+	}
+	ep, err := s.resolveScanCredentials(context.Background(), ScanRequest{}, cfg)
+	if err != nil {
+		t.Fatalf("resolveScanCredentials: %v", err)
+	}
+	if ep.Model != "deepseek-v4-pro:cloud" {
+		t.Fatalf("Model = %q, want deepseek-v4-pro:cloud (legacy prefix should be stripped)", ep.Model)
+	}
+}

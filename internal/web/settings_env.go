@@ -419,7 +419,7 @@ func (s *Server) applyCatalogLLMSettings(ctx context.Context, req llmSettingsReq
 
 	// Legacy env-var sync. Always written when the operator
 	// supplied a model so the legacy path stays runnable.
-	if model := bareModelForProvider(strings.TrimSpace(req.Model), provider); model != "" {
+	if model := modelForConfiguredProvider(strings.TrimSpace(req.Model), provider); model != "" {
 		updates["XALGORIX_LLM"] = model
 	}
 
@@ -475,18 +475,6 @@ func (s *Server) applyCatalogLLMSettings(ctx context.Context, req llmSettingsReq
 		return err
 	}
 	return nil
-}
-
-func bareModelForProvider(model, provider string) string {
-	model = strings.TrimSpace(model)
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider != "" {
-		prefix := provider + "/"
-		if strings.HasPrefix(strings.ToLower(model), prefix) {
-			return strings.TrimSpace(model[len(prefix):])
-		}
-	}
-	return model
 }
 
 func containerReachableLocalBase(raw string) string {
@@ -560,7 +548,7 @@ func (s *Server) llmSettings(ctx context.Context) llmSettingsResponse {
 		}
 	}
 	resp.Provider = provider
-	resp.Model = bareModelForProvider(s.cfg.LLM, provider)
+	resp.Model = modelForConfiguredProvider(s.cfg.LLM, provider)
 
 	// AuthMethod derivation: dispatch precedence mirrors the
 	// resolver. cfg.LLMProfile present + Profile.Type drives the
