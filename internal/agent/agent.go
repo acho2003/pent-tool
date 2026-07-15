@@ -920,7 +920,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 			}
 
 			if blocked, reason := a.shouldBlockForActivityPolicy(tc.Name, tc.Args); blocked {
-				blockMsg := "⛔ ACTIVITY POLICY BLOCKED TOOL — " + reason
+				blockMsg := "⛔ ACTIVITY POLICY BLOCKED TOOL — " + reason + noteBlockedToolCall(a.state, tc.Name, tc.Args)
 				a.emit(Event{Type: "tool_call", ToolName: tc.Name, ToolArgs: tc.Args})
 				a.emit(Event{Type: "tool_result", ToolName: tc.Name, ToolResult: tools.Result{Output: blockMsg}, TotalTokens: tokenCount()})
 				a.msgMu.Lock()
@@ -930,7 +930,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 			}
 
 			if blocked, reason := a.shouldBlockForPhaseRestriction(tc.Name, tc.Args); blocked {
-				blockMsg := "⛔ PHASE RESTRICTION BLOCKED TOOL — " + reason
+				blockMsg := "⛔ PHASE RESTRICTION BLOCKED TOOL — " + reason + noteBlockedToolCall(a.state, tc.Name, tc.Args)
 				a.emit(Event{Type: "tool_call", ToolName: tc.Name, ToolArgs: tc.Args})
 				a.emit(Event{Type: "tool_result", ToolName: tc.Name, ToolResult: tools.Result{Output: blockMsg}, TotalTokens: tokenCount()})
 				a.msgMu.Lock()
@@ -946,7 +946,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 			// pivoting to third-party hosts discovered via DNS, port
 			// scans, related infrastructure, etc.
 			if blocked, reason := a.shouldBlockForOutOfScope(tc.Name, tc.Args); blocked {
-				blockMsg := "⛔ OUT-OF-SCOPE TARGET BLOCKED — " + reason
+				blockMsg := "⛔ OUT-OF-SCOPE TARGET BLOCKED — " + reason + noteBlockedToolCall(a.state, tc.Name, tc.Args)
 				a.emit(Event{Type: "tool_call", ToolName: tc.Name, ToolArgs: tc.Args})
 				a.emit(Event{Type: "tool_result", ToolName: tc.Name, ToolResult: tools.Result{Output: blockMsg}, TotalTokens: tokenCount()})
 				a.msgMu.Lock()
@@ -954,6 +954,11 @@ func (a *Agent) Run(targets []string, instruction string) {
 				a.msgMu.Unlock()
 				continue
 			}
+
+			// This call passed every block guard — a real, allowed action.
+			// Clear the consecutive-blocked-call counter so only a SUSTAINED
+			// block loop (no allowed call in between) escalates.
+			a.state.ConsecutiveBlockedCalls = 0
 
 			a.hooks.Fire(OnToolCall, a.state, toolArgs)
 

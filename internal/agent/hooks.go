@@ -92,6 +92,18 @@ type ScanState struct {
 	LastResultFP          string
 	ConsecutiveSameResult int // same result-output fingerprint back-to-back
 
+	// Blocked-call loop detection. The three block guards (activity policy,
+	// phase restriction, out-of-scope) short-circuit the dispatch BEFORE the
+	// stuck tracker above ever runs, so a model that fixates on a
+	// permanently-rejected action — e.g. repeatedly probing an out-of-scope
+	// host, or active probes in passive mode — never trips a nudge and burns
+	// iterations to MaxIterations (default unlimited). These count consecutive
+	// blocked calls with no allowed tool call in between; reset the moment a
+	// call passes the guards. NOT reset by OnHealthyResponse — a "healthy"
+	// response that re-issues a blocked call is exactly the loop.
+	ConsecutiveBlockedCalls int
+	LastBlockedCallHash     string
+
 	// CumulativeRateLimitWait tracks the total time spent parked in the
 	// provider-rate-limit backoff loop across the whole scan. It bounds an
 	// otherwise-indefinite stall: a persistently 429'd provider would
@@ -203,7 +215,36 @@ const (
 	RepeatCallSoftNudge  = 3 // identical (tool,args) → soft pivot nudge + skip
 	RepeatCallHardSkip   = 5 // identical (tool,args) → strong force-skip nudge
 	RepeatResultHardSkip = 4 // identical result output across calls → force-skip
+
+	BlockedCallSoftNudge = 3 // consecutive guard-blocked calls → soft corrective nudge
+	BlockedCallHardNudge = 6 // consecutive guard-blocked calls → hard "stop / pivot / finish" nudge
 )
+
+// noteBlockedToolCall records that a Gated_Tool call was rejected by a block
+// guard (activity policy, phase restriction, or out-of-scope) and returns an
+// escalating corrective nudge (appended to the block message) once the agent
+// has been blocked repeatedly with no allowed call in between. Returns "" until
+// the soft threshold is reached. The dispatch loop resets
+// ConsecutiveBlockedCalls to 0 the moment a call passes the guards, so only a
+// sustained block loop escalates. This is the backstop for the block branches,
+// which short-circuit before the normal stuck tracker (issue #158 follow-up).
+func noteBlockedToolCall(state *ScanState, name string, args map[string]string) string {
+	state.ConsecutiveBlockedCalls++
+	hash := hashToolArgs(name, args)
+	identical := hash == state.LastBlockedCallHash
+	state.LastBlockedCallHash = hash
+
+	if state.ConsecutiveBlockedCalls < BlockedCallSoftNudge {
+		return ""
+	}
+	if state.ConsecutiveBlockedCalls >= BlockedCallHardNudge {
+		return fmt.Sprintf("\n\n⛔ STOP — %d of your last tool calls were rejected by scan guards with no allowed action in between. Repeating a blocked action cannot change the result. You MUST change course NOW: choose an IN-SCOPE target and a policy-allowed action, or — if in-scope testing is exhausted — call finish. Do not attempt this or any other blocked action again.", state.ConsecutiveBlockedCalls)
+	}
+	if identical {
+		return fmt.Sprintf("\n\n⚠️ You have attempted this exact blocked action %d times in a row — it will never be permitted. Stop repeating it and pick a different, in-scope and policy-allowed action.", state.ConsecutiveBlockedCalls)
+	}
+	return fmt.Sprintf("\n\n⚠️ %d of your last actions were blocked by scan guards. Change approach — only in-scope targets and policy-allowed actions will run.", state.ConsecutiveBlockedCalls)
+}
 
 // ── Per-Role Temperatures ────────────────────────────────────────────────────
 // Temperature controls the LLM's creativity vs determinism tradeoff.
