@@ -565,7 +565,7 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 		scanDir:            scanDir,
 		cfg:                scanCfg,
 		server:             s,
-		instruction:        buildAutonomousInstruction(target, instruction),
+		instruction:        buildAutonomousInstruction(target, instruction, scanCfg.AllowLocalTargets),
 		codeScanMode:       req.codeScanMode,
 		allowLoopbackPorts: req.allowLoopbackPorts,
 		name:               req.Name,
@@ -611,7 +611,7 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 		ActiveScanID:  filepath.Base(scanDir),
 	})
 
-	dastInstruction := buildDASTInstruction(target)
+	dastInstruction := buildDASTInstruction(target, scanCfg.AllowLocalTargets)
 	if req.Instruction != "" {
 		dastInstruction += "\n\n" + req.Instruction
 	}

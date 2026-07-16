@@ -169,6 +169,7 @@ func allEnvSettingDefinitions() []envSettingDefinition {
 		{Key: "XALGORIX_PASSWORD", Label: "Dashboard password", Category: "Security", Description: "Plaintext dashboard password. Prefer XALGORIX_PASSWORD_HASH.", InputType: "secret", Sensitive: true, RequiresRestart: true},
 		{Key: "XALGORIX_PASSWORD_HASH", Label: "Dashboard password hash", Category: "Security", Description: "Bcrypt dashboard password hash.", InputType: "secret", Sensitive: true, RequiresRestart: true},
 		{Key: "XALGORIX_BIND", Label: "Bind address", Category: "Security", Description: "Web server listen address.", DefaultValue: "127.0.0.1", Placeholder: "127.0.0.1", InputType: "text", RequiresRestart: true},
+		{Key: "XALGORIX_ALLOW_LOCAL_TARGETS", Label: "Allow local targets", Category: "Security", Description: "Permit scanning locally-hosted apps (localhost / 127.0.0.1 / private IPs) — for self-hosted demo/staging on the same box. The dashboard's own listener is always protected. Leave OFF on shared/hosted deployments.", DefaultValue: "false", InputType: "boolean"},
 
 		{Key: "CAIDO_PORT", Label: "Caido port", Category: "Integrations", Description: "Caido proxy port. 0 means auto-detect.", DefaultValue: "0", InputType: "number"},
 		{Key: "CAIDO_API_TOKEN", Label: "Caido API token", Category: "Integrations", Description: "Caido API token for proxy integration.", InputType: "secret", Sensitive: true},
@@ -744,6 +745,8 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 			s.cfg.RateLimitBurst = parseIntSetting(value, 20)
 		case "XALGORIX_TLS_SKIP_VERIFY":
 			s.cfg.TLSSkipVerify = parseBoolSetting(value, false)
+		case "XALGORIX_ALLOW_LOCAL_TARGETS":
+			s.cfg.AllowLocalTargets = parseBoolSetting(value, false)
 		case "CAIDO_PORT":
 			s.cfg.CaidoPort = parseIntSetting(value, 0)
 		case "CAIDO_API_TOKEN":
@@ -844,6 +847,8 @@ func (s *Server) envSettingValue(key string) string {
 		return strconv.Itoa(s.cfg.RateLimitBurst)
 	case "XALGORIX_TLS_SKIP_VERIFY":
 		return strconv.FormatBool(s.cfg.TLSSkipVerify)
+	case "XALGORIX_ALLOW_LOCAL_TARGETS":
+		return strconv.FormatBool(s.cfg.AllowLocalTargets)
 	case "CAIDO_PORT":
 		return strconv.Itoa(s.cfg.CaidoPort)
 	case "CAIDO_API_TOKEN":

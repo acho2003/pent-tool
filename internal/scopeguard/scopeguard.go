@@ -59,6 +59,33 @@ type Config struct {
 	// remain blocked. Empty (the default) preserves the strict behavior:
 	// all loopback is treated as self.
 	AllowLoopbackPorts []int
+
+	// AllowLocalTargets is a GLOBAL opt-in for self-hosted installs that want
+	// to scan a locally-hosted app (loopback, localhost, or one of the
+	// machine's own interface IPs) — e.g. a demo/staging environment on the
+	// same box. Default false. It NEVER exposes the dashboard's own listener:
+	// the self-listener fast-path still blocks the exact bind host:port, and
+	// any local target on the dashboard's Port is refused regardless, so this
+	// can't be turned into a self-scan loop. The unspecified address
+	// (0.0.0.0 / ::) is always blocked. Must remain off on multi-tenant /
+	// hosted deployments (it would let a user reach the operator's machine).
+	AllowLocalTargets bool
+}
+
+// localTargetsAllowed reports whether the global self-hosted local-scan opt-in
+// applies to a target on the given port. Gated so the dashboard's own listener
+// port is never in scope, even via a different local address.
+func (c Config) localTargetsAllowed(hostPort string) bool {
+	if !c.AllowLocalTargets {
+		return false
+	}
+	if hostPort == "" {
+		return true
+	}
+	if pn, err := strconv.Atoi(hostPort); err == nil && pn == c.Port {
+		return false // never scan the dashboard's own port, on any local address
+	}
+	return true
 }
 
 // loopbackPortAllowed reports whether hostPort (a decimal port string) is in
@@ -134,7 +161,11 @@ func IsLocalOrListener(cfg Config, target string) bool {
 	// in. Loopback hosts on exactly that port are NOT self. The dashboard
 	// listener port is never in the allowlist (see loopbackPortAllowed), so
 	// this can never expose the operator's own dashboard.
-	allowLoopback := cfg.loopbackPortAllowed(hostPort)
+	// The per-scan provisioned-port allowlist OR the global self-hosted
+	// local-scan opt-in can exempt loopback. Both are gated so the dashboard's
+	// own port is never in scope; the self-listener fast-path above already
+	// blocked the exact bind host:port.
+	allowLoopback := cfg.loopbackPortAllowed(hostPort) || cfg.localTargetsAllowed(hostPort)
 
 	// Explicit textual matches (fast path) — these always mean "self"
 	lower := strings.ToLower(host)
@@ -196,6 +227,12 @@ func IsLocalOrListener(cfg Config, target string) bool {
 	// operator's own public-facing services (SSH, Grafana, CUPS, etc.)
 	// even when the probed port differs from the dashboard listener.
 	if ipsMatchLocalInterface(resolvedIPs) {
+		// Self-hosted opt-in: the operator explicitly allows scanning apps on
+		// this machine's own interfaces (except the dashboard's port, which
+		// localTargetsAllowed excludes).
+		if cfg.localTargetsAllowed(hostPort) {
+			return false
+		}
 		return true
 	}
 

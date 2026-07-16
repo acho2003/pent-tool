@@ -152,6 +152,15 @@ type Config struct {
 	// the server will refuse to start.
 	BindAddr string // XALGORIX_BIND - listen address (default 127.0.0.1)
 
+	// AllowLocalTargets opts a self-hosted install into scanning locally-hosted
+	// apps — loopback, localhost, or one of this machine's own interface IPs
+	// (e.g. a demo/staging environment on the same box), which are blocked by
+	// default as "self". The dashboard's own listener is ALWAYS protected
+	// regardless of this flag. XALGORIX_ALLOW_LOCAL_TARGETS (default false).
+	// Leave OFF on any shared/hosted deployment — it would let a user reach
+	// the operator's own machine.
+	AllowLocalTargets bool
+
 	// Auto-install gating — the LLM-driven terminal tool can call apt/cargo/npm
 	// for missing binaries. Letting that happen under sudo on a multi-user box
 	// is a privilege-escalation surface, so it's now opt-in.
@@ -317,6 +326,10 @@ func load() *Config {
 
 		// Network binding — loopback-only by default.
 		BindAddr: envOr("XALGORIX_BIND", "127.0.0.1"),
+
+		// Self-hosted opt-in to scan locally-hosted apps (off by default; the
+		// dashboard's own listener stays protected regardless).
+		AllowLocalTargets: envOrBool("XALGORIX_ALLOW_LOCAL_TARGETS", false),
 
 		// Auto-install gates — default off for non-root; root sessions keep the
 		// historical behavior so existing systemd deployments keep working.

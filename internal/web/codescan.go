@@ -66,6 +66,7 @@ func (s *Server) isBlockedTargetForScan(target string, allowLoopbackPorts []int)
 		BindAddr:           s.cfg.BindAddr,
 		Port:               s.port,
 		AllowLoopbackPorts: allowLoopbackPorts,
+		AllowLocalTargets:  s.cfg.AllowLocalTargets,
 	}, target)
 }
 

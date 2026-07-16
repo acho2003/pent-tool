@@ -95,6 +95,7 @@ func (s *Server) executeScanSession(sess *scanSession) {
 		BindAddr:           s.cfg.BindAddr,
 		Port:               s.port,
 		AllowLoopbackPorts: sess.allowLoopbackPorts,
+		AllowLocalTargets:  s.cfg.AllowLocalTargets,
 	}, agentOpts...)
 	agnt.SetPhaseRestrictions(sess.phases)
 	agnt.SetActivityPolicy(sess.reconMode, sess.scanIntensity, []string{sess.target, sess.parentTarget})

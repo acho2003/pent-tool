@@ -3,8 +3,25 @@ package web
 
 import "fmt"
 
+// localScopeRule returns the scope paragraph about local/internal addresses.
+// By default it forbids scanning them (they're the operator's own machine). On
+// a self-hosted install that opted in via XALGORIX_ALLOW_LOCAL_TARGETS, the
+// configured target may itself be local, so we tell the agent to test it —
+// the dashboard's own listener is still protected by the scope guard.
+func localScopeRule(allowLocal bool) string {
+	if allowLocal {
+		return "**LOCAL TARGETS ARE IN SCOPE (self-hosted mode):** This installation is configured to test locally-hosted apps. If the target above is a loopback/localhost/private/link-local address, it IS your intended target — test it fully. The one thing you must never touch is the Xalgorix dashboard's own listener."
+	}
+	return "**⛔ STRICTLY FORBIDDEN — NEVER scan these (they are the local server, NOT the target):**\n" +
+		"- 127.0.0.1, localhost, 0.0.0.0, ::1 (loopback addresses)\n" +
+		"- 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (private/internal IPs)\n" +
+		"- 169.254.0.0/16 (link-local addresses)\n" +
+		"- Any IP that resolves to the machine you are running on\n" +
+		"If a tool discovers a local/internal IP, SKIP IT and move to the next target. Do NOT run any scans, port scans, or vulnerability tests against local addresses."
+}
+
 // Build autonomous instruction that gives AI freedom to decide approach
-func buildAutonomousInstruction(target string, customInstruction string) string {
+func buildAutonomousInstruction(target string, customInstruction string, allowLocal bool) string {
 	baseInstruction := `## AUTONOMOUS PENTESTING MODE — EXPLOIT-FIRST METHODOLOGY
 
 You are an elite penetration tester. YOUR GOAL: Find REAL, EXPLOITABLE vulnerabilities with PROOF.
@@ -19,12 +36,7 @@ Your primary target is ` + "`" + `` + target + `` + "`" + `. However, the follow
 
 **Out of scope:** Completely different domains, third-party services (Google, AWS, CDNs), unless they are explicitly part of the target's infrastructure.
 
-**⛔ STRICTLY FORBIDDEN — NEVER scan these (they are the local server, NOT the target):**
-- 127.0.0.1, localhost, 0.0.0.0, ::1 (loopback addresses)
-- 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (private/internal IPs)
-- 169.254.0.0/16 (link-local addresses)
-- Any IP that resolves to the machine you are running on
-If a tool discovers a local/internal IP, SKIP IT and move to the next target. Do NOT run any scans, port scans, or vulnerability tests against local addresses.
+` + localScopeRule(allowLocal) + `
 
 **Why:** Many applications split auth (login.example.com), API (api.example.com), and web (www.example.com) across subdomains. Testing only www would miss critical attack surface.
 
@@ -250,14 +262,14 @@ If you notice a possible vulnerability during recon, record it as an observation
 }
 
 // Build autonomous DAST instruction for URL scanning
-func buildDASTInstruction(target string) string {
+func buildDASTInstruction(target string, allowLocal bool) string {
 	return `## AUTONOMOUS DAST MODE — EXPLOIT-FIRST
 
 YOUR TARGET: ` + target + `
 
 **SCOPE:** Primary target + all sibling subdomains of the same root domain (e.g., www.example.com → login.example.com, api.example.com are in scope). Follow redirects to auth/SSO subdomains.
 
-**⛔ NEVER scan:** 127.0.0.1, localhost, 0.0.0.0, ::1, 10.x.x.x, 172.16-31.x.x, 192.168.x.x, 169.254.x.x — these are local/internal and NOT the target.
+` + localScopeRule(allowLocal) + `
 
 ## ORGANIZE YOUR WORK
 You are already inside the target's scan workspace. Save evidence and tool output in the current directory with clear filenames. Do not use cd to leave this workspace and do not write to /root, /tmp, or another home directory.

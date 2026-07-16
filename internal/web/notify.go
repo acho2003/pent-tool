@@ -160,8 +160,9 @@ func (s *Server) sendSimpleEmbed(color int, title, description string) {
 // (Requirement 3.8 / design.md → "DNS Lookup Semantics").
 func (s *Server) isBlockedTarget(target string) bool {
 	return scopeguard.IsLocalOrListener(scopeguard.Config{
-		BindAddr: s.cfg.BindAddr,
-		Port:     s.port,
+		BindAddr:          s.cfg.BindAddr,
+		Port:              s.port,
+		AllowLocalTargets: s.cfg.AllowLocalTargets,
 	}, target)
 }
 
