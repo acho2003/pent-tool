@@ -1480,7 +1480,16 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if allBlocked {
-			http.Error(w, "all targets are local/internal addresses or the dashboard's own listener; refusing to self-scan", http.StatusBadRequest)
+			msg := "All targets are local/internal addresses or the dashboard's own listener, so the scan was refused (self-scan protection)."
+			if s.cfg.AllowLocalTargets {
+				// Local scanning is already on, so the only things still blocked
+				// are the dashboard itself and the unspecified address.
+				msg += " The dashboard's own listener and the unspecified address (0.0.0.0 / ::) are never scannable, even with local targets enabled — point the scan at the app's actual host:port instead."
+			} else {
+				// Self-hosted operators can opt in; tell them exactly how.
+				msg += " To scan a locally-hosted app on a self-hosted install, enable local targets: Settings → Security → \"Allow local targets\", or set XALGORIX_ALLOW_LOCAL_TARGETS=true in ~/.xalgorix.env and restart. (The dashboard's own listener stays protected either way. Leave this OFF on shared/hosted deployments.)"
+			}
+			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
 	}
