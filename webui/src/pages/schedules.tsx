@@ -554,8 +554,9 @@ export default function SchedulesPage() {
               <Label htmlFor="sched-instruction">
                 Custom instruction (optional)
               </Label>
-              <Input
+              <Textarea
                 id="sched-instruction"
+                rows={4}
                 placeholder="e.g. Skip noisy subdomain enumeration, focus on api testing"
                 value={instruction}
                 onChange={(e) => setInstruction(e.target.value)}

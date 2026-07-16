@@ -160,11 +160,15 @@ export default function NewScanDialog({
           </div>
           <div className="space-y-2">
             <Label htmlFor="instruction">Instruction (optional)</Label>
-            <Input
+            <textarea
               id="instruction"
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
-              placeholder="Focus on auth + injection. Skip noisy enumeration."
+              rows={4}
+              placeholder={
+                "Multiple lines are supported — e.g.\nFocus on auth + injection; skip noisy enumeration.\nCreds: admin@example.com / hunter2 (role: admin)\nSecond account: user@example.com / pass123 (role: member)"
+              }
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
           </div>
           {error && (
