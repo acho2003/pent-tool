@@ -189,6 +189,43 @@ func (s *Server) executeScanSession(sess *scanSession) {
 		return
 	}
 
+	// 8b. Abnormal LLM-side abort (agent bailed: refused tools / empty responses
+	// / repeated errors / rate-limit). This is NOT a clean completion — the scan
+	// produced no real result — so record it as "failed" with a diagnostic stop
+	// reason instead of "finished". Downstream (dashboard / hosted refunds)
+	// keys off this so a force-stopped scan is never shown as completed.
+	//
+	// We update BOTH the persisted record AND the live instance: the scan-status
+	// API (applyInstanceSnapshot) overlays the in-memory instance status over the
+	// record, and runMultiScan's deferred finalize would otherwise flip a still-
+	// "running" instance to "finished". Marking the instance "failed" here makes
+	// every read path agree. This runs after the event processor has drained
+	// (<-done above), so there is no concurrent processEvent writer.
+	if sess.abortReason != "" {
+		finishedAt := time.Now().Format(time.RFC3339)
+		sess.record.Status = "failed"
+		sess.record.StopReason = sess.abortReason
+		sess.record.FinishedAt = finishedAt
+		if sess.instanceID != "" {
+			s.instancesMu.RLock()
+			inst, ok := s.instances[sess.instanceID]
+			s.instancesMu.RUnlock()
+			if ok {
+				inst.mu.Lock()
+				// Never clobber a user-initiated stop/pause; only downgrade a
+				// still-active instance to failed.
+				if inst.Status == "running" || inst.Status == "pending" || inst.Status == "" {
+					inst.Status = "failed"
+					inst.StopReason = sess.abortReason
+					inst.FinishedAt = finishedAt
+				}
+				inst.mu.Unlock()
+			}
+		}
+		s.saveScanRecordTo(sess.record, sess.scanDir)
+		return
+	}
+
 	// 9. Finalize record
 	sess.record.Status = "finished"
 	sess.record.FinishedAt = time.Now().Format(time.RFC3339)
@@ -380,6 +417,15 @@ func (s *Server) processEvent(evt agent.Event, sess *scanSession) {
 	}
 
 	if evt.Type == "finished" {
+		// An abnormal LLM-side abort (refused tools / empty responses / repeated
+		// errors / rate-limit) reuses the "finished" event type but is NOT a
+		// clean completion. Record the reason so finalize marks the scan failed.
+		if evt.Aborted {
+			sess.abortReason = evt.AbortReason
+			if sess.abortReason == "" {
+				sess.abortReason = "llm_aborted"
+			}
+		}
 		// Build set of vulns already broadcast in real-time to avoid duplicates
 		seen := make(map[string]bool)
 		for _, v := range sess.record.Vulns {

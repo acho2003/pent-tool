@@ -2498,6 +2498,13 @@ type scanSession struct {
 	// Wildcard lifecycle flags
 	skipNotesCleanup     bool   // when true, don't delete notes store on cleanup (discovery phase)
 	parentReportingCtxID string // stable context ID for accumulating vulns across wildcard subdomain scans
+
+	// abortReason is set (via processEvent) when the agent emits a "finished"
+	// event flagged as an abnormal LLM-side abort — refused to call tools,
+	// empty responses, repeated errors, provider rate-limit exhaustion. When
+	// set, the session finalizes the record as "failed" (not "finished") so a
+	// force-stopped scan is never reported as a clean completion.
+	abortReason string
 }
 
 // cleanup tears down all per-session resources. Every sub-operation

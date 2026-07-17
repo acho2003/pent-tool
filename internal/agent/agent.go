@@ -80,6 +80,16 @@ type Event struct {
 	AgentID     string
 	Timestamp   time.Time
 	TotalTokens int
+
+	// Aborted marks a "finished" event that is NOT a clean completion: the
+	// agent bailed out because of an LLM-side malfunction (refused to call
+	// tools, empty responses, repeated errors, provider rate-limit exhaustion).
+	// Consumers use this to record the scan as failed instead of completed — a
+	// forced abort produced no real result, so reporting it as "completed" is
+	// misleading (and, on hosted deployments, must trigger a refund).
+	// AbortReason is a short machine-readable tag (e.g. "llm_no_tool_calls").
+	Aborted     bool
+	AbortReason string
 }
 
 // toolExecResult holds the result of an async tool execution.
@@ -785,7 +795,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 				// wait exceeds maxCumulativeRateLimitWait, fail the scan cleanly.
 				if maxCumulativeRateLimitWait > 0 && a.state.CumulativeRateLimitWait >= maxCumulativeRateLimitWait {
 					a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Agent stopped: LLM provider rate limited for a cumulative %s without recovering.", a.state.CumulativeRateLimitWait), TotalTokens: tokenCount()})
-					a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: provider rate limited for a cumulative %s without recovering.", a.state.CumulativeRateLimitWait), TotalTokens: tokenCount()})
+					a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: provider rate limited for a cumulative %s without recovering.", a.state.CumulativeRateLimitWait), TotalTokens: tokenCount(), Aborted: true, AbortReason: "llm_rate_limited"})
 					return
 				}
 				a.emit(Event{Type: "error", Content: "⏳ Rate limited by LLM provider — waiting 30 minutes before retrying (will NOT skip this target)", TotalTokens: tokenCount()})
@@ -804,7 +814,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 			a.emit(Event{Type: "error", Content: fmt.Sprintf("LLM error (attempt %d/25): %s", a.state.ConsecutiveErrors, errStr), TotalTokens: tokenCount()})
 			if a.state.ConsecutiveErrors >= 25 {
 				a.emit(Event{Type: "error", Content: fmt.Sprintf("⛔ Agent stopped: LLM failed %d consecutive times. Last error: %s", a.state.ConsecutiveErrors, errStr), TotalTokens: tokenCount()})
-				a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: LLM failed %d consecutive times. Last error: %s", a.state.ConsecutiveErrors, errStr), TotalTokens: tokenCount()})
+				a.emit(Event{Type: "finished", Content: fmt.Sprintf("Agent stopped: LLM failed %d consecutive times. Last error: %s", a.state.ConsecutiveErrors, errStr), TotalTokens: tokenCount(), Aborted: true, AbortReason: "llm_repeated_errors"})
 				return
 			}
 			// Exponential backoff: 10s, 20s, 30s... capped at 120s
@@ -824,7 +834,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 			a.emit(Event{Type: "message", Content: fmt.Sprintf("⚠️ LLM returned empty response (%d/12)", a.state.EmptyResponseCount), TotalTokens: tokenCount()})
 			if emptyResult.ForceSkip {
 				a.emit(Event{Type: "error", Content: emptyResult.EmitMessage, TotalTokens: tokenCount()})
-				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM returned too many empty responses", TotalTokens: tokenCount()})
+				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM returned too many empty responses", TotalTokens: tokenCount(), Aborted: true, AbortReason: "llm_empty_responses"})
 				return
 			}
 			if emptyResult.Nudge != "" {
@@ -873,7 +883,7 @@ func (a *Agent) Run(targets []string, instruction string) {
 			noToolResult := a.hooks.Fire(OnNoToolResponse, a.state, map[string]string{"response": cleanText})
 			if noToolResult.ForceSkip {
 				a.emit(Event{Type: "error", Content: noToolResult.EmitMessage, TotalTokens: tokenCount()})
-				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM refused to call tools after 15 attempts", TotalTokens: tokenCount()})
+				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM refused to call tools after 15 attempts", TotalTokens: tokenCount(), Aborted: true, AbortReason: "llm_no_tool_calls"})
 				return
 			}
 			if noToolResult.Nudge != "" {
