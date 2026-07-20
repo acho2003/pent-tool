@@ -30,6 +30,20 @@ var (
 	invokeOpen   = regexp.MustCompile(`<invoke\s+name=["']([^"']+)["']>`)
 	funcCallsTag = regexp.MustCompile(`</?function_calls>`)
 
+	// Recover malformed tool-call OPEN tags. Some models intermittently drop
+	// the leading "<" — or the whole "<function" — from the opening tag while
+	// still emitting a well-formed body and "</function>", e.g.
+	//     function=terminal_execute><parameter=command>id</parameter></function>
+	//     =send_request><parameter=method>GET</parameter></function>
+	// The strict fnRegex never matched these, so the call was counted as a
+	// "no tool call" response; 15 of those in a row force-stops the whole scan
+	// (observed in production). Requiring a "<parameter" or "</function>"
+	// immediately after the ">" makes this a specific, low-false-positive
+	// signal — ordinary prose does not contain "=word><parameter". Correct
+	// "<function=name>" tags also match this pattern and are rewritten to the
+	// identical canonical form, so the repair is idempotent.
+	repairFnOpenRe = regexp.MustCompile(`(?s)<?(?:function)?\s*=\s*([A-Za-z_][A-Za-z0-9_-]*)\s*>(\s*(?:<parameter|</function>))`)
+
 	// Normalize quotes around = in tags: <function = "name"> → <function=name>
 	stripQuotesRe = regexp.MustCompile(`<(function|parameter)\s*=\s*["']?([^>"']+?)["']?\s*>`)
 
@@ -155,6 +169,9 @@ func normalizeFormat(content string) string {
 		content = invokeOpen.ReplaceAllString(content, "<function=$1>")
 		content = strings.ReplaceAll(content, "</invoke>", "</function>")
 	}
+
+	// Repair malformed function-open tags (missing leading "<" / "<function").
+	content = repairFnOpenRe.ReplaceAllString(content, "<function=${1}>${2}")
 
 	// Normalize quotes/spaces around = signs: <function = "name"> → <function=name>
 	content = stripQuotesRe.ReplaceAllStringFunc(content, func(s string) string {
