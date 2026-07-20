@@ -190,7 +190,9 @@ export default function ScanDetailPage() {
               variant="outline"
               size="sm"
               onClick={() =>
-                start.mutate(scan.id, {
+                // Instance-action endpoints key off the instance id, which for
+                // wildcard scans differs from the scan record id (scan.id).
+                start.mutate(scan.instance_id || scan.id, {
                   onSuccess: (res) => {
                     if (res.instance_id) {
                       navigate(`/scans/${res.instance_id}`);
@@ -209,7 +211,7 @@ export default function ScanDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => stop.mutate(scan.id)}
+              onClick={() => stop.mutate(scan.instance_id || scan.id)}
               disabled={stop.isPending}
             >
               <X className="mr-1 h-4 w-4" /> Stop

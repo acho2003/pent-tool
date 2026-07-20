@@ -2199,6 +2199,39 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleInstanceAction handles per-instance operations (stop, etc)
+// resolveInstanceForAction maps a URL id to a live ScanInstance for the
+// per-instance action endpoints (stop/pause/resume/restart/start/events).
+//
+// The exact in-memory instance id always wins. But the scan-detail page routes
+// by the scan RECORD id (and sometimes a short hex alias), which for wildcard
+// scans differs from the instance id — so a plain map lookup 404'd and the
+// Stop/Delete buttons silently did nothing there, while the Instances page
+// (which passes the real instance id) worked. Fall back to resolving the id as
+// a record id / short alias and mapping that record to its instance.
+func (s *Server) resolveInstanceForAction(id string) (*ScanInstance, bool) {
+	if id == "" {
+		return nil, false
+	}
+	s.instancesMu.RLock()
+	inst, ok := s.instances[id]
+	s.instancesMu.RUnlock()
+	if ok {
+		return inst, true
+	}
+	// Not a live instance id — try to resolve it as a scan record id, then as a
+	// recent short alias, and map the resolved record back to its instance.
+	_, rec := s.findScanByID(id)
+	if rec == nil {
+		_, rec = s.findRecentScanForShortAlias(id)
+	}
+	if rec != nil {
+		if inst := s.instanceForRecord(rec); inst != nil {
+			return inst, true
+		}
+	}
+	return nil, false
+}
+
 func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	// Path: /api/instances/{id}/stop or /api/instances/{id}
@@ -2209,9 +2242,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	}
 	instanceID := parts[0]
 
-	s.instancesMu.RLock()
-	inst, ok := s.instances[instanceID]
-	s.instancesMu.RUnlock()
+	inst, ok := s.resolveInstanceForAction(instanceID)
 	if !ok {
 		http.Error(w, "instance not found", http.StatusNotFound)
 		return
