@@ -572,9 +572,29 @@ func (c *Client) SetTemperature(temp *float64) {
 	}
 }
 
-// effectiveTemperature returns the per-call override if set, otherwise
-// falls back to the config default.
+// modelRequiresFixedTemperature reports whether a model rejects any
+// temperature other than the default 1 (returns 400 "only 1 is allowed for
+// this model"). Moonshot's Kimi K2.6 and K3 models enforce this. For these the
+// agent's per-role SetTemperature overrides (validator/reporter/scanner, which
+// use values like 0.0) MUST be ignored — otherwise every call errors. Matching
+// on the bare model name is safe: only Moonshot serves these names.
+func modelRequiresFixedTemperature(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	return strings.Contains(m, "kimi-k2.6") || strings.Contains(m, "kimi-k3")
+}
+
+// effectiveTemperature returns the temperature to send. Models that only accept
+// the default (Kimi K2.6 / K3) always get 1 regardless of config or per-call
+// overrides. Otherwise the per-call override wins, falling back to the config
+// default.
 func (c *Client) effectiveTemperature() *float64 {
+	if modelRequiresFixedTemperature(c.apiModel) {
+		one := 1.0
+		return &one
+	}
 	if v, ok := c.tempOverride.Load().(*float64); ok && v != nil {
 		return v
 	}
