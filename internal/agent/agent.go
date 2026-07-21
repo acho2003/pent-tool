@@ -882,8 +882,9 @@ func (a *Agent) Run(targets []string, instruction string) {
 		if len(toolCalls) == 0 {
 			noToolResult := a.hooks.Fire(OnNoToolResponse, a.state, map[string]string{"response": cleanText})
 			if noToolResult.ForceSkip {
+				reason, detail := classifyNoToolAbort(a.state)
 				a.emit(Event{Type: "error", Content: noToolResult.EmitMessage, TotalTokens: tokenCount()})
-				a.emit(Event{Type: "finished", Content: "Agent stopped: LLM refused to call tools after 15 attempts", TotalTokens: tokenCount(), Aborted: true, AbortReason: "llm_no_tool_calls"})
+				a.emit(Event{Type: "finished", Content: detail, TotalTokens: tokenCount(), Aborted: true, AbortReason: reason})
 				return
 			}
 			if noToolResult.Nudge != "" {

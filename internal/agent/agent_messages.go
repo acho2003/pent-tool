@@ -10,9 +10,33 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
 )
 
+// maxToolResultBytes caps how much of a single tool result is fed into the LLM
+// context. A raw `cat`/`strings`/`curl` of a large asset (a 500 KB minified JS
+// bundle, a big HTML page, a huge JSON) would otherwise flood the context in
+// one shot — the model then degrades into empty/reasoning-only responses with
+// no tool calls and the scan force-stops. We keep the head and tail (the useful
+// parts of most outputs) and drop the middle, telling the model to re-extract
+// what it needs with grep/head/jq. On-disk files written by the tool are
+// untouched, so subdomain collection etc. still see the full data.
+const maxToolResultBytes = 16000
+
+func capToolOutputForLLM(output string) string {
+	if len(output) <= maxToolResultBytes {
+		return output
+	}
+	const headBytes = 12000
+	const tailBytes = 3000
+	head := output[:headBytes]
+	tail := output[len(output)-tailBytes:]
+	return fmt.Sprintf(
+		"%s\n\n… [TOOL OUTPUT TRUNCATED — showed %d of %d bytes to fit the context window. Do NOT dump whole files/pages again; re-run with grep/head/jq/rg to extract only the specific lines, endpoints, or fields you need.] …\n\n%s",
+		head, headBytes+tailBytes, len(output), tail,
+	)
+}
+
 // formatToolResult formats tool execution results with helpful suggestions
 func formatToolResult(toolName string, result tools.Result) string {
-	output := result.Output
+	output := capToolOutputForLLM(result.Output)
 	errorMsg := result.Error
 
 	var msg string

@@ -1187,9 +1187,13 @@ func hookNoToolHandler(state *ScanState, args map[string]string) HookResult {
 	}
 
 	if state.NoToolCount >= 15 {
+		msg := "⛔ Model returned 15 consecutive responses with no tool call — it stopped taking actions (likely context flooded by a large tool output, or a reasoning loop). Force finishing."
+		if state.RefusalCount >= 3 {
+			msg = "⛔ Model declined to act for 15 consecutive responses (safety refusal). Force finishing — try a model that permits authorized security testing."
+		}
 		return HookResult{
 			ForceSkip:   true,
-			EmitMessage: "⛔ LLM failed to call any tools for 15 consecutive responses. Force finishing.",
+			EmitMessage: msg,
 		}
 	}
 
@@ -1230,6 +1234,19 @@ Call a tool NOW in your next response.`,
 	return HookResult{
 		Nudge: "Please use the available tools by calling them with the XML format shown in the system prompt. Do not just describe what you would do — actually call the tools.",
 	}
+}
+
+// classifyNoToolAbort turns a no-tool force-stop into a machine reason tag plus
+// a human explanation of the ACTUAL cause, instead of the old catch-all
+// "LLM refused to call tools". It distinguishes a genuine safety refusal from a
+// "stopped taking actions" stall — the latter is almost always context
+// exhaustion (a huge tool output dumped into the window) or a reasoning loop,
+// not a target problem.
+func classifyNoToolAbort(state *ScanState) (reason, detail string) {
+	if state != nil && state.RefusalCount >= 3 {
+		return "llm_safety_refusal", "Agent stopped: the model repeatedly declined to run the assessment (safety refusal) across 15 responses. This is a model-side refusal, not a target or scanner issue — switch to a model that permits authorized security testing."
+	}
+	return "llm_no_tool_calls", "Agent stopped: the model returned 15 consecutive responses with NO tool call — it stopped taking actions. This is typically caused by a very large tool output flooding the context (e.g. dumping a whole JS bundle or page instead of grepping it) or a reasoning loop — not by the target being unscannable."
 }
 
 // isRefusal reports whether the model's text looks like a safety/ethics refusal
