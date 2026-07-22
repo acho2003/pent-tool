@@ -123,31 +123,70 @@ func alignPruneCutoff(messages []llm.Message, start int) int {
 }
 
 // pruneThresholdBytes is the serialized message-buffer ceiling used by
-// shouldPruneBeforeLLM. ~800 KiB ≈ ~200K tokens at ~4 bytes per token,
-// safely below the smallest provider context window we target while
-// leaving headroom for the system prompt + a multi-turn tool dialog.
-const pruneThresholdBytes = 800 * 1024
+// shouldPruneBeforeLLM. ~500 KiB ≈ ~125K tokens at ~4 bytes per token. Kept
+// well below the 200K-token mark on purpose: models lose focus and STOP
+// CALLING TOOLS long before they hit their hard context limit (the recurring
+// llm_no_tool_calls stall at phase 22), and many providers ship 128K windows.
+// Compaction preserves a structured digest + saved notes, so lowering this only
+// discards raw tool-output bytes the agent no longer needs.
+const pruneThresholdBytes = 500 * 1024
+
+// maxRecentMsgBytes caps EACH kept-recent message during pruning. Compaction
+// summarizes OLD messages, but the recent window was kept verbatim — a run of
+// large tool outputs (even after the per-call cap) could still balloon the
+// context right back up. Truncating each recent message here bounds the whole
+// buffer so raw output never accumulates across phases.
+const maxRecentMsgBytes = 8000
 
 // perMessageOverheadBytes accounts for role tags, JSON delimiters, and
 // per-message structural overhead added by the provider serializer that
 // is not visible in Message.Content alone.
 const perMessageOverheadBytes = 50
 
+// bytesPerTokenEstimate converts the operator's token budget
+// (XALGORIX_CONTEXT_COMPACT_TOKENS) into the byte ceiling used by the cheap
+// no-tokenizer heuristic. ~4 bytes/token is a conservative average for the
+// English + JSON + code text that dominates scan transcripts.
+const bytesPerTokenEstimate = 4
+
+// compactThresholdBytes resolves the effective byte ceiling for auto-compaction
+// from config (token budget × ~4 bytes), falling back to the built-in default
+// when config is absent (tests/CLI). A configured budget of 0 disables
+// proactive compaction — the last-resort forcePruneMessages on a hard context
+// overflow still applies.
+func (a *Agent) compactThresholdBytes() int {
+	if a.cfg != nil {
+		if a.cfg.ContextCompactTokens < 0 {
+			return pruneThresholdBytes
+		}
+		if a.cfg.ContextCompactTokens == 0 {
+			return 0 // disabled
+		}
+		return a.cfg.ContextCompactTokens * bytesPerTokenEstimate
+	}
+	return pruneThresholdBytes
+}
+
 // shouldPruneBeforeLLM reports whether the agent's current message buffer
-// would serialize larger than pruneThresholdBytes and therefore should be
-// pruned before the next outbound LLM call. Cheap byte-count heuristic:
-// no tokenizer dependency and no allocations beyond the message slice.
+// would serialize larger than the configured compaction ceiling and therefore
+// should be pruned before the next outbound LLM call. Cheap byte-count
+// heuristic: no tokenizer dependency and no allocations beyond the message
+// slice.
 //
 // Implements Requirement 2.3 (bounded message history before LLM calls)
 // and underwrites Property P2.3.
 func (a *Agent) shouldPruneBeforeLLM() bool {
+	threshold := a.compactThresholdBytes()
+	if threshold <= 0 {
+		return false // auto-compaction disabled
+	}
 	a.msgMu.Lock()
 	defer a.msgMu.Unlock()
 
 	size := 0
 	for i := range a.messages {
 		size += len(a.messages[i].Content) + perMessageOverheadBytes
-		if size > pruneThresholdBytes {
+		if size > threshold {
 			return true
 		}
 	}
@@ -165,7 +204,7 @@ func (a *Agent) pruneMessages() {
 	}
 
 	// Keep system prompt (index 0) + the most recent keepRecent messages
-	keepRecent := 60
+	keepRecent := 40
 	if keepRecent > len(a.messages)-1 {
 		keepRecent = len(a.messages) - 1
 	}
@@ -198,8 +237,15 @@ func (a *Agent) pruneMessages() {
 		Content: sb.String(),
 	})
 
-	// Keep recent messages intact
-	pruned = append(pruned, a.messages[cutoff:]...)
+	// Keep recent messages, but truncate any oversized raw tool output so the
+	// recent window itself can't re-flood the context (the digest above already
+	// preserves the structured takeaways of anything trimmed here).
+	for _, msg := range a.messages[cutoff:] {
+		if len(msg.Content) > maxRecentMsgBytes {
+			msg.Content = msg.Content[:maxRecentMsgBytes] + "\n\n[OUTPUT TRUNCATED TO FIT CONTEXT WINDOW — re-run with grep/head/jq to re-extract specific data if needed]"
+		}
+		pruned = append(pruned, msg)
+	}
 	a.messages = pruned
 
 	log.Printf("[agent] Pruned message history: kept %d messages (was %d), compacted %d messages into digest, notes injected: %v",
@@ -253,11 +299,10 @@ func (a *Agent) forcePruneMessages() {
 
 	pruned = append(pruned, llm.Message{Role: "user", Content: sb.String()})
 
-	// Keep recent messages, but truncate any that are excessively long
-	const maxMsgLen = 12000 // ~3K tokens per message max
+	// Keep recent messages, but truncate any that are excessively long.
 	for _, msg := range a.messages[cutoff:] {
-		if len(msg.Content) > maxMsgLen {
-			msg.Content = msg.Content[:maxMsgLen] + "\n\n[OUTPUT TRUNCATED TO FIT CONTEXT WINDOW]"
+		if len(msg.Content) > maxRecentMsgBytes {
+			msg.Content = msg.Content[:maxRecentMsgBytes] + "\n\n[OUTPUT TRUNCATED TO FIT CONTEXT WINDOW]"
 		}
 		pruned = append(pruned, msg)
 	}

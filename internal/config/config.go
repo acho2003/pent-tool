@@ -35,6 +35,14 @@ type Config struct {
 	// budget so the full call fits. XALGORIX_MAX_OUTPUT_TOKENS, default 8192.
 	MaxOutputTokens int
 
+	// ContextCompactTokens is the approximate token budget for the agent's
+	// running message history. Once the buffer is estimated to exceed this, the
+	// agent auto-compacts older turns into a structured digest (+ saved notes)
+	// before the next LLM call. Set below your model's context window so the
+	// model never loses focus / stops calling tools as context fills up.
+	// XALGORIX_CONTEXT_COMPACT_TOKENS, default 120000. 0 disables auto-compaction.
+	ContextCompactTokens int
+
 	// Runtime settings
 	RuntimeBackend string // XALGORIX_RUNTIME_BACKEND — always "native"
 	Workspace      string // XALGORIX_WORKSPACE — workspace root dir
@@ -256,17 +264,18 @@ func load() *Config {
 
 	cfg := &Config{
 		// LLM
-		LLM:              envOr("XALGORIX_LLM", ""),
-		LLMProvider:      envOr("XALGORIX_LLM_PROVIDER", ""),
-		APIBase:          envOr("XALGORIX_API_BASE", ""),
-		APIKey:           envOr("XALGORIX_API_KEY", ""),
-		LLMProfile:       envOr("XALGORIX_LLM_PROFILE", ""),
-		ReasoningEffort:  envOr("XALGORIX_REASONING_EFFORT", "high"),
-		OllamaCompatible: envOrBool("XALGORIX_OLLAMA_COMPATIBLE", false),
-		Temperature:      envOrFloatPtr("XALGORIX_TEMPERATURE", 0.2),
-		LLMMaxRetries:    envOrInt("XALGORIX_LLM_MAX_RETRIES", 5),
-		MaxOutputTokens:  envOrInt("XALGORIX_MAX_OUTPUT_TOKENS", 8192),
-		MemCompTimeout:   envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),
+		LLM:                  envOr("XALGORIX_LLM", ""),
+		LLMProvider:          envOr("XALGORIX_LLM_PROVIDER", ""),
+		APIBase:              envOr("XALGORIX_API_BASE", ""),
+		APIKey:               envOr("XALGORIX_API_KEY", ""),
+		LLMProfile:           envOr("XALGORIX_LLM_PROFILE", ""),
+		ReasoningEffort:      envOr("XALGORIX_REASONING_EFFORT", "high"),
+		OllamaCompatible:     envOrBool("XALGORIX_OLLAMA_COMPATIBLE", false),
+		Temperature:          envOrFloatPtr("XALGORIX_TEMPERATURE", 0.2),
+		LLMMaxRetries:        envOrInt("XALGORIX_LLM_MAX_RETRIES", 5),
+		MaxOutputTokens:      envOrInt("XALGORIX_MAX_OUTPUT_TOKENS", 8192),
+		ContextCompactTokens: envOrInt("XALGORIX_CONTEXT_COMPACT_TOKENS", 120000),
+		MemCompTimeout:       envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),
 
 		// Runtime
 		RuntimeBackend:      "native", // Always native in Go version
