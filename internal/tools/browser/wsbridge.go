@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,7 @@ type WSBridge struct {
 	mu       sync.Mutex
 	conn     *websocket.Conn
 	server   *http.Server
+	listener net.Listener
 	addr     string
 	pending  map[string]chan json.RawMessage
 	reqIDSeq atomic.Int64
@@ -87,23 +89,48 @@ func (b *WSBridge) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ext", b.handleExtWS)
 
-	b.server = &http.Server{
-		Addr:    b.addr,
+	// Bind the listener synchronously so that (a) bind errors surface here
+	// instead of being swallowed inside a goroutine, and (b) the socket is
+	// guaranteed to be closable via b.listener on Stop(). Binding inside the
+	// serve goroutine races with Stop()->Close(): if Close() runs before
+	// Serve() tracks the listener, the bound socket leaks and the port stays
+	// occupied ("address already in use" on the next Start).
+	ln, err := net.Listen("tcp", b.addr)
+	if err != nil {
+		return fmt.Errorf("wsbridge listen on %s: %w", b.addr, err)
+	}
+	// Resolve the actual bound address (important when addr uses port 0).
+	b.addr = ln.Addr().String()
+	b.listener = ln
+
+	srv := &http.Server{
 		Handler: mux,
 		// Bound header-read time to avoid a Slowloris-style hang on this
 		// loopback control channel.
 		ReadHeaderTimeout: 15 * time.Second,
 	}
+	b.server = srv
+	addr := b.addr
 
+	// Capture srv in a local so a concurrent Stop() (which nils b.server)
+	// can't turn this into a nil-pointer dereference.
 	go func() {
-		log.Printf("[wsbridge] Starting WebSocket server on %s", b.addr)
-		if err := b.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("[wsbridge] Starting WebSocket server on %s", addr)
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("[wsbridge] Server error: %v", err)
 		}
 	}()
 
 	b.running = true
 	return nil
+}
+
+// Addr returns the address the bridge server is bound to. When the bridge was
+// started with a port of 0, this reflects the OS-assigned ephemeral port.
+func (b *WSBridge) Addr() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.addr
 }
 
 // Stop shuts down the WebSocket server and closes connections.
@@ -122,6 +149,14 @@ func (b *WSBridge) Stop() {
 
 	if b.server != nil {
 		_ = b.server.Close()
+		b.server = nil
+	}
+
+	// Close the listener explicitly in case the serve goroutine hasn't yet
+	// started tracking it (server.Close only closes tracked listeners).
+	if b.listener != nil {
+		_ = b.listener.Close()
+		b.listener = nil
 	}
 
 	// Cancel all pending requests

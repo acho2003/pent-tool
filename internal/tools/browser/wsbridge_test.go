@@ -114,13 +114,13 @@ func TestBridge_SendCommand_Roundtrip(t *testing.T) {
 	resetBridge()
 	b := GetBridge()
 	b.mu.Lock()
-	b.addr = "127.0.0.1:38402"
+	b.addr = "127.0.0.1:0"
 	b.mu.Unlock()
 	b.Start()
 	defer func() { b.Stop(); resetBridge() }()
 
 	// Connect mock extension
-	conn := connectMockExtension(t, "127.0.0.1:38402")
+	conn := connectMockExtension(t, b.Addr())
 	defer conn.Close()
 
 	// Wait for connection to register
@@ -164,12 +164,12 @@ func TestBridge_SendCommand_Timeout(t *testing.T) {
 	resetBridge()
 	b := GetBridge()
 	b.mu.Lock()
-	b.addr = "127.0.0.1:38403"
+	b.addr = "127.0.0.1:0"
 	b.mu.Unlock()
 	b.Start()
 	defer func() { b.Stop(); resetBridge() }()
 
-	conn := connectMockExtension(t, "127.0.0.1:38403")
+	conn := connectMockExtension(t, b.Addr())
 	defer conn.Close()
 	time.Sleep(100 * time.Millisecond)
 
@@ -187,12 +187,12 @@ func TestBridge_ExtHello(t *testing.T) {
 	resetBridge()
 	b := GetBridge()
 	b.mu.Lock()
-	b.addr = "127.0.0.1:38404"
+	b.addr = "127.0.0.1:0"
 	b.mu.Unlock()
 	b.Start()
 	defer func() { b.Stop(); resetBridge() }()
 
-	conn := connectMockExtension(t, "127.0.0.1:38404")
+	conn := connectMockExtension(t, b.Addr())
 	defer conn.Close()
 
 	// Send ext_hello
@@ -219,12 +219,12 @@ func TestBridge_Keepalive(t *testing.T) {
 	resetBridge()
 	b := GetBridge()
 	b.mu.Lock()
-	b.addr = "127.0.0.1:38405"
+	b.addr = "127.0.0.1:0"
 	b.mu.Unlock()
 	b.Start()
 	defer func() { b.Stop(); resetBridge() }()
 
-	conn := connectMockExtension(t, "127.0.0.1:38405")
+	conn := connectMockExtension(t, b.Addr())
 	defer conn.Close()
 
 	// Send keepalive — should not crash
