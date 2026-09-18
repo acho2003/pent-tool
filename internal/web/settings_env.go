@@ -115,37 +115,36 @@ type llmSettingsRequest struct {
 var envSettingKeyRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 func allEnvSettingDefinitions() []envSettingDefinition {
-	autoInstallDefault := "false"
-	if os.Getuid() == 0 {
-		autoInstallDefault = "true"
-	}
 	return []envSettingDefinition{
-		{Key: "XALGORIX_LLM", Label: "LLM model", Category: "LLM", Description: "Provider-native model ID used by scans and post-scan chat.", Placeholder: "MiniMax-M3", InputType: "text"},
-		{Key: "XALGORIX_LLM_PROVIDER", Label: "LLM provider", Category: "LLM", Description: "Explicit provider ID used to route the selected model without adding a provider prefix to its model name.", Placeholder: "ollama", InputType: "text"},
-		{Key: "XALGORIX_API_KEY", Label: "LLM API key", Category: "LLM", Description: "Provider API key for the configured model.", Placeholder: "sk-...", InputType: "secret", Sensitive: true},
-		{Key: "XALGORIX_API_BASE", Label: "API base URL", Category: "LLM", Description: "Optional custom provider endpoint. Leave blank to use provider defaults.", Placeholder: "https://api.openai.com/v1", InputType: "url"},
-		{Key: "XALGORIX_LLM_PROFILE", Label: "Active LLM profile", Category: "LLM", Description: "Active credential pointer (\"<provider>:<profileId>\"). Set by the LLM Settings tab; takes precedence over XALGORIX_API_KEY/XALGORIX_LLM when present.", Placeholder: "openai:default", InputType: "text"},
-		{Key: "XALGORIX_REASONING_EFFORT", Label: "Reasoning effort", Category: "LLM", Description: "Reasoning depth for providers that support it.", DefaultValue: "high", InputType: "select", Options: []string{"none", "low", "medium", "high", "xhigh"}},
-		{Key: "XALGORIX_OLLAMA_COMPATIBLE", Label: "Ollama-compatible endpoint", Category: "LLM", Description: "Force Ollama reasoning semantics for a custom endpoint that does not use port 11434.", DefaultValue: "false", InputType: "boolean"},
-		{Key: "XALGORIX_LLM_MAX_RETRIES", Label: "LLM max retries", Category: "LLM", Description: "Retry count for transient LLM provider failures.", DefaultValue: "5", InputType: "number"},
-		{Key: "XALGORIX_MAX_OUTPUT_TOKENS", Label: "Max output tokens", Category: "LLM", Description: "Per-call completion cap (max_tokens). Reasoning models spend part of this on hidden thinking before a tool call, so a small provider default can truncate large calls. Clamped to a 1024 floor.", DefaultValue: "8192", InputType: "number"},
-		{Key: "XALGORIX_LLM_CONTEXT_WINDOW", Label: "LLM context window (tokens)", Category: "LLM", Description: "Total context window of your model, in tokens. Auto-compaction fires at a fraction of this (see compaction ratio) so the running context is only compacted when the window is genuinely filling up. Set to your model's real window (e.g. 1000000 for a 1M-token model). Default 128000.", DefaultValue: "128000", InputType: "number"},
-		{Key: "XALGORIX_CONTEXT_COMPACT_RATIO", Label: "Context compaction ratio", Category: "LLM", Description: "Fraction of the context window at which to auto-compact (0.5–0.9). Default 0.75 = compact at ~75% full. Compacting earlier discards useful working context and hurts output quality; going higher risks hitting the provider's hard limit first.", DefaultValue: "0.75", InputType: "number"},
-		{Key: "XALGORIX_CONTEXT_COMPACT_TOKENS", Label: "Context compaction budget (tokens, override)", Category: "LLM", Description: "Optional ABSOLUTE override for the compaction trigger. Leave at -1 (auto) to derive the trigger from the context window × ratio above. Set a positive token count to force a fixed budget instead. 0 disables auto-compaction. Default -1 (auto).", DefaultValue: "-1", InputType: "number"},
-		{Key: "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", Label: "Memory compressor timeout", Category: "LLM", Description: "Timeout in seconds for context compression.", DefaultValue: "30", InputType: "number"},
-		{Key: "XALGORIX_MAX_ITERATIONS", Label: "Max iterations", Category: "Runtime", Description: "Maximum agent iterations per scan. 0 means unlimited.", DefaultValue: "0", InputType: "number"},
-		{Key: "XALGORIX_MIN_ITERATIONS", Label: "Min iterations (testing floor)", Category: "Runtime", Description: "Minimum testing floor in iterations before the gatekeeper permits finish. Ensures deep probing (OAST, ReDoS, fuzzing) before concluding.", DefaultValue: "50", InputType: "number"},
-		{Key: "XALGORIX_MAX_FINISH_REJECTIONS", Label: "Max finish rejections", Category: "Runtime", Description: "Number of times the agent's finish call will be rejected by the gatekeeper before allowing a deadlock bypass, enforcing deeper testing coverage.", DefaultValue: "15", InputType: "number"},
-		{Key: "XALGORIX_MAX_TOOL_CALLS", Label: "Max tool calls (budget)", Category: "Runtime", Description: "Per-scan tool-call cap; the scan stops cleanly when reached (findings preserved). 0 = unlimited.", DefaultValue: "0", InputType: "number", RequiresRestart: true},
-		{Key: "XALGORIX_MAX_DURATION", Label: "Max duration seconds (budget)", Category: "Runtime", Description: "Per-scan wall-clock cap in seconds; the scan stops cleanly when reached. 0 = unlimited.", DefaultValue: "0", InputType: "number", RequiresRestart: true},
-		{Key: "XALGORIX_MAX_TOKENS", Label: "Max LLM tokens (budget)", Category: "Runtime", Description: "Per-scan total-token cap; the scan stops cleanly when reached. 0 = unlimited.", DefaultValue: "0", InputType: "number", RequiresRestart: true},
-		{Key: "XALGORIX_TARGET_AUTH", Label: "Target auth (authenticated scanning)", Category: "Runtime", Description: "Authenticated-session credentials for the target so the agent tests post-auth surface (IDOR/BOLA, privilege escalation, business logic). One 'Header-Name: value' per line or separated by ';'. e.g. 'Cookie: session=abc; Authorization: Bearer xyz'. Auto-applied to http_request.", Placeholder: "Cookie: session=...; Authorization: Bearer ...", InputType: "text", Sensitive: true, RequiresRestart: true},
-		{Key: "XALGORIX_SCAN_HEADERS", Label: "Scan headers (attribution)", Category: "Runtime", Description: "Identifying header(s) added to ALL target-facing scan traffic (agent HTTP client + httpx/nuclei via -H) so an authorized Xalgorix run is attributable in the target's logs and can be allow-listed by its WAF/SOC. Bug-bounty programs often require one, e.g. 'X-Bug-Bounty: <handle>'. One 'Header-Name: value' per entry, separated by ';'. Never attached to LLM APIs, notifications, or the dashboard.", Placeholder: "X-Bug-Bounty: ulises2k; X-Scan-ID: engagement-42", InputType: "text", RequiresRestart: true},
+		{Key: "XALGORIX_LLM", Label: "Report AI model", Category: "Report AI", Description: "Provider-native model ID used only after scanner attempts finish.", Placeholder: "gpt-5.1", InputType: "text"},
+		{Key: "XALGORIX_LLM_PROVIDER", Label: "Report AI provider", Category: "Report AI", Description: "Explicit provider ID used to route report-generation calls.", Placeholder: "openai", InputType: "text"},
+		{Key: "XALGORIX_API_KEY", Label: "Report AI API key", Category: "Report AI", Description: "Provider API key for report generation. Scans run without this value.", Placeholder: "sk-...", InputType: "secret", Sensitive: true},
+		{Key: "XALGORIX_API_BASE", Label: "Report AI base URL", Category: "Report AI", Description: "Optional custom provider endpoint for report generation.", Placeholder: "https://api.openai.com/v1", InputType: "url"},
+		{Key: "XALGORIX_LLM_PROFILE", Label: "Active Report AI profile", Category: "Report AI", Description: "Active credential pointer (\"<provider>:<profileId>\") for report generation.", Placeholder: "openai:default", InputType: "text"},
+		{Key: "XALGORIX_OLLAMA_COMPATIBLE", Label: "Ollama-compatible endpoint", Category: "Report AI", Description: "Force Ollama semantics for a custom report endpoint that does not use port 11434.", DefaultValue: "false", InputType: "boolean"},
+		{Key: "XALGORIX_LLM_MAX_RETRIES", Label: "Report AI max retries", Category: "Report AI", Description: "Retry count for transient report-provider failures.", DefaultValue: "5", InputType: "number"},
+		{Key: "XALGORIX_MAX_OUTPUT_TOKENS", Label: "Report AI output tokens", Category: "Report AI", Description: "Per-call completion cap for report generation. Clamped to a 1024 floor.", DefaultValue: "8192", InputType: "number"},
+
+		{Key: "XALGORIX_NUCLEI_PATH", Label: "Nuclei path", Category: "Scanners", Description: "Nuclei executable path.", DefaultValue: "nuclei", InputType: "path", RequiresRestart: true},
+		{Key: "XALGORIX_TRIVY_PATH", Label: "Trivy path", Category: "Scanners", Description: "Trivy executable path.", DefaultValue: "trivy", InputType: "path", RequiresRestart: true},
+		{Key: "XALGORIX_VULS_PATH", Label: "Vuls path", Category: "Scanners", Description: "Vuls executable path.", DefaultValue: "vuls", InputType: "path", RequiresRestart: true},
+		{Key: "XALGORIX_VULS_SSH_CONFIG", Label: "Vuls SSH config", Category: "Scanners", Description: "Operator-managed SSH config used to resolve Vuls aliases. Private key material is not stored in scan records.", Placeholder: "~/.ssh/config", InputType: "path", Sensitive: true, RequiresRestart: true},
+		{Key: "XALGORIX_ZAP_URL", Label: "ZAP API URL", Category: "Scanners", Description: "Internal authenticated OWASP ZAP API endpoint.", Placeholder: "http://zap:8080", InputType: "url", RequiresRestart: true},
+		{Key: "XALGORIX_ZAP_API_KEY", Label: "ZAP API key", Category: "Scanners", Description: "API key for the internal ZAP service.", InputType: "secret", Sensitive: true, RequiresRestart: true},
+		{Key: "XALGORIX_GVM_HOST", Label: "GMP host", Category: "Scanners", Description: "Greenbone GMP host.", Placeholder: "gvmd", InputType: "text", RequiresRestart: true},
+		{Key: "XALGORIX_GVM_PORT", Label: "GMP port", Category: "Scanners", Description: "Greenbone GMP TCP port.", DefaultValue: "9390", InputType: "number", RequiresRestart: true},
+		{Key: "XALGORIX_GVM_USERNAME", Label: "GMP username", Category: "Scanners", Description: "Greenbone GMP username.", InputType: "text", RequiresRestart: true},
+		{Key: "XALGORIX_GVM_PASSWORD", Label: "GMP password", Category: "Scanners", Description: "Greenbone GMP password.", InputType: "secret", Sensitive: true, RequiresRestart: true},
+		{Key: "XALGORIX_SCANNER_MAX_OUTPUT_BYTES", Label: "Scanner output bytes", Category: "Scanners", Description: "Per-scanner raw output cap. Truncation is recorded on the scanner run.", DefaultValue: "104857600", InputType: "number", RequiresRestart: true},
+		{Key: "XALGORIX_NUCLEI_TIMEOUT_SECONDS", Label: "Nuclei timeout", Category: "Scanners", Description: "Nuclei attempt timeout in seconds.", DefaultValue: "3600", InputType: "number", RequiresRestart: true},
+		{Key: "XALGORIX_ZAP_TIMEOUT_SECONDS", Label: "ZAP timeout", Category: "Scanners", Description: "ZAP attempt timeout in seconds.", DefaultValue: "7200", InputType: "number", RequiresRestart: true},
+		{Key: "XALGORIX_OPENVAS_TIMEOUT_SECONDS", Label: "OpenVAS timeout", Category: "Scanners", Description: "OpenVAS attempt timeout in seconds.", DefaultValue: "14400", InputType: "number", RequiresRestart: true},
+		{Key: "XALGORIX_TRIVY_TIMEOUT_SECONDS", Label: "Trivy timeout", Category: "Scanners", Description: "Trivy attempt timeout in seconds.", DefaultValue: "3600", InputType: "number", RequiresRestart: true},
+		{Key: "XALGORIX_VULS_TIMEOUT_SECONDS", Label: "Vuls timeout", Category: "Scanners", Description: "Vuls attempt timeout in seconds.", DefaultValue: "3600", InputType: "number", RequiresRestart: true},
+
+		{Key: "XALGORIX_TARGET_AUTH", Label: "Target auth", Category: "Runtime", Description: "Authenticated target headers applied deterministically to web scanners. One 'Header-Name: value' per line or separated by ';'.", Placeholder: "Cookie: session=...; Authorization: Bearer ...", InputType: "text", Sensitive: true, RequiresRestart: true},
+		{Key: "XALGORIX_SCAN_HEADERS", Label: "Scan headers", Category: "Runtime", Description: "Attribution headers added to target-facing scanner traffic. Never attached to Report AI APIs, notifications, or the dashboard.", Placeholder: "X-Bug-Bounty: handle; X-Scan-ID: engagement-42", InputType: "text", RequiresRestart: true},
 		{Key: "XALGORIX_SCAN_HEADERS_FILE", Label: "Scan headers file", Category: "Runtime", Description: "Path to a file of scan/attribution headers, one 'Name: value' per line ('#' comments and blank lines ignored). Merged with XALGORIX_SCAN_HEADERS; the inline value wins on a name clash.", Placeholder: "/path/to/scan-headers.txt", InputType: "path", RequiresRestart: true},
-		{Key: "XALGORIX_OOB_PUBLIC_URL", Label: "OOB callback URL", Category: "Runtime", Description: "Public address targets can reach for out-of-band verification of blind vulns (blind SSRF/RCE/XSS/XXE), e.g. https://oob.example.com. Enables the oob_callback tool. Leave blank to disable OOB.", Placeholder: "https://oob.example.com", InputType: "url", RequiresRestart: true},
-		{Key: "XALGORIX_OOB_PORT", Label: "OOB listener port", Category: "Runtime", Description: "Local port the OOB callback listener binds (0.0.0.0). Expose/reverse-proxy it to the OOB callback URL above.", Placeholder: "8888", InputType: "number", RequiresRestart: true},
-		{Key: "XALGORIX_SOURCE_REPO", Label: "Whitebox source (repo/path)", Category: "Runtime", Description: "Enable whitebox / source-assisted assessment. A Git URL (shallow-cloned) or a local directory path to the target's source. Activates the code_search tool and source→sink→exploit methodology — where RCE, injection, and secret-exposure bugs are found.", Placeholder: "https://github.com/org/app.git", InputType: "text", RequiresRestart: true},
-		{Key: "GEMINI_API_KEY", Label: "Gemini web-search key", Category: "LLM", Description: "Optional Gemini key for web search enrichment.", Placeholder: "AIza...", InputType: "secret", Sensitive: true},
 
 		{Key: "XALGORIX_DISCORD_WEBHOOK", Label: "Discord webhook", Category: "Notifications", Description: "Global Discord webhook used when a scan does not provide its own.", Placeholder: "https://discord.com/api/webhooks/...", InputType: "secret", Sensitive: true},
 		{Key: "XALGORIX_DISCORD_MIN_SEVERITY", Label: "Discord minimum severity", Category: "Notifications", Description: "Minimum severity sent to Discord.", InputType: "select", Options: []string{"", "info", "low", "medium", "high", "critical"}},
@@ -153,9 +152,6 @@ func allEnvSettingDefinitions() []envSettingDefinition {
 		{Key: "XALGORIX_TELEGRAM_BOT_TOKEN", Label: "Telegram bot token", Category: "Notifications", Description: "Bot token from @BotFather. Required to enable Telegram notifications.", Placeholder: "123456789:ABC-DEF...", InputType: "secret", Sensitive: true},
 		{Key: "XALGORIX_TELEGRAM_CHAT_ID", Label: "Telegram chat ID", Category: "Notifications", Description: "Target chat/channel ID. Numeric ID (e.g. -1001234567890) or @channelusername.", Placeholder: "-1001234567890", InputType: "text"},
 		{Key: "XALGORIX_TELEGRAM_MIN_SEVERITY", Label: "Telegram minimum severity", Category: "Notifications", Description: "Minimum severity sent to Telegram.", InputType: "select", Options: []string{"", "info", "low", "medium", "high", "critical"}},
-
-		{Key: "AGENTMAIL_POD", Label: "AgentMail pod", Category: "AgentMail", Description: "AgentMail pod identifier.", Placeholder: "am_us_pod_47", InputType: "text"},
-		{Key: "AGENTMAIL_API_KEY", Label: "AgentMail API key", Category: "AgentMail", Description: "AgentMail API key for inbound email triage.", Placeholder: "ak_...", InputType: "secret", Sensitive: true},
 
 		{Key: "XALGORIX_RATE_LIMIT_REQUESTS", Label: "Rate-limit requests", Category: "Rate limits", Description: "Requests allowed per dashboard rate-limit window.", DefaultValue: "60", InputType: "number"},
 		{Key: "XALGORIX_RATE_LIMIT_WINDOW", Label: "Rate-limit window", Category: "Rate limits", Description: "Rate-limit window in seconds.", DefaultValue: "60", InputType: "number"},
@@ -169,10 +165,6 @@ func allEnvSettingDefinitions() []envSettingDefinition {
 		{Key: "XALGORIX_TLS_SKIP_VERIFY", Label: "Skip TLS verification", Category: "Proxy", Description: "Allow insecure TLS verification for proxied/testing traffic.", DefaultValue: "false", InputType: "boolean"},
 
 		{Key: "XALGORIX_WORKSPACE", Label: "Workspace", Category: "Runtime", Description: "Workspace root for scan execution.", InputType: "path", RequiresRestart: true},
-		{Key: "XALGORIX_DISABLE_BROWSER", Label: "Disable browser", Category: "Runtime", Description: "Disable browser automation tools.", DefaultValue: "false", InputType: "boolean"},
-		{Key: "XALGORIX_BROWSER_PATH", Label: "Browser path", Category: "Runtime", Description: "Custom Chrome/Chromium executable path.", InputType: "path"},
-		{Key: "XALGORIX_ALLOW_AUTO_INSTALL", Label: "Allow auto-install", Category: "Runtime", Description: "Permit the agent to auto-install missing packages.", DefaultValue: autoInstallDefault, InputType: "boolean"},
-		{Key: "XALGORIX_AUTO_INSTALL_SUDO", Label: "Allow sudo auto-install", Category: "Runtime", Description: "Permit sudo-prefixed auto-installs.", DefaultValue: "false", InputType: "boolean"},
 		{Key: "XALGORIX_ALLOW_ABSOLUTE_FILEEDIT", Label: "Allow absolute file edits", Category: "Runtime", Description: "Allow file-edit tooling to write absolute paths.", DefaultValue: "false", InputType: "boolean"},
 
 		{Key: "XALGORIX_USERNAME", Label: "Dashboard username", Category: "Security", Description: "Dashboard login username.", InputType: "text", RequiresRestart: true},
@@ -207,7 +199,26 @@ func envDefinitionByKey() map[string]envSettingDefinition {
 	for _, def := range defs {
 		out[def.Key] = def
 	}
+	for _, def := range hiddenLegacyEnvSettingDefinitions() {
+		out[def.Key] = def
+	}
 	return out
+}
+
+func hiddenLegacyEnvSettingDefinitions() []envSettingDefinition {
+	return []envSettingDefinition{
+		{Key: "XALGORIX_REASONING_EFFORT", Label: "Reasoning effort", Category: "Legacy", DefaultValue: "high", InputType: "select", Options: []string{"none", "low", "medium", "high", "xhigh"}},
+		{Key: "XALGORIX_LLM_CONTEXT_WINDOW", Label: "LLM context window", Category: "Legacy", DefaultValue: "128000", InputType: "number"},
+		{Key: "XALGORIX_CONTEXT_COMPACT_RATIO", Label: "Context compaction ratio", Category: "Legacy", DefaultValue: "0.75", InputType: "number"},
+		{Key: "XALGORIX_CONTEXT_COMPACT_TOKENS", Label: "Context compaction tokens", Category: "Legacy", DefaultValue: "-1", InputType: "number"},
+		{Key: "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", Label: "Memory compressor timeout", Category: "Legacy", DefaultValue: "30", InputType: "number"},
+		{Key: "XALGORIX_MAX_ITERATIONS", Label: "Max iterations", Category: "Legacy", DefaultValue: "0", InputType: "number"},
+		{Key: "XALGORIX_MIN_ITERATIONS", Label: "Min iterations", Category: "Legacy", DefaultValue: "50", InputType: "number"},
+		{Key: "XALGORIX_MAX_FINISH_REJECTIONS", Label: "Max finish rejections", Category: "Legacy", DefaultValue: "15", InputType: "number"},
+		{Key: "GEMINI_API_KEY", Label: "Gemini API key", Category: "Legacy", InputType: "secret", Sensitive: true},
+		{Key: "AGENTMAIL_POD", Label: "AgentMail pod", Category: "Legacy", InputType: "text"},
+		{Key: "AGENTMAIL_API_KEY", Label: "AgentMail API key", Category: "Legacy", InputType: "secret", Sensitive: true},
+	}
 }
 
 func (s *Server) handleLLMSettings(w http.ResponseWriter, r *http.Request) {

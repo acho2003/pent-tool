@@ -40,6 +40,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/safe"
 	"github.com/xalgord/xalgorix/v4/internal/sandbox"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
 	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
@@ -220,9 +221,10 @@ func isDashboardReadPath(method, path string) bool {
 		"/api/status",
 		"/api/version",
 		"/api/scans",
+		"/api/findings",
+		"/api/findings/summary",
 		"/api/instances",
 		"/api/queue/status",
-		"/api/findings/summary",
 		"/api/legacy-import/status":
 		return true
 	default:
@@ -267,20 +269,23 @@ func logRecover(label string) {
 // ScanRequest is the JSON body for starting a scan.
 type ScanRequest struct {
 	Targets        []string `json:"targets"`
-	Instruction    string   `json:"instruction"`
-	ScanMode       string   `json:"scan_mode"`       // "single" or "wildcard"
-	Model          string   `json:"model"`           // e.g. "minimax/MiniMax-M3"
-	APIKey         string   `json:"api_key"`         // provider API key
-	APIBase        string   `json:"api_base"`        // provider API base URL
+	Instruction    string   `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
+	ScanMode       string   `json:"scan_mode"` // "single" or "wildcard"
+	Model          string   `json:"-"`
+	APIKey         string   `json:"-"`
+	APIBase        string   `json:"-"`
 	DiscordWebhook string   `json:"discord_webhook"` // Discord webhook URL
 	SeverityFilter []string `json:"severity_filter"` // e.g. ["critical", "high"]
-	Name           string   `json:"name"`            // user-defined scan name
-	SaveOnly       bool     `json:"save_only"`       // if true, save scan config without starting
-	Phases         []int    `json:"phases"`          // selected methodology phases (empty = all)
-	ReconMode      string   `json:"recon_mode"`      // active or passive reconnaissance
-	ScanIntensity  string   `json:"scan_intensity"`  // active or passive testing/scanning
-	CompanyName    string   `json:"company_name"`    // report branding: company name
-	LogoPath       string   `json:"logo_path"`       // report branding: logo file path
+	// Scanners selects which of scanner.OrderedNames run. Empty = all five.
+	// Deselected scanners still produce an explicit "skipped" run.
+	Scanners      []string `json:"scanners"`
+	Name          string   `json:"name"`      // user-defined scan name
+	SaveOnly      bool     `json:"save_only"` // if true, save scan config without starting
+	Phases        []int    `json:"-"`
+	ReconMode     string   `json:"-"`
+	ScanIntensity string   `json:"-"`
+	CompanyName   string   `json:"company_name"` // report branding: company name
+	LogoPath      string   `json:"logo_path"`    // report branding: logo file path
 	// TargetAuth carries per-scan authenticated-scanning material so the
 	// agent can exercise post-login attack surface. Format mirrors
 	// XALGORIX_TARGET_AUTH (see httpclient/sessionauth.go): a header/cookie
@@ -289,7 +294,7 @@ type ScanRequest struct {
 	// TargetAuthSecondary is a SECOND account's auth (same format as TargetAuth),
 	// surfaced to the agent to prove horizontal access-control flaws (IDOR/BOLA).
 	// Not auto-applied. Empty = single-account testing.
-	TargetAuthSecondary string `json:"target_auth_b"`
+	TargetAuthSecondary string `json:"-"`
 	// SourceRepo enables whitebox/source-assisted scanning. It is either a
 	// git clone URL or a local path; the agent clones/opens it at scan
 	// start and exposes it via the code_search tool. Empty = blackbox.
@@ -299,12 +304,12 @@ type ScanRequest struct {
 	//   "review"    — source review / SAST, no running target (Option 1).
 	//   "provision" — build & run the source locally, then DAST it (Option 2).
 	// Empty = normal target-driven scan (SourceRepo, if set, augments it).
-	CodeScan string `json:"code_scan"`
+	CodeScan string `json:"-"`
 	// ScanContext is a path to operator-supplied context artifact(s) — an
 	// OpenAPI/Swagger spec, HAR capture, or Postman collection (file or dir).
 	// The engine parses them into a seeded attack surface (real endpoints +
 	// params) and harvests any captured auth. Empty = crawl-only discovery.
-	ScanContext string `json:"scan_context"`
+	ScanContext string `json:"-"`
 	// ProviderProfile is the optional "<provider>:<profileId>" key
 	// (e.g. "openai:default") that selects an Auth_Profile from
 	// Profile_Store for this scan. When set on a request from an
@@ -314,7 +319,9 @@ type ScanRequest struct {
 	// used. Ad-hoc Model/APIKey/APIBase fields still take precedence
 	// per Requirement 11.4.
 	// Validates: Requirements 11.1, 11.2, 11.5.
-	ProviderProfile string `json:"provider_profile,omitempty"`
+	ProviderProfile string           `json:"-"`
+	Artifact        scanner.Artifact `json:"artifact,omitempty"`
+	VulsSSHHost     string           `json:"vuls_ssh_host,omitempty"`
 	// Internal fields — `json:"-"` makes them un-settable from the wire.
 	// Critical: a client must not be able to set InstanceID to spoof
 	// broadcasts to another scan, or set IsResume to bypass the resume
@@ -360,6 +367,9 @@ type WSEvent struct {
 	SubTargetTotal int               `json:"sub_target_total,omitempty"` // total subdomains for current wildcard target
 	ParentTarget   string            `json:"parent_target,omitempty"`    // parent domain for subdomain scans
 	CurrentPhase   int               `json:"current_phase,omitempty"`    // inferred active methodology phase
+	Scanner        string            `json:"scanner,omitempty"`
+	Stream         string            `json:"stream,omitempty"`
+	Sequence       int64             `json:"sequence,omitempty"`
 }
 
 // VulnSummary is a simplified vulnerability for the UI.
@@ -401,6 +411,7 @@ type SubScanSummary struct {
 
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
+	SchemaVersion            int              `json:"schema_version,omitempty"`
 	ID                       string           `json:"id"`
 	InstanceID               string           `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
 	Name                     string           `json:"name,omitempty"`        // user-defined scan name
@@ -413,6 +424,7 @@ type ScanRecord struct {
 	ScanMode                 string           `json:"scan_mode,omitempty"`                  // single, wildcard, dast
 	Instruction              string           `json:"instruction,omitempty"`                // custom scan instructions
 	SeverityFilter           []string         `json:"severity_filter,omitempty"`            // severity filter for scan
+	Scanners                 []string         `json:"scanners,omitempty"`                   // selected scanners (empty = whole pipeline)
 	DiscordWebhook           string           `json:"discord_webhook,omitempty"`            // discord notification webhook
 	DiscordWebhookConfigured bool             `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
 	TelegramConfigured       bool             `json:"telegram_configured,omitempty"`        // true when global Telegram notifications are configured (token never exposed)
@@ -432,35 +444,43 @@ type ScanRecord struct {
 	SubScanCompleted         int              `json:"sub_scan_completed,omitempty"`
 	SubScanRunning           int              `json:"sub_scan_running,omitempty"`
 	SubScanRemaining         int              `json:"sub_scan_remaining,omitempty"`
+	ScannerRuns              []scanner.Run    `json:"scanner_runs,omitempty"`
+	Artifact                 scanner.Artifact `json:"artifact,omitempty"`
+	VulsSSHHost              string           `json:"vuls_ssh_host,omitempty"`
+	ReportMode               string           `json:"report_mode,omitempty"`
+	ReportGeneratedAt        string           `json:"report_generated_at,omitempty"`
 }
 
 // QueueState persists scan queue state for recovery after restart
 type QueueState struct {
-	InstanceID            string   `json:"instance_id,omitempty"`
-	Targets               []string `json:"targets"`
-	CurrentIdx            int      `json:"current_idx"`
-	Instruction           string   `json:"instruction"`
-	ScanMode              string   `json:"scan_mode"`
-	StartedAt             string   `json:"started_at"`
-	Active                bool     `json:"active"`
-	Name                  string   `json:"name,omitempty"`
-	SeverityFilter        []string `json:"severity_filter,omitempty"`
-	Phases                []int    `json:"phases,omitempty"`
-	ReconMode             string   `json:"recon_mode,omitempty"`
-	ScanIntensity         string   `json:"scan_intensity,omitempty"`
-	CompanyName           string   `json:"company_name,omitempty"`
-	LogoPath              string   `json:"logo_path,omitempty"`
-	DiscordWebhook        string   `json:"discord_webhook,omitempty"`
-	Paused                bool     `json:"paused,omitempty"`
-	ActiveTarget          string   `json:"active_target,omitempty"`
-	ActiveScanDir         string   `json:"active_scan_dir,omitempty"`
-	ActiveScanID          string   `json:"active_scan_id,omitempty"`
-	WildcardActiveTarget  string   `json:"wildcard_active_target,omitempty"`
-	WildcardActiveScanDir string   `json:"wildcard_active_scan_dir,omitempty"`
-	WildcardActiveScanID  string   `json:"wildcard_active_scan_id,omitempty"`
-	WildcardDiscoveryDone bool     `json:"wildcard_discovery_done,omitempty"`
-	WildcardSubdomains    []string `json:"wildcard_subdomains,omitempty"`
-	WildcardSubIndex      int      `json:"wildcard_sub_index,omitempty"`
+	InstanceID            string           `json:"instance_id,omitempty"`
+	Targets               []string         `json:"targets"`
+	CurrentIdx            int              `json:"current_idx"`
+	Instruction           string           `json:"instruction"`
+	ScanMode              string           `json:"scan_mode"`
+	StartedAt             string           `json:"started_at"`
+	Active                bool             `json:"active"`
+	Name                  string           `json:"name,omitempty"`
+	SeverityFilter        []string         `json:"severity_filter,omitempty"`
+	Scanners              []string         `json:"scanners,omitempty"`
+	Phases                []int            `json:"phases,omitempty"`
+	ReconMode             string           `json:"recon_mode,omitempty"`
+	ScanIntensity         string           `json:"scan_intensity,omitempty"`
+	CompanyName           string           `json:"company_name,omitempty"`
+	LogoPath              string           `json:"logo_path,omitempty"`
+	DiscordWebhook        string           `json:"discord_webhook,omitempty"`
+	Paused                bool             `json:"paused,omitempty"`
+	ActiveTarget          string           `json:"active_target,omitempty"`
+	ActiveScanDir         string           `json:"active_scan_dir,omitempty"`
+	ActiveScanID          string           `json:"active_scan_id,omitempty"`
+	WildcardActiveTarget  string           `json:"wildcard_active_target,omitempty"`
+	WildcardActiveScanDir string           `json:"wildcard_active_scan_dir,omitempty"`
+	WildcardActiveScanID  string           `json:"wildcard_active_scan_id,omitempty"`
+	WildcardDiscoveryDone bool             `json:"wildcard_discovery_done,omitempty"`
+	WildcardSubdomains    []string         `json:"wildcard_subdomains,omitempty"`
+	WildcardSubIndex      int              `json:"wildcard_sub_index,omitempty"`
+	Artifact              scanner.Artifact `json:"artifact,omitempty"`
+	VulsSSHHost           string           `json:"vuls_ssh_host,omitempty"`
 }
 
 // ScanInstance represents a running or completed scan instance.
@@ -480,6 +500,7 @@ type ScanInstance struct {
 	ScanMode       string   `json:"scan_mode"`
 	Instruction    string   `json:"instruction,omitempty"`     // custom scan instructions for restart
 	SeverityFilter []string `json:"severity_filter,omitempty"` // severity filter for restart
+	Scanners       []string `json:"scanners,omitempty"`        // selected scanners for restart (empty = all)
 	Phases         []int    `json:"phases,omitempty"`          // selected methodology phases (empty = all)
 	ReconMode      string   `json:"recon_mode,omitempty"`      // active or passive reconnaissance
 	ScanIntensity  string   `json:"scan_intensity,omitempty"`  // active or passive testing/scanning
@@ -492,12 +513,15 @@ type ScanInstance struct {
 	// on-disk instance record or exposed via the API. Survives save→start
 	// within the running process; a process restart drops them (the operator
 	// re-enters auth), which is the safe default for secrets.
-	TargetAuth          string        `json:"-"`
-	TargetAuthSecondary string        `json:"-"`
-	SourceRepo          string        `json:"-"`
-	ScanContext         string        `json:"-"`
-	Vulns               []VulnSummary `json:"vulns,omitempty"`
-	CurrentPhase        int           `json:"current_phase,omitempty"`
+	TargetAuth          string           `json:"-"`
+	TargetAuthSecondary string           `json:"-"`
+	SourceRepo          string           `json:"-"`
+	ScanContext         string           `json:"-"`
+	Vulns               []VulnSummary    `json:"vulns,omitempty"`
+	CurrentPhase        int              `json:"current_phase,omitempty"`
+	ScannerRuns         []scanner.Run    `json:"scanner_runs,omitempty"`
+	Artifact            scanner.Artifact `json:"artifact,omitempty"`
+	VulsSSHHost         string           `json:"vuls_ssh_host,omitempty"`
 	agent               *agent.Agent
 	cancel              context.CancelFunc
 	scanDir             string
@@ -549,7 +573,6 @@ var dashboardRoutes = []string{
 	"/api/stop",
 	"/api/restart",
 	"/api/status",
-	"/api/findings/summary",
 	"/api/legacy-import/status",
 	"/api/scans",
 	"/api/scans/",
@@ -557,14 +580,15 @@ var dashboardRoutes = []string{
 	"/api/schedules",
 	"/api/schedules/",
 	"/api/upload-targets",
-	"/api/upload-instructions",
 	"/api/upload-logo",
 	"/api/upload-context",
-	"/api/upload-source",
+	"/api/findings",
+	"/api/findings/summary",
 	"/uploads/logos/",
 	"/api/report/",
+	"/api/reports/",
+	"/api/scanners/status",
 	"/api/settings/rate-limit",
-	"/api/settings/agentmail",
 	"/api/settings/llm",
 	"/api/settings/llm/keys",
 	"/api/settings/llm/test-route",
@@ -573,10 +597,8 @@ var dashboardRoutes = []string{
 	"/api/queue/resume",
 	"/api/queue/clear",
 	"/api/version",
-	"/api/stop-notify",
 	"/api/instances",
 	"/api/instances/",
-	"/api/chat",
 
 	// Dashboard auth (login/logout/status). Distinct from the new
 	// /api/auth/profiles namespace below.
@@ -955,11 +977,13 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/restart", s.handleRestart)
 	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/findings/summary", s.handleFindingsSummary)
-	mux.HandleFunc("/api/findings", s.handleFindingsList)
 	mux.HandleFunc("/api/legacy-import/status", s.handleLegacyImportStatus)
 	mux.HandleFunc("/api/scans", s.handleListScans)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/output/") || strings.HasSuffix(r.URL.Path, "/artifact") {
+			s.handleScannerOutput(w, r)
+			return
+		}
 		if strings.Contains(r.URL.Path, "/vulns/") && r.Method == http.MethodDelete {
 			s.handleDeleteVuln(w, r)
 			return
@@ -974,17 +998,22 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/schedules", s.handleSchedules)
 	mux.HandleFunc("/api/schedules/", s.handleScheduleDetail)
 	mux.HandleFunc("/api/upload-targets", s.handleUploadTargets)
-	mux.HandleFunc("/api/upload-instructions", s.handleUploadInstructions)
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
 	mux.HandleFunc("/api/upload-context", s.handleUploadContext)
-	mux.HandleFunc("/api/upload-source", s.handleUploadSource)
+	// Findings surface (read-only). Handlers exist independently of the
+	// /api/scans/ dispatcher; register them explicitly so the SPA's
+	// findings table + severity summary resolve to real JSON instead of
+	// falling through to the static catch-all.
+	mux.HandleFunc("/api/findings", s.handleFindingsList)
+	mux.HandleFunc("/api/findings/summary", s.handleFindingsSummary)
 	// Serve uploaded logos
 	logosDir := filepath.Join(s.dataDir, "logos")
 	_ = os.MkdirAll(logosDir, 0700)
 	mux.Handle("/uploads/logos/", http.StripPrefix("/uploads/logos/", http.FileServer(http.Dir(logosDir))))
 	mux.HandleFunc("/api/report/", s.handleDownloadReport)
+	mux.HandleFunc("/api/reports/", s.handleReportAction)
+	mux.HandleFunc("/api/scanners/status", s.handleScannerStatus)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
-	mux.HandleFunc("/api/settings/agentmail", s.handleAgentMailSettings)
 	mux.HandleFunc("/api/settings/llm", s.handleLLMSettings)
 	mux.HandleFunc("/api/settings/llm/keys", s.handleProviderKeys)
 	mux.HandleFunc("/api/settings/llm/test-route", s.handleTestRoute)
@@ -993,11 +1022,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/queue/resume", s.handleQueueResume)
 	mux.HandleFunc("/api/queue/clear", s.handleQueueClear)
 	mux.HandleFunc("/api/version", s.handleVersion)
-	mux.HandleFunc("/api/stop-notify", s.handleStopNotify)
 	mux.HandleFunc("/api/instances", s.handleInstances)
 	mux.HandleFunc("/api/instances/", s.handleInstanceAction)
-
-	mux.HandleFunc("/api/chat", s.handleChat)
 
 	// Auth routes (these are public — authMiddleware skips them)
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
@@ -1444,18 +1470,53 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Code-first scans: the subject is source (SourceRepo), not a live URL.
-	// "review" needs no target; "provision" synthesizes a loopback target the
-	// agent stands the app up on. resolveCodeScan validates and, on success,
-	// sets req.Targets / req.codeScanMode / req.allowLoopbackPorts.
-	isCodeScan, codeErr := s.resolveCodeScan(&req)
-	if codeErr != "" {
-		http.Error(w, codeErr, http.StatusBadRequest)
+	// Schema v2 accepts "dast" only as a compatibility alias. Source inputs
+	// are deterministic Trivy artifacts; arbitrary AI build/provision mode is
+	// intentionally unsupported.
+	if req.ScanMode == "dast" {
+		req.ScanMode = "single"
+	}
+	if req.ScanMode == "" {
+		req.ScanMode = "single"
+	}
+	if req.ScanMode != "single" && req.ScanMode != "wildcard" {
+		http.Error(w, "scan_mode must be single or wildcard", http.StatusBadRequest)
 		return
+	}
+	selectedScanners, err := scanner.NormalizeScanners(req.Scanners)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Scanners = selectedScanners
+	if strings.TrimSpace(req.CodeScan) == "provision" {
+		http.Error(w, "code provisioning is no longer supported; submit artifact.kind and artifact.ref for Trivy", http.StatusBadRequest)
+		return
+	}
+	if req.Artifact.Ref == "" && strings.TrimSpace(req.SourceRepo) != "" {
+		req.Artifact.Ref = strings.TrimSpace(req.SourceRepo)
+		req.Artifact.Kind = "repository"
+		if !strings.Contains(req.Artifact.Ref, "://") {
+			req.Artifact.Kind = "filesystem"
+		}
+	}
+	if req.Artifact.Ref != "" {
+		req.Artifact.Kind = strings.ToLower(strings.TrimSpace(req.Artifact.Kind))
+		switch req.Artifact.Kind {
+		case "filesystem", "repository", "image", "sbom":
+		default:
+			http.Error(w, "artifact.kind must be filesystem, repository, image, or sbom", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(req.Targets) == 0 && req.Artifact.Ref != "" {
+		// Artifact-only scans still produce five explicit statuses: network
+		// scanners are not applicable to this synthetic target, while Trivy runs.
+		req.Targets = []string{"artifact://" + req.Artifact.Kind}
 	}
 
 	if len(req.Targets) == 0 {
-		http.Error(w, "targets required (or provide source_repo with code_scan=review|provision)", http.StatusBadRequest)
+		http.Error(w, "targets required (or provide artifact.kind and artifact.ref)", http.StatusBadRequest)
 		return
 	}
 	normalizeScanRequestActivity(&req)
@@ -1468,7 +1529,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	// target) proceed and the blocked entries are filtered downstream.
 	// Code scans are exempt: a "provision" target is a deliberate loopback
 	// address the scope guard allowlists for this scan only.
-	if !req.SaveOnly && !isCodeScan {
+	if !req.SaveOnly && req.Artifact.Ref == "" {
 		allBlocked := true
 		for _, t := range req.Targets {
 			if strings.TrimSpace(t) == "" {
@@ -1494,43 +1555,9 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// R11.6 precondition check: if the request names a
-	// provider_profile, fail fast with HTTP 400 BEFORE spawning a
-	// scan goroutine. Other resolver errors are intentionally NOT
-	// surfaced here — they're either transient (file lock contention
-	// during a concurrent profile edit) or downstream concerns the
-	// LLM client's own resolver will report when it actually runs
-	// the request. This guard exists solely so a misspelled profile
-	// id never produces a "started" instance the operator then has
-	// to clean up.
-	if _, err := s.resolveScanCredentials(r.Context(), req, s.cfg); err != nil {
-		if errors.Is(err, errUnknownProviderProfile) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		// Non-sentinel resolver error (typically a transient
-		// flock contention or a profile race-deleted between
-		// the dashboard's profile-list fetch and the scan
-		// submission). M8: log so the error is visible at
-		// triage time rather than being silently swallowed; the
-		// LLM client's own resolver will surface a follow-up
-		// envelope at first chat call.
-		log.Printf("scan: precondition resolveScanCredentials returned non-sentinel error: %v", err)
-		// fall through — surface the error only when it is the
-		// canonical R11.6 sentinel.
-	}
-
-	// Apply LLM provider settings from web UI securely using a copy
-	scanCfg := *s.cfg // shallow copy
-	if req.Model != "" {
-		scanCfg.LLM = req.Model
-	}
-	if req.APIKey != "" {
-		scanCfg.APIKey = req.APIKey
-	}
-	if req.APIBase != "" {
-		scanCfg.APIBase = req.APIBase
-	}
+	// Scanner execution never resolves or copies model/provider credentials.
+	// Report AI reads the server's Report AI settings only after all attempts.
+	scanCfg := *s.cfg
 
 	// Save-only mode: create a persistent scan config without starting execution
 	if req.SaveOnly {
@@ -1545,6 +1572,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			ScanMode:       req.ScanMode,
 			Instruction:    req.Instruction,
 			SeverityFilter: req.SeverityFilter,
+			Scanners:       req.Scanners,
 			Phases:         req.Phases,
 			ReconMode:      req.ReconMode,
 			ScanIntensity:  req.ScanIntensity,
@@ -1558,9 +1586,10 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			TargetAuthSecondary: req.TargetAuthSecondary,
 			SourceRepo:          req.SourceRepo,
 			ScanContext:         req.ScanContext,
+			Artifact:            req.Artifact,
+			VulsSSHHost:         req.VulsSSHHost,
+			ScannerRuns:         nil,
 		}
-		chatCfg := scanCfg
-		inst.chatCfg = &chatCfg
 		s.instancesMu.Lock()
 		s.instances[instanceID] = inst
 		s.instancesMu.Unlock()
@@ -1572,6 +1601,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[ERROR] failed to create saved-target dir %s: %v", savedDir, err)
 		} else {
 			rec := &ScanRecord{
+				SchemaVersion:            scanner.SchemaVersion,
 				ID:                       instanceID,
 				Name:                     req.Name,
 				Target:                   targetStr,
@@ -1580,6 +1610,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 				ScanMode:                 req.ScanMode,
 				Instruction:              req.Instruction,
 				SeverityFilter:           req.SeverityFilter,
+				Scanners:                 append([]string(nil), req.Scanners...),
 				Phases:                   req.Phases,
 				ReconMode:                req.ReconMode,
 				ScanIntensity:            req.ScanIntensity,
@@ -1589,6 +1620,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 				DiscordWebhook:           req.DiscordWebhook,
 				DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
 				TelegramConfigured:       s.telegramConfigured(),
+				Artifact:                 req.Artifact,
+				VulsSSHHost:              req.VulsSSHHost,
 			}
 			s.saveScanRecordTo(rec, savedDir)
 		}
@@ -2071,6 +2104,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 			ScanMode:       inst.ScanMode,
 			Instruction:    inst.Instruction,
 			SeverityFilter: append([]string(nil), inst.SeverityFilter...),
+			Scanners:       append([]string(nil), inst.Scanners...),
 			Phases:         inst.Phases,
 			ReconMode:      inst.ReconMode,
 			ScanIntensity:  inst.ScanIntensity,
@@ -2313,6 +2347,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		instruction := inst.Instruction
 		scanMode := inst.ScanMode
 		severityFilter := inst.SeverityFilter
+		selectedScanners := append([]string(nil), inst.Scanners...)
 		discordWebhook := inst.DiscordWebhook
 		phases := inst.Phases
 		reconMode := inst.ReconMode
@@ -2332,6 +2367,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			Instruction:         instruction,
 			ScanMode:            scanMode,
 			SeverityFilter:      severityFilter,
+			Scanners:            selectedScanners,
 			DiscordWebhook:      discordWebhook,
 			Name:                instName,
 			Phases:              phases,
@@ -2373,6 +2409,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			Instruction:         inst.Instruction,
 			ScanMode:            inst.ScanMode,
 			SeverityFilter:      inst.SeverityFilter,
+			Scanners:            append([]string(nil), inst.Scanners...),
 			DiscordWebhook:      inst.DiscordWebhook,
 			Name:                inst.Name,
 			Phases:              inst.Phases,
@@ -2506,6 +2543,7 @@ type scanSession struct {
 	name               string
 	userInstruction    string
 	severityFilter     []string
+	scanners           []string // selected scanners (empty = whole pipeline)
 	discordWebhook     string
 	discoveryMode      bool
 	genReport          bool
@@ -2524,6 +2562,9 @@ type scanSession struct {
 	scanContext        string               // per-scan attack-surface context path (see ScanRequest.ScanContext)
 	codeScanMode       agent.CodeScanMode   // code-first scan mode (see ScanRequest.CodeScan)
 	allowLoopbackPorts []int                // per-scan loopback allowlist for provision scans (scope-guard exemption)
+	ctx                context.Context
+	artifact           scanner.Artifact
+	vulsSSHHost        string
 
 	// llmClient, when non-nil, is a pre-built llm.Client carrying
 	// a per-scan endpoint resolver derived from the originating
@@ -2762,7 +2803,19 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	reportPath, err := s.generateReportAt(rec, scanDir)
+	var reportPath string
+	var err error
+	if rec.SchemaVersion >= scanner.SchemaVersion {
+		reportPath = filepath.Join(scanDir, fmt.Sprintf("xalgorix_report_%s.pdf", rec.ID))
+		if info, statErr := os.Stat(reportPath); statErr != nil || !info.Mode().IsRegular() {
+			reportPath = s.generateScannerReport(rec, scanDir, rec.InstanceID)
+			if reportPath == "" {
+				err = fmt.Errorf("scanner report generation failed")
+			}
+		}
+	} else {
+		reportPath, err = s.generateReportAt(rec, scanDir)
+	}
 	if err != nil {
 		log.Printf("Report generation error: %v", err)
 		fallbackPath := filepath.Join(scanDir, fmt.Sprintf("xalgorix_report_%s.pdf", scanID))
@@ -2972,6 +3025,7 @@ func (s *Server) handleQueueStatus(w http.ResponseWriter, r *http.Request) {
 			"paused":                    state.Paused,
 			"name":                      state.Name,
 			"severity_filter":           state.SeverityFilter,
+			"scanners":                  state.Scanners,
 			"phases":                    state.Phases,
 			"recon_mode":                normalizeActivityMode(state.ReconMode),
 			"scan_intensity":            normalizeActivityMode(state.ScanIntensity),

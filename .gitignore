@@ -65,3 +65,6 @@ webui/.turbo/
 .kiro/
 node_modules
 research/
+
+# Cover-snapshot failure dump written by internal/reporting tests on drift.
+internal/reporting/testdata/cover.actual.pdf

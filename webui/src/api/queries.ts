@@ -135,25 +135,10 @@ export function useInstanceEvents(id?: string) {
   });
 }
 
-export function useQueueStatus() {
-  return useQuery({
-    queryKey: qk.queue,
-    queryFn: api.queueStatus,
-    refetchInterval: 10000,
-  });
-}
-
 export function useRateLimit() {
   return useQuery({
     queryKey: qk.rateLimit,
     queryFn: api.rateLimit,
-  });
-}
-
-export function useAgentMail() {
-  return useQuery({
-    queryKey: qk.agentMail,
-    queryFn: api.agentMail,
   });
 }
 
@@ -255,17 +240,6 @@ export function useUpdateRateLimit() {
   });
 }
 
-export function useUpdateAgentMail() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.updateAgentMail,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.agentMail });
-      qc.invalidateQueries({ queryKey: qk.environmentSettings });
-    },
-  });
-}
-
 export function useUpdateLLMSettings() {
   const qc = useQueryClient();
   return useMutation({
@@ -291,25 +265,6 @@ export function useUpdateEnvironmentSettings() {
       qc.invalidateQueries({ queryKey: qk.version });
       qc.invalidateQueries({ queryKey: qk.instances });
     },
-  });
-}
-
-export function useQueueResume() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.queueResume,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.queue });
-      qc.invalidateQueries({ queryKey: qk.instances });
-    },
-  });
-}
-
-export function useQueueClear() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.queueClear,
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.queue }),
   });
 }
 
@@ -424,17 +379,6 @@ export function useDiscoverProviderModels() {
 // legacy-migrate mutation. Profile CRUD is the only state-changing
 // surface left.
 // ---------------------------------------------------------------------------
-
-export function useCreateAPIKeyProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.createAPIKeyProfile,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.authProfiles });
-      qc.invalidateQueries({ queryKey: qk.llmSettings });
-    },
-  });
-}
 
 export function useOAuthStart() {
   // No cache invalidation: the start handshake is an out-of-band

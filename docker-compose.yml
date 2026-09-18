@@ -1,52 +1,62 @@
-# Xalgorix — one-command run. Publishes the dashboard on http://localhost:9137
-# and persists all data (scans, reports, and settings) to a named volume.
-#
-#   docker compose up -d
-#   docker compose logs -f      # shows the generated admin password on first run
-#
-# You do NOT need an LLM key to start — the dashboard launches without one and
-# you can configure the model + API key under Settings → LLM (it persists to the
-# volume). Set the env vars below only if you'd rather bake them in.
+include:
+  - compose.greenbone.yaml
+
 services:
   xalgorix:
-    image: xalgord/xalgorix:latest
-    # Or build locally instead of pulling:  build: .
-    #
-    # Full host-like permissions so the engine's toolset behaves as it does when
-    # run natively as root. Docker's DEFAULT sandbox drops capabilities
-    # (e.g. NET_ADMIN) and applies a seccomp/AppArmor filter, which breaks
-    # low-level tools: iptables/route/interface changes, ARP-spoof/MITM
-    # (ettercap/bettercap), tun/tap VPNs, ptrace-based debuggers (gdb/strace),
-    # masscan interface tuning, and tools that create their own namespaces.
-    #
-    # NOTE: an image cannot grant itself these — they MUST be set at run time.
-    # This compose file is the recommended launch path precisely so you get them
-    # by default with no extra flags. The container is meant to be a disposable,
-    # network-isolated scanning sandbox running as root; privileged mode is the
-    # intended posture. Never expose the dashboard publicly without auth.
+    # Build the checked-out source instead of pulling the historical amd64-only
+    # release image. This lets Docker Desktop produce a native arm64 image on
+    # Apple Silicon while retaining the same service name for deployments.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: xalgorix:local
+    pull_policy: build
     privileged: true
-    # ── Prefer least-privilege instead of `privileged: true`? Comment the line
-    #    above and uncomment this targeted set (covers the pentest toolset while
-    #    stopping short of full device access):
-    # cap_add:
-    #   - NET_ADMIN      # iptables/nftables, routes, interfaces, ARP/MITM, VPN
-    #   - NET_RAW        # raw sockets / SYN scans (in Docker's default set too)
-    #   - SYS_PTRACE     # gdb / strace / debug attach
-    # security_opt:
-    #   - seccomp=unconfined     # allow mount/unshare/bpf/perf_event_open/keyctl
-    #   - apparmor=unconfined
     ports:
-      - "9137:9137"
-    # Uncomment to bake in credentials / LLM (all optional). If you omit the
-    # login, a random admin password is generated and printed to the logs on
-    # first start. The LLM can be set here or under Settings → LLM.
-    # environment:
-    #   XALGORIX_USERNAME: admin
-    #   XALGORIX_PASSWORD: change-me-please
-    #   XALGORIX_LLM: minimax/MiniMax-M3
-    #   XALGORIX_API_KEY: your_provider_api_key
+      - "127.0.0.1:9137:9137"
     volumes:
       - xalgorix-data:/data
+      - ${HOME}/.codex/auth.json:/root/.codex/auth.json:ro
+      - gvmd_socket_vol:/run/gvmd:ro
+    environment:
+      XALGORIX_ZAP_URL: http://zap:8080
+      XALGORIX_ZAP_API_KEY: ${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
+      XALGORIX_GVM_SOCKET: /run/gvmd/gvmd.sock
+      XALGORIX_GVM_USERNAME: ${XALGORIX_GVM_USERNAME:-admin}
+      XALGORIX_GVM_PASSWORD: ${XALGORIX_GVM_PASSWORD:-admin}
+    depends_on:
+      zap:
+        condition: service_healthy
+      gvmd:
+        condition: service_started
+      ospd-openvas:
+        condition: service_started
+    restart: unless-stopped
+
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    command:
+      - zap.sh
+      - -daemon
+      - -host
+      - 0.0.0.0
+      - -port
+      - "8080"
+      - -config
+      - api.addrs.addr.name=.*
+      - -config
+      - api.addrs.addr.regex=true
+      - -config
+      - api.key=${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
+    # No shared volume: the engine drives ZAP entirely over its HTTP API and
+    # pulls the JSON report back through it, so ZAP never reads or writes the
+    # scan directory.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/JSON/core/view/version/?apikey=${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     restart: unless-stopped
 
 volumes:

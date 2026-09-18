@@ -1,0 +1,19 @@
+FROM vxcontrol/kali-linux:latest
+
+COPY build/xalgorix /usr/local/bin/xalgorix
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/xalgorix /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /data
+
+ENV XALGORIX_BIND=0.0.0.0 \
+    XALGORIX_DATA_DIR=/data \
+    XALGORIX_BROWSER_PATH=/usr/bin/chromium \
+	XALGORIX_ALLOW_AUTO_INSTALL=0 \
+    XALGORIX_NO_AUTO_UPDATE=1
+
+VOLUME ["/data"]
+EXPOSE 9137
+
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["--web"]

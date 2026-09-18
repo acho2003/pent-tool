@@ -25,9 +25,9 @@ const (
 
 // handleUploadSource accepts a .zip archive of a codebase, extracts it safely
 // under <dataDir>/sources/<slug>/, and returns the ABSOLUTE path of the
-// extracted root. The caller passes that path back as ScanRequest.source_repo
-// (with code_scan=review|provision) so the engine can scan uploaded code with
-// no git URL and no live target — the frictionless "scan my code" entry point.
+// extracted root. The caller can pass that path back as a Trivy filesystem or
+// repository artifact so the deterministic scanner pipeline can inspect code
+// with no git URL and no live target.
 func (s *Server) handleUploadSource(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)

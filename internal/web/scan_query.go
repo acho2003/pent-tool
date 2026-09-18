@@ -325,6 +325,7 @@ func (s *Server) scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 	copy(vulns, inst.Vulns)
 	phases := append([]int(nil), inst.Phases...)
 	severityFilter := append([]string(nil), inst.SeverityFilter...)
+	selectedScanners := append([]string(nil), inst.Scanners...)
 
 	return &ScanRecord{
 		ID:                       inst.ID,
@@ -339,6 +340,7 @@ func (s *Server) scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 		ScanMode:                 inst.ScanMode,
 		Instruction:              inst.Instruction,
 		SeverityFilter:           severityFilter,
+		Scanners:                 selectedScanners,
 		DiscordWebhook:           inst.DiscordWebhook,
 		DiscordWebhookConfigured: inst.DiscordWebhook != "",
 		TelegramConfigured:       s.telegramConfigured(),
@@ -747,6 +749,7 @@ func (s *Server) rebuildInstancesFromDisk() {
 			ScanMode:       entry.rec.ScanMode,
 			Instruction:    entry.rec.Instruction,
 			SeverityFilter: entry.rec.SeverityFilter,
+			Scanners:       entry.rec.Scanners,
 			Phases:         entry.rec.Phases,
 			ReconMode:      entry.rec.ReconMode,
 			ScanIntensity:  entry.rec.ScanIntensity,

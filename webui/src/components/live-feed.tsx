@@ -9,57 +9,28 @@ import { EmptyState } from "./states";
 
 export type FeedFilter =
   | "all"
-  | "tools"
-  | "findings"
+  | "scanners"
   | "errors"
-  | "agent"
-  | "http"
-  | "llm";
+  | "reports";
 
 const FILTERS: { key: FeedFilter; label: string }[] = [
   { key: "all", label: "All" },
-  { key: "tools", label: "Tools" },
-  { key: "findings", label: "Findings" },
+  { key: "scanners", label: "Scanners" },
   { key: "errors", label: "Errors" },
-  { key: "agent", label: "Agent" },
-  { key: "http", label: "HTTP" },
-  { key: "llm", label: "LLM" },
+  { key: "reports", label: "Reports" },
 ];
 
 function matchFilter(e: FeedEvent, f: FeedFilter): boolean {
   const t = e.type || "";
-  if (t === "thinking" || t === "thought") return false;
+  if (t === "thinking" || t === "thought" || t === "agent" || t === "llm") return false;
   if (f === "all") return true;
   switch (f) {
-    case "tools":
-      return (
-        t === "tool_call" ||
-        t === "tool_result" ||
-        t === "tool_output" ||
-        t === "tool_error" ||
-        !!e.tool_name
-      );
-    case "findings":
-      return (
-        t === "vuln" ||
-        t === "vuln_found" ||
-        t === "vulns" ||
-        (Array.isArray(e.vulns) && e.vulns.length > 0)
-      );
+	case "scanners":
+	  return t.startsWith("scanner_");
     case "errors":
-      return t === "error" || !!e.error;
-    case "agent":
-      return (
-        t === "agent" ||
-        t === "thought" ||
-        t === "decision" ||
-        t === "message" ||
-        t === "phase"
-      );
-    case "http":
-      return t === "http" || t === "request" || t === "response";
-    case "llm":
-      return t === "llm" || t === "token" || t === "llm_output";
+	  return t === "error" || t === "scanner_failed" || !!e.error;
+	case "reports":
+	  return t.startsWith("report_");
     default:
       if (isInternalLLMInstruction(e.content || e.error || e.output)) {
         return false;

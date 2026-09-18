@@ -48,6 +48,23 @@ export interface WSEvent {
   sub_target_total?: number;
   parent_target?: string;
   current_phase?: number;
+  scanner?: string;
+  stream?: "stdout" | "stderr" | string;
+  sequence?: number;
+}
+
+// Fixed execution order of the deterministic pipeline. Mirrors
+// scanner.OrderedNames (internal/scanner/types.go); its length is the
+// number of attempts every scan produces.
+export const SCANNER_ORDER = ["nuclei", "zap", "openvas", "trivy", "vuls"] as const;
+
+export interface ScannerArtifact { kind: "filesystem" | "repository" | "image" | "sbom" | string; ref: string; }
+export interface ScannerRun {
+  scanner: "nuclei" | "zap" | "openvas" | "trivy" | "vuls" | string;
+  target: string;
+  status: "completed" | "failed" | "cancelled" | "not_applicable" | "skipped" | "running";
+  started_at?: string; finished_at?: string; exit_code?: number; reason?: string;
+  stdout_path?: string; stderr_path?: string; artifact_path?: string; checksum?: string; truncated?: boolean;
 }
 
 export interface ScanInstance {
@@ -66,6 +83,7 @@ export interface ScanInstance {
   scan_mode: string;
   instruction?: string;
   severity_filter?: string[];
+  scanners?: string[];
   phases?: number[];
   recon_mode?: "active" | "passive";
   scan_intensity?: "active" | "passive";
@@ -73,6 +91,9 @@ export interface ScanInstance {
   logo_path?: string;
   vulns?: VulnSummary[];
   current_phase?: number;
+  scanner_runs?: ScannerRun[];
+  artifact?: ScannerArtifact;
+  vuls_ssh_host?: string;
 }
 
 export interface SubScanSummary {
@@ -86,6 +107,7 @@ export interface SubScanSummary {
 }
 
 export interface ScanRecord {
+  schema_version?: number;
   id: string;
   instance_id?: string;
   name?: string;
@@ -98,6 +120,7 @@ export interface ScanRecord {
   scan_mode?: string;
   instruction?: string;
   severity_filter?: string[];
+  scanners?: string[];
   discord_webhook?: string;
   discord_webhook_configured?: boolean;
   telegram_configured?: boolean;
@@ -117,6 +140,11 @@ export interface ScanRecord {
   sub_scan_completed?: number;
   sub_scan_running?: number;
   sub_scan_remaining?: number;
+  scanner_runs?: ScannerRun[];
+  artifact?: ScannerArtifact;
+  vuls_ssh_host?: string;
+  report_mode?: "ai" | "deterministic_fallback" | string;
+  report_generated_at?: string;
 }
 
 export interface ScanListItem {
@@ -210,36 +238,22 @@ export interface AuthStatus {
 
 export interface ScanRequest {
   targets: string[];
-  instruction?: string;
   scan_mode?: string;
-  model?: string;
-  api_key?: string;
-  api_base?: string;
-  discord_webhook?: string;
-  severity_filter?: string[];
   name?: string;
   save_only?: boolean;
-  phases?: number[];
-  recon_mode?: "active" | "passive";
-  scan_intensity?: "active" | "passive";
   company_name?: string;
   logo_path?: string;
-  // Server-side path to an uploaded context artifact (OpenAPI/Swagger, HAR, or
-  // Postman collection). The engine parses it into a seeded attack surface and
-  // harvests any captured auth. Set via POST /api/upload-context.
-  scan_context?: string;
-  // Authenticated-session material applied automatically to http_request
-  // ("Cookie: …; Authorization: Bearer …"). Enables post-login testing.
   target_auth?: string;
-  // A SECOND account's auth (same format), surfaced to the agent to prove
-  // horizontal access-control flaws (IDOR/BOLA). Not auto-applied.
-  target_auth_b?: string;
-  // Optional "<provider>:<profileId>" key naming the AuthProfile to
-  // use for this scan. When unset the legacy / catalog-default path
-  // applies. Mirrors the Go ScanRequest.ProviderProfile field on
-  // /api/scan and is honored only for authenticated operators
-  // (Requirement 11.1, 11.5).
-  provider_profile?: string;
+  artifact?: ScannerArtifact;
+  vuls_ssh_host?: string;
+  // Restrict the post-scan report to findings at or above the selected
+  // severities. Empty/omitted = all severities. Accepted by the backend
+  // ScanRequest (`severity_filter`).
+  severity_filter?: string[];
+  // Restrict the run to these scanners (names from SCANNER_ORDER). Omitted or
+  // empty runs the whole pipeline; deselected scanners are recorded as
+  // "skipped" rather than omitted from the scan record.
+  scanners?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -379,12 +393,6 @@ export interface RateLimitSettings {
   window: number;
 }
 
-export interface AgentMailSettings {
-  pod: string;
-  apiKey: string;
-  hasApiKey: boolean;
-}
-
 export interface LLMSettings {
   model: string;
   apiBase: string;
@@ -495,21 +503,11 @@ export interface ScanSchedule {
   last_run?: string;
   enabled: boolean;
   targets: string[];
-  instruction?: string;
   scan_mode: string;
-  severity_filter?: string[];
-  phases?: number[];
-  recon_mode?: "active" | "passive";
-  scan_intensity?: "active" | "passive";
   company_name?: string;
   logo_path?: string;
-  discord_webhook?: string;
-  model?: string;
-  // Optional "<provider>:<profileId>" key naming the AuthProfile this
-  // schedule should run scans under (provider-catalog-and-oauth, R14.4).
-  // Mirrors ScanRequest.provider_profile; persisted on the schedule
-  // and re-applied on each trigger.
-  provider_profile?: string;
+  artifact?: ScannerArtifact;
+  vuls_ssh_host?: string;
 }
 
 // Response shape of GET /api/findings/summary. Polled every 10s by the

@@ -1,6 +1,7 @@
 .git
 .github
-build
+build/*
+!build/xalgorix
 tmp
 research
 docs

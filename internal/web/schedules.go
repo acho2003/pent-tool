@@ -2,12 +2,15 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
 // scheduleIDPattern validates schedule IDs to prevent path traversal.
@@ -36,8 +39,8 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if len(req.Targets) == 0 {
-			http.Error(w, "targets are required", http.StatusBadRequest)
+		if err := normalizeDeterministicSchedule(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if req.Name == "" {
@@ -108,6 +111,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			Instruction:    sch.Instruction,
 			ScanMode:       sch.ScanMode,
 			SeverityFilter: sch.SeverityFilter,
+			Scanners:       append([]string(nil), sch.Scanners...),
 			Phases:         sch.Phases,
 			ReconMode:      sch.ReconMode,
 			ScanIntensity:  sch.ScanIntensity,
@@ -115,13 +119,11 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			LogoPath:       sch.LogoPath,
 			DiscordWebhook: sch.DiscordWebhook,
 			Name:           sch.Name + " (Scheduled)",
-			Model:          sch.Model,
+			Artifact:       sch.Artifact,
+			VulsSSHHost:    sch.VulsSSHHost,
 		}
 
 		scanCfg := *s.cfg
-		if sch.Model != "" {
-			scanCfg.LLM = sch.Model
-		}
 		instanceID := randomSlug()
 
 		go s.runMultiScan(req, &scanCfg, instanceID)
@@ -149,8 +151,8 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if len(req.Targets) == 0 {
-			http.Error(w, "targets are required", http.StatusBadRequest)
+		if err := normalizeDeterministicSchedule(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		normalizeScheduleActivity(&req)
@@ -173,6 +175,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		sch.Instruction = req.Instruction
 		sch.ScanMode = req.ScanMode
 		sch.SeverityFilter = req.SeverityFilter
+		sch.Scanners = append([]string(nil), req.Scanners...)
 		sch.Phases = req.Phases
 		sch.ReconMode = req.ReconMode
 		sch.ScanIntensity = req.ScanIntensity
@@ -180,6 +183,8 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		sch.LogoPath = req.LogoPath
 		sch.DiscordWebhook = req.DiscordWebhook
 		sch.Model = req.Model
+		sch.Artifact = req.Artifact
+		sch.VulsSSHHost = req.VulsSSHHost
 
 		// If any timing field changed, or enabled transitioned false -> true, recalculate NextRun
 		if sch.timing() != oldTiming || (sch.Enabled && !oldEnabled) {
@@ -210,4 +215,33 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func normalizeDeterministicSchedule(sch *ScanSchedule) error {
+	if sch.ScanMode == "" || sch.ScanMode == "dast" || sch.ScanMode == "source" {
+		sch.ScanMode = "single"
+	}
+	if sch.ScanMode != "single" && sch.ScanMode != "wildcard" {
+		return fmt.Errorf("scan_mode must be single or wildcard")
+	}
+	if sch.Artifact.Ref != "" {
+		sch.Artifact.Kind = strings.ToLower(strings.TrimSpace(sch.Artifact.Kind))
+		switch sch.Artifact.Kind {
+		case "filesystem", "repository", "image", "sbom":
+		default:
+			return fmt.Errorf("artifact.kind must be filesystem, repository, image, or sbom")
+		}
+	}
+	if len(sch.Targets) == 0 && sch.Artifact.Ref != "" {
+		sch.Targets = []string{"artifact://" + sch.Artifact.Kind}
+	}
+	if len(sch.Targets) == 0 {
+		return fmt.Errorf("targets are required (or provide an artifact)")
+	}
+	selected, err := scanner.NormalizeScanners(sch.Scanners)
+	if err != nil {
+		return err
+	}
+	sch.Scanners = selected
+	return nil
 }

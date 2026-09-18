@@ -90,18 +90,19 @@ export default function LoginPage() {
         <div className="space-y-6">
           <div className="space-y-2">
             <h1 className="font-sans text-4xl font-semibold tracking-tight text-foreground text-balance">
-              The autonomous offensive AI platform.
+			  Deterministic multi-scanner security assessments.
             </h1>
             <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-              Continuous reconnaissance, multi-phase exploitation, and AI-driven triage — orchestrated from a single
+			  Nuclei, ZAP, OpenVAS, Trivy, and Vuls in a fixed pipeline, with optional report-only AI — managed from a single
               console.
             </p>
           </div>
-          <dl className="grid grid-cols-2 gap-6 border-t border-border pt-6">
-            <Stat label="Active scans" value="12" />
-            <Stat label="Findings (7d)" value="2,431" />
-            <Stat label="Mean time to detect" value="42s" />
-            <Stat label="Coverage" value="98.4%" />
+          <dl className="grid grid-cols-3 gap-6 border-t border-border pt-6">
+            <Stat label="Nuclei" value="01" />
+            <Stat label="ZAP" value="02" />
+            <Stat label="OpenVAS" value="03" />
+            <Stat label="Trivy" value="04" />
+            <Stat label="Vuls" value="05" />
           </dl>
         </div>
         <p className="text-xs text-muted-foreground">© Xalgorix · Internal use only</p>

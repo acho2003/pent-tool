@@ -18,6 +18,12 @@ func TestRouterWiringRoutesRegistered(t *testing.T) {
 	want := []string{
 		"/api/settings/llm/keys",
 		"/api/settings/llm/test-route",
+		// Findings + upload-context handlers exist but were previously
+		// never mounted, silently 404ing into the SPA catch-all. Lock in
+		// their registration so the regression cannot recur unnoticed.
+		"/api/findings",
+		"/api/findings/summary",
+		"/api/upload-context",
 	}
 	for _, pattern := range want {
 		found := false
@@ -146,7 +152,6 @@ func TestRouterWiringRouteListInvariants(t *testing.T) {
 		"/api/settings/llm",
 		"/api/settings/environment",
 		"/api/version",
-		"/api/chat",
 		"/api/auth/login",
 		"/api/auth/logout",
 		"/api/auth/status",

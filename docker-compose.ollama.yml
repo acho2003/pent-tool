@@ -1,0 +1,28 @@
+# Local Ollama configuration for Xalgorix.
+#
+# Start with:
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up -d
+#
+# Ollama runs on the macOS host so it can use Apple Silicon acceleration.
+# Xalgorix stays in its offensive-security container and reaches Ollama through
+# Docker Desktop's host gateway.
+services:
+  xalgorix:
+    image: xalgorix:ollama-local
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    platform: linux/arm64
+    environment:
+      XALGORIX_LLM_PROVIDER: ollama
+      XALGORIX_LLM: ollama/qwen3:8b
+      XALGORIX_API_BASE: http://host.docker.internal:11434/v1
+      # Harmless compatibility value for legacy configuration/status paths.
+      # Ollama itself does not require or validate this key.
+      XALGORIX_API_KEY: ollama
+      XALGORIX_OLLAMA_COMPATIBLE: "true"
+      XALGORIX_REASONING_EFFORT: high
+      XALGORIX_LLM_CONTEXT_WINDOW: "64000"
+      XALGORIX_MAX_OUTPUT_TOKENS: "8192"
+    extra_hosts:
+      - host.docker.internal:host-gateway

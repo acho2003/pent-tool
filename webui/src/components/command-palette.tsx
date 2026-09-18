@@ -3,13 +3,15 @@ import { Command } from "cmdk";
 import { useNavigate } from "react-router-dom";
 import { create } from "zustand";
 import {
+  AlertOctagon,
+  Clock,
   FileText,
   LayoutGrid,
   Plug,
   Plus,
   Radio,
+  Server,
   Settings,
-  ShieldAlert,
   Target,
 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -31,7 +33,9 @@ const NAV_ITEMS = [
   { label: "Overview", to: "/", icon: LayoutGrid },
   { label: "New Scan", to: "/scans/new", icon: Plus },
   { label: "Scans", to: "/scans", icon: Target },
-  { label: "Findings", to: "/findings", icon: ShieldAlert },
+  { label: "Findings", to: "/findings", icon: AlertOctagon },
+  { label: "Schedules", to: "/schedules", icon: Clock },
+  { label: "Instances", to: "/instances", icon: Server },
   { label: "Live Feed", to: "/live", icon: Radio },
   { label: "Reports", to: "/reports", icon: FileText },
   { label: "Integrations", to: "/integrations", icon: Plug },

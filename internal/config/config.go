@@ -37,6 +37,24 @@ type Config struct {
 	// budget so the full call fits. XALGORIX_MAX_OUTPUT_TOKENS, default 8192.
 	MaxOutputTokens int
 
+	NucleiPath            string
+	TrivyPath             string
+	VulsPath              string
+	VulsSSHConfigPath     string
+	ZAPURL                string
+	ZAPAPIKey             string
+	GVMHost               string
+	GVMPort               int
+	GVMSocket             string
+	GVMUsername           string
+	GVMPassword           string
+	ScannerMaxOutputBytes int64
+	NucleiTimeoutSec      int
+	ZAPTimeoutSec         int
+	OpenVASTimeoutSec     int
+	TrivyTimeoutSec       int
+	VulsTimeoutSec        int
+
 	// ContextCompactTokens is an OPTIONAL absolute override for the compaction
 	// trigger. When > 0, the agent auto-compacts older turns into a structured
 	// digest (+ saved notes) once the running message history is estimated to
@@ -309,20 +327,37 @@ func load() *Config {
 
 	cfg := &Config{
 		// LLM
-		LLM:                  envOr("XALGORIX_LLM", ""),
-		LLMProvider:          envOr("XALGORIX_LLM_PROVIDER", ""),
-		APIBase:              envOr("XALGORIX_API_BASE", ""),
-		APIKey:               envOr("XALGORIX_API_KEY", ""),
-		LLMProfile:           envOr("XALGORIX_LLM_PROFILE", ""),
-		ReasoningEffort:      envOr("XALGORIX_REASONING_EFFORT", "high"),
-		OllamaCompatible:     envOrBool("XALGORIX_OLLAMA_COMPATIBLE", false),
-		Temperature:          envOrFloatPtr("XALGORIX_TEMPERATURE", 0.2),
-		LLMMaxRetries:        envOrInt("XALGORIX_LLM_MAX_RETRIES", 5),
-		MaxOutputTokens:      envOrInt("XALGORIX_MAX_OUTPUT_TOKENS", 8192),
-		ContextCompactTokens: envOrInt("XALGORIX_CONTEXT_COMPACT_TOKENS", -1),
-		LLMContextWindow:     envOrInt("XALGORIX_LLM_CONTEXT_WINDOW", 128000),
-		ContextCompactRatio:  envOrFloat("XALGORIX_CONTEXT_COMPACT_RATIO", 0.75),
-		MemCompTimeout:       envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),
+		LLM:                   envOr("XALGORIX_LLM", ""),
+		LLMProvider:           envOr("XALGORIX_LLM_PROVIDER", ""),
+		APIBase:               envOr("XALGORIX_API_BASE", ""),
+		APIKey:                envOr("XALGORIX_API_KEY", ""),
+		LLMProfile:            envOr("XALGORIX_LLM_PROFILE", ""),
+		ReasoningEffort:       envOr("XALGORIX_REASONING_EFFORT", "high"),
+		OllamaCompatible:      envOrBool("XALGORIX_OLLAMA_COMPATIBLE", false),
+		Temperature:           envOrFloatPtr("XALGORIX_TEMPERATURE", 0.2),
+		LLMMaxRetries:         envOrInt("XALGORIX_LLM_MAX_RETRIES", 5),
+		MaxOutputTokens:       envOrInt("XALGORIX_MAX_OUTPUT_TOKENS", 8192),
+		ContextCompactTokens:  envOrInt("XALGORIX_CONTEXT_COMPACT_TOKENS", -1),
+		LLMContextWindow:      envOrInt("XALGORIX_LLM_CONTEXT_WINDOW", 128000),
+		ContextCompactRatio:   envOrFloat("XALGORIX_CONTEXT_COMPACT_RATIO", 0.75),
+		MemCompTimeout:        envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),
+		NucleiPath:            envOr("XALGORIX_NUCLEI_PATH", "nuclei"),
+		TrivyPath:             envOr("XALGORIX_TRIVY_PATH", "trivy"),
+		VulsPath:              envOr("XALGORIX_VULS_PATH", "vuls"),
+		VulsSSHConfigPath:     envOr("XALGORIX_VULS_SSH_CONFIG", filepath.Join(home, ".ssh", "config")),
+		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
+		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
+		GVMHost:               envOr("XALGORIX_GVM_HOST", ""),
+		GVMPort:               envOrInt("XALGORIX_GVM_PORT", 9390),
+		GVMSocket:             envOr("XALGORIX_GVM_SOCKET", ""),
+		GVMUsername:           envOr("XALGORIX_GVM_USERNAME", ""),
+		GVMPassword:           envOr("XALGORIX_GVM_PASSWORD", ""),
+		ScannerMaxOutputBytes: int64(envOrInt("XALGORIX_SCANNER_MAX_OUTPUT_BYTES", 100<<20)),
+		NucleiTimeoutSec:      envOrInt("XALGORIX_NUCLEI_TIMEOUT_SECONDS", 3600),
+		ZAPTimeoutSec:         envOrInt("XALGORIX_ZAP_TIMEOUT_SECONDS", 7200),
+		OpenVASTimeoutSec:     envOrInt("XALGORIX_OPENVAS_TIMEOUT_SECONDS", 14400),
+		TrivyTimeoutSec:       envOrInt("XALGORIX_TRIVY_TIMEOUT_SECONDS", 3600),
+		VulsTimeoutSec:        envOrInt("XALGORIX_VULS_TIMEOUT_SECONDS", 3600),
 
 		// Runtime
 		RuntimeBackend:      "native", // Always native in Go version
@@ -475,12 +510,6 @@ func (c *Config) Validate() error {
 	// into the user's working directory.
 	if c.DataDir == "" {
 		return fmt.Errorf("DataDir is empty — Data_Dir resolution failed; check XALGORIX_DATA_DIR or HOME and verify the binary can create ~/.xalgorix/data with mode 0o700")
-	}
-	if c.LLM == "" {
-		return fmt.Errorf("XALGORIX_LLM is required. Set it to a provider-native model ID such as 'gpt-5.4' or 'claude-sonnet-4-20250514'")
-	}
-	if c.APIKey == "" {
-		return fmt.Errorf("XALGORIX_API_KEY is required. Set it in ~/.xalgorix.env")
 	}
 	return nil
 }

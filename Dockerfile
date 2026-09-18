@@ -1,9 +1,9 @@
-# Xalgorix — AI autonomous penetration testing platform (Kali, batteries-included).
+# Xalgorix — deterministic security scanner pipeline.
 #
 # The runtime is based on Kali Linux and pulls in Kali's pentest metapackages,
 # so hundreds of offensive-security tools are preinstalled. On top of that every
-# package manager the agent uses (apt, go, cargo, pipx/pip, npm) is available at
-# runtime, so the LLM-driven terminal can still auto-install anything missing.
+# Nuclei, Trivy, and Vuls are baked into the image. Scanner execution never
+# installs software at runtime and never constructs commands with an LLM.
 #
 # It runs as ROOT on purpose: the engine only enables package auto-install for
 # uid 0 (internal/config: AllowAutoInstall defaults to os.Getuid()==0), and
@@ -34,8 +34,8 @@
 #
 # Then open http://127.0.0.1:9137
 #
-# amd64 image. The release BINARIES remain multi-arch (Linux amd64/arm64) via
-# the one-line installer.
+# The source image builds for the Docker builder's target architecture, including
+# Linux amd64 and arm64. Published historical releases may be amd64-only.
 
 # ── Stage 1: build the React web UI ──────────────────────────────────────────
 FROM node:22-bookworm-slim AS webui
@@ -71,13 +71,18 @@ ARG VERSION=docker
 RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/xalgorix ./cmd/xalgorix/
 
-# Latest versions of the Go tools the engine knows how to auto-install
-# (packageMap → goTools), into /go/bin. Best-effort per tool so one flaky
-# module never fails the image; anything missing stays runtime-installable.
+# Scanner clients required by the deterministic pipeline are mandatory image
+# build inputs. Optional legacy utilities remain best-effort below.
 ENV GOBIN=/go/bin
+# Trivy currently imports encoding/json/jsontext, which Go 1.26 exposes behind
+# the jsonv2 experiment. This is compiled into the binary, not a runtime scanner
+# setting.
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
+    && GOEXPERIMENT=jsonv2 go install -v github.com/aquasecurity/trivy/cmd/trivy@latest \
+    && GOEXPERIMENT=jsonv2 go install -v github.com/future-architect/vuls/cmd/vuls@latest
+
 RUN set -eux; \
     for pkg in \
-      github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
       github.com/projectdiscovery/httpx/cmd/httpx@latest \
       github.com/projectdiscovery/dnsx/cmd/dnsx@latest \
       github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
@@ -103,9 +108,9 @@ RUN set -eux; \
       github.com/haccer/subjack@latest \
       github.com/securego/gosec/v2/cmd/gosec@latest \
       github.com/zricethezav/gitleaks/v8@latest \
-    ; do go install -v "$pkg" || echo "WARN: go install $pkg failed (installable at runtime)"; done; \
+    ; do go install -v "$pkg" || echo "WARN: optional utility $pkg unavailable"; done; \
     CGO_ENABLED=1 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest \
-      || echo "WARN: naabu build failed (installable at runtime)"
+      || echo "WARN: optional naabu utility unavailable"
 
 # ── Stage 3: runtime — Kali Linux, full toolset, runs as root ────────────────
 FROM kalilinux/kali-rolling
@@ -113,10 +118,12 @@ FROM kalilinux/kali-rolling
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Kali metapackages = the extensive toolset. Recommends are left ON so the
-# metapackages pull their full tool set. Covers the web/app-pentest domains the
-# agent uses plus general coverage, and adds the package managers required for
-# runtime auto-install (go/cargo/pipx/npm) and Chromium for browser DAST.
-RUN apt-get update && apt-get install -y \
+# metapackages pull their full tool set. Use Kali's direct signed-repository
+# endpoint: the HTTP mirror redirector can select unreachable regional mirrors
+# during ARM image builds. Package managers remain available for operators,
+# while scanner runtime auto-install is disabled.
+RUN sed -i 's|http://http.kali.org/kali|http://kali.download/kali|g' /etc/apt/sources.list.d/kali.sources \
+    && apt-get update && apt-get install -y \
       kali-linux-headless \
       kali-tools-information-gathering \
       kali-tools-web \
@@ -174,9 +181,13 @@ RUN curl -sSLo /tmp/ferox.zip https://github.com/epi052/feroxbuster/releases/lat
     && rm -f /tmp/ferox.zip \
     || echo "WARN: feroxbuster prefetch failed (present via Kali/cargo)"
 
-# Python tools the engine auto-installs via pipx (best-effort at build). One per
-# tool so a single flaky package never fails the image; the rest stay
-# runtime-installable via the packageMap → pipx path.
+# Python tools installed at image build time. gvm-tools is kept for interactive
+# operator use only — the scanner pipeline speaks GMP natively (internal/scanner
+# /gmp.go) because gvm-tools refuses to run under uid 0, and this image runs as
+# root by design. Each tool is installed on its own so a single flaky package
+# never fails the image; the rest stay runtime-installable via the
+# packageMap → pipx path.
+RUN pipx install gvm-tools || pip3 install --break-system-packages gvm-tools
 RUN for p in scrapling semgrep bandit git-dumper arjun uro; do \
       pipx install "$p" || pip3 install --break-system-packages "$p" \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
@@ -227,7 +238,7 @@ RUN if [ -x /root/go/bin/httpx ]; then ln -sf /root/go/bin/httpx /usr/bin/httpx;
 ENV XALGORIX_BIND=0.0.0.0 \
     XALGORIX_BROWSER_PATH=/usr/bin/chromium \
     XALGORIX_DATA_DIR=/data \
-    XALGORIX_ALLOW_AUTO_INSTALL=1 \
+	XALGORIX_ALLOW_AUTO_INSTALL=0 \
     XALGORIX_NO_AUTO_UPDATE=1
 
 # Entrypoint generates dashboard credentials when none are supplied (the image

@@ -496,9 +496,8 @@ func Generate(scan *Scan, opts Options) (string, error) {
 	pdf.SetFont("Helvetica", "", 9)
 	setColor(white)
 	pdf.SetX(10)
-	pdf.MultiCell(190, 4.5, "Xalgorix follows a comprehensive 22-phase penetration testing methodology "+
-		"aligned with OWASP, PTES, and industry best practices. Each phase is executed by an autonomous AI agent "+
-		"with tool access to terminal, browser, and specialized security utilities.", "", "L", false)
+	pdf.MultiCell(190, 4.5, "Xalgorix executes a deterministic security assessment workflow using configured scanner output "+
+		"and preserved artifacts. Findings in this report are based on scanner-reported records and any available scanner evidence.", "", "L", false)
 	pdf.Ln(4)
 
 	// Determine which phases were executed
@@ -1143,13 +1142,13 @@ func Generate(scan *Scan, opts Options) (string, error) {
 	drawRect(10, pdf.GetY()+2, 50, 0.8, teal)
 	pdf.Ln(10)
 
-	disclaimer := `This penetration test was conducted by Xalgorix, an autonomous AI-powered security assessment tool. The findings in this report are based on automated testing and manual verification where possible.
+	disclaimer := `This penetration test was conducted by Xalgorix using deterministic scanner execution. The findings in this report are based on scanner-reported output and preserved native artifacts.
 
 IMPORTANT NOTICES:
 
 * Scope: This assessment was limited to the target systems explicitly listed in this report. Any systems or services outside the defined scope were not tested.
 
-* False Positives: While Xalgorix attempts to verify findings before reporting, some findings may require manual validation. We recommend validating all critical and high-severity findings before taking remediation actions.
+* False Positives: Scanner-reported findings may require manual validation. We recommend validating all critical and high-severity findings before taking remediation actions.
 
 * Limitations: Automated testing cannot discover all vulnerabilities. Manual testing, code review, and other complementary security activities are recommended for comprehensive security coverage.
 

@@ -1,4 +1,4 @@
-// Xalgorix — Autonomous AI Pentesting Engine
+// Xalgorix — deterministic security scanner pipeline
 package main
 
 import (
@@ -20,6 +20,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/proxy"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/scanheaders"
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 	"github.com/xalgord/xalgorix/v4/internal/tui"
 	"github.com/xalgord/xalgorix/v4/internal/web"
 )
@@ -223,9 +224,6 @@ func main() {
 	// Set web package version from main — single source of truth
 	web.Version = version
 
-	if args.model != "" {
-		cfg.LLM = args.model
-	}
 	if args.bind != "" {
 		cfg.BindAddr = args.bind
 	}
@@ -254,53 +252,58 @@ func main() {
 		return
 	}
 
-	// A code-first scan (--code-scan review|provision) makes the source the
-	// subject, so --target is not required — but --source (or
-	// XALGORIX_SOURCE_REPO) must supply the codebase.
-	codeScan := strings.ToLower(strings.TrimSpace(args.codeScan))
 	if args.source != "" {
 		cfg.SourceRepo = args.source
 	}
-	if codeScan != "" && strings.TrimSpace(cfg.SourceRepo) == "" {
-		fmt.Fprintf(os.Stderr, "Error: --code-scan requires --source <git URL or local path>\n\n")
+	if args.artifactKind != "" {
+		switch strings.ToLower(strings.TrimSpace(args.artifactKind)) {
+		case "filesystem", "repository", "image", "sbom":
+		default:
+			fmt.Fprintln(os.Stderr, "Error: --artifact-kind must be filesystem, repository, image, or sbom")
+			os.Exit(1)
+		}
+	}
+	if args.artifactKind != "" && strings.TrimSpace(cfg.SourceRepo) == "" {
+		fmt.Fprintln(os.Stderr, "Error: --artifact-kind requires --source")
 		os.Exit(1)
 	}
-
-	// CLI/TUI mode — a live target is required unless this is a code-first scan.
-	if len(args.targets) == 0 && codeScan == "" {
-		fmt.Fprintf(os.Stderr, "Error: at least one --target is required (or use --code-scan with --source, or --web for Web UI)\n\n")
+	if len(args.targets) == 0 && strings.TrimSpace(cfg.SourceRepo) == "" {
+		fmt.Fprintf(os.Stderr, "Error: at least one --target or --source artifact is required (or use --web for Web UI)\n\n")
 		printUsage()
 		os.Exit(1)
 	}
 
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %s\n\n", err)
-		fmt.Fprintf(os.Stderr, "Set your model:     export XALGORIX_LLM='minimax/MiniMax-M3'\n")
-		fmt.Fprintf(os.Stderr, "Set your API key:    export XALGORIX_API_KEY='sk-...'\n")
 		os.Exit(1)
 	}
 
 	// Default to CLI mode (no TUI)
-	tui.RunCLI(cfg, args.targets, args.instruction, codeScan)
+	selectedScanners, err := scanner.NormalizeScanners(args.scanners)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	tui.RunCLI(cfg, args.targets, args.artifactKind, args.vulsSSHHost, selectedScanners)
 }
 
 type cliArgs struct {
-	targets     []string
-	instruction string
-	headers     []string
-	model       string
-	source      string // --source: git URL or local path for code-first scans
-	codeScan    string // --code-scan: "review" or "provision"
-	bind        string
-	version     bool
-	update      bool
-	webUI       bool
-	port        int
-	start       bool
-	stop        bool
-	restart     bool
-	restartIdle bool
-	uninstall   bool
+	targets      []string
+	headers      []string
+	source       string // --source: Trivy repository/filesystem input
+	artifactKind string
+	vulsSSHHost  string
+	scanners     []string
+	bind         string
+	version      bool
+	update       bool
+	webUI        bool
+	port         int
+	start        bool
+	stop         bool
+	restart      bool
+	restartIdle  bool
+	uninstall    bool
 }
 
 func parseArgs() cliArgs {
@@ -314,11 +317,6 @@ func parseArgs() cliArgs {
 				i++
 				args.targets = append(args.targets, osArgs[i])
 			}
-		case "--instruction", "-i":
-			if i+1 < len(osArgs) {
-				i++
-				args.instruction = osArgs[i]
-			}
 		case "--header", "-H":
 			if i+1 < len(osArgs) {
 				i++
@@ -329,15 +327,20 @@ func parseArgs() cliArgs {
 				i++
 				args.source = osArgs[i]
 			}
-		case "--code-scan":
+		case "--artifact-kind":
 			if i+1 < len(osArgs) {
 				i++
-				args.codeScan = osArgs[i]
+				args.artifactKind = osArgs[i]
 			}
-		case "--model", "-m":
+		case "--vuls-ssh-host":
 			if i+1 < len(osArgs) {
 				i++
-				args.model = osArgs[i]
+				args.vulsSSHHost = osArgs[i]
+			}
+		case "--scanners":
+			if i+1 < len(osArgs) {
+				i++
+				args.scanners = append(args.scanners, strings.Split(osArgs[i], ",")...)
 			}
 		case "--port", "-p":
 			if i+1 < len(osArgs) {
@@ -376,16 +379,16 @@ func parseArgs() cliArgs {
 		default:
 			if strings.HasPrefix(osArgs[i], "--target=") {
 				args.targets = append(args.targets, strings.TrimPrefix(osArgs[i], "--target="))
-			} else if strings.HasPrefix(osArgs[i], "--instruction=") {
-				args.instruction = strings.TrimPrefix(osArgs[i], "--instruction=")
 			} else if strings.HasPrefix(osArgs[i], "--header=") {
 				args.headers = append(args.headers, strings.TrimPrefix(osArgs[i], "--header="))
 			} else if strings.HasPrefix(osArgs[i], "--source=") {
 				args.source = strings.TrimPrefix(osArgs[i], "--source=")
-			} else if strings.HasPrefix(osArgs[i], "--code-scan=") {
-				args.codeScan = strings.TrimPrefix(osArgs[i], "--code-scan=")
-			} else if strings.HasPrefix(osArgs[i], "--model=") {
-				args.model = strings.TrimPrefix(osArgs[i], "--model=")
+			} else if strings.HasPrefix(osArgs[i], "--artifact-kind=") {
+				args.artifactKind = strings.TrimPrefix(osArgs[i], "--artifact-kind=")
+			} else if strings.HasPrefix(osArgs[i], "--vuls-ssh-host=") {
+				args.vulsSSHHost = strings.TrimPrefix(osArgs[i], "--vuls-ssh-host=")
+			} else if strings.HasPrefix(osArgs[i], "--scanners=") {
+				args.scanners = append(args.scanners, strings.Split(strings.TrimPrefix(osArgs[i], "--scanners="), ",")...)
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				_, _ = fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
 			} else if strings.HasPrefix(osArgs[i], "--bind=") {
@@ -401,7 +404,7 @@ func printUsage() {
 	fmt.Print(tui.Banner)
 	fmt.Println()
 	fmt.Println()
-	fmt.Println("  Autonomous AI Pentesting Engine")
+	fmt.Println("  Deterministic Security Scanner Pipeline")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Printf("  xalgorix --web                  Start the Web UI (default port %d)\n", defaultWebPort)
@@ -422,12 +425,11 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("CLI Flags:")
 	fmt.Println("  -t, --target <url>        Target URL, IP, or local path (repeatable)")
-	fmt.Println("  -i, --instruction <text>  Custom instructions for the agent")
 	fmt.Println("  -H, --header <Name: value>  Identifying header on all target traffic (repeatable)")
-	fmt.Println("  -s, --source <repo|path>  Codebase to scan (git URL or local path)")
-	fmt.Println("      --code-scan <mode>    Code-first scan: 'review' (SAST, no target)")
-	fmt.Println("                            or 'provision' (build+run source, then DAST)")
-	fmt.Println("  -m, --model <name>        LLM model (overrides XALGORIX_LLM)")
+	fmt.Println("  -s, --source <repo|path>  Trivy repository or filesystem input")
+	fmt.Println("      --artifact-kind <kind> filesystem, repository, image, or sbom")
+	fmt.Println("      --vuls-ssh-host <alias> Operator-managed SSH config alias")
+	fmt.Println("      --scanners <list>     Comma-separated subset of " + strings.Join(scanner.OrderedNames, ",") + " (default: all)")
 	fmt.Println("  -v, --version             Show version")
 	fmt.Println("  -up, --update             Update to latest version")
 	fmt.Println("  --start                  Start as background service")
@@ -445,9 +447,8 @@ func printUsage() {
 	fmt.Println("  xalgorix --web")
 	fmt.Println("  xalgorix --web --port 8080")
 	fmt.Println("  xalgorix --target https://example.com")
-	fmt.Println("  xalgorix --target https://example.com --instruction \"Focus on auth\"")
-	fmt.Println("  xalgorix --source ./my-app --code-scan review")
-	fmt.Println("  xalgorix --source https://github.com/org/app.git --code-scan provision")
+	fmt.Println("  xalgorix --source ./my-app --artifact-kind filesystem")
+	fmt.Println("  xalgorix --target prod.example --vuls-ssh-host prod-web")
 	fmt.Println()
 	fmt.Println("Service Commands:")
 	fmt.Println("  xalgorix --start      Start Web UI in background")
@@ -556,7 +557,7 @@ func handleStart() {
 
 func serviceUnitContent(home, installPath string) string {
 	return fmt.Sprintf(`[Unit]
-Description=Xalgorix - Autonomous AI Pentesting Engine
+Description=Xalgorix - Deterministic Security Scanner Pipeline
 After=network.target
 
 [Service]

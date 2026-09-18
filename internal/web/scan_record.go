@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 )
 
@@ -34,6 +35,7 @@ func (s *Server) scanRecordForSession(sess *scanSession) *ScanRecord {
 
 func (s *Server) freshScanRecordForSession(sess *scanSession, startedAt string) *ScanRecord {
 	return &ScanRecord{
+		SchemaVersion:            scanner.SchemaVersion,
 		ID:                       sess.id,
 		InstanceID:               sess.instanceID,
 		Name:                     sess.name,
@@ -42,6 +44,7 @@ func (s *Server) freshScanRecordForSession(sess *scanSession, startedAt string) 
 		ScanMode:                 sess.scanMode,
 		Instruction:              sess.userInstruction,
 		SeverityFilter:           append([]string(nil), sess.severityFilter...),
+		Scanners:                 append([]string(nil), sess.scanners...),
 		DiscordWebhook:           sess.discordWebhook,
 		DiscordWebhookConfigured: sess.discordWebhook != "" || s.discordWebhook != "",
 		TelegramConfigured:       s.telegramConfigured(),
@@ -55,6 +58,8 @@ func (s *Server) freshScanRecordForSession(sess *scanSession, startedAt string) 
 		LogoPath:                 sess.logoPath,
 		Phases:                   append([]int(nil), sess.phases...),
 		CurrentPhase:             firstSelectedPhase(sess.phases),
+		Artifact:                 sess.artifact,
+		VulsSSHHost:              sess.vulsSSHHost,
 	}
 }
 
@@ -73,6 +78,7 @@ func (s *Server) refreshResumedScanRecord(rec *ScanRecord, sess *scanSession, fa
 		rec.Instruction = sess.userInstruction
 	}
 	rec.SeverityFilter = append([]string(nil), sess.severityFilter...)
+	rec.Scanners = append([]string(nil), sess.scanners...)
 	rec.DiscordWebhook = sess.discordWebhook
 	rec.DiscordWebhookConfigured = sess.discordWebhook != "" || s.discordWebhook != ""
 	rec.TelegramConfigured = s.telegramConfigured()
@@ -82,6 +88,11 @@ func (s *Server) refreshResumedScanRecord(rec *ScanRecord, sess *scanSession, fa
 		rec.StartedAt = fallbackStartedAt
 	}
 	rec.Status = "running"
+	if rec.SchemaVersion == 0 {
+		rec.SchemaVersion = scanner.SchemaVersion
+	}
+	rec.Artifact = sess.artifact
+	rec.VulsSSHHost = sess.vulsSSHHost
 	rec.FinishedAt = ""
 	rec.StopReason = ""
 	if rec.Events == nil {
@@ -234,6 +245,9 @@ func (s *Server) seedResumeInstanceFromRecord(inst *ScanInstance, req ScanReques
 	}
 	if len(rec.SeverityFilter) > 0 {
 		inst.SeverityFilter = append([]string(nil), rec.SeverityFilter...)
+	}
+	if len(rec.Scanners) > 0 {
+		inst.Scanners = append([]string(nil), rec.Scanners...)
 	}
 	if len(rec.Phases) > 0 {
 		inst.Phases = append([]int(nil), rec.Phases...)

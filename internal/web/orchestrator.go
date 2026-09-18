@@ -83,6 +83,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		ScanMode:            req.ScanMode,
 		Instruction:         req.Instruction,
 		SeverityFilter:      req.SeverityFilter,
+		Scanners:            append([]string(nil), req.Scanners...),
 		Phases:              req.Phases,
 		ReconMode:           req.ReconMode,
 		ScanIntensity:       req.ScanIntensity,
@@ -94,6 +95,8 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		TargetAuthSecondary: req.TargetAuthSecondary,
 		SourceRepo:          req.SourceRepo,
 		ScanContext:         req.ScanContext,
+		Artifact:            req.Artifact,
+		VulsSSHHost:         req.VulsSSHHost,
 	}
 	s.seedResumeInstanceFromRecord(instance, req)
 	chatCfg := *scanCfg
@@ -560,7 +563,7 @@ func subdomainTargetsFromRecord(rec *ScanRecord) []string {
 }
 
 // runSingleTarget handles a single-site mode scan for one target.
-func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
+func (s *Server) runSingleTarget(ctx context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
 	scanDir, resumed := s.scanDirForResume(req, target)
 	s.saveQueueState(idx, req, queueProgress{
 		ActiveTarget:  target,
@@ -599,6 +602,7 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 		name:               req.Name,
 		userInstruction:    req.Instruction,
 		severityFilter:     req.SeverityFilter,
+		scanners:           req.Scanners,
 		discordWebhook:     req.DiscordWebhook,
 		discoveryMode:      false,
 		genReport:          true,
@@ -614,7 +618,10 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 		targetAuthB:        req.TargetAuthSecondary,
 		sourceRepo:         req.SourceRepo,
 		scanContext:        req.ScanContext,
-		llmClient:          s.scanLLMClientForRequest(req, scanCfg),
+		llmClient:          nil,
+		ctx:                ctx,
+		artifact:           req.Artifact,
+		vulsSSHHost:        req.VulsSSHHost,
 	}
 	s.executeScanSession(sess)
 	if s.instanceInterrupted(req.InstanceID) {
@@ -631,7 +638,7 @@ func (s *Server) runSingleTarget(_ context.Context, scanCfg *config.Config, req 
 }
 
 // runDASTTarget handles a DAST mode scan for one target URL.
-func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
+func (s *Server) runDASTTarget(ctx context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
 	scanDir, resumed := s.scanDirForResume(req, target)
 	s.saveQueueState(idx, req, queueProgress{
 		ActiveTarget:  target,
@@ -671,6 +678,7 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 		name:               req.Name,
 		userInstruction:    req.Instruction,
 		severityFilter:     req.SeverityFilter,
+		scanners:           req.Scanners,
 		discordWebhook:     req.DiscordWebhook,
 		discoveryMode:      false,
 		genReport:          true,
@@ -686,7 +694,10 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 		targetAuthB:        req.TargetAuthSecondary,
 		sourceRepo:         req.SourceRepo,
 		scanContext:        req.ScanContext,
-		llmClient:          s.scanLLMClientForRequest(req, scanCfg),
+		llmClient:          nil,
+		ctx:                ctx,
+		artifact:           req.Artifact,
+		vulsSSHHost:        req.VulsSSHHost,
 	}
 	s.executeScanSession(sess)
 	if s.instanceInterrupted(req.InstanceID) {
@@ -703,7 +714,11 @@ func (s *Server) runDASTTarget(_ context.Context, scanCfg *config.Config, req Sc
 }
 
 // runWildcardTarget handles wildcard mode: Phase 1 subdomain discovery, then Phase 2 per-subdomain scanning.
-func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
+func (s *Server) runWildcardTarget(ctx context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
+	if deterministicScannerPipelineEnabled() {
+		s.runDeterministicWildcard(ctx, scanCfg, req, target, idx, total)
+		return
+	}
 	// ── Stable parent reporting context for vuln accumulation ──
 	// All subdomain sessions merge their vulns into this context.
 	// It persists across the entire wildcard scan and is cleaned up at the end.
@@ -782,6 +797,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 			name:               req.Name,
 			userInstruction:    req.Instruction,
 			severityFilter:     req.SeverityFilter,
+			scanners:           req.Scanners,
 			discordWebhook:     req.DiscordWebhook,
 			discoveryMode:      true,
 			genReport:          false,
@@ -798,7 +814,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 			targetAuthB:        req.TargetAuthSecondary,
 			sourceRepo:         req.SourceRepo,
 			scanContext:        req.ScanContext,
-			llmClient:          s.scanLLMClientForRequest(req, scanCfg),
+			llmClient:          nil,
 		}
 		s.executeScanSession(discoverySess)
 		if s.instanceInterrupted(req.InstanceID) {
@@ -1030,6 +1046,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				name:                 req.Name,
 				userInstruction:      req.Instruction,
 				severityFilter:       req.SeverityFilter,
+				scanners:             req.Scanners,
 				discordWebhook:       req.DiscordWebhook,
 				discoveryMode:        false,
 				genReport:            false,
@@ -1046,7 +1063,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 				targetAuthB:          req.TargetAuthSecondary,
 				sourceRepo:           req.SourceRepo,
 				scanContext:          req.ScanContext,
-				llmClient:            s.scanLLMClientForRequest(req, scanCfg),
+				llmClient:            nil,
 			}
 			s.executeScanSession(subSess)
 			if s.instanceInterrupted(req.InstanceID) {
@@ -1069,6 +1086,7 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 						ScanMode:                 "wildcard",
 						Instruction:              req.Instruction,
 						SeverityFilter:           append([]string(nil), req.SeverityFilter...),
+						Scanners:                 append([]string(nil), req.Scanners...),
 						DiscordWebhook:           req.DiscordWebhook,
 						DiscordWebhookConfigured: req.DiscordWebhook != "" || s.discordWebhook != "",
 						TelegramConfigured:       s.telegramConfigured(),
@@ -1161,6 +1179,11 @@ func (s *Server) runWildcardTarget(_ context.Context, scanCfg *config.Config, re
 	}
 	s.instancesMu.RUnlock()
 }
+
+// Kept as a function (rather than a feature flag) while legacy record helpers
+// remain compiled for backward-compatible reads. New wildcard execution is
+// unconditionally deterministic.
+func deterministicScannerPipelineEnabled() bool { return true }
 
 func commandRateForPolicy(policy scanctx.RequestRatePolicy) int {
 	if !policy.Enabled() {

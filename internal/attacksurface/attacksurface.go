@@ -3,11 +3,9 @@
 // deduplicated attack surface (endpoints + params + example bodies) plus any
 // authentication material found in real requests.
 //
-// This is the "informed black-box" lever: instead of blindly crawling, the
-// agent starts from the target's REAL endpoint/parameter surface and, when a
-// HAR/Postman capture includes a live session, an authenticated one. It mirrors
-// the "attach security context" capability of mature autonomous pentest
-// platforms and is the single biggest force-multiplier for black-box coverage.
+// This is the "informed black-box" lever: instead of only crawling, scanners
+// can start from the target's REAL endpoint/parameter surface and, when a
+// HAR/Postman capture includes a live session, an authenticated one.
 package attacksurface
 
 import (

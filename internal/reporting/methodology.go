@@ -2,8 +2,7 @@ package reporting
 
 // MethodologyPhaseNames maps each phase number in the Xalgorix 22-phase
 // methodology to its display name. The map is the single source of truth
-// consumed by both the PDF report and the autonomous-mode phase-filter
-// instruction builder in internal/web.
+// consumed by the legacy PDF report renderer and older scan records.
 var MethodologyPhaseNames = map[int]string{
 	1:  "Deep Reconnaissance & Attack Surface Mapping",
 	2:  "Manual Vulnerability Discovery",

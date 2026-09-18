@@ -24,12 +24,15 @@ func (s *Server) saveQueueState(idx int, req ScanRequest, progress ...queueProgr
 		Active:         true,
 		Name:           req.Name,
 		SeverityFilter: req.SeverityFilter,
+		Scanners:       req.Scanners,
 		Phases:         req.Phases,
 		ReconMode:      req.ReconMode,
 		ScanIntensity:  req.ScanIntensity,
 		CompanyName:    req.CompanyName,
 		LogoPath:       req.LogoPath,
 		DiscordWebhook: req.DiscordWebhook,
+		Artifact:       req.Artifact,
+		VulsSSHHost:    req.VulsSSHHost,
 	}
 	if len(progress) > 0 {
 		p := progress[0]
@@ -217,6 +220,7 @@ func scanRequestFromQueueState(state *QueueState, sourcePath string) ScanRequest
 		ResumeQueueStatePath: sourcePath,
 		Name:                 state.Name,
 		SeverityFilter:       append([]string(nil), state.SeverityFilter...),
+		Scanners:             append([]string(nil), state.Scanners...),
 		Phases:               append([]int(nil), state.Phases...),
 		ReconMode:            state.ReconMode,
 		ScanIntensity:        state.ScanIntensity,
@@ -233,6 +237,8 @@ func scanRequestFromQueueState(state *QueueState, sourcePath string) ScanRequest
 		ResumeSubIndex:       state.WildcardSubIndex,
 		ResumeDiscoveryDone:  state.WildcardDiscoveryDone,
 		ResumeOriginalTarget: state.CurrentIdx,
+		Artifact:             state.Artifact,
+		VulsSSHHost:          state.VulsSSHHost,
 	}
 }
 
@@ -277,6 +283,9 @@ func fillResumeRequestDefaults(req *ScanRequest, defaults ScanRequest) {
 	if len(req.SeverityFilter) == 0 {
 		req.SeverityFilter = append([]string(nil), defaults.SeverityFilter...)
 	}
+	if len(req.Scanners) == 0 {
+		req.Scanners = append([]string(nil), defaults.Scanners...)
+	}
 	if len(req.Phases) == 0 {
 		req.Phases = append([]int(nil), defaults.Phases...)
 	}
@@ -295,6 +304,12 @@ func fillResumeRequestDefaults(req *ScanRequest, defaults ScanRequest) {
 	if req.DiscordWebhook == "" {
 		req.DiscordWebhook = defaults.DiscordWebhook
 	}
+	if req.Artifact.Ref == "" {
+		req.Artifact = defaults.Artifact
+	}
+	if req.VulsSSHHost == "" {
+		req.VulsSSHHost = defaults.VulsSSHHost
+	}
 }
 
 func (s *Server) scanRequestForPausedInstance(instanceID string, inst *ScanInstance) (ScanRequest, bool, string) {
@@ -308,6 +323,7 @@ func (s *Server) scanRequestForPausedInstance(instanceID string, inst *ScanInsta
 		Instruction:    inst.Instruction,
 		ScanMode:       inst.ScanMode,
 		SeverityFilter: append([]string(nil), inst.SeverityFilter...),
+		Scanners:       append([]string(nil), inst.Scanners...),
 		DiscordWebhook: inst.DiscordWebhook,
 		Name:           inst.Name,
 		Phases:         append([]int(nil), inst.Phases...),

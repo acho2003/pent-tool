@@ -25,7 +25,6 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { ErrorState } from "@/components/states";
 import {
-  useAgentMail,
   useAuthProfiles,
   useDeleteAuthProfile,
   useDiscoverProviderModels,
@@ -34,7 +33,6 @@ import {
   useProviders,
   useRateLimit,
   useRefreshAuthProfile,
-  useUpdateAgentMail,
   useUpdateEnvironmentSettings,
   useUpdateLLMSettings,
   useUpdateRateLimit,
@@ -54,7 +52,6 @@ const settingsTabs = [
   "llm",
   "engagement",
   "notifications",
-  "email",
   "environment",
   "account",
 ] as const;
@@ -115,8 +112,6 @@ export default function SettingsPage() {
 
   const rate = useRateLimit();
   const updateRate = useUpdateRateLimit();
-  const mail = useAgentMail();
-  const updateMail = useUpdateAgentMail();
   const llm = useLLMSettings();
   const updateLLM = useUpdateLLMSettings();
   const environment = useEnvironmentSettings();
@@ -131,7 +126,6 @@ export default function SettingsPage() {
   const deleteProfile = useDeleteAuthProfile();
 
   const [rateForm, setRateForm] = useState({ requests: 10, window: 1 });
-  const [mailForm, setMailForm] = useState({ pod: "", apiKey: "" });
   const [llmForm, setLLMForm] = useState<LLMFormState>(emptyLLMForm);
   const [oauthOpen, setOAuthOpen] = useState(false);
   const [notificationForm, setNotificationForm] = useState({
@@ -146,7 +140,6 @@ export default function SettingsPage() {
   const [envFilter, setEnvFilter] = useState("");
   const [envRestartRequired, setEnvRestartRequired] = useState(false);
   const [savedRate, setSavedRate] = useState(false);
-  const [savedMail, setSavedMail] = useState(false);
   const [savedLLM, setSavedLLM] = useState(false);
   const [savedNotifications, setSavedNotifications] = useState(false);
   const [savedEnvironment, setSavedEnvironment] = useState(false);
@@ -160,14 +153,6 @@ export default function SettingsPage() {
     }
   }, [rate.data]);
 
-  useEffect(() => {
-    if (mail.data) {
-      setMailForm({
-        pod: mail.data.pod ?? "",
-        apiKey: mail.data.apiKey ?? "",
-      });
-    }
-  }, [mail.data]);
 
   useEffect(() => {
     if (!llm.data) return;
@@ -345,8 +330,13 @@ export default function SettingsPage() {
       reasoningEffort: llmForm.reasoningEffort,
       ollamaCompatible: llmForm.ollamaCompatible,
       llmMaxRetries: llmForm.llmMaxRetries,
-      memoryCompressorTimeout: llmForm.memoryCompressorTimeout,
-      maxIterations: llmForm.maxIterations,
+      // memoryCompressorTimeout, maxIterations, and geminiApiKey are
+      // agent-era settings with no control in this (deterministic
+      // report-AI) UI. Sending their defaults made every save clobber
+      // whatever the operator configured via the Environment tab / env
+      // file — so we omit them here and let the backend preserve the
+      // stored values (its POST handler only writes fields that are
+      // present and non-zero).
     };
     if (llmForm.authMethod === "api_key") {
       // Only send the apiKey when the user actually typed
@@ -375,9 +365,6 @@ export default function SettingsPage() {
     if (llmForm.authMethod === "none") {
       req.activeProfileKey = "";
     }
-    if (!isMaskedSettingValue(llmForm.geminiApiKey)) {
-      req.geminiApiKey = llmForm.geminiApiKey;
-    }
     await updateLLM.mutateAsync(req);
     setSavedLLM(true);
     setTimeout(() => setSavedLLM(false), 2500);
@@ -396,16 +383,15 @@ export default function SettingsPage() {
           Settings
         </h1>
         <p className="text-sm text-muted-foreground">
-          LLM provider, environment variables, integrations, and account access.
+		  Report AI provider, report limits, environment variables, and account access.
         </p>
       </header>
 
       <Tabs value={activeTab} onValueChange={changeTab}>
         <TabsList className="flex h-auto flex-wrap">
-          <TabsTrigger value="llm">LLM</TabsTrigger>
+		  <TabsTrigger value="llm">Report AI</TabsTrigger>
           <TabsTrigger value="engagement">Engagement</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
-          <TabsTrigger value="email">AgentMail</TabsTrigger>
           <TabsTrigger value="environment">Environment</TabsTrigger>
           <TabsTrigger value="account">Account</TabsTrigger>
         </TabsList>
@@ -415,7 +401,7 @@ export default function SettingsPage() {
             <Skeleton className="h-96" />
           ) : llm.error ? (
             <ErrorState
-              title="Failed to load LLM settings"
+			  title="Failed to load Report AI settings"
               description={llm.error instanceof Error ? llm.error.message : "Unknown error"}
               action={
                 <Button size="sm" variant="outline" onClick={() => llm.refetch()}>
@@ -426,9 +412,9 @@ export default function SettingsPage() {
           ) : (
             <Card>
               <CardHeader>
-                <CardTitle>LLM provider</CardTitle>
+				<CardTitle>Report AI provider</CardTitle>
                 <CardDescription>
-                  Saved to {llmForm.envFile || "~/.xalgorix.env"} and used by new scans.
+				  Used only after all scanner attempts finish. Scans do not require this configuration.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -804,11 +790,9 @@ export default function SettingsPage() {
 
                 <Separator />
 
-                {/* Bottom row: numeric tuning that applies regardless
-                    of provider / auth method. */}
-                <div className="grid gap-3 lg:grid-cols-4">
+				<div className="grid max-w-xs gap-3">
                   <div className="space-y-2">
-                    <Label htmlFor="llm-retries">LLM max retries</Label>
+					<Label htmlFor="llm-retries">Report generation retries</Label>
                     <Input
                       id="llm-retries"
                       type="number"
@@ -823,79 +807,7 @@ export default function SettingsPage() {
                       }
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="llm-memory-timeout">Memory timeout</Label>
-                    <Input
-                      id="llm-memory-timeout"
-                      type="number"
-                      min={5}
-                      max={600}
-                      value={llmForm.memoryCompressorTimeout}
-                      onChange={(e) =>
-                        setLLMForm({
-                          ...llmForm,
-                          memoryCompressorTimeout: Number(e.target.value),
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="llm-max-iterations">Max iterations</Label>
-                    <Input
-                      id="llm-max-iterations"
-                      type="number"
-                      min={0}
-                      max={1000}
-                      value={llmForm.maxIterations}
-                      onChange={(e) =>
-                        setLLMForm({
-                          ...llmForm,
-                          maxIterations: Number(e.target.value),
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="gemini-api-key">Gemini search key</Label>
-                    <Input
-                      id="gemini-api-key"
-                      value={llmForm.geminiApiKey}
-                      onChange={(e) =>
-                        setLLMForm({ ...llmForm, geminiApiKey: e.target.value })
-                      }
-                      placeholder={
-                        llmForm.hasGeminiApiKey ? "**** (saved)" : "AIza..."
-                      }
-                      className="font-mono"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>Reasoning effort</Label>
-                    <Select
-                      value={llmForm.reasoningEffort || "high"}
-                      onValueChange={(value) =>
-                        setLLMForm({ ...llmForm, reasoningEffort: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(ollamaMode
-                          ? ["none", "low", "medium", "high"]
-                          : ["low", "medium", "high", "xhigh"]
-                        ).map((value) => (
-                          <SelectItem key={value} value={value}>
-                            {value}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
+				</div>
 
                 <Separator />
                 <div className="flex items-center justify-end gap-3">
@@ -904,7 +816,7 @@ export default function SettingsPage() {
                     onClick={saveLLMSettings}
                     disabled={updateLLM.isPending || !llmForm.provider}
                   >
-                    {updateLLM.isPending ? "Saving..." : "Save LLM settings"}
+					{updateLLM.isPending ? "Saving..." : "Save Report AI settings"}
                   </Button>
                 </div>
               </CardContent>
@@ -1171,77 +1083,6 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
             </>
-          )}
-        </TabsContent>
-
-        <TabsContent value="email">
-          {mail.isLoading ? (
-            <Skeleton className="h-72" />
-          ) : mail.error ? (
-            <ErrorState
-              title="Failed to load AgentMail settings"
-              description={mail.error instanceof Error ? mail.error.message : "Unknown error"}
-              action={
-                <Button size="sm" variant="outline" onClick={() => mail.refetch()}>
-                  Retry
-                </Button>
-              }
-            />
-          ) : (
-            <Card>
-              <CardHeader>
-                <CardTitle>AgentMail</CardTitle>
-                <CardDescription>
-                  Inbound triage requires a configured pod and API key.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="space-y-2">
-                  <Label htmlFor="pod">Pod</Label>
-                  <Input
-                    id="pod"
-                    value={mailForm.pod}
-                    onChange={(e) =>
-                      setMailForm({ ...mailForm, pod: e.target.value })
-                    }
-                    placeholder="xalgorix-prod"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="apikey">API key</Label>
-                  <Input
-                    id="apikey"
-                    value={mailForm.apiKey}
-                    onChange={(e) =>
-                      setMailForm({ ...mailForm, apiKey: e.target.value })
-                    }
-                    placeholder={mail.data?.hasApiKey ? "**** (saved)" : "ak_..."}
-                    className="font-mono"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Leave masked value untouched to keep the existing key.
-                  </p>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-end gap-3">
-                  {savedMail && (
-                    <span className="text-xs text-success">Saved</span>
-                  )}
-                  <Button
-                    onClick={async () => {
-                      setSavedMail(false);
-                      await updateMail.mutateAsync(mailForm);
-                      setSavedMail(true);
-                      setTimeout(() => setSavedMail(false), 2500);
-                    }}
-                    disabled={updateMail.isPending}
-                  >
-                    {updateMail.isPending ? "Saving..." : "Save"}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
           )}
         </TabsContent>
 

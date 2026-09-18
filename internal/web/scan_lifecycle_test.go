@@ -265,7 +265,7 @@ func TestStopReqGlobalFlagDoesNotInterruptPendingScan(t *testing.T) {
 func TestHandleScanAckIsPendingNotStarted(t *testing.T) {
 	s := newTestServer(t, nil)
 
-	body := `{"targets":["https://example.com"],"scan_mode":"quick"}`
+	body := `{"targets":["https://example.com"],"scan_mode":"single"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()

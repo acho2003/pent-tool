@@ -16,6 +16,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/xalgord/xalgorix/v4/internal/safe"
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
 type ScanSchedule struct {
@@ -38,16 +39,20 @@ type ScanSchedule struct {
 	LastRun        time.Time `json:"last_run,omitempty"`
 	Enabled        bool      `json:"enabled"`
 	Targets        []string  `json:"targets"`
-	Instruction    string    `json:"instruction,omitempty"`
+	Instruction    string    `json:"-"`
 	ScanMode       string    `json:"scan_mode"`
-	SeverityFilter []string  `json:"severity_filter,omitempty"`
-	Phases         []int     `json:"phases,omitempty"`
-	ReconMode      string    `json:"recon_mode,omitempty"`
-	ScanIntensity  string    `json:"scan_intensity,omitempty"`
-	CompanyName    string    `json:"company_name,omitempty"`
-	LogoPath       string    `json:"logo_path,omitempty"`
-	DiscordWebhook string    `json:"discord_webhook,omitempty"`
-	Model          string    `json:"model,omitempty"`
+	SeverityFilter []string  `json:"-"`
+	// Scanners restricts scheduled runs to the named scanners (empty = all).
+	Scanners       []string         `json:"scanners,omitempty"`
+	Phases         []int            `json:"-"`
+	ReconMode      string           `json:"-"`
+	ScanIntensity  string           `json:"-"`
+	CompanyName    string           `json:"company_name,omitempty"`
+	LogoPath       string           `json:"logo_path,omitempty"`
+	DiscordWebhook string           `json:"discord_webhook,omitempty"`
+	Model          string           `json:"-"`
+	Artifact       scanner.Artifact `json:"artifact,omitempty"`
+	VulsSSHHost    string           `json:"vuls_ssh_host,omitempty"`
 }
 
 // runAtPattern validates ScanSchedule.RunAt as a 24h "HH:MM" time of day.
@@ -238,6 +243,9 @@ func (s *Server) loadSchedulesFromDisk() {
 			continue
 		}
 		normalizeScheduleActivity(&sch)
+		if err := normalizeDeterministicSchedule(&sch); err != nil {
+			log.Printf("[SCHEDULER] Schedule %s needs deterministic input updates: %v", sch.ID, err)
+		}
 		if err := normalizeScheduleTiming(&sch); err != nil {
 			// Keep the schedule: calculateNextRun tolerates the bad value, so
 			// losing the whole entry over it would be worse.
@@ -320,6 +328,7 @@ func (s *Server) checkAndRunSchedules() {
 					Instruction:    sch.Instruction,
 					ScanMode:       sch.ScanMode,
 					SeverityFilter: sch.SeverityFilter,
+					Scanners:       append([]string(nil), sch.Scanners...),
 					Phases:         sch.Phases,
 					ReconMode:      sch.ReconMode,
 					ScanIntensity:  sch.ScanIntensity,
@@ -327,13 +336,11 @@ func (s *Server) checkAndRunSchedules() {
 					LogoPath:       sch.LogoPath,
 					DiscordWebhook: sch.DiscordWebhook,
 					Name:           sch.Name + " (Scheduled)",
-					Model:          sch.Model,
+					Artifact:       sch.Artifact,
+					VulsSSHHost:    sch.VulsSSHHost,
 				}
 
 				scanCfg := *s.cfg
-				if sch.Model != "" {
-					scanCfg.LLM = sch.Model
-				}
 				instanceID := randomSlug()
 
 				go s.runMultiScan(req, &scanCfg, instanceID)

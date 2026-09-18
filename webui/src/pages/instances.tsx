@@ -21,11 +21,10 @@ import {
   useDeleteScan,
 } from "@/api/queries"
 import { ScanStatusPill } from "@/components/scan-status-pill"
-import { PhaseProgress } from "@/components/phase-progress"
 import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination"
 import { useDebounced } from "@/lib/use-debounced"
 import { timeAgo, formatDuration, shortId } from "@/lib/utils"
-import type { InstancesResponse, ScanInstance } from "@/types/api"
+import { SCANNER_ORDER, type InstancesResponse, type ScanInstance } from "@/types/api"
 import {
   Cpu,
   MemoryStick,
@@ -34,8 +33,6 @@ import {
   Square,
   RotateCw,
   Layers,
-  Coins,
-  ShieldAlert,
   ExternalLink,
   Search,
   Trash2,
@@ -302,32 +299,23 @@ function InstanceCard({ instance }: { instance: ScanInstance }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="grid grid-cols-3 gap-2">
-          <Stat
-            icon={<ShieldAlert className="h-3 w-3" />}
-            label="VULNS"
-            value={String(instance.vuln_count ?? 0)}
-          />
-          <Stat
-            icon={<Layers className="h-3 w-3" />}
-            label="ITERS"
-            value={String(instance.iterations ?? 0)}
-          />
-          <Stat
-            icon={<Coins className="h-3 w-3" />}
-            label="TOKENS"
-            value={
-              instance.total_tokens
-                ? compactNumber(instance.total_tokens)
-                : "0"
-            }
-          />
-        </div>
-        <PhaseProgress
-          current={instance.current_phase}
-          selected={instance.phases}
-          status={instance.status}
-        />
+		<div className="grid grid-cols-3 gap-2">
+		  <Stat
+			icon={<Layers className="h-3 w-3" />}
+			label="DONE"
+			value={String((instance.scanner_runs ?? []).filter((r) => r.status === "completed" || r.status === "not_applicable" || r.status === "skipped").length)}
+		  />
+		  <Stat
+			icon={<Layers className="h-3 w-3" />}
+			label="FAILED"
+			value={String((instance.scanner_runs ?? []).filter((r) => r.status === "failed" || r.status === "cancelled").length)}
+		  />
+		  <Stat
+			icon={<Layers className="h-3 w-3" />}
+			label="REMAINING"
+			value={String(Math.max(0, SCANNER_ORDER.length - (instance.scanner_runs ?? []).length))}
+		  />
+		</div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
           <div>
             <div>Started {timeAgo(instance.started_at)}</div>
@@ -395,10 +383,4 @@ function Stat({ icon, label, value }: { icon: ReactNode; label: string; value: s
       <div className="mono text-base text-foreground">{value}</div>
     </div>
   )
-}
-
-function compactNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
 }

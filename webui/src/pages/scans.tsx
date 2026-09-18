@@ -26,7 +26,6 @@ import {
   MoreHorizontal,
   Plus,
   Search,
-  ShieldAlert,
   Trash2,
 } from "lucide-react";
 import NewScanDialog from "@/components/new-scan-dialog";
@@ -260,8 +259,8 @@ function ScanTable({
                   <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-60" />
                 </Th>
                 <Th>Status</Th>
-                <Th>Findings</Th>
-                <Th>Tokens</Th>
+				<Th>Mode</Th>
+				<Th>Report</Th>
                 <Th>Started</Th>
                 <Th className="w-12 pr-4 text-right">Actions</Th>
               </tr>
@@ -310,21 +309,8 @@ function ScanTable({
                   <Td>
                     <ScanStatusPill status={s.status} />
                   </Td>
-                  <Td>
-                    <div className="inline-flex items-center gap-1 mono text-xs">
-                      <ShieldAlert
-                        className={
-                          s.vuln_count > 0
-                            ? "h-3 w-3 text-amber-400"
-                            : "h-3 w-3 text-muted-foreground"
-                        }
-                      />
-                      {s.vuln_count ?? 0}
-                    </div>
-                  </Td>
-                  <Td className="mono text-xs text-muted-foreground">
-                    {s.total_tokens ? s.total_tokens.toLocaleString() : "—"}
-                  </Td>
+				  <Td className="text-xs capitalize text-muted-foreground">{s.scan_mode === "dast" ? "single" : (s.scan_mode || "single")}</Td>
+				  <Td className="text-xs text-muted-foreground">{["finished", "completed"].includes((s.status || "").toLowerCase()) ? "ready" : "pending"}</Td>
                   <Td className="pr-4">
                     <span className="text-muted-foreground">
                       {timeAgo(s.started_at)}

@@ -9,7 +9,6 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -67,11 +66,10 @@ import {
   ListChecks,
   ArrowRight,
   Loader2,
-  Send,
 } from "lucide-react";
 import { LiveFeed, type FeedFilter } from "@/components/live-feed";
 import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination";
-import type { SubScanSummary, VulnSummary } from "@/types/api";
+import type { ScanRecord, ScannerRun, SubScanSummary, VulnSummary } from "@/types/api";
 
 export default function ScanDetailPage() {
   const navigate = useNavigate();
@@ -121,6 +119,9 @@ export default function ScanDetailPage() {
         }
       />
     );
+	if ((scan.schema_version ?? 0) >= 2) {
+		return <DeterministicScanDetail scan={scan} onRefresh={() => void refetch()} />;
+	}
 
   const status = (scan.status || "").toLowerCase();
   const canStop = status === "running" || status === "paused";
@@ -245,7 +246,7 @@ export default function ScanDetailPage() {
           <CardHeader>
             <CardTitle className="text-sm">Phase progress</CardTitle>
             <CardDescription>
-              Xalgorix runs a {PHASES.length}-phase autonomous methodology.
+			  Legacy scan methodology ({PHASES.length} phases).
               Currently:{" "}
               <span className="text-foreground">
                 {currentPhaseLabel(scan.current_phase)}
@@ -344,12 +345,10 @@ export default function ScanDetailPage() {
           <FindingsTab vulns={scan.vulns ?? []} scanId={scan.id} />
         </TabsContent>
         <TabsContent value="events">
-          <EventsTab
-            events={mergedEvents}
-            scanId={scan.id}
-            instanceId={eventInstanceId}
-            status={status}
-            target={scan.target}
+		  <EventsTab
+			events={mergedEvents}
+			scanId={scan.id}
+			target={scan.target}
           />
         </TabsContent>
         {!!scan.sub_scan_total && (
@@ -363,6 +362,39 @@ export default function ScanDetailPage() {
       </Tabs>
     </div>
   );
+}
+
+const SCANNER_NAMES = ["nuclei", "zap", "openvas", "trivy", "vuls"] as const;
+
+function DeterministicScanDetail({ scan, onRefresh }: { scan: ScanRecord; onRefresh: () => void }) {
+	const [selected, setSelected] = useState<string>("nuclei");
+	const [stream, setStream] = useState<"stdout" | "stderr">("stdout");
+	const [output, setOutput] = useState("");
+	const [loading, setLoading] = useState(false);
+	const [regenerating, setRegenerating] = useState(false);
+	const byName = useMemo(() => new Map((scan.scanner_runs ?? []).map((r) => [r.scanner, r])), [scan.scanner_runs]);
+	useEffect(() => {
+		let active = true;
+		setLoading(true);
+		api.scannerOutput(scan.id, selected, stream).then((text) => { if (active) setOutput(text); }).catch((e) => { if (active) setOutput(e instanceof Error ? e.message : "Output unavailable"); }).finally(() => { if (active) setLoading(false); });
+		return () => { active = false; };
+	}, [scan.id, selected, stream, scan.scanner_runs]);
+	async function regenerate() {
+		setRegenerating(true);
+		try { await api.regenerateReport(scan.id); onRefresh(); } finally { setRegenerating(false); }
+	}
+	return <div className="space-y-6">
+		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>
+		<header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h1 className="font-mono text-2xl font-semibold">{scan.target}</h1><div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{scan.id}</span><span>·</span><span>{formatDuration(scan.started_at, scan.finished_at)}</span><Badge variant="outline">schema v2</Badge></div></div><div className="flex gap-2"><ScanStatusPill status={scan.status} /><Button variant="outline" size="sm" asChild><a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer"><Download className="mr-1 h-4 w-4" /> Report</a></Button><Button variant="outline" size="sm" onClick={() => void regenerate()} disabled={regenerating}>{regenerating ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1 h-4 w-4" />} Regenerate report</Button></div></header>
+		<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{SCANNER_NAMES.map((name) => <ScannerStatusCard key={name} name={name} run={byName.get(name)} active={selected === name} onClick={() => setSelected(name)} />)}</div>
+		<Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle className="capitalize">{selected} raw output</CardTitle><CardDescription>Native scanner output only. AI is not used in scan execution or this view.</CardDescription></div><div className="flex gap-2"><Button size="sm" variant={stream === "stdout" ? "default" : "outline"} onClick={() => setStream("stdout")}>stdout</Button><Button size="sm" variant={stream === "stderr" ? "default" : "outline"} onClick={() => setStream("stderr")}>stderr</Button>{byName.get(selected)?.artifact_path && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></div></CardHeader><CardContent><pre className="max-h-[32rem] min-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-4 text-xs text-neutral-200">{loading ? "Loading…" : output || "No output recorded."}</pre></CardContent></Card>
+		<Card><CardHeader><CardTitle>Report state</CardTitle></CardHeader><CardContent className="text-sm"><div className="grid gap-2 sm:grid-cols-3"><div><span className="text-muted-foreground">Mode</span><p className="font-medium">{scan.report_mode || "pending"}</p></div><div><span className="text-muted-foreground">Generated</span><p>{scan.report_generated_at ? formatTime(scan.report_generated_at) : "—"}</p></div><div><span className="text-muted-foreground">Artifact</span><p>{scan.artifact ? `${scan.artifact.kind}: ${scan.artifact.ref}` : "Not supplied"}</p></div></div></CardContent></Card>
+	</div>;
+}
+
+function ScannerStatusCard({ name, run, active, onClick }: { name: string; run?: ScannerRun; active: boolean; onClick: () => void }) {
+	const status = run?.status ?? "pending";
+	return <button type="button" onClick={onClick} className={cn("rounded-lg border p-4 text-left transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>;
 }
 
 function currentPhaseLabel(p?: number): string {
@@ -1028,14 +1060,10 @@ function DetailSection({
 function EventsTab({
   events,
   scanId,
-  instanceId,
-  status,
   target,
 }: {
   events: FeedEvent[];
   scanId: string;
-  instanceId: string;
-  status: string;
   target: string;
 }) {
   const [filter, setFilter] = useState<FeedFilter>("all");
@@ -1050,126 +1078,7 @@ function EventsTab({
         emptyTitle="No events yet"
         emptyDescription="Once the scan starts producing output it will stream here."
       />
-      {status === "running" && (
-        <ScanGuidanceComposer instanceId={instanceId} />
-      )}
-    </div>
-  );
-}
-
-const GUIDANCE_SUGGESTIONS = [
-  "Focus next on authentication and session handling.",
-  "Prioritize IDOR and broken access control checks.",
-  "Verify the strongest finding with reproducible evidence.",
-  "Summarize progress, then continue with the highest-risk gap.",
-];
-
-function ScanGuidanceComposer({ instanceId }: { instanceId: string }) {
-  const [message, setMessage] = useState("");
-  const [sending, setSending] = useState(false);
-  const [feedback, setFeedback] = useState<{
-    kind: "success" | "error";
-    text: string;
-  } | null>(null);
-
-  const trimmed = message.trim();
-
-  async function sendGuidance() {
-    if (!trimmed || sending) return;
-    setSending(true);
-    setFeedback(null);
-    try {
-      const result = await api.chat(trimmed, instanceId);
-      setMessage("");
-      setFeedback({
-        kind: "success",
-        text: result.response || "Guidance queued for the next agent iteration.",
-      });
-    } catch (err) {
-      setFeedback({
-        kind: "error",
-        text: err instanceof Error ? err.message : "Could not send guidance.",
-      });
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm">Guide this scan</CardTitle>
-        <CardDescription>
-          Send a priority or correction to this agent. It will pick it up on
-          its next iteration without interrupting the scan.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2" aria-label="Guidance suggestions">
-          {GUIDANCE_SUGGESTIONS.map((suggestion) => (
-            <Button
-              key={suggestion}
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-auto whitespace-normal py-1.5 text-left text-xs"
-              onClick={() => {
-                setMessage(suggestion);
-                setFeedback(null);
-              }}
-              disabled={sending}
-            >
-              {suggestion}
-            </Button>
-          ))}
-        </div>
-        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
-          <Textarea
-            value={message}
-            onChange={(event) => {
-              setMessage(event.target.value);
-              setFeedback(null);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void sendGuidance();
-              }
-            }}
-            placeholder="Example: Re-check the admin API with the second account before moving on."
-            aria-label="Message to the running scan agent"
-            rows={3}
-            maxLength={4000}
-            disabled={sending}
-          />
-          <Button
-            type="button"
-            onClick={() => void sendGuidance()}
-            disabled={!trimmed || sending}
-            className="shrink-0 sm:w-auto"
-          >
-            {sending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-            Send
-          </Button>
-        </div>
-        <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-          <span
-            aria-live="polite"
-            className={cn(
-              feedback?.kind === "success" && "text-emerald-400",
-              feedback?.kind === "error" && "text-red-400",
-            )}
-          >
-            {feedback?.text || "Enter to send · Shift+Enter for a new line"}
-          </span>
-          <span className="mono shrink-0">{message.length}/4000</span>
-        </div>
-      </CardContent>
-    </Card>
+	</div>
   );
 }
 

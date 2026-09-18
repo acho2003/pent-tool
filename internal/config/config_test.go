@@ -203,21 +203,10 @@ func TestConfig_Validate(t *testing.T) {
 		t.Error("expected error for empty DataDir")
 	}
 
-	// With DataDir resolved, we fall through to the LLM check.
+	// Scanner execution is deterministic and does not require Report AI.
 	cfg.DataDir = "/tmp/xalgorix-validate-test"
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for empty LLM")
-	}
-
-	// LLM alone is no longer enough — the validator also requires an API key.
-	cfg.LLM = "openai/gpt-5.4"
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when LLM is set but APIKey is empty")
-	}
-
-	cfg.APIKey = "test-key"
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error with DataDir, LLM, and APIKey set, got: %v", err)
+		t.Errorf("expected no error with DataDir and no Report AI configured, got: %v", err)
 	}
 }
 
