@@ -7,8 +7,9 @@ import (
 
 // buildOSV scans the source tree's dependency manifests. osv-scanner exits 1 when
 // it finds vulnerabilities, so okExit={1} keeps such a run completed.
-// NOTE: verify the subcommand against the installed osv-scanner version; v1 uses
-// `osv-scanner --format json -r <dir>`, v2 uses `osv-scanner scan ...`.
+// This uses the v1 CLI form (bare invocation, --format/--output/-r); the
+// Dockerfile pins osv-scanner to v1 to match. v2 restructured the CLI into
+// `scan source`, so a v2 binary would reject this invocation.
 func buildOSV(req Request, cfg Config) commandSpec {
 	src := strings.TrimSpace(req.Target)
 	if src == "" {

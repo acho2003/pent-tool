@@ -86,8 +86,12 @@ ENV GOBIN=/go/bin
 RUN go install -v -p 4 github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/aquasecurity/trivy/cmd/trivy@latest
 RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/future-architect/vuls/cmd/vuls@latest
-RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/google/osv-scanner/v2/cmd/osv-scanner@latest \
-    || go install -v -p 4 github.com/google/osv-scanner/cmd/osv-scanner@latest \
+# Pinned to osv-scanner v1: buildOSV uses the v1 CLI form (bare invocation with
+# --format/--output/-r). v2 restructured the CLI into `scan source`; installing
+# v2 here would make the bare invocation exit non-zero and its findings would be
+# recorded as a failed run. v1 still queries the live OSV.dev database, so vuln
+# coverage is current regardless of binary version.
+RUN go install -v -p 4 github.com/google/osv-scanner/cmd/osv-scanner@v1.9.2 \
     || echo "WARN: osv-scanner install failed (installable at runtime)"
 
 RUN set -eux; \
