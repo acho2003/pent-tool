@@ -60,6 +60,7 @@ type Request struct {
 
 type Run struct {
 	Scanner      string `json:"scanner"`
+	Scope        string `json:"scope,omitempty"`
 	Target       string `json:"target"`
 	Status       string `json:"status"`
 	StartedAt    string `json:"started_at,omitempty"`
