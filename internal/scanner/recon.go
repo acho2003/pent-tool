@@ -174,7 +174,9 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 			artifact: artifact,
 			timeout:  cfg.SubfinderTimeout,
 		}
-		run := executeSpec(ctx, "subfinder", req, cfg, spec, emit)
+		sfReq := req
+		sfReq.Scope = scopeKey
+		run := executeSpec(ctx, "subfinder", sfReq, cfg, spec, emit)
 		run.Scope = scopeKey
 		runs = append(runs, run)
 		if run.Status == "completed" {
@@ -198,7 +200,9 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 			return os.WriteFile(inputPath, []byte(strings.Join(seeds, "\n")+"\n"), 0o600)
 		},
 	}
-	httpxRun := executeSpec(ctx, "httpx", req, cfg, httpxSpec, emit)
+	httpxReq := req
+	httpxReq.Scope = scopeKey
+	httpxRun := executeSpec(ctx, "httpx", httpxReq, cfg, httpxSpec, emit)
 	httpxRun.Scope = scopeKey
 	live := parseHttpxLive(httpxArtifact)
 	if len(live) == 0 {
@@ -251,7 +255,9 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 			timeout:      cfg.NmapTimeout,
 			outputSubdir: subdir,
 		}
-		nmapRun := executeSpec(ctx, "nmap", req, cfg, nmapSpec, emit)
+		nmapReq := req
+		nmapReq.Scope = reconHostScopeKey(req.Target, host)
+		nmapRun := executeSpec(ctx, "nmap", nmapReq, cfg, nmapSpec, emit)
 		// Host-unique but still recon-prefixed: keeps each per-host nmap run on its
 		// own resume key so a multi-host resume never folds them together, while
 		// hasTerminalReconRuns/terminalReconRunsFrom still select it by "recon:".

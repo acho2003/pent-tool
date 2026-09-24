@@ -32,7 +32,7 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	base := filepath.Join(req.ScanDir, "scanner-output", "openvas")
 	_ = os.MkdirAll(base, 0o700)
 	run := Run{
-		Scanner: "openvas", Target: req.Target, Status: "running", ExitCode: -1,
+		Scanner: "openvas", Target: req.Target, Scope: req.Scope, Status: "running", ExitCode: -1,
 		StartedAt:  time.Now().Format(time.RFC3339Nano),
 		StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"),
 		ArtifactPath: filepath.Join(base, "results.xml"),

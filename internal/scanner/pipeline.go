@@ -162,6 +162,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 		}
 		hostReq := req
 		hostReq.Target = sc.Target
+		hostReq.Scope = scopeKey
 		// Isolate each host's scanner artifacts. Every scan runner derives its
 		// output base from req.ScanDir alone, so two scopes writing under one
 		// ScanDir would clobber each other's results and break VerifyChecksum.
@@ -362,7 +363,7 @@ func (r commandRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 
 func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec commandSpec, emit EmitFunc) Run {
 	now := time.Now()
-	run := Run{Scanner: name, Target: req.Target, Status: "running", StartedAt: now.Format(time.RFC3339Nano), ExitCode: -1}
+	run := Run{Scanner: name, Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: now.Format(time.RFC3339Nano), ExitCode: -1}
 	base := filepath.Join(req.ScanDir, "scanner-output", name)
 	if spec.outputSubdir != "" {
 		base = filepath.Join(base, spec.outputSubdir)

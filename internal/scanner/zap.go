@@ -38,7 +38,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	base := filepath.Join(req.ScanDir, "scanner-output", "zap")
 	_ = os.MkdirAll(base, 0o700)
-	run := Run{Scanner: "zap", Target: req.Target, Status: "running", StartedAt: time.Now().Format(time.RFC3339Nano), ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: filepath.Join(base, "results.json")}
+	run := Run{Scanner: "zap", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().Format(time.RFC3339Nano), ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: filepath.Join(base, "results.json")}
 	logFile, _ := os.OpenFile(run.StdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if logFile != nil {
 		defer logFile.Close()

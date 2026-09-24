@@ -31,7 +31,7 @@ func (f fakeRunner) Run(_ context.Context, req Request, _ Config, emit EmitFunc)
 	if f.cancel != nil {
 		f.cancel()
 	}
-	r := Run{Scanner: f.name, Target: req.Target, Status: f.status}
+	r := Run{Scanner: f.name, Target: req.Target, Scope: req.Scope, Status: f.status}
 	if r.Status == "" {
 		r.Status = "completed"
 	}
@@ -578,5 +578,30 @@ func TestApplyDefaultsMaxWorkers(t *testing.T) {
 	}
 	if got := NewPipeline(Config{MaxWorkers: 8}).Config.MaxWorkers; got != 8 {
 		t.Fatalf("MaxWorkers override = %d, want 8", got)
+	}
+}
+
+func TestEmittedEventsCarryScope(t *testing.T) {
+	var seen []string
+	var events []Event
+	p := &Pipeline{Runners: []Runner{fakeRunner{name: "nuclei", seen: &seen}}}
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("a.example.com")}, nil
+	}
+	_ = p.Run(context.Background(), Request{Target: "a.example.com", ScanDir: t.TempDir()}, nil, func(e Event) {
+		events = append(events, e)
+	})
+	// The fakeRunner emits an event; assert it carries the host scope.
+	found := false
+	for _, e := range events {
+		if e.Scanner == "nuclei" {
+			if e.Run.Scope != "host:a.example.com" {
+				t.Fatalf("emitted event scope = %q, want host:a.example.com", e.Run.Scope)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no nuclei event observed")
 	}
 }

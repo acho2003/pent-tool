@@ -44,3 +44,26 @@ func TestUpsertScannerRunKeysOnScopeAndScanner(t *testing.T) {
 		t.Fatalf("host B run must be untouched by host A's update: %#v", got)
 	}
 }
+
+// TestUpsertDistinguishesLiveEmittedScopes guards the crash-persisted record for
+// the live-emit path fixed in Increment 4: two scanner_started-style runs for the
+// same scanner ("nmap") arrive with different per-host recon scopes. Before scope
+// was threaded through Request, live-emitted runs carried Scope=="" and collapsed
+// into one; now each carries its per-host scope and upsert must retain both.
+func TestUpsertDistinguishesLiveEmittedScopes(t *testing.T) {
+	var runs []scanner.Run
+
+	upsertScannerRun(&runs, scanner.Run{Scanner: "nmap", Scope: "recon:t:a", Target: "a", Status: "running"})
+	upsertScannerRun(&runs, scanner.Run{Scanner: "nmap", Scope: "recon:t:b", Target: "b", Status: "running"})
+
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d, want 2 (live-emitted per-host nmap runs must not collapse): %#v", len(runs), runs)
+	}
+	byScope := map[string]scanner.Run{}
+	for _, r := range runs {
+		byScope[r.Scope] = r
+	}
+	if byScope["recon:t:a"].Target != "a" || byScope["recon:t:b"].Target != "b" {
+		t.Fatalf("per-host live-emitted runs lost their identity: %#v", runs)
+	}
+}
