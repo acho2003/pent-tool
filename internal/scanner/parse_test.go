@@ -180,3 +180,15 @@ func TestParseSemgrepFindings(t *testing.T) {
 		t.Errorf("severity = %q, want high", got[0].Severity)
 	}
 }
+
+func TestParseGitleaksFindings(t *testing.T) {
+	body := `[{"RuleID":"generic-api-key","File":"config.py","Commit":"abc123","StartLine":5,"Description":"API key"}]`
+	p := writeFixture(t, "results.json", body)
+	got, err := ParseRun(Run{Scanner: "gitleaks", ArtifactPath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != "gitleaks:generic-api-key:config.py:abc123" {
+		t.Fatalf("parsed %#v", got)
+	}
+}

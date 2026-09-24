@@ -61,6 +61,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseTrivy(run.ArtifactPath)
 	case "semgrep":
 		return parseSemgrep(run.ArtifactPath)
+	case "gitleaks":
+		return parseGitleaks(run.ArtifactPath)
 	case "vuls":
 		return parseVuls(run.ArtifactPath)
 	case "nmap":
@@ -233,6 +235,31 @@ func semgrepSeverity(s string) string {
 	default:
 		return "low"
 	}
+}
+
+// parseGitleaks reads gitleaks' JSON array. Secrets have no native severity;
+// they are reported high. SourceID is gitleaks:rule:file:commit.
+func parseGitleaks(path string) ([]Finding, error) {
+	var entries []map[string]any
+	if err := readJSON(path, &entries); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, m := range entries {
+		rule := str(m["RuleID"])
+		file := str(m["File"])
+		commit := str(m["Commit"])
+		out = append(out, Finding{
+			SourceID:    "gitleaks:" + rule + ":" + file + ":" + commit,
+			Scanner:     "gitleaks",
+			Title:       firstNonEmpty(rule, "secret"),
+			Severity:    "high",
+			Target:      file,
+			Endpoint:    file + ":" + str(m["StartLine"]),
+			Description: firstNonEmpty(str(m["Description"]), "secret detected"),
+		})
+	}
+	return out, nil
 }
 
 func parseVuls(path string) ([]Finding, error) {

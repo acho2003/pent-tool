@@ -9,13 +9,14 @@ func TestExistingRunnerDescriptors(t *testing.T) {
 		phase  Phase
 		weight Weight
 	}{
-		"nuclei":  {PhaseWeb, WeightLight},
-		"zap":     {PhaseWeb, WeightHeavy},
-		"testssl": {PhaseWeb, WeightLight},
-		"openvas": {PhaseServer, WeightHeavy},
-		"trivy":   {PhaseSAST, WeightLight},
-		"semgrep": {PhaseSAST, WeightLight},
-		"vuls":    {PhaseServer, WeightLight},
+		"nuclei":   {PhaseWeb, WeightLight},
+		"zap":      {PhaseWeb, WeightHeavy},
+		"testssl":  {PhaseWeb, WeightLight},
+		"openvas":  {PhaseServer, WeightHeavy},
+		"trivy":    {PhaseSAST, WeightLight},
+		"semgrep":  {PhaseSAST, WeightLight},
+		"gitleaks": {PhaseSAST, WeightLight},
+		"vuls":     {PhaseServer, WeightLight},
 	}
 	if len(p.Runners) != len(want) {
 		t.Fatalf("runner count = %d, want %d", len(p.Runners), len(want))
