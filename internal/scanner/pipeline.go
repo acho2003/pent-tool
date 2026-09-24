@@ -150,6 +150,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	// Scan phase, fanned out per discovered host scope in discovery order.
 	for _, sc := range scopes {
 		scopeKey := sc.Key()
+		sc.Tracks = Classify(sc.Evidence)
 		hostReq := req
 		hostReq.Target = sc.Target
 		// Isolate each host's scanner artifacts. Every scan runner derives its
@@ -165,6 +166,10 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			// the scan's evidence shows what was not attempted and why.
 			if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
 				out = append(out, skippedRun(runner.Name(), scopeKey, hostReq, emit))
+				continue
+			}
+			if !runnerAppliesToTracks(runner.Descriptor(), sc.Tracks) {
+				out = append(out, notApplicableClassifierRun(runner.Name(), scopeKey, hostReq, emit))
 				continue
 			}
 			if err := ctx.Err(); err != nil {
@@ -264,6 +269,35 @@ func cancelledRun(name, scopeKey string, req Request, reason error, emit EmitFun
 	r := Run{Scanner: name, Target: req.Target, Status: "cancelled", Reason: reason.Error(), StartedAt: now, FinishedAt: now, Scope: scopeKey}
 	if emit != nil {
 		emit(Event{Type: "scanner_failed", Scanner: name, Run: r, Output: r.Reason})
+	}
+	return r
+}
+
+// runnerAppliesToTracks reports whether a runner should attempt a host, given
+// the host's classified tracks. A runner with no declared tracks (e.g. trivy)
+// always applies; otherwise at least one of its tracks must match the host's.
+func runnerAppliesToTracks(d Descriptor, tracks []Track) bool {
+	if len(d.Tracks) == 0 {
+		return true // no-track runners (e.g. trivy) always run per host
+	}
+	for _, dt := range d.Tracks {
+		for _, ht := range tracks {
+			if dt == ht {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// notApplicableClassifierRun builds the terminal record for a scanner whose
+// track does not match the host's classified tracks, scoped to scopeKey and
+// emitting the matching not-applicable event.
+func notApplicableClassifierRun(name, scope string, req Request, emit EmitFunc) Run {
+	now := time.Now().Format(time.RFC3339Nano)
+	r := Run{Scanner: name, Target: req.Target, Status: "not_applicable", Reason: "host tracks do not include this scanner's track", StartedAt: now, FinishedAt: now, Scope: scope}
+	if emit != nil {
+		emit(Event{Type: "scanner_not_applicable", Scanner: name, Run: r, Output: r.Reason})
 	}
 	return r
 }

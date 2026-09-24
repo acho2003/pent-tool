@@ -16,11 +16,12 @@ type fakeRunner struct {
 	gotDir *[]string
 	status string
 	cancel context.CancelFunc
+	tracks []Track
 }
 
 func (f fakeRunner) Name() string { return f.name }
 func (f fakeRunner) Descriptor() Descriptor {
-	return Descriptor{Name: f.name, Phase: PhaseWeb, Weight: WeightLight}
+	return Descriptor{Name: f.name, Phase: PhaseWeb, Weight: WeightLight, Tracks: f.tracks}
 }
 func (f fakeRunner) Run(_ context.Context, req Request, _ Config, emit EmitFunc) Run {
 	*f.seen = append(*f.seen, f.name)
@@ -464,6 +465,51 @@ func TestPipelineResumePreservesPerHostNmapRuns(t *testing.T) {
 	}
 	if len(artifacts) != 2 || artifacts[0] == artifacts[1] {
 		t.Fatalf("nmap artifact paths = %v, want two distinct per-host artifacts", artifacts)
+	}
+}
+
+func TestPipelineClassifierGatesTracks(t *testing.T) {
+	var seen []string
+	// nuclei is web-track, vuls is server-track (real descriptors via NewPipeline).
+	p := NewPipeline(Config{})
+	// Keep only nuclei (web) and vuls (server) to make assertions crisp.
+	var runners []Runner
+	for _, r := range p.Runners {
+		switch r.Name() {
+		case "nuclei":
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackWeb}})
+		case "vuls":
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackServer}})
+		}
+	}
+	p2 := &Pipeline{Runners: runners}
+	// One web-only host.
+	p2.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		s := HostScope("web.example.com")
+		s.Evidence = HostEvidence{LiveURLs: []string{"https://web.example.com"}}
+		return []Scope{s}, nil
+	}
+	runs := p2.Run(context.Background(), Request{Target: "web.example.com", ScanDir: t.TempDir()}, nil, nil)
+	byScanner := map[string]string{}
+	for _, r := range runs {
+		byScanner[r.Scanner] = r.Status
+	}
+	// nuclei (web) runs; vuls (server) is not_applicable for a web-only host.
+	if byScanner["vuls"] != "not_applicable" {
+		t.Errorf("vuls status = %q, want not_applicable", byScanner["vuls"])
+	}
+	// nuclei actually executed (fakeRunner appended its name).
+	found := false
+	for _, n := range seen {
+		if n == "nuclei" {
+			found = true
+		}
+		if n == "vuls" {
+			t.Errorf("vuls should not have executed for a web-only host")
+		}
+	}
+	if !found {
+		t.Errorf("nuclei should have executed for a web host")
 	}
 }
 
