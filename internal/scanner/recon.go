@@ -14,6 +14,12 @@ import (
 
 func reconScopeKey(target string) string { return "recon:" + target }
 
+// reconHostScopeKey gives each per-host nmap run its own recon-prefixed resume
+// key. Without the host suffix every per-host nmap run would collapse to the
+// single resumeKey("recon:<target>","nmap") and a multi-host resume would drop
+// one host's findings and duplicate another's.
+func reconHostScopeKey(target, host string) string { return reconScopeKey(target) + ":" + host }
+
 // hostFromTarget extracts the bare host from a URL, host:port, or host.
 func hostFromTarget(target string) string {
 	t := strings.TrimSpace(target)
@@ -246,7 +252,10 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 			outputSubdir: subdir,
 		}
 		nmapRun := executeSpec(ctx, "nmap", req, cfg, nmapSpec, emit)
-		nmapRun.Scope = scopeKey
+		// Host-unique but still recon-prefixed: keeps each per-host nmap run on its
+		// own resume key so a multi-host resume never folds them together, while
+		// hasTerminalReconRuns/terminalReconRunsFrom still select it by "recon:".
+		nmapRun.Scope = reconHostScopeKey(req.Target, host)
 		runs = append(runs, nmapRun)
 		if nmapRun.Status == "completed" {
 			if findings, err := parseNmap(artifact); err == nil {

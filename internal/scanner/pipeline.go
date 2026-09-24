@@ -101,9 +101,10 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
-// Run executes the five scanner attempts in a stable order. Existing terminal
-// runs are reused, which makes queue resume continue at the first incomplete
-// scanner without mutating immutable raw artifacts.
+// Run executes the recon phase, then fans the scan phase out over every
+// discovered host scope, running each scanner per host in a stable order.
+// Existing terminal runs are reused, which makes queue resume continue at the
+// first incomplete (scope, scanner) without mutating immutable raw artifacts.
 func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit EmitFunc) []Run {
 	recon := p.reconFn
 	if recon == nil {

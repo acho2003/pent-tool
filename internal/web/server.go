@@ -276,7 +276,7 @@ type ScanRequest struct {
 	APIBase        string   `json:"-"`
 	DiscordWebhook string   `json:"discord_webhook"` // Discord webhook URL
 	SeverityFilter []string `json:"severity_filter"` // e.g. ["critical", "high"]
-	// Scanners selects which of scanner.OrderedNames run. Empty = all five.
+	// Scanners selects which of scanner.OrderedNames run. Empty = all scanners.
 	// Deselected scanners still produce an explicit "skipped" run.
 	Scanners      []string `json:"scanners"`
 	Name          string   `json:"name"`      // user-defined scan name

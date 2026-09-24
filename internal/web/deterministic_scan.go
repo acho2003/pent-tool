@@ -134,7 +134,11 @@ func countTerminalRuns(runs []scanner.Run) int {
 }
 func upsertScannerRun(runs *[]scanner.Run, run scanner.Run) {
 	for i := range *runs {
-		if (*runs)[i].Scanner == run.Scanner {
+		// Match on both Scope and Scanner: Increment 2 introduced duplicate scanner
+		// names across scopes (per-host nuclei/zap/... and per-host recon nmap), so
+		// keying on Scanner alone would let one host's run overwrite another's in
+		// the crash-persisted record used for resume.
+		if (*runs)[i].Scanner == run.Scanner && (*runs)[i].Scope == run.Scope {
 			(*runs)[i] = run
 			return
 		}

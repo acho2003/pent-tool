@@ -427,6 +427,46 @@ func TestPipelineResumeScansUnstartedDiscoveredHost(t *testing.T) {
 	}
 }
 
+func TestPipelineResumePreservesPerHostNmapRuns(t *testing.T) {
+	p := &Pipeline{Runners: nil}
+	// Resume must never re-invoke recon when a prior scan already completed it.
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		t.Error("reconFn must not run on resume with persisted per-host recon runs")
+		return nil, nil
+	}
+	scanDir := t.TempDir()
+	// recon discovered two hosts; both host scopes are persisted for lossless resume.
+	saveReconScopes(scanDir, []Scope{HostScope("a.example.com"), HostScope("b.example.com")})
+	// The prior recon produced one singleton subfinder run plus one nmap run per
+	// host, each on its OWN host-unique recon scope and its own artifact path.
+	existing := []Run{
+		{Scanner: "subfinder", Scope: reconScopeKey("example.com"), Status: "completed"},
+		{Scanner: "nmap", Scope: reconHostScopeKey("example.com", "a.example.com"), Target: "a.example.com", Status: "completed", ArtifactPath: "/scan/nmap/a/nmap.xml", Checksum: "chk-a"},
+		{Scanner: "nmap", Scope: reconHostScopeKey("example.com", "b.example.com"), Target: "b.example.com", Status: "completed", ArtifactPath: "/scan/nmap/b/nmap.xml", Checksum: "chk-b"},
+	}
+	runs := p.Run(context.Background(), Request{Target: "example.com", ScanDir: scanDir}, existing, nil)
+
+	// Both per-host nmap runs must survive resume exactly once — neither dropped
+	// (host A lost) nor duplicated (host B doubled), which is what a shared resume
+	// key would cause.
+	byScope := map[string]int{}
+	var artifacts []string
+	for _, r := range runs {
+		if r.Scanner == "nmap" {
+			byScope[r.Scope]++
+			artifacts = append(artifacts, r.ArtifactPath)
+		}
+	}
+	keyA := reconHostScopeKey("example.com", "a.example.com")
+	keyB := reconHostScopeKey("example.com", "b.example.com")
+	if byScope[keyA] != 1 || byScope[keyB] != 1 {
+		t.Fatalf("per-host nmap runs = %v, want each of %q and %q exactly once", byScope, keyA, keyB)
+	}
+	if len(artifacts) != 2 || artifacts[0] == artifacts[1] {
+		t.Fatalf("nmap artifact paths = %v, want two distinct per-host artifacts", artifacts)
+	}
+}
+
 func TestApplyDefaultsReconFields(t *testing.T) {
 	p := NewPipeline(Config{})
 	c := p.Config
