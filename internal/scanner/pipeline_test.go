@@ -616,3 +616,25 @@ func TestFailedServiceRunCarriesScope(t *testing.T) {
 		t.Fatalf("emitted event scope = %q, want host:x", got.Run.Scope)
 	}
 }
+
+// TestScanPhaseResultOrderStable locks the scope-major, runner-minor ordering of
+// scan-phase results. Task 4 parallelizes execution but MUST keep this order.
+func TestScanPhaseResultOrderStable(t *testing.T) {
+	var seen []string
+	p := &Pipeline{Runners: []Runner{
+		fakeRunner{name: "nuclei", seen: &seen}, fakeRunner{name: "vuls", seen: &seen},
+	}}
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("a"), HostScope("b")}, nil
+	}
+	runs := p.Run(context.Background(), Request{Target: "t", ScanDir: t.TempDir()}, nil, nil)
+	// Expect order: (a,nuclei),(a,vuls),(b,nuclei),(b,vuls)
+	var got []string
+	for _, r := range runs {
+		got = append(got, r.Scope+"/"+r.Scanner)
+	}
+	want := []string{"host:a/nuclei", "host:a/vuls", "host:b/nuclei", "host:b/vuls"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+}

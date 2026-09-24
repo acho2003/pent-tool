@@ -151,6 +151,15 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	}
 
 	// Scan phase, fanned out per discovered host scope in discovery order.
+	//
+	// Each (scope, runner) pair owns one pre-assigned, ordered slot in results.
+	// Ordering is intrinsic to the slot index, decoupled from when a slot is
+	// written, so Task 4 can execute the runAttempt slots concurrently while the
+	// output order stays deterministic. Non-executing decisions (reuse, skip,
+	// not_applicable, cancellation) resolve inline into their slot; executable
+	// pairs run runAttempt sequentially (still) and write into their own slot.
+	results := make([]Run, len(scopes)*len(p.Runners))
+	slot := 0
 	for _, sc := range scopes {
 		scopeKey := sc.Key()
 		sc.Tracks = Classify(sc.Evidence)
@@ -169,30 +178,39 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 		hostReq.ScanDir = filepath.Join(req.ScanDir, "hosts", sanitizeHost(sc.Target))
 		for i, runner := range p.Runners {
 			if old, ok := byKey[resumeKey(scopeKey, runner.Name())]; ok {
-				out = append(out, old)
+				results[slot] = old
+				slot++
 				continue
 			}
 			// A deselected scanner still produces an explicit terminal record, so
 			// the scan's evidence shows what was not attempted and why.
 			if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
-				out = append(out, skippedRun(runner.Name(), scopeKey, hostReq, emit))
+				results[slot] = skippedRun(runner.Name(), scopeKey, hostReq, emit)
+				slot++
 				continue
 			}
 			if !runnerAppliesToTracks(runner.Descriptor(), sc.Tracks) {
-				out = append(out, notApplicableClassifierRun(runner.Name(), scopeKey, hostReq, emit))
+				results[slot] = notApplicableClassifierRun(runner.Name(), scopeKey, hostReq, emit)
+				slot++
 				continue
 			}
 			if err := ctx.Err(); err != nil {
-				for _, rest := range p.Runners[i:] {
-					out = append(out, cancelledRun(rest.Name(), scopeKey, hostReq, err, emit))
+				// Cancellation observed: fill this and every remaining slot in the
+				// scope with a cancelled record, then stop scanning this scope. Slots
+				// are written by index, so the cancelled fan-out keeps its order.
+				for j, rest := range p.Runners[i:] {
+					results[slot+j] = cancelledRun(rest.Name(), scopeKey, hostReq, err, emit)
 				}
+				slot += len(p.Runners) - i
 				break
 			}
 			run := runAttempt(ctx, runner, hostReq, p.Config, emit)
 			run.Scope = scopeKey
-			out = append(out, run)
+			results[slot] = run
+			slot++
 		}
 	}
+	out = append(out, results...)
 	return out
 }
 
