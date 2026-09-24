@@ -106,16 +106,17 @@ func parseHttpxLive(path string) []httpxResult {
 			continue
 		}
 		var v struct {
-			URL    string `json:"url"`
-			Host   string `json:"host"`
-			Port   string `json:"port"`
-			Scheme string `json:"scheme"`
-			TLS    bool   `json:"tls"`
+			URL    string      `json:"url"`
+			Host   string      `json:"host"`
+			Port   json.Number `json:"port"` // real httpx emits an int; older/mock output a string
+			Scheme string      `json:"scheme"`
 		}
 		if err := json.Unmarshal([]byte(line), &v); err != nil {
 			continue
 		}
-		out = append(out, httpxResult{URL: v.URL, Host: v.Host, Port: v.Port, Scheme: v.Scheme, TLS: v.TLS})
+		// httpx does not emit a reliable top-level tls bool (only a tls object
+		// under -tls-grab); scheme is the dependable https signal.
+		out = append(out, httpxResult{URL: v.URL, Host: v.Host, Port: v.Port.String(), Scheme: v.Scheme, TLS: v.Scheme == "https"})
 	}
 	return out
 }

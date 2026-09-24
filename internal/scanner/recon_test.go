@@ -35,8 +35,8 @@ func TestCandidateHostsStripsSchemeAndPort(t *testing.T) {
 }
 
 func TestParseHttpxLive(t *testing.T) {
-	jsonl := `{"url":"https://a.example.com","host":"a.example.com","port":"443","scheme":"https","tls":true}` + "\n" +
-		`{"url":"http://b.example.com","host":"b.example.com","port":"80","scheme":"http"}` + "\n"
+	jsonl := `{"url":"https://a.example.com","host":"a.example.com","port":443,"scheme":"https"}` + "\n" +
+		`{"url":"http://b.example.com","host":"b.example.com","port":80,"scheme":"http"}` + "\n"
 	dir := t.TempDir()
 	p := filepath.Join(dir, "httpx.jsonl")
 	if err := os.WriteFile(p, []byte(jsonl), 0o600); err != nil {
@@ -46,8 +46,11 @@ func TestParseHttpxLive(t *testing.T) {
 	if len(res) != 2 {
 		t.Fatalf("results = %d, want 2", len(res))
 	}
-	if res[0].Host != "a.example.com" || !res[0].TLS || res[0].Scheme != "https" {
+	if res[0].Host != "a.example.com" || !res[0].TLS || res[0].Scheme != "https" || res[0].Port != "443" {
 		t.Fatalf("unexpected result[0]: %+v", res[0])
+	}
+	if res[1].TLS {
+		t.Fatalf("result[1] TLS should be false for http scheme: %+v", res[1])
 	}
 }
 
