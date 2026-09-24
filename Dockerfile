@@ -77,9 +77,15 @@ ENV GOBIN=/go/bin
 # Trivy currently imports encoding/json/jsontext, which Go 1.26 exposes behind
 # the jsonv2 experiment. This is compiled into the binary, not a runtime scanner
 # setting.
-RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
-    && GOEXPERIMENT=jsonv2 go install -v github.com/aquasecurity/trivy/cmd/trivy@latest \
-    && GOEXPERIMENT=jsonv2 go install -v github.com/future-architect/vuls/cmd/vuls@latest
+# Cap compile parallelism (-p 4) so peak memory stays bounded: on a many-core
+# Docker VM, `go install` otherwise fans out one compile/link job per CPU and
+# the linker for these large dep trees (trivy: AWS SDK + k8s; vuls: similar)
+# can exhaust a small Docker memory allotment and get OOM-killed, surfacing as
+# a bare "exit code: 1" with no Go error. Separate RUN layers also mean a
+# failure names the exact tool and successful tools stay cached on rebuild.
+RUN go install -v -p 4 github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/aquasecurity/trivy/cmd/trivy@latest
+RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/future-architect/vuls/cmd/vuls@latest
 
 RUN set -eux; \
     for pkg in \
