@@ -126,7 +126,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	safeEmit := emit
 	if emit != nil {
 		inner := emit
-		safeEmit = func(e Event) { emitMu.Lock(); inner(e); emitMu.Unlock() }
+		safeEmit = func(e Event) { emitMu.Lock(); defer emitMu.Unlock(); inner(e) }
 	}
 	byKey := indexTerminal(existing, HostScope(req.Target).Key())
 	out := make([]Run, 0, len(p.Runners))
