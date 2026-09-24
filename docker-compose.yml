@@ -18,12 +18,20 @@ services:
       - xalgorix-data:/data
       - ${HOME}/.codex/auth.json:/root/.codex/auth.json:ro
       - gvmd_socket_vol:/run/gvmd:ro
+    # Let containers resolve the host machine so a dev site running on the
+    # host (e.g. http://host.docker.internal:3000) is reachable from the
+    # scanners. host-gateway maps to the Docker bridge/VM gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       XALGORIX_ZAP_URL: http://zap:8080
       XALGORIX_ZAP_API_KEY: ${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
       XALGORIX_GVM_SOCKET: /run/gvmd/gvmd.sock
       XALGORIX_GVM_USERNAME: ${XALGORIX_GVM_USERNAME:-admin}
       XALGORIX_GVM_PASSWORD: ${XALGORIX_GVM_PASSWORD:-admin}
+      # Self-hosted opt-in: allow scanning locally-hosted apps. The
+      # dashboard's own listener stays protected. Leave OFF on shared hosts.
+      XALGORIX_ALLOW_LOCAL_TARGETS: "true"
     depends_on:
       zap:
         condition: service_healthy
@@ -35,8 +43,19 @@ services:
 
   zap:
     image: ghcr.io/zaproxy/zaproxy:stable
+    # ZAP runs the actual HTTP requests, so it also needs to resolve the host
+    # to reach a dev site on host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # zap.sh otherwise sizes the JVM heap at ~1/4 of the *host's* RAM, which it
+    # reads even when the container is capped far lower — so it requests more
+    # than mem_limit allows and the kernel OOM-kills ZAP mid active scan
+    # (surfacing to the engine as "connection refused" on the status poll).
+    # Pin the heap explicitly and give mem_limit headroom above it for ZAP's
+    # off-heap use (Selenium/HtmlUnit, native buffers).
     command:
       - zap.sh
+      - -Xmx${XALGORIX_ZAP_MAX_HEAP:-2g}
       - -daemon
       - -host
       - 0.0.0.0
@@ -51,6 +70,11 @@ services:
     # No shared volume: the engine drives ZAP entirely over its HTTP API and
     # pulls the JSON report back through it, so ZAP never reads or writes the
     # scan directory.
+    #
+    # Keep mem_limit comfortably above XALGORIX_ZAP_MAX_HEAP: it is the total
+    # container ceiling (heap + off-heap + metaspace), so a bare heap-sized
+    # limit would still OOM-kill ZAP.
+    mem_limit: ${XALGORIX_ZAP_MEM_LIMIT:-3g}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/JSON/core/view/version/?apikey=${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}"]
       interval: 10s

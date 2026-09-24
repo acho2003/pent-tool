@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+// zapDomXSSPluginID is ZAP's DOM XSS active scan rule (from the "domxss"
+// add-on). It is disabled per scan because it launches headless Firefox, which
+// OOM-kills the daemon on a memory-constrained host.
+const zapDomXSSPluginID = "40026"
+
 type zapRunner struct{}
 
 func (zapRunner) Name() string { return "zap" }
@@ -147,6 +152,18 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	if err := zapWaitPassive(cctx, call, logLine); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
+	// Disable the DOM XSS active scan rule (plugin 40026). It drives headless
+	// Firefox through Selenium, whose memory lands on top of the JVM heap and
+	// exceeds ZAP's container limit mid-scan; the browser child is OOM-killed and
+	// the daemon comes down (surfacing as "connection refused" on the next poll).
+	// Reflected and persistent XSS over HTTP stay covered by the other XSS rules.
+	// Best-effort: a ZAP build without the DOM XSS add-on has nothing to disable,
+	// so a failure here is logged, not fatal.
+	if _, err := call("/JSON/ascan/action/disableScanners/", url.Values{"ids": {zapDomXSSPluginID}}); err != nil {
+		logLine("could not disable ZAP DOM XSS scan rule: " + err.Error())
+	} else {
+		logLine("ZAP DOM XSS scan rule disabled (avoids headless-browser OOM)")
 	}
 	active, err := call("/JSON/ascan/action/scan/", url.Values{"url": {target}, "recurse": {"true"}, "inScopeOnly": {"false"}})
 	if err != nil {

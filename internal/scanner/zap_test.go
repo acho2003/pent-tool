@@ -63,6 +63,8 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = map[string]string{"status": "100"}
 	case "/JSON/pscan/view/recordsToScan/":
 		body = map[string]string{"recordsToScan": "0"}
+	case "/JSON/ascan/action/disableScanners/":
+		// acknowledged; body stays {"Result":"OK"}
 	case "/JSON/ascan/action/scan/":
 		body = map[string]string{"scan": "9"}
 	case "/JSON/ascan/view/status/":
@@ -93,7 +95,7 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 	if run.Status != "completed" {
 		t.Fatalf("status = %q reason = %q", run.Status, run.Reason)
 	}
-	for _, path := range []string{"/JSON/spider/action/scan/", "/JSON/pscan/view/recordsToScan/", "/JSON/ascan/action/scan/", "/JSON/core/view/alerts/"} {
+	for _, path := range []string{"/JSON/spider/action/scan/", "/JSON/pscan/view/recordsToScan/", "/JSON/ascan/action/disableScanners/", "/JSON/ascan/action/scan/", "/JSON/core/view/alerts/"} {
 		if !fake.called(path) {
 			t.Errorf("runner never called %s", path)
 		}

@@ -146,8 +146,22 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 		return fail(fmt.Errorf("Greenbone default scanner not found"))
 	}
 
+	// gvmd rejects create_target unless it carries a port list (or an inline
+	// port range): "One of PORT_LIST and PORT_RANGE are required". Resolve the
+	// built-in "All IANA assigned TCP" list by name, matching how the config and
+	// scanner above are resolved, and fall back to the first list the feed ships
+	// so a renamed default still yields a usable target.
+	portListData, err := call("resolve-port-list", `<get_port_lists filter="name=&quot;All IANA assigned TCP&quot;"/>`, 2*time.Minute)
+	if err != nil {
+		return fail(err)
+	}
+	portListID := xmlIDByExactName(portListData, "port_list", "All IANA assigned TCP")
+	if portListID == "" {
+		return fail(fmt.Errorf("Greenbone port list not found; feed may still be syncing"))
+	}
+
 	name := "xalgorix-" + filepath.Base(req.ScanDir)
-	targetData, err := call("create-target", fmt.Sprintf(`<create_target><name>%s</name><hosts>%s</hosts></create_target>`, xmlEscape(name), xmlEscape(host)), 2*time.Minute)
+	targetData, err := call("create-target", fmt.Sprintf(`<create_target><name>%s</name><hosts>%s</hosts><port_list id="%s"/></create_target>`, xmlEscape(name), xmlEscape(host), portListID), 2*time.Minute)
 	if err != nil {
 		return fail(err)
 	}

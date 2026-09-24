@@ -120,6 +120,10 @@ func (f *fakeGvmd) respond(command string) string {
 		return `<get_scanners_response status="200">` +
 			`<scanner id="scn-cve"><name>CVE</name></scanner>` +
 			`<scanner id="scn-default"><name>OpenVAS Default</name></scanner></get_scanners_response>`
+	case "get_port_lists":
+		return `<get_port_lists_response status="200">` +
+			`<port_list id="pl-tcp-udp"><name>All IANA assigned TCP and UDP</name></port_list>` +
+			`<port_list id="pl-tcp"><name>All IANA assigned TCP</name></port_list></get_port_lists_response>`
 	case "create_target":
 		return `<create_target_response status="201" status_text="OK" id="tgt-1"/>`
 	case "create_task":
@@ -176,6 +180,9 @@ func TestOpenVASRunAgainstFakeGvmd(t *testing.T) {
 	}
 	if !fake.seen("<hosts>example.test</hosts>") {
 		t.Error("target host was not derived from the URL")
+	}
+	if !fake.seen(`<port_list id="pl-tcp"/>`) {
+		t.Error("target was not created with the exact-match All IANA assigned TCP port list")
 	}
 	findings, err := parseOpenVAS(run.ArtifactPath)
 	if err != nil || len(findings) != 1 || findings[0].CVE != "CVE-2021-0000" {
