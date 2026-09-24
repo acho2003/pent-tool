@@ -61,6 +61,10 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseTrivy(run.ArtifactPath)
 	case "vuls":
 		return parseVuls(run.ArtifactPath)
+	case "nmap":
+		return parseNmap(run.ArtifactPath)
+	case "subfinder", "httpx":
+		return nil, nil // recon evidence tools produce no findings
 	default:
 		return nil, fmt.Errorf("unsupported scanner %q", run.Scanner)
 	}
@@ -221,6 +225,68 @@ func parseVuls(path string) ([]Finding, error) {
 		m, _ := val.(map[string]any)
 		score := firstFloat(m, "cvss3Score")
 		out = append(out, Finding{SourceID: "vuls:" + id + ":" + server, Scanner: "vuls", Title: firstNonEmpty(str(m["title"]), id), Severity: cvssSeverity(score, ""), Target: server, Description: str(m["summary"]), Evidence: firstNonEmpty(str(m["affectedPackages"]), str(m["cveContents"])), CVE: asCVE(id), CVSS: score})
+	}
+	return out, nil
+}
+
+type nmapRun struct {
+	Hosts []nmapHost `xml:"host"`
+}
+type nmapHost struct {
+	Addresses []nmapAddr `xml:"address"`
+	Ports     []nmapPort `xml:"ports>port"`
+}
+type nmapAddr struct {
+	Addr string `xml:"addr,attr"`
+	Type string `xml:"addrtype,attr"`
+}
+type nmapPort struct {
+	Protocol string    `xml:"protocol,attr"`
+	PortID   string    `xml:"portid,attr"`
+	State    nmapState `xml:"state"`
+	Service  nmapSvc   `xml:"service"`
+}
+type nmapState struct {
+	State string `xml:"state,attr"`
+}
+type nmapSvc struct {
+	Name    string `xml:"name,attr"`
+	Product string `xml:"product,attr"`
+	Version string `xml:"version,attr"`
+}
+
+func parseNmap(path string) ([]Finding, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var run nmapRun
+	if err := xml.Unmarshal(b, &run); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, h := range run.Hosts {
+		host := ""
+		for _, a := range h.Addresses {
+			if a.Type == "ipv4" || a.Type == "ipv6" {
+				host = a.Addr
+				break
+			}
+		}
+		for _, p := range h.Ports {
+			if p.State.State != "open" {
+				continue
+			}
+			out = append(out, Finding{
+				SourceID: "nmap:" + host + ":" + p.PortID,
+				Scanner:  "nmap",
+				Title:    firstNonEmpty(p.Service.Name, "open port "+p.PortID),
+				Severity: "info",
+				Target:   host,
+				Endpoint: p.PortID,
+				Evidence: strings.TrimSpace(p.Service.Product + " " + p.Service.Version),
+			})
+		}
 	}
 	return out, nil
 }

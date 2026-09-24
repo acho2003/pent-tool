@@ -60,3 +60,42 @@ func TestPartiallyWrittenNucleiKeepsCompleteRecords(t *testing.T) {
 		t.Fatalf("findings=%#v errors=%v", findings, errs)
 	}
 }
+
+func TestParseNmapPorts(t *testing.T) {
+	xml := `<?xml version="1.0"?><nmaprun><host><address addr="10.0.0.5" addrtype="ipv4"/>` +
+		`<ports><port protocol="tcp" portid="22"><state state="open"/>` +
+		`<service name="ssh" product="OpenSSH" version="9.2"/></port>` +
+		`<port protocol="tcp" portid="443"><state state="closed"/>` +
+		`<service name="https"/></port></ports></host></nmaprun>`
+	dir := t.TempDir()
+	p := filepath.Join(dir, "nmap.xml")
+	if err := os.WriteFile(p, []byte(xml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := parseNmap(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 { // only the open port
+		t.Fatalf("findings = %d, want 1", len(findings))
+	}
+	f := findings[0]
+	if f.SourceID != "nmap:10.0.0.5:22" || f.Scanner != "nmap" || f.Endpoint != "22" {
+		t.Fatalf("unexpected finding: %+v", f)
+	}
+	if f.Title != "ssh" {
+		t.Fatalf("title = %q, want ssh", f.Title)
+	}
+}
+
+func TestParseRunEvidenceOnlyRecon(t *testing.T) {
+	for _, name := range []string{"subfinder", "httpx"} {
+		got, err := ParseRun(Run{Scanner: name, Status: "completed"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("%s produced %d findings, want 0", name, len(got))
+		}
+	}
+}
