@@ -109,14 +109,14 @@ type Config struct {
 	GVMUser   string
 	GVMPass   string
 
-	RateRPS        int
-	ScanHeaders    []string
-	MaxOutputBytes int64
-	NucleiTimeout  time.Duration
-	ZAPTimeout     time.Duration
-	OpenVASTimeout time.Duration
-	TrivyTimeout   time.Duration
-	VulsTimeout    time.Duration
+	RateRPS          int
+	ScanHeaders      []string
+	MaxOutputBytes   int64
+	NucleiTimeout    time.Duration
+	ZAPTimeout       time.Duration
+	OpenVASTimeout   time.Duration
+	TrivyTimeout     time.Duration
+	VulsTimeout      time.Duration
 	SubfinderTimeout time.Duration
 	HttpxTimeout     time.Duration
 	NmapTimeout      time.Duration
