@@ -34,6 +34,7 @@ func NewPipeline(cfg Config) *Pipeline {
 	return &Pipeline{Config: cfg, reconFn: runRecon, Runners: []Runner{
 		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}, build: buildNuclei},
 		zapRunner{},
+		commandRunner{name: "testssl", desc: Descriptor{Name: "testssl", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}, build: buildTestssl},
 		openVASRunner{},
 		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight}, build: buildTrivy},
 		vulsRunner{},

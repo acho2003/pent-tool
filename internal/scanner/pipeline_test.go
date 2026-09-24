@@ -48,6 +48,7 @@ func TestPipelineFixedOrderAndFailureContinuation(t *testing.T) {
 	p := &Pipeline{Runners: []Runner{
 		fakeRunner{name: "nuclei", seen: &seen},
 		fakeRunner{name: "zap", seen: &seen, status: "failed"},
+		fakeRunner{name: "testssl", seen: &seen},
 		fakeRunner{name: "openvas", seen: &seen},
 		fakeRunner{name: "trivy", seen: &seen, status: "not_applicable"},
 		fakeRunner{name: "vuls", seen: &seen, status: "not_applicable"},
@@ -56,7 +57,7 @@ func TestPipelineFixedOrderAndFailureContinuation(t *testing.T) {
 	if !reflect.DeepEqual(seen, OrderedNames) {
 		t.Fatalf("order = %v, want %v", seen, OrderedNames)
 	}
-	if len(runs) != 5 || runs[1].Status != "failed" || runs[2].Status != "completed" {
+	if len(runs) != 6 || runs[1].Status != "failed" || runs[2].Status != "completed" {
 		t.Fatalf("unexpected runs: %#v", runs)
 	}
 }
@@ -82,7 +83,8 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 	var events []Event
 	p := &Pipeline{Runners: []Runner{
 		fakeRunner{name: "nuclei", seen: &seen}, fakeRunner{name: "zap", seen: &seen},
-		fakeRunner{name: "openvas", seen: &seen}, fakeRunner{name: "trivy", seen: &seen}, fakeRunner{name: "vuls", seen: &seen},
+		fakeRunner{name: "testssl", seen: &seen}, fakeRunner{name: "openvas", seen: &seen},
+		fakeRunner{name: "trivy", seen: &seen}, fakeRunner{name: "vuls", seen: &seen},
 	}}
 	runs := p.Run(context.Background(), Request{Target: "example.com", Scanners: []string{"nuclei", "trivy"}}, nil,
 		func(e Event) { events = append(events, e) })
@@ -118,8 +120,8 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 			skippedEvents++
 		}
 	}
-	if skippedEvents != 3 {
-		t.Errorf("scanner_skipped events = %d, want 3", skippedEvents)
+	if skippedEvents != 4 {
+		t.Errorf("scanner_skipped events = %d, want 4", skippedEvents)
 	}
 }
 

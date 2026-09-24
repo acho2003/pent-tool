@@ -11,6 +11,7 @@ func TestExistingRunnerDescriptors(t *testing.T) {
 	}{
 		"nuclei":  {PhaseWeb, WeightLight},
 		"zap":     {PhaseWeb, WeightHeavy},
+		"testssl": {PhaseWeb, WeightLight},
 		"openvas": {PhaseServer, WeightHeavy},
 		"trivy":   {PhaseSAST, WeightLight},
 		"vuls":    {PhaseServer, WeightLight},
