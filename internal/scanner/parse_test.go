@@ -130,3 +130,27 @@ func TestParseRunEvidenceOnlyRecon(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTestsslFindings(t *testing.T) {
+	body := `[
+	  {"id":"SSLv3","ip":"example.com/93.184.216.34","port":"443","severity":"OK","finding":"not offered"},
+	  {"id":"cert_expirationStatus","ip":"example.com/93.184.216.34","port":"443","severity":"HIGH","finding":"expired 3 days ago","cve":"","cwe":"CWE-298"},
+	  {"id":"BREACH","ip":"example.com/93.184.216.34","port":"443","severity":"MEDIUM","finding":"potentially vulnerable","cve":"CVE-2013-3587"}
+	]`
+	p := writeFixture(t, "results.json", body)
+	got, err := ParseRun(Run{Scanner: "testssl", ArtifactPath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 { // OK filtered out; HIGH + MEDIUM kept
+		t.Fatalf("want 2 findings, got %d: %#v", len(got), got)
+	}
+	for _, f := range got {
+		if f.Scanner != "testssl" {
+			t.Errorf("scanner = %q", f.Scanner)
+		}
+		if !strings.HasPrefix(f.SourceID, "testssl:example.com:443:") {
+			t.Errorf("SourceID = %q", f.SourceID)
+		}
+	}
+}

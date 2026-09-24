@@ -63,6 +63,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseVuls(run.ArtifactPath)
 	case "nmap":
 		return parseNmap(run.ArtifactPath)
+	case "testssl":
+		return parseTestssl(run.ArtifactPath)
 	case "subfinder", "httpx":
 		return nil, nil // recon evidence tools produce no findings
 	default:
@@ -287,6 +289,42 @@ func parseNmap(path string) ([]Finding, error) {
 				Evidence: strings.TrimSpace(p.Service.Product + " " + p.Service.Version),
 			})
 		}
+	}
+	return out, nil
+}
+
+// parseTestssl reads testssl.sh's flat --jsonfile array and emits one Finding
+// per actionable entry (severity LOW and above). OK/INFO/DEBUG/WARN entries are
+// status lines, not vulnerabilities, and are dropped so the report stays focused.
+func parseTestssl(path string) ([]Finding, error) {
+	var entries []map[string]any
+	if err := readJSON(path, &entries); err != nil {
+		return nil, err
+	}
+	actionable := map[string]bool{"LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
+	var out []Finding
+	for _, m := range entries {
+		sev := strings.ToUpper(strings.TrimSpace(str(m["severity"])))
+		if !actionable[sev] {
+			continue
+		}
+		id := str(m["id"])
+		host := str(m["ip"])
+		if i := strings.IndexByte(host, '/'); i >= 0 { // "fqdn/ip" -> "fqdn"
+			host = host[:i]
+		}
+		port := str(m["port"])
+		out = append(out, Finding{
+			SourceID:    "testssl:" + host + ":" + port + ":" + id,
+			Scanner:     "testssl",
+			Title:       firstNonEmpty(id, "TLS finding"),
+			Severity:    severity(sev),
+			Target:      host,
+			Endpoint:    host + ":" + port,
+			Description: str(m["finding"]),
+			CVE:         asCVE(str(m["cve"])),
+			CWE:         str(m["cwe"]),
+		})
 	}
 	return out, nil
 }
