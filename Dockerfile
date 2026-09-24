@@ -230,6 +230,11 @@ RUN git clone --depth 1 https://github.com/Dionach/CMSmap /opt/CMSmap \
     && chmod +x /usr/local/bin/cmsmap \
     || echo "WARN: cmsmap prefetch failed (installable at runtime)"
 
+# testssl.sh — TLS/cert scanner (bash script; needs its bundled etc/ data dir)
+RUN git clone --depth 1 https://github.com/testssl/testssl.sh /opt/testssl.sh \
+      && ln -sf /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh \
+    || echo "WARN: testssl.sh install failed (installable at runtime)"
+
 # Bake nuclei templates so first-run scans don't stall on a template fetch.
 RUN /root/go/bin/nuclei -update-templates >/dev/null 2>&1 || echo "WARN: nuclei template prefetch skipped"
 
