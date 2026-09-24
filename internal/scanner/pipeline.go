@@ -66,6 +66,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.NmapPath == "" {
 		cfg.NmapPath = "nmap"
 	}
+	if cfg.TestsslPath == "" {
+		cfg.TestsslPath = "testssl.sh"
+	}
 	if cfg.GVMPort == 0 {
 		cfg.GVMPort = 9390
 	}
@@ -101,6 +104,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.NmapTimeout <= 0 {
 		cfg.NmapTimeout = 30 * time.Minute
+	}
+	if cfg.TestsslTimeout <= 0 {
+		cfg.TestsslTimeout = 30 * time.Minute
 	}
 }
 

@@ -41,6 +41,10 @@ type Config struct {
 	TrivyPath             string
 	VulsPath              string
 	VulsSSHConfigPath     string
+	SubfinderPath         string
+	HttpxPath             string
+	NmapPath              string
+	TestsslPath           string
 	ZAPURL                string
 	ZAPAPIKey             string
 	GVMHost               string
@@ -55,6 +59,10 @@ type Config struct {
 	OpenVASTimeoutSec     int
 	TrivyTimeoutSec       int
 	VulsTimeoutSec        int
+	SubfinderTimeoutSec   int
+	HttpxTimeoutSec       int
+	NmapTimeoutSec        int
+	TestsslTimeoutSec     int
 
 	// ContextCompactTokens is an OPTIONAL absolute override for the compaction
 	// trigger. When > 0, the agent auto-compacts older turns into a structured
@@ -346,6 +354,10 @@ func load() *Config {
 		TrivyPath:             envOr("XALGORIX_TRIVY_PATH", "trivy"),
 		VulsPath:              envOr("XALGORIX_VULS_PATH", "vuls"),
 		VulsSSHConfigPath:     envOr("XALGORIX_VULS_SSH_CONFIG", filepath.Join(home, ".ssh", "config")),
+		SubfinderPath:         envOr("XALGORIX_SUBFINDER_PATH", "subfinder"),
+		HttpxPath:             envOr("XALGORIX_HTTPX_PATH", "httpx"),
+		NmapPath:              envOr("XALGORIX_NMAP_PATH", "nmap"),
+		TestsslPath:           envOr("XALGORIX_TESTSSL_PATH", "testssl.sh"),
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
 		GVMHost:               envOr("XALGORIX_GVM_HOST", ""),
@@ -360,6 +372,10 @@ func load() *Config {
 		OpenVASTimeoutSec:     envOrInt("XALGORIX_OPENVAS_TIMEOUT_SECONDS", 14400),
 		TrivyTimeoutSec:       envOrInt("XALGORIX_TRIVY_TIMEOUT_SECONDS", 3600),
 		VulsTimeoutSec:        envOrInt("XALGORIX_VULS_TIMEOUT_SECONDS", 3600),
+		SubfinderTimeoutSec:   envOrInt("XALGORIX_SUBFINDER_TIMEOUT_SECONDS", 600),
+		HttpxTimeoutSec:       envOrInt("XALGORIX_HTTPX_TIMEOUT_SECONDS", 600),
+		NmapTimeoutSec:        envOrInt("XALGORIX_NMAP_TIMEOUT_SECONDS", 1800),
+		TestsslTimeoutSec:     envOrInt("XALGORIX_TESTSSL_TIMEOUT_SECONDS", 1800),
 
 		// Runtime
 		RuntimeBackend:      "native", // Always native in Go version

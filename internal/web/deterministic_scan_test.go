@@ -2,9 +2,59 @@ package web
 
 import (
 	"testing"
+	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
+
+// TestScannerConfigThreadsReconAndTestsslPaths guards the config-plumbing gap
+// where the recon tools' (subfinder/httpx/nmap) and testssl's paths/timeouts
+// were never copied from config.Config into scanner.Config, silently falling
+// back to bare PATH names inside the pipeline instead of respecting operator
+// configuration. Built directly from a hand-populated config.Config literal
+// (rather than the full config.Load/Get singleton) to avoid cross-package
+// singleton/env brittleness while still exercising the real scannerConfig
+// mapping.
+func TestScannerConfigThreadsReconAndTestsslPaths(t *testing.T) {
+	cfg := &config.Config{
+		SubfinderPath:       "/usr/local/bin/subfinder",
+		HttpxPath:           "/usr/local/bin/httpx",
+		NmapPath:            "/usr/local/bin/nmap",
+		TestsslPath:         "/opt/testssl.sh/testssl.sh",
+		SubfinderTimeoutSec: 111,
+		HttpxTimeoutSec:     222,
+		NmapTimeoutSec:      333,
+		TestsslTimeoutSec:   444,
+	}
+
+	sc := scannerConfig(cfg)
+
+	if sc.SubfinderPath != "/usr/local/bin/subfinder" {
+		t.Errorf("SubfinderPath = %q, want /usr/local/bin/subfinder", sc.SubfinderPath)
+	}
+	if sc.HttpxPath != "/usr/local/bin/httpx" {
+		t.Errorf("HttpxPath = %q, want /usr/local/bin/httpx", sc.HttpxPath)
+	}
+	if sc.NmapPath != "/usr/local/bin/nmap" {
+		t.Errorf("NmapPath = %q, want /usr/local/bin/nmap", sc.NmapPath)
+	}
+	if sc.TestsslPath != "/opt/testssl.sh/testssl.sh" {
+		t.Errorf("TestsslPath = %q, want /opt/testssl.sh/testssl.sh", sc.TestsslPath)
+	}
+	if sc.SubfinderTimeout != 111*time.Second {
+		t.Errorf("SubfinderTimeout = %v, want 111s", sc.SubfinderTimeout)
+	}
+	if sc.HttpxTimeout != 222*time.Second {
+		t.Errorf("HttpxTimeout = %v, want 222s", sc.HttpxTimeout)
+	}
+	if sc.NmapTimeout != 333*time.Second {
+		t.Errorf("NmapTimeout = %v, want 333s", sc.NmapTimeout)
+	}
+	if sc.TestsslTimeout != 444*time.Second {
+		t.Errorf("TestsslTimeout = %v, want 444s", sc.TestsslTimeout)
+	}
+}
 
 // TestUpsertScannerRunKeysOnScopeAndScanner guards the crash-persisted resume
 // record: Increment 2 emits duplicate scanner names across scopes (per-host

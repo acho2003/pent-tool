@@ -106,6 +106,7 @@ type Config struct {
 	SubfinderPath     string
 	HttpxPath         string
 	NmapPath          string
+	TestsslPath       string
 
 	ZAPURL    string
 	ZAPAPIKey string
@@ -127,6 +128,7 @@ type Config struct {
 	SubfinderTimeout time.Duration
 	HttpxTimeout     time.Duration
 	NmapTimeout      time.Duration
+	TestsslTimeout   time.Duration
 }
 
 type EmitFunc func(Event)
