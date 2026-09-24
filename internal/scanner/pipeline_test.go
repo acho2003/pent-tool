@@ -13,6 +13,7 @@ import (
 type fakeRunner struct {
 	name   string
 	seen   *[]string
+	gotDir *[]string
 	status string
 	cancel context.CancelFunc
 }
@@ -23,6 +24,9 @@ func (f fakeRunner) Descriptor() Descriptor {
 }
 func (f fakeRunner) Run(_ context.Context, req Request, _ Config, emit EmitFunc) Run {
 	*f.seen = append(*f.seen, f.name)
+	if f.gotDir != nil {
+		*f.gotDir = append(*f.gotDir, req.ScanDir)
+	}
 	if f.cancel != nil {
 		f.cancel()
 	}
@@ -317,6 +321,66 @@ func TestPipelineFansOutPerHost(t *testing.T) {
 	// Recon runs come first and carry the recon scope.
 	if runs[0].Scanner != "subfinder" || runs[0].Scope != reconScopeKey("example.com") {
 		t.Fatalf("first run = %#v, want subfinder in recon scope", runs[0])
+	}
+}
+
+func TestPipelineIsolatesPerHostScanDirs(t *testing.T) {
+	seen := []string{}
+	dirs := []string{}
+	root := t.TempDir()
+	p := &Pipeline{Runners: []Runner{
+		fakeRunner{name: "nuclei", seen: &seen, gotDir: &dirs},
+	}}
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("a.example.com"), HostScope("b.example.com")}, nil
+	}
+	p.Run(context.Background(), Request{Target: "example.com", ScanDir: root}, nil, nil)
+	if len(dirs) != 2 {
+		t.Fatalf("scan runner invoked %d times, want 2", len(dirs))
+	}
+	if dirs[0] == dirs[1] {
+		t.Fatalf("both hosts shared ScanDir %q; artifacts would collide", dirs[0])
+	}
+	wantA := filepath.Join(root, "hosts", sanitizeHost("a.example.com"))
+	wantB := filepath.Join(root, "hosts", sanitizeHost("b.example.com"))
+	if dirs[0] != wantA || dirs[1] != wantB {
+		t.Fatalf("per-host ScanDirs = %v, want [%q %q]", dirs, wantA, wantB)
+	}
+}
+
+func TestPipelineReusesReconOnResume(t *testing.T) {
+	seen := []string{}
+	p := &Pipeline{Runners: []Runner{
+		fakeRunner{name: "nuclei", seen: &seen},
+	}}
+	called := false
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		called = true
+		t.Error("reconFn must not run on resume with prior recon runs")
+		return nil, nil
+	}
+	existing := []Run{
+		{Scanner: "subfinder", Scope: reconScopeKey("example.com"), Status: "completed"},
+		{Scanner: "nuclei", Scope: "host:a.example.com", Target: "a.example.com", Status: "completed", Checksum: "immutable"},
+	}
+	runs := p.Run(context.Background(), Request{Target: "example.com", ScanDir: t.TempDir()}, existing, nil)
+	if called {
+		t.Fatal("reconFn was invoked on resume")
+	}
+	if len(seen) != 0 {
+		t.Fatalf("scan runner re-executed on resume: %v", seen)
+	}
+	var nuclei *Run
+	for i := range runs {
+		if runs[i].Scanner == "nuclei" && runs[i].Scope == "host:a.example.com" {
+			nuclei = &runs[i]
+		}
+	}
+	if nuclei == nil {
+		t.Fatal("completed nuclei run for host:a.example.com was dropped on resume")
+	}
+	if nuclei.Status != "completed" || nuclei.Checksum != "immutable" {
+		t.Fatalf("reused run mutated: %#v", *nuclei)
 	}
 }
 

@@ -113,8 +113,18 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	out := make([]Run, 0, len(p.Runners))
 
 	// Recon phase runs first. Its runs carry their own recon:<target> scope and
-	// are reused on resume by (scope, scanner) just like scan runs.
-	scopes, reconRuns := recon(ctx, req, p.Config, emit)
+	// are reused on resume by (scope, scanner) just like scan runs. On resume we
+	// reconstruct scopes from the prior run rather than re-invoking the real recon
+	// tools, which would waste work and could drop a host (and its completed scan
+	// evidence) that recon no longer reports.
+	var scopes []Scope
+	var reconRuns []Run
+	if hasTerminalReconRuns(existing) {
+		scopes, reconRuns = reusePriorRecon(existing)
+	}
+	if len(scopes) == 0 {
+		scopes, reconRuns = recon(ctx, req, p.Config, emit)
+	}
 	for _, rr := range reconRuns {
 		if old, ok := byKey[resumeKey(rr.Scope, rr.Scanner)]; ok {
 			out = append(out, old)
@@ -131,6 +141,10 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 		scopeKey := sc.Key()
 		hostReq := req
 		hostReq.Target = sc.Target
+		// Isolate each host's scanner artifacts. Every scan runner derives its
+		// output base from req.ScanDir alone, so two scopes writing under one
+		// ScanDir would clobber each other's results and break VerifyChecksum.
+		hostReq.ScanDir = filepath.Join(req.ScanDir, "hosts", sanitizeHost(sc.Target))
 		for i, runner := range p.Runners {
 			if old, ok := byKey[resumeKey(scopeKey, runner.Name())]; ok {
 				out = append(out, old)
@@ -172,6 +186,41 @@ func indexTerminal(existing []Run, fallbackScope string) map[string]Run {
 		byKey[resumeKey(s, run.Scanner)] = run
 	}
 	return byKey
+}
+
+// hasTerminalReconRuns reports whether existing carries at least one terminal
+// recon-phase run, i.e. a prior scan already completed the recon phase.
+func hasTerminalReconRuns(existing []Run) bool {
+	for _, run := range existing {
+		if run.Terminal() && strings.HasPrefix(run.Scope, "recon:") {
+			return true
+		}
+	}
+	return false
+}
+
+// reusePriorRecon reconstructs the recon result from a prior run so a resume does
+// not re-invoke the real recon tools. It returns the terminal recon runs and the
+// host scopes rebuilt from the distinct host:<target> scan-run scopes seen in
+// existing, in first-seen order.
+func reusePriorRecon(existing []Run) (scopes []Scope, reconRuns []Run) {
+	seen := make(map[string]bool)
+	for _, run := range existing {
+		if !run.Terminal() {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(run.Scope, "recon:"):
+			reconRuns = append(reconRuns, run)
+		case strings.HasPrefix(run.Scope, "host:"):
+			if seen[run.Scope] {
+				continue
+			}
+			seen[run.Scope] = true
+			scopes = append(scopes, HostScope(strings.TrimPrefix(run.Scope, "host:")))
+		}
+	}
+	return scopes, reconRuns
 }
 
 // skippedRun builds the terminal record for a scanner deselected from this scan,
