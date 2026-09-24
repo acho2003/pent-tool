@@ -23,17 +23,28 @@ import (
 type Pipeline struct {
 	Config  Config
 	Runners []Runner
+	// reconFn discovers host scopes and returns the recon-phase runs. NewPipeline
+	// wires the real runRecon; a hand-built &Pipeline{} leaves it nil, which Run
+	// falls back to singleScopeRecon so tests keep their single implicit scope.
+	reconFn func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run)
 }
 
 func NewPipeline(cfg Config) *Pipeline {
 	applyDefaults(&cfg)
-	return &Pipeline{Config: cfg, Runners: []Runner{
+	return &Pipeline{Config: cfg, reconFn: runRecon, Runners: []Runner{
 		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}, build: buildNuclei},
 		zapRunner{},
 		openVASRunner{},
 		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight}, build: buildTrivy},
 		vulsRunner{},
 	}}
+}
+
+// singleScopeRecon is the nil-reconFn fallback: it discovers no new hosts and
+// runs no recon commands, so Run scans the single implicit host scope exactly as
+// it did before recon fan-out existed.
+func singleScopeRecon(_ context.Context, req Request, _ Config, _ EmitFunc) ([]Scope, []Run) {
+	return []Scope{HostScope(req.Target)}, nil
 }
 
 func applyDefaults(cfg *Config) {
@@ -94,7 +105,61 @@ func applyDefaults(cfg *Config) {
 // runs are reused, which makes queue resume continue at the first incomplete
 // scanner without mutating immutable raw artifacts.
 func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit EmitFunc) []Run {
-	scope := HostScope(req.Target).Key()
+	recon := p.reconFn
+	if recon == nil {
+		recon = singleScopeRecon
+	}
+	byKey := indexTerminal(existing, HostScope(req.Target).Key())
+	out := make([]Run, 0, len(p.Runners))
+
+	// Recon phase runs first. Its runs carry their own recon:<target> scope and
+	// are reused on resume by (scope, scanner) just like scan runs.
+	scopes, reconRuns := recon(ctx, req, p.Config, emit)
+	for _, rr := range reconRuns {
+		if old, ok := byKey[resumeKey(rr.Scope, rr.Scanner)]; ok {
+			out = append(out, old)
+			continue
+		}
+		out = append(out, rr)
+	}
+	if len(scopes) == 0 {
+		scopes = []Scope{HostScope(req.Target)} // degrade: scan the single implicit host
+	}
+
+	// Scan phase, fanned out per discovered host scope in discovery order.
+	for _, sc := range scopes {
+		scopeKey := sc.Key()
+		hostReq := req
+		hostReq.Target = sc.Target
+		for i, runner := range p.Runners {
+			if old, ok := byKey[resumeKey(scopeKey, runner.Name())]; ok {
+				out = append(out, old)
+				continue
+			}
+			// A deselected scanner still produces an explicit terminal record, so
+			// the scan's evidence shows what was not attempted and why.
+			if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
+				out = append(out, skippedRun(runner.Name(), scopeKey, hostReq, emit))
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				for _, rest := range p.Runners[i:] {
+					out = append(out, cancelledRun(rest.Name(), scopeKey, hostReq, err, emit))
+				}
+				break
+			}
+			run := runAttempt(ctx, runner, hostReq, p.Config, emit)
+			run.Scope = scopeKey
+			out = append(out, run)
+		}
+	}
+	return out
+}
+
+// indexTerminal maps each existing terminal run to its (scope, scanner) resume
+// key. A legacy run with empty Scope predates scoping and folds to fallbackScope
+// (the implicit host scope) so Increment-1 resume records still match.
+func indexTerminal(existing []Run, fallbackScope string) map[string]Run {
 	byKey := make(map[string]Run, len(existing))
 	for _, run := range existing {
 		if !run.Terminal() {
@@ -102,43 +167,33 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 		}
 		s := run.Scope
 		if s == "" {
-			s = scope // legacy records predate scoping; treat as the implicit scope
+			s = fallbackScope
 		}
 		byKey[resumeKey(s, run.Scanner)] = run
 	}
-	out := make([]Run, 0, len(p.Runners))
-	for i, runner := range p.Runners {
-		if old, ok := byKey[resumeKey(scope, runner.Name())]; ok {
-			out = append(out, old)
-			continue
-		}
-		// A deselected scanner still produces an explicit terminal record, so
-		// the scan's evidence shows what was not attempted and why.
-		if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
-			now := time.Now().Format(time.RFC3339Nano)
-			r := Run{Scanner: runner.Name(), Target: req.Target, Status: "skipped", Reason: "not selected for this scan", StartedAt: now, FinishedAt: now, Scope: scope}
-			out = append(out, r)
-			if emit != nil {
-				emit(Event{Type: "scanner_skipped", Scanner: runner.Name(), Run: r, Output: r.Reason})
-			}
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			for _, rest := range p.Runners[i:] {
-				now := time.Now().Format(time.RFC3339Nano)
-				r := Run{Scanner: rest.Name(), Target: req.Target, Status: "cancelled", Reason: err.Error(), StartedAt: now, FinishedAt: now, Scope: scope}
-				out = append(out, r)
-				if emit != nil {
-					emit(Event{Type: "scanner_failed", Scanner: rest.Name(), Run: r, Output: r.Reason})
-				}
-			}
-			break
-		}
-		run := runAttempt(ctx, runner, req, p.Config, emit)
-		run.Scope = scope
-		out = append(out, run)
+	return byKey
+}
+
+// skippedRun builds the terminal record for a scanner deselected from this scan,
+// scoped to scopeKey and emitting the matching skip event.
+func skippedRun(name, scopeKey string, req Request, emit EmitFunc) Run {
+	now := time.Now().Format(time.RFC3339Nano)
+	r := Run{Scanner: name, Target: req.Target, Status: "skipped", Reason: "not selected for this scan", StartedAt: now, FinishedAt: now, Scope: scopeKey}
+	if emit != nil {
+		emit(Event{Type: "scanner_skipped", Scanner: name, Run: r, Output: r.Reason})
 	}
-	return out
+	return r
+}
+
+// cancelledRun builds the terminal record for a scanner not attempted because the
+// context was cancelled, scoped to scopeKey and emitting the failure event.
+func cancelledRun(name, scopeKey string, req Request, reason error, emit EmitFunc) Run {
+	now := time.Now().Format(time.RFC3339Nano)
+	r := Run{Scanner: name, Target: req.Target, Status: "cancelled", Reason: reason.Error(), StartedAt: now, FinishedAt: now, Scope: scopeKey}
+	if emit != nil {
+		emit(Event{Type: "scanner_failed", Scanner: name, Run: r, Output: r.Reason})
+	}
+	return r
 }
 
 func resumeKey(scope, scanner string) string { return scope + "\x00" + scanner }

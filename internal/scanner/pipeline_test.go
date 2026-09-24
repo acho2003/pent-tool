@@ -237,6 +237,11 @@ type atomicInt64Adapter struct{}
 
 func TestRunStampsImplicitScope(t *testing.T) {
 	p := NewPipeline(Config{})
+	// Inject a deterministic recon stub so this test needs no real recon tools:
+	// a single implicit host scope and no recon runs (pre-fan-out behavior).
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("example.com")}, nil
+	}
 	// Only run the "skipped" bookkeeping path so the test needs no real tools:
 	// select a scanner subset of one, leaving the rest skipped.
 	req := Request{Target: "example.com", Scanners: []string{"nuclei"}, ScanDir: t.TempDir()}
@@ -257,6 +262,11 @@ func TestRunStampsImplicitScope(t *testing.T) {
 
 func TestResumeReusesLegacyEmptyScopeRuns(t *testing.T) {
 	p := NewPipeline(Config{})
+	// Inject a deterministic recon stub so this test needs no real recon tools:
+	// a single implicit host scope and no recon runs (pre-fan-out behavior).
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("example.com")}, nil
+	}
 	// A legacy terminal run with empty Scope must be reused (not re-run).
 	legacy := Run{Scanner: "nuclei", Target: "example.com", Status: "completed"}
 	req := Request{Target: "example.com", Scanners: []string{"nuclei"}, ScanDir: t.TempDir()}
@@ -274,6 +284,39 @@ func TestResumeReusesLegacyEmptyScopeRuns(t *testing.T) {
 	}
 	if got.Status != "completed" {
 		t.Fatalf("nuclei status = %q, want completed (legacy run should be reused)", got.Status)
+	}
+}
+
+func TestPipelineFansOutPerHost(t *testing.T) {
+	seen := []string{}
+	p := &Pipeline{Runners: []Runner{
+		fakeRunner{name: "nuclei", seen: &seen},
+		fakeRunner{name: "zap", seen: &seen},
+	}}
+	// Inject a recon stub returning two host scopes plus one recon run.
+	p.reconFn = func(ctx context.Context, req Request, cfg Config, emit EmitFunc) ([]Scope, []Run) {
+		now := time.Now().Format(time.RFC3339Nano)
+		return []Scope{HostScope("a.example.com"), HostScope("b.example.com")},
+			[]Run{{Scanner: "subfinder", Scope: reconScopeKey(req.Target), Status: "completed", StartedAt: now, FinishedAt: now}}
+	}
+	runs := p.Run(context.Background(), Request{Target: "example.com", ScanDir: t.TempDir()}, nil, nil)
+	// 1 recon run + 2 hosts * 2 scan runners = 5.
+	reconRuns := 1
+	if want := reconRuns + 2*len(p.Runners); len(runs) != want {
+		t.Fatalf("runs = %d, want %d", len(runs), want)
+	}
+	hostScopes := map[string]int{}
+	for _, r := range runs {
+		if r.Scanner == "nuclei" || r.Scanner == "zap" {
+			hostScopes[r.Scope]++
+		}
+	}
+	if hostScopes["host:a.example.com"] != 2 || hostScopes["host:b.example.com"] != 2 {
+		t.Fatalf("per-host scan runs wrong: %v", hostScopes)
+	}
+	// Recon runs come first and carry the recon scope.
+	if runs[0].Scanner != "subfinder" || runs[0].Scope != reconScopeKey("example.com") {
+		t.Fatalf("first run = %#v, want subfinder in recon scope", runs[0])
 	}
 }
 
