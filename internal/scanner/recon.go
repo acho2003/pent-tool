@@ -265,3 +265,42 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 	}
 	return scopes, runs
 }
+
+// subfinderRunner is a descriptor stub for subfinder within the recon phase.
+type subfinderRunner struct{}
+
+func (subfinderRunner) Name() string { return "subfinder" }
+
+func (subfinderRunner) Descriptor() Descriptor {
+	return Descriptor{Name: "subfinder", Phase: PhaseRecon, Weight: WeightLight}
+}
+
+func (subfinderRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	return notApplicableRun("subfinder", req, cfg, "recon runs via the recon phase", emit)
+}
+
+// httpxRunner is a descriptor stub for httpx within the recon phase.
+type httpxRunner struct{}
+
+func (httpxRunner) Name() string { return "httpx" }
+
+func (httpxRunner) Descriptor() Descriptor {
+	return Descriptor{Name: "httpx", Phase: PhaseRecon, Weight: WeightLight}
+}
+
+func (httpxRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	return notApplicableRun("httpx", req, cfg, "recon runs via the recon phase", emit)
+}
+
+// nmapRunner is a descriptor stub for nmap within the recon phase.
+type nmapRunner struct{}
+
+func (nmapRunner) Name() string { return "nmap" }
+
+func (nmapRunner) Descriptor() Descriptor {
+	return Descriptor{Name: "nmap", Phase: PhaseRecon, Weight: WeightLight}
+}
+
+func (nmapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	return notApplicableRun("nmap", req, cfg, "recon runs via the recon phase", emit)
+}

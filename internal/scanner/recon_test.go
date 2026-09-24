@@ -92,3 +92,13 @@ func TestParseSubfinderHosts(t *testing.T) {
 		t.Fatalf("hosts = %v", hosts)
 	}
 }
+
+func TestReconRunnerDescriptors(t *testing.T) {
+	rs := []Runner{subfinderRunner{}, httpxRunner{}, nmapRunner{}}
+	for _, r := range rs {
+		d := r.Descriptor()
+		if d.Phase != PhaseRecon {
+			t.Errorf("%s phase = %q, want recon", d.Name, d.Phase)
+		}
+	}
+}
