@@ -52,8 +52,8 @@ func GenerateCLIReport(cfg *config.Config, target, scanDir string, runs []scanne
 	if cfg == nil {
 		return "", fmt.Errorf("configuration is required")
 	}
-	if len(runs) != len(scanner.OrderedNames) {
-		return "", fmt.Errorf("expected five scanner statuses, got %d", len(runs))
+	if len(runs) == 0 {
+		return "", fmt.Errorf("no scanner runs to report")
 	}
 	for _, run := range runs {
 		if !run.Terminal() {
