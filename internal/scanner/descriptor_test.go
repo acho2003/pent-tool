@@ -14,6 +14,7 @@ func TestExistingRunnerDescriptors(t *testing.T) {
 		"testssl": {PhaseWeb, WeightLight},
 		"openvas": {PhaseServer, WeightHeavy},
 		"trivy":   {PhaseSAST, WeightLight},
+		"semgrep": {PhaseSAST, WeightLight},
 		"vuls":    {PhaseServer, WeightLight},
 	}
 	if len(p.Runners) != len(want) {

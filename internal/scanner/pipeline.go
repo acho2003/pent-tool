@@ -38,6 +38,7 @@ func NewPipeline(cfg Config) *Pipeline {
 		openVASRunner{},
 		vulsRunner{},
 		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildTrivy},
+		commandRunner{name: "semgrep", desc: Descriptor{Name: "semgrep", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildSemgrep},
 	}}
 }
 

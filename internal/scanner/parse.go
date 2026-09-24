@@ -59,6 +59,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseOpenVAS(run.ArtifactPath)
 	case "trivy":
 		return parseTrivy(run.ArtifactPath)
+	case "semgrep":
+		return parseSemgrep(run.ArtifactPath)
 	case "vuls":
 		return parseVuls(run.ArtifactPath)
 	case "nmap":
@@ -192,6 +194,45 @@ func parseOpenVAS(path string) ([]Finding, error) {
 		out = append(out, Finding{SourceID: "openvas:" + firstNonEmpty(r.ID, r.NVT.OID), Scanner: "openvas", Title: r.Name, Severity: cvssSeverity(score, r.Threat), Target: r.Host, Endpoint: r.Port, Description: r.Description, Evidence: "Greenbone NVT " + r.NVT.OID, CVE: firstCSV(r.NVT.CVE), CVSS: score})
 	}
 	return out, nil
+}
+
+// parseSemgrep reads semgrep --json output. SourceID is semgrep:rule:file:line.
+func parseSemgrep(path string) ([]Finding, error) {
+	var root map[string]any
+	if err := readJSON(path, &root); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, rv := range array(root["results"]) {
+		r, _ := rv.(map[string]any)
+		rule := str(r["check_id"])
+		file := str(r["path"])
+		start, _ := r["start"].(map[string]any)
+		line := str(start["line"])
+		extra, _ := r["extra"].(map[string]any)
+		out = append(out, Finding{
+			SourceID:    "semgrep:" + rule + ":" + file + ":" + line,
+			Scanner:     "semgrep",
+			Title:       firstNonEmpty(rule, "semgrep finding"),
+			Severity:    semgrepSeverity(str(extra["severity"])),
+			Target:      file,
+			Endpoint:    file + ":" + line,
+			Description: str(extra["message"]),
+		})
+	}
+	return out, nil
+}
+
+// semgrepSeverity maps semgrep's ERROR/WARNING/INFO to the shared scale.
+func semgrepSeverity(s string) string {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "ERROR":
+		return "high"
+	case "WARNING":
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func parseVuls(path string) ([]Finding, error) {

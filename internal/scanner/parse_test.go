@@ -165,3 +165,18 @@ func TestParseTestsslFindings(t *testing.T) {
 		t.Errorf("multi-CVE not narrowed to first: CVE = %q", sweet32.CVE)
 	}
 }
+
+func TestParseSemgrepFindings(t *testing.T) {
+	body := `{"results":[{"check_id":"go.lang.security.audit.xss","path":"web/h.go","start":{"line":42},"extra":{"message":"XSS","severity":"ERROR"}}]}`
+	p := writeFixture(t, "results.json", body)
+	got, err := ParseRun(Run{Scanner: "semgrep", ArtifactPath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != "semgrep:go.lang.security.audit.xss:web/h.go:42" {
+		t.Fatalf("parsed %#v", got)
+	}
+	if got[0].Severity != "high" {
+		t.Errorf("severity = %q, want high", got[0].Severity)
+	}
+}

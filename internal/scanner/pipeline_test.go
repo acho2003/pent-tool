@@ -55,14 +55,15 @@ func TestPipelineFixedOrderAndFailureContinuation(t *testing.T) {
 		fakeRunner{name: "testssl", seen: &seen, applies: appliesToHost},
 		fakeRunner{name: "openvas", seen: &seen, applies: appliesToHost},
 		fakeRunner{name: "trivy", seen: &seen, status: "not_applicable", applies: appliesToHost},
+		fakeRunner{name: "semgrep", seen: &seen, status: "not_applicable", applies: appliesToHost},
 		fakeRunner{name: "vuls", seen: &seen, status: "not_applicable", applies: appliesToHost},
 	}}
 	runs := p.Run(context.Background(), Request{Target: "example.com"}, nil, nil)
 	if !reflect.DeepEqual(seen, OrderedNames) {
 		t.Fatalf("order = %v, want %v", seen, OrderedNames)
 	}
-	// 6 runners * (1 host scope + 1 source scope) = 12 rows.
-	if len(runs) != 12 || runs[1].Status != "failed" || runs[2].Status != "completed" {
+	// 7 runners * (1 host scope + 1 source scope) = 14 rows.
+	if len(runs) != 14 || runs[1].Status != "failed" || runs[2].Status != "completed" {
 		t.Fatalf("unexpected runs: %#v", runs)
 	}
 }
@@ -109,7 +110,8 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 	p := &Pipeline{Runners: []Runner{
 		fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost}, fakeRunner{name: "zap", seen: &seen, applies: appliesToHost},
 		fakeRunner{name: "testssl", seen: &seen, applies: appliesToHost}, fakeRunner{name: "openvas", seen: &seen, applies: appliesToHost},
-		fakeRunner{name: "trivy", seen: &seen, applies: appliesToHost}, fakeRunner{name: "vuls", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "trivy", seen: &seen, applies: appliesToHost}, fakeRunner{name: "semgrep", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "vuls", seen: &seen, applies: appliesToHost},
 	}}
 	runs := p.Run(context.Background(), Request{Target: "example.com", Scanners: []string{"nuclei", "trivy"}}, nil,
 		func(e Event) { events = append(events, e) })
@@ -146,9 +148,9 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 			skippedEvents++
 		}
 	}
-	// 4 deselected scanners per scope * 2 scopes (host + source) = 8.
-	if skippedEvents != 8 {
-		t.Errorf("scanner_skipped events = %d, want 8", skippedEvents)
+	// 5 deselected scanners per scope * 2 scopes (host + source) = 10.
+	if skippedEvents != 10 {
+		t.Errorf("scanner_skipped events = %d, want 10", skippedEvents)
 	}
 }
 
