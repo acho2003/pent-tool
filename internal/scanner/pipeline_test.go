@@ -571,3 +571,12 @@ func TestApplyDefaultsReconFields(t *testing.T) {
 		t.Fatalf("recon timeouts = %v/%v/%v", c.SubfinderTimeout, c.HttpxTimeout, c.NmapTimeout)
 	}
 }
+
+func TestApplyDefaultsMaxWorkers(t *testing.T) {
+	if got := NewPipeline(Config{}).Config.MaxWorkers; got != 3 {
+		t.Fatalf("MaxWorkers default = %d, want 3", got)
+	}
+	if got := NewPipeline(Config{MaxWorkers: 8}).Config.MaxWorkers; got != 8 {
+		t.Fatalf("MaxWorkers override = %d, want 8", got)
+	}
+}

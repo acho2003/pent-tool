@@ -72,6 +72,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.RateRPS <= 0 {
 		cfg.RateRPS = 10
 	}
+	if cfg.MaxWorkers <= 0 {
+		cfg.MaxWorkers = 3
+	}
 	if cfg.MaxOutputBytes <= 0 {
 		cfg.MaxOutputBytes = 100 << 20
 	}

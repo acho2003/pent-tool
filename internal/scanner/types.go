@@ -110,6 +110,7 @@ type Config struct {
 	GVMPass   string
 
 	RateRPS          int
+	MaxWorkers       int
 	ScanHeaders      []string
 	MaxOutputBytes   int64
 	NucleiTimeout    time.Duration

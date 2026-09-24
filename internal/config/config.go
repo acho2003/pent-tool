@@ -49,6 +49,7 @@ type Config struct {
 	GVMUsername           string
 	GVMPassword           string
 	ScannerMaxOutputBytes int64
+	MaxWorkers            int
 	NucleiTimeoutSec      int
 	ZAPTimeoutSec         int
 	OpenVASTimeoutSec     int
@@ -353,6 +354,7 @@ func load() *Config {
 		GVMUsername:           envOr("XALGORIX_GVM_USERNAME", ""),
 		GVMPassword:           envOr("XALGORIX_GVM_PASSWORD", ""),
 		ScannerMaxOutputBytes: int64(envOrInt("XALGORIX_SCANNER_MAX_OUTPUT_BYTES", 100<<20)),
+		MaxWorkers:            envOrInt("XALGORIX_MAX_WORKERS", 3),
 		NucleiTimeoutSec:      envOrInt("XALGORIX_NUCLEI_TIMEOUT_SECONDS", 3600),
 		ZAPTimeoutSec:         envOrInt("XALGORIX_ZAP_TIMEOUT_SECONDS", 7200),
 		OpenVASTimeoutSec:     envOrInt("XALGORIX_OPENVAS_TIMEOUT_SECONDS", 14400),
