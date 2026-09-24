@@ -86,6 +86,9 @@ ENV GOBIN=/go/bin
 RUN go install -v -p 4 github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/aquasecurity/trivy/cmd/trivy@latest
 RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/future-architect/vuls/cmd/vuls@latest
+RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/google/osv-scanner/v2/cmd/osv-scanner@latest \
+    || go install -v -p 4 github.com/google/osv-scanner/cmd/osv-scanner@latest \
+    || echo "WARN: osv-scanner install failed (installable at runtime)"
 
 RUN set -eux; \
     for pkg in \
