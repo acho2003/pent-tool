@@ -176,11 +176,12 @@ Pure, unit-tested function in a dedicated file with a documented table:
   `{22, 21, 23, 25, 53, 110, 139, 445, 3306, 3389, 5432, 6379, 27017, …}`.
   Tools: openvas, vuls, nmap script findings.
 - **Both** tracks when both conditions hold.
-- **Neither**: host is live but exposes nothing useful → each candidate tool
-  records `not_applicable` for that scope.
-- **Fail open**: a host whose evidence yields no tracks at all (recon
-  degraded/absent) is scanned on all tracks rather than recorded
-  `not_applicable`, so a reachable host is never silently under-scanned.
+- **Neither → fail open**: when the evidence yields no track at all — whether
+  the host is live but exposes nothing useful, or recon was degraded/absent —
+  the host is scanned on **all** tracks rather than recorded `not_applicable`,
+  so a reachable host is never silently under-scanned. (This supersedes the
+  earlier "neither → not_applicable" design: the two cases are
+  indistinguishable from evidence alone, so the classifier fails open.)
 
 The exact port/service table is captured in code as a single source of truth
 with a test asserting representative classifications.
