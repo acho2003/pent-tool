@@ -3,6 +3,7 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -85,6 +86,36 @@ func TestParseNmapPorts(t *testing.T) {
 	}
 	if f.Title != "ssh" {
 		t.Fatalf("title = %q, want ssh", f.Title)
+	}
+}
+
+// TestParseRunsSurfacesNmapFinding proves an nmap-sourced Run flows through
+// the same ParseRuns path the report pipeline uses (internal/web/report_ai.go
+// calls scanner.ParseRuns(rec.ScannerRuns)): the finding survives with its
+// "nmap:" SourceID prefix and a stamped EvidenceRef, so nothing about the
+// generic Run dispatch or dedup step drops recon-sourced findings before they
+// ever reach the report's dynamic source-id allow-map.
+func TestParseRunsSurfacesNmapFinding(t *testing.T) {
+	xmlBody := `<?xml version="1.0"?><nmaprun><host><address addr="10.0.0.5" addrtype="ipv4"/>` +
+		`<ports><port protocol="tcp" portid="22"><state state="open"/>` +
+		`<service name="ssh" product="OpenSSH" version="9.2"/></port></ports></host></nmaprun>`
+	p := writeFixture(t, "nmap.xml", xmlBody)
+	findings, errs := ParseRuns([]Run{{Scanner: "nmap", Status: "completed", ArtifactPath: p}})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1: %#v", len(findings), findings)
+	}
+	f := findings[0]
+	if !strings.HasPrefix(f.SourceID, "nmap:") {
+		t.Fatalf("SourceID = %q, want nmap: prefix", f.SourceID)
+	}
+	if f.Scanner != "nmap" {
+		t.Fatalf("Scanner = %q, want nmap", f.Scanner)
+	}
+	if f.EvidenceRef == "" || !strings.Contains(f.EvidenceRef, f.SourceID) {
+		t.Fatalf("EvidenceRef = %q, want it to reference SourceID %q", f.EvidenceRef, f.SourceID)
 	}
 }
 
