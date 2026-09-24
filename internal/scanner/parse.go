@@ -63,6 +63,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseSemgrep(run.ArtifactPath)
 	case "gitleaks":
 		return parseGitleaks(run.ArtifactPath)
+	case "osv":
+		return parseOSV(run.ArtifactPath)
 	case "vuls":
 		return parseVuls(run.ArtifactPath)
 	case "nmap":
@@ -258,6 +260,48 @@ func parseGitleaks(path string) ([]Finding, error) {
 			Endpoint:    file + ":" + str(m["StartLine"]),
 			Description: firstNonEmpty(str(m["Description"]), "secret detected"),
 		})
+	}
+	return out, nil
+}
+
+// parseOSV reads osv-scanner --format json. SourceID is osv:pkg:vulnID; the CVE
+// is taken from the first CVE alias when present.
+func parseOSV(path string) ([]Finding, error) {
+	var root map[string]any
+	if err := readJSON(path, &root); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, rv := range array(root["results"]) {
+		r, _ := rv.(map[string]any)
+		src, _ := r["source"].(map[string]any)
+		srcPath := str(src["path"])
+		for _, pv := range array(r["packages"]) {
+			pkgObj, _ := pv.(map[string]any)
+			pkg, _ := pkgObj["package"].(map[string]any)
+			name := str(pkg["name"])
+			for _, vv := range array(pkgObj["vulnerabilities"]) {
+				v, _ := vv.(map[string]any)
+				id := str(v["id"])
+				cve := ""
+				for _, a := range array(v["aliases"]) {
+					if c := asCVE(str(a)); c != "" {
+						cve = c
+						break
+					}
+				}
+				out = append(out, Finding{
+					SourceID:    "osv:" + name + ":" + id,
+					Scanner:     "osv",
+					Title:       firstNonEmpty(id, name),
+					Severity:    "medium",
+					Target:      name,
+					Endpoint:    srcPath,
+					Description: str(v["summary"]),
+					CVE:         cve,
+				})
+			}
+		}
 	}
 	return out, nil
 }

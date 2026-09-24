@@ -58,13 +58,14 @@ func TestPipelineFixedOrderAndFailureContinuation(t *testing.T) {
 		fakeRunner{name: "semgrep", seen: &seen, status: "not_applicable", applies: appliesToHost},
 		fakeRunner{name: "gitleaks", seen: &seen, status: "not_applicable", applies: appliesToHost},
 		fakeRunner{name: "vuls", seen: &seen, status: "not_applicable", applies: appliesToHost},
+		fakeRunner{name: "osv", seen: &seen, status: "not_applicable", applies: appliesToHost},
 	}}
 	runs := p.Run(context.Background(), Request{Target: "example.com"}, nil, nil)
 	if !reflect.DeepEqual(seen, OrderedNames) {
 		t.Fatalf("order = %v, want %v", seen, OrderedNames)
 	}
-	// 8 runners * (1 host scope + 1 source scope) = 16 rows.
-	if len(runs) != 16 || runs[1].Status != "failed" || runs[2].Status != "completed" {
+	// 9 runners * (1 host scope + 1 source scope) = 18 rows.
+	if len(runs) != 18 || runs[1].Status != "failed" || runs[2].Status != "completed" {
 		t.Fatalf("unexpected runs: %#v", runs)
 	}
 }
@@ -114,6 +115,7 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 		fakeRunner{name: "trivy", seen: &seen, applies: appliesToHost}, fakeRunner{name: "semgrep", seen: &seen, applies: appliesToHost},
 		fakeRunner{name: "gitleaks", seen: &seen, applies: appliesToHost},
 		fakeRunner{name: "vuls", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "osv", seen: &seen, applies: appliesToHost},
 	}}
 	runs := p.Run(context.Background(), Request{Target: "example.com", Scanners: []string{"nuclei", "trivy"}}, nil,
 		func(e Event) { events = append(events, e) })
@@ -150,9 +152,9 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 			skippedEvents++
 		}
 	}
-	// 6 deselected scanners per scope * 2 scopes (host + source) = 12.
-	if skippedEvents != 12 {
-		t.Errorf("scanner_skipped events = %d, want 12", skippedEvents)
+	// 7 deselected scanners per scope * 2 scopes (host + source) = 14.
+	if skippedEvents != 14 {
+		t.Errorf("scanner_skipped events = %d, want 14", skippedEvents)
 	}
 }
 

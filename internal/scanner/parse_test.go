@@ -16,6 +16,21 @@ func writeFixture(t *testing.T, name, data string) string {
 	return p
 }
 
+func TestParseOSVFindings(t *testing.T) {
+	body := `{"results":[{"source":{"path":"go.mod"},"packages":[{"package":{"name":"golang.org/x/net"},"vulnerabilities":[{"id":"GHSA-vvpx","summary":"DoS","aliases":["CVE-2023-44487"]}]}]}]}`
+	p := writeFixture(t, "results.json", body)
+	got, err := ParseRun(Run{Scanner: "osv", ArtifactPath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != "osv:golang.org/x/net:GHSA-vvpx" {
+		t.Fatalf("parsed %#v", got)
+	}
+	if got[0].CVE != "CVE-2023-44487" {
+		t.Errorf("CVE = %q", got[0].CVE)
+	}
+}
+
 func TestNativeFormatParsers(t *testing.T) {
 	tests := []struct{ name, scanner, body string }{
 		{"nuclei", "nuclei", `{"template-id":"cve-test","matched-at":"https://e.test/a","host":"e.test","info":{"name":"Test","severity":"high"}}` + "\n"},

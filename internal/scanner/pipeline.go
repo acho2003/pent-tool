@@ -40,6 +40,7 @@ func NewPipeline(cfg Config) *Pipeline {
 		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildTrivy},
 		commandRunner{name: "semgrep", desc: Descriptor{Name: "semgrep", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildSemgrep},
 		commandRunner{name: "gitleaks", desc: Descriptor{Name: "gitleaks", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildGitleaks},
+		commandRunner{name: "osv", desc: Descriptor{Name: "osv", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildOSV},
 	}}
 }
 
