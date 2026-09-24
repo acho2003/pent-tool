@@ -16,6 +16,10 @@ type openVASRunner struct{}
 
 func (openVASRunner) Name() string { return "openvas" }
 
+func (openVASRunner) Descriptor() Descriptor {
+	return Descriptor{Name: "openvas", Phase: PhaseServer, Tracks: []Track{TrackServer}, Weight: WeightHeavy}
+}
+
 func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
 	host := hostOnly(req.Target)
 	if host == "" {

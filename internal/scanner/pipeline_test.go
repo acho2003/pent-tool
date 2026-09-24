@@ -18,6 +18,9 @@ type fakeRunner struct {
 }
 
 func (f fakeRunner) Name() string { return f.name }
+func (f fakeRunner) Descriptor() Descriptor {
+	return Descriptor{Name: f.name, Phase: PhaseWeb, Weight: WeightLight}
+}
 func (f fakeRunner) Run(_ context.Context, req Request, _ Config, emit EmitFunc) Run {
 	*f.seen = append(*f.seen, f.name)
 	if f.cancel != nil {

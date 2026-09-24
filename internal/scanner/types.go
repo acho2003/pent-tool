@@ -119,5 +119,6 @@ type EmitFunc func(Event)
 
 type Runner interface {
 	Name() string
+	Descriptor() Descriptor
 	Run(context.Context, Request, Config, EmitFunc) Run
 }

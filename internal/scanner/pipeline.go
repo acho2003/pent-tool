@@ -28,10 +28,10 @@ type Pipeline struct {
 func NewPipeline(cfg Config) *Pipeline {
 	applyDefaults(&cfg)
 	return &Pipeline{Config: cfg, Runners: []Runner{
-		commandRunner{name: "nuclei", build: buildNuclei},
+		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}, build: buildNuclei},
 		zapRunner{},
 		openVASRunner{},
-		commandRunner{name: "trivy", build: buildTrivy},
+		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight}, build: buildTrivy},
 		vulsRunner{},
 	}}
 }
@@ -147,10 +147,12 @@ type commandBuilder func(Request, Config) commandSpec
 
 type commandRunner struct {
 	name  string
+	desc  Descriptor
 	build commandBuilder
 }
 
-func (r commandRunner) Name() string { return r.name }
+func (r commandRunner) Name() string           { return r.name }
+func (r commandRunner) Descriptor() Descriptor { return r.desc }
 func (r commandRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
 	spec := r.build(req, cfg)
 	return executeSpec(ctx, r.name, req, cfg, spec, emit)
