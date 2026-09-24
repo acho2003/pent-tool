@@ -359,11 +359,14 @@ func TestPipelineReusesReconOnResume(t *testing.T) {
 		t.Error("reconFn must not run on resume with prior recon runs")
 		return nil, nil
 	}
+	scanDir := t.TempDir()
+	// Persist the discovered scope set so resume exercises the recon-scopes.json path.
+	saveReconScopes(scanDir, []Scope{HostScope("a.example.com")})
 	existing := []Run{
 		{Scanner: "subfinder", Scope: reconScopeKey("example.com"), Status: "completed"},
 		{Scanner: "nuclei", Scope: "host:a.example.com", Target: "a.example.com", Status: "completed", Checksum: "immutable"},
 	}
-	runs := p.Run(context.Background(), Request{Target: "example.com", ScanDir: t.TempDir()}, existing, nil)
+	runs := p.Run(context.Background(), Request{Target: "example.com", ScanDir: scanDir}, existing, nil)
 	if called {
 		t.Fatal("reconFn was invoked on resume")
 	}
@@ -381,6 +384,46 @@ func TestPipelineReusesReconOnResume(t *testing.T) {
 	}
 	if nuclei.Status != "completed" || nuclei.Checksum != "immutable" {
 		t.Fatalf("reused run mutated: %#v", *nuclei)
+	}
+}
+
+func TestPipelineResumeScansUnstartedDiscoveredHost(t *testing.T) {
+	seen := []string{}
+	p := &Pipeline{Runners: []Runner{
+		fakeRunner{name: "nuclei", seen: &seen},
+	}}
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		t.Error("reconFn must not run when the discovered scope set is persisted")
+		return nil, nil
+	}
+	scanDir := t.TempDir()
+	// recon discovered TWO hosts; only host a has a completed scan run so far.
+	saveReconScopes(scanDir, []Scope{HostScope("a.example.com"), HostScope("b.example.com")})
+	existing := []Run{
+		{Scanner: "subfinder", Scope: reconScopeKey("example.com"), Status: "completed"},
+		{Scanner: "nuclei", Scope: "host:a.example.com", Target: "a.example.com", Status: "completed", Checksum: "immutable"},
+	}
+	runs := p.Run(context.Background(), Request{Target: "example.com", ScanDir: scanDir}, existing, nil)
+	// host a is reused (not re-run); host b — discovered but unstarted — is scanned.
+	if !reflect.DeepEqual(seen, []string{"nuclei"}) {
+		t.Fatalf("executed %v, want only b's nuclei (a reused, b scanned)", seen)
+	}
+	byScope := map[string]Run{}
+	for _, r := range runs {
+		if r.Scanner == "nuclei" {
+			byScope[r.Scope] = r
+		}
+	}
+	a, okA := byScope["host:a.example.com"]
+	b, okB := byScope["host:b.example.com"]
+	if !okA || !okB {
+		t.Fatalf("missing a host: got scopes %v (unstarted host b must not be dropped)", byScope)
+	}
+	if a.Status != "completed" || a.Checksum != "immutable" {
+		t.Fatalf("host a run not reused immutably: %#v", a)
+	}
+	if b.Status != "completed" || b.Target != "b.example.com" {
+		t.Fatalf("host b run not freshly scanned: %#v", b)
 	}
 }
 

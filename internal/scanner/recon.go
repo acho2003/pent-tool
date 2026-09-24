@@ -263,7 +263,45 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 		}
 		scopes = append(scopes, s)
 	}
+	// Persist the complete discovered scope set so a resume interrupted mid-scan
+	// can re-fan out over every discovered host — including hosts that recon found
+	// but that have no terminal scan run yet — without re-invoking the recon tools.
+	saveReconScopes(req.ScanDir, scopes)
 	return scopes, runs
+}
+
+// reconScopesPath is the artifact holding the discovered scope set for resume.
+func reconScopesPath(scanDir string) string {
+	return filepath.Join(scanDir, "scanner-output", "recon-scopes.json")
+}
+
+// saveReconScopes writes the discovered scope set (including per-host Evidence,
+// which round-trips since all Scope fields are exported) for lossless resume. A
+// write failure is non-fatal: recon still returns its in-memory scopes.
+func saveReconScopes(scanDir string, scopes []Scope) {
+	path := reconScopesPath(scanDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(scopes, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0o600)
+}
+
+// loadReconScopes reads the persisted discovered scope set. It returns
+// (scopes, true) only when the file exists and decodes to at least one scope.
+func loadReconScopes(scanDir string) ([]Scope, bool) {
+	data, err := os.ReadFile(reconScopesPath(scanDir))
+	if err != nil {
+		return nil, false
+	}
+	var scopes []Scope
+	if err := json.Unmarshal(data, &scopes); err != nil || len(scopes) == 0 {
+		return nil, false
+	}
+	return scopes, true
 }
 
 // subfinderRunner is a descriptor stub for subfinder within the recon phase.

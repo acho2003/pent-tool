@@ -120,7 +120,17 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	var scopes []Scope
 	var reconRuns []Run
 	if hasTerminalReconRuns(existing) {
-		scopes, reconRuns = reusePriorRecon(existing)
+		// Primary resume source: the complete discovered scope set persisted by
+		// recon. This includes hosts recon found that have no terminal scan run yet,
+		// so a mid-scan resume never silently drops an unstarted host.
+		if persisted, ok := loadReconScopes(req.ScanDir); ok {
+			scopes = persisted
+			reconRuns = terminalReconRunsFrom(existing)
+		} else {
+			// Fallback (missing recon-scopes.json): rebuild the scope set from the
+			// host scopes already present in existing.
+			scopes, reconRuns = reusePriorRecon(existing)
+		}
 	}
 	if len(scopes) == 0 {
 		scopes, reconRuns = recon(ctx, req, p.Config, emit)
@@ -197,6 +207,18 @@ func hasTerminalReconRuns(existing []Run) bool {
 		}
 	}
 	return false
+}
+
+// terminalReconRunsFrom returns the terminal recon-phase runs (Scope prefix
+// "recon:") from existing, preserving order, so a resume re-emits them via byKey.
+func terminalReconRunsFrom(existing []Run) []Run {
+	var out []Run
+	for _, run := range existing {
+		if run.Terminal() && strings.HasPrefix(run.Scope, "recon:") {
+			out = append(out, run)
+		}
+	}
+	return out
 }
 
 // reusePriorRecon reconstructs the recon result from a prior run so a resume does
