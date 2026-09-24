@@ -513,6 +513,54 @@ func TestPipelineClassifierGatesTracks(t *testing.T) {
 	}
 }
 
+func TestPipelineFailOpenEmptyEvidence(t *testing.T) {
+	var seen []string
+	// nuclei is web-track, vuls is server-track (real descriptors via NewPipeline).
+	p := NewPipeline(Config{})
+	var runners []Runner
+	for _, r := range p.Runners {
+		switch r.Name() {
+		case "nuclei":
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackWeb}})
+		case "vuls":
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackServer}})
+		}
+	}
+	p2 := &Pipeline{Runners: runners}
+	// One host with no recon evidence at all (recon degraded/absent).
+	p2.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("x")}, nil
+	}
+	runs := p2.Run(context.Background(), Request{Target: "x", ScanDir: t.TempDir()}, nil, nil)
+	byScanner := map[string]string{}
+	for _, r := range runs {
+		byScanner[r.Scanner] = r.Status
+	}
+	// Fail open: both web and server tracks are scanned, so neither is
+	// not_applicable and both actually executed.
+	if byScanner["nuclei"] == "not_applicable" {
+		t.Errorf("nuclei status = %q, want not not_applicable (fail open)", byScanner["nuclei"])
+	}
+	if byScanner["vuls"] == "not_applicable" {
+		t.Errorf("vuls status = %q, want not not_applicable (fail open)", byScanner["vuls"])
+	}
+	sawNuclei, sawVuls := false, false
+	for _, n := range seen {
+		if n == "nuclei" {
+			sawNuclei = true
+		}
+		if n == "vuls" {
+			sawVuls = true
+		}
+	}
+	if !sawNuclei {
+		t.Errorf("nuclei should have executed for a host with empty evidence (fail open)")
+	}
+	if !sawVuls {
+		t.Errorf("vuls should have executed for a host with empty evidence (fail open)")
+	}
+}
+
 func TestApplyDefaultsReconFields(t *testing.T) {
 	p := NewPipeline(Config{})
 	c := p.Config

@@ -151,6 +151,12 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	for _, sc := range scopes {
 		scopeKey := sc.Key()
 		sc.Tracks = Classify(sc.Evidence)
+		if len(sc.Tracks) == 0 {
+			// Fail open: a host with no recon evidence (recon degraded/absent, or the
+			// single-host degrade path) is scanned on all tracks rather than downgraded
+			// to trivy-only, so a reachable host is never silently under-scanned.
+			sc.Tracks = []Track{TrackWeb, TrackServer}
+		}
 		hostReq := req
 		hostReq.Target = sc.Target
 		// Isolate each host's scanner artifacts. Every scan runner derives its

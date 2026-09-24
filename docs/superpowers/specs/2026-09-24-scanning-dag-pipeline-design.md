@@ -178,6 +178,9 @@ Pure, unit-tested function in a dedicated file with a documented table:
 - **Both** tracks when both conditions hold.
 - **Neither**: host is live but exposes nothing useful → each candidate tool
   records `not_applicable` for that scope.
+- **Fail open**: a host whose evidence yields no tracks at all (recon
+  degraded/absent) is scanned on all tracks rather than recorded
+  `not_applicable`, so a reachable host is never silently under-scanned.
 
 The exact port/service table is captured in code as a single source of truth
 with a test asserting representative classifications.
