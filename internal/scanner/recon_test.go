@@ -1,6 +1,10 @@
 package scanner
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestReconScopeKey(t *testing.T) {
 	if got := reconScopeKey("example.com"); got != "recon:example.com" {
@@ -27,5 +31,35 @@ func TestCandidateHostsStripsSchemeAndPort(t *testing.T) {
 	got := candidateHosts("http://localhost:3000/")
 	if len(got) != 1 || got[0] != "localhost" {
 		t.Fatalf("got %v, want [localhost]", got)
+	}
+}
+
+func TestParseHttpxLive(t *testing.T) {
+	jsonl := `{"url":"https://a.example.com","host":"a.example.com","port":"443","scheme":"https","tls":true}` + "\n" +
+		`{"url":"http://b.example.com","host":"b.example.com","port":"80","scheme":"http"}` + "\n"
+	dir := t.TempDir()
+	p := filepath.Join(dir, "httpx.jsonl")
+	if err := os.WriteFile(p, []byte(jsonl), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := parseHttpxLive(p)
+	if len(res) != 2 {
+		t.Fatalf("results = %d, want 2", len(res))
+	}
+	if res[0].Host != "a.example.com" || !res[0].TLS || res[0].Scheme != "https" {
+		t.Fatalf("unexpected result[0]: %+v", res[0])
+	}
+}
+
+func TestParseSubfinderHosts(t *testing.T) {
+	jsonl := `{"host":"a.example.com"}` + "\n" + `{"host":"b.example.com"}` + "\n"
+	dir := t.TempDir()
+	p := filepath.Join(dir, "subfinder.jsonl")
+	if err := os.WriteFile(p, []byte(jsonl), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hosts := parseSubfinderHosts(p)
+	if len(hosts) != 2 || hosts[0] != "a.example.com" {
+		t.Fatalf("hosts = %v", hosts)
 	}
 }
