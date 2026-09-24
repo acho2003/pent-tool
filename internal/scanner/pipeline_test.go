@@ -234,3 +234,45 @@ func TestFakeBinaryRawStreamingRedactionAndLimit(t *testing.T) {
 
 // Kept as a named type so this test does not reach into outputWriter's atomic implementation.
 type atomicInt64Adapter struct{}
+
+func TestRunStampsImplicitScope(t *testing.T) {
+	p := NewPipeline(Config{})
+	// Only run the "skipped" bookkeeping path so the test needs no real tools:
+	// select a scanner subset of one, leaving the rest skipped.
+	req := Request{Target: "example.com", Scanners: []string{"nuclei"}, ScanDir: t.TempDir()}
+	// Cancel immediately so nuclei is recorded cancelled, not actually executed.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runs := p.Run(ctx, req, nil, nil)
+	if len(runs) != len(p.Runners) {
+		t.Fatalf("run count = %d, want %d", len(runs), len(p.Runners))
+	}
+	want := HostScope("example.com").Key()
+	for _, r := range runs {
+		if r.Scope != want {
+			t.Errorf("%s scope = %q, want %q", r.Scanner, r.Scope, want)
+		}
+	}
+}
+
+func TestResumeReusesLegacyEmptyScopeRuns(t *testing.T) {
+	p := NewPipeline(Config{})
+	// A legacy terminal run with empty Scope must be reused (not re-run).
+	legacy := Run{Scanner: "nuclei", Target: "example.com", Status: "completed"}
+	req := Request{Target: "example.com", Scanners: []string{"nuclei"}, ScanDir: t.TempDir()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runs := p.Run(ctx, req, []Run{legacy}, nil)
+	var got *Run
+	for i := range runs {
+		if runs[i].Scanner == "nuclei" {
+			got = &runs[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("no nuclei run returned")
+	}
+	if got.Status != "completed" {
+		t.Fatalf("nuclei status = %q, want completed (legacy run should be reused)", got.Status)
+	}
+}

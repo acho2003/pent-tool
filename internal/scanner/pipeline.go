@@ -76,15 +76,21 @@ func applyDefaults(cfg *Config) {
 // runs are reused, which makes queue resume continue at the first incomplete
 // scanner without mutating immutable raw artifacts.
 func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit EmitFunc) []Run {
-	byName := make(map[string]Run, len(existing))
+	scope := HostScope(req.Target).Key()
+	byKey := make(map[string]Run, len(existing))
 	for _, run := range existing {
-		if run.Terminal() {
-			byName[run.Scanner] = run
+		if !run.Terminal() {
+			continue
 		}
+		s := run.Scope
+		if s == "" {
+			s = scope // legacy records predate scoping; treat as the implicit scope
+		}
+		byKey[resumeKey(s, run.Scanner)] = run
 	}
 	out := make([]Run, 0, len(p.Runners))
 	for i, runner := range p.Runners {
-		if old, ok := byName[runner.Name()]; ok {
+		if old, ok := byKey[resumeKey(scope, runner.Name())]; ok {
 			out = append(out, old)
 			continue
 		}
@@ -92,7 +98,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 		// the scan's evidence shows what was not attempted and why.
 		if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
 			now := time.Now().Format(time.RFC3339Nano)
-			r := Run{Scanner: runner.Name(), Target: req.Target, Status: "skipped", Reason: "not selected for this scan", StartedAt: now, FinishedAt: now}
+			r := Run{Scanner: runner.Name(), Target: req.Target, Status: "skipped", Reason: "not selected for this scan", StartedAt: now, FinishedAt: now, Scope: scope}
 			out = append(out, r)
 			if emit != nil {
 				emit(Event{Type: "scanner_skipped", Scanner: runner.Name(), Run: r, Output: r.Reason})
@@ -102,7 +108,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 		if err := ctx.Err(); err != nil {
 			for _, rest := range p.Runners[i:] {
 				now := time.Now().Format(time.RFC3339Nano)
-				r := Run{Scanner: rest.Name(), Target: req.Target, Status: "cancelled", Reason: err.Error(), StartedAt: now, FinishedAt: now}
+				r := Run{Scanner: rest.Name(), Target: req.Target, Status: "cancelled", Reason: err.Error(), StartedAt: now, FinishedAt: now, Scope: scope}
 				out = append(out, r)
 				if emit != nil {
 					emit(Event{Type: "scanner_failed", Scanner: rest.Name(), Run: r, Output: r.Reason})
@@ -111,10 +117,13 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			break
 		}
 		run := runAttempt(ctx, runner, req, p.Config, emit)
+		run.Scope = scope
 		out = append(out, run)
 	}
 	return out
 }
+
+func resumeKey(scope, scanner string) string { return scope + "\x00" + scanner }
 
 func runAttempt(ctx context.Context, runner Runner, req Request, cfg Config, emit EmitFunc) (run Run) {
 	defer func() {
