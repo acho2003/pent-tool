@@ -314,6 +314,13 @@ func parseTestssl(path string) ([]Finding, error) {
 			host = host[:i]
 		}
 		port := str(m["port"])
+		// testssl can list several space-separated CVEs in one entry
+		// (e.g. "CVE-2016-2183 CVE-2016-6329"); keep the first, matching the
+		// single-CVE convention the other parsers use via firstCSV.
+		cve := str(m["cve"])
+		if fields := strings.Fields(cve); len(fields) > 0 {
+			cve = fields[0]
+		}
 		out = append(out, Finding{
 			SourceID:    "testssl:" + host + ":" + port + ":" + id,
 			Scanner:     "testssl",
@@ -322,7 +329,7 @@ func parseTestssl(path string) ([]Finding, error) {
 			Target:      host,
 			Endpoint:    host + ":" + port,
 			Description: str(m["finding"]),
-			CVE:         asCVE(str(m["cve"])),
+			CVE:         asCVE(firstCSV(cve)),
 			CWE:         str(m["cwe"]),
 		})
 	}

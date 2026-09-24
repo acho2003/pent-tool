@@ -135,7 +135,7 @@ func TestParseTestsslFindings(t *testing.T) {
 	body := `[
 	  {"id":"SSLv3","ip":"example.com/93.184.216.34","port":"443","severity":"OK","finding":"not offered"},
 	  {"id":"cert_expirationStatus","ip":"example.com/93.184.216.34","port":"443","severity":"HIGH","finding":"expired 3 days ago","cve":"","cwe":"CWE-298"},
-	  {"id":"BREACH","ip":"example.com/93.184.216.34","port":"443","severity":"MEDIUM","finding":"potentially vulnerable","cve":"CVE-2013-3587"}
+	  {"id":"SWEET32","ip":"example.com/93.184.216.34","port":"443","severity":"MEDIUM","finding":"potentially vulnerable","cve":"CVE-2016-2183 CVE-2016-6329"}
 	]`
 	p := writeFixture(t, "results.json", body)
 	got, err := ParseRun(Run{Scanner: "testssl", ArtifactPath: p})
@@ -145,12 +145,23 @@ func TestParseTestsslFindings(t *testing.T) {
 	if len(got) != 2 { // OK filtered out; HIGH + MEDIUM kept
 		t.Fatalf("want 2 findings, got %d: %#v", len(got), got)
 	}
-	for _, f := range got {
+	var sweet32 *Finding
+	for i, f := range got {
 		if f.Scanner != "testssl" {
 			t.Errorf("scanner = %q", f.Scanner)
 		}
 		if !strings.HasPrefix(f.SourceID, "testssl:example.com:443:") {
 			t.Errorf("SourceID = %q", f.SourceID)
 		}
+		if strings.HasSuffix(f.SourceID, ":SWEET32") {
+			sweet32 = &got[i]
+		}
+	}
+	// A space-separated multi-CVE entry keeps only the first CVE.
+	if sweet32 == nil {
+		t.Fatalf("SWEET32 finding missing: %#v", got)
+	}
+	if sweet32.CVE != "CVE-2016-2183" {
+		t.Errorf("multi-CVE not narrowed to first: CVE = %q", sweet32.CVE)
 	}
 }
