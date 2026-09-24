@@ -13,17 +13,18 @@ import (
 )
 
 type fakeRunner struct {
-	name   string
-	seen   *[]string
-	gotDir *[]string
-	status string
-	cancel context.CancelFunc
-	tracks []Track
+	name    string
+	seen    *[]string
+	gotDir  *[]string
+	status  string
+	cancel  context.CancelFunc
+	tracks  []Track
+	applies func(Scope) bool
 }
 
 func (f fakeRunner) Name() string { return f.name }
 func (f fakeRunner) Descriptor() Descriptor {
-	return Descriptor{Name: f.name, Phase: PhaseWeb, Weight: WeightLight, Tracks: f.tracks}
+	return Descriptor{Name: f.name, Phase: PhaseWeb, Weight: WeightLight, Tracks: f.tracks, Applies: f.applies}
 }
 func (f fakeRunner) Run(_ context.Context, req Request, _ Config, emit EmitFunc) Run {
 	*f.seen = append(*f.seen, f.name)
@@ -45,20 +46,44 @@ func (f fakeRunner) Run(_ context.Context, req Request, _ Config, emit EmitFunc)
 
 func TestPipelineFixedOrderAndFailureContinuation(t *testing.T) {
 	var seen []string
+	// Host runners (Applies: appliesToHost) execute only on the host scope; the
+	// appended source scope records each as not_applicable, so seen stays the
+	// host-only execution order and the total doubles to two scopes worth of rows.
 	p := &Pipeline{Runners: []Runner{
-		fakeRunner{name: "nuclei", seen: &seen},
-		fakeRunner{name: "zap", seen: &seen, status: "failed"},
-		fakeRunner{name: "testssl", seen: &seen},
-		fakeRunner{name: "openvas", seen: &seen},
-		fakeRunner{name: "trivy", seen: &seen, status: "not_applicable"},
-		fakeRunner{name: "vuls", seen: &seen, status: "not_applicable"},
+		fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "zap", seen: &seen, status: "failed", applies: appliesToHost},
+		fakeRunner{name: "testssl", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "openvas", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "trivy", seen: &seen, status: "not_applicable", applies: appliesToHost},
+		fakeRunner{name: "vuls", seen: &seen, status: "not_applicable", applies: appliesToHost},
 	}}
 	runs := p.Run(context.Background(), Request{Target: "example.com"}, nil, nil)
 	if !reflect.DeepEqual(seen, OrderedNames) {
 		t.Fatalf("order = %v, want %v", seen, OrderedNames)
 	}
-	if len(runs) != 6 || runs[1].Status != "failed" || runs[2].Status != "completed" {
+	// 6 runners * (1 host scope + 1 source scope) = 12 rows.
+	if len(runs) != 12 || runs[1].Status != "failed" || runs[2].Status != "completed" {
 		t.Fatalf("unexpected runs: %#v", runs)
+	}
+}
+
+func TestScopeKindGating(t *testing.T) {
+	if runnerAppliesToScope(Descriptor{Applies: appliesToHost}, Scope{Kind: ScopeSource}) {
+		t.Error("host runner must not apply to source scope")
+	}
+	if !runnerAppliesToScope(Descriptor{Applies: appliesToSource}, Scope{Kind: ScopeSource}) {
+		t.Error("source runner must apply to source scope")
+	}
+	if runnerAppliesToScope(Descriptor{Applies: appliesToSource}, Scope{Kind: ScopeHost, Tracks: []Track{TrackWeb}}) {
+		t.Error("source runner must not apply to host scope")
+	}
+	// host runner on a host scope still respects tracks
+	d := Descriptor{Applies: appliesToHost, Tracks: []Track{TrackServer}}
+	if runnerAppliesToScope(d, Scope{Kind: ScopeHost, Tracks: []Track{TrackWeb}}) {
+		t.Error("host runner with mismatched track must not apply")
+	}
+	if !runnerAppliesToScope(d, Scope{Kind: ScopeHost, Tracks: []Track{TrackServer}}) {
+		t.Error("host runner with matching track must apply")
 	}
 }
 
@@ -82,9 +107,9 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 	var seen []string
 	var events []Event
 	p := &Pipeline{Runners: []Runner{
-		fakeRunner{name: "nuclei", seen: &seen}, fakeRunner{name: "zap", seen: &seen},
-		fakeRunner{name: "testssl", seen: &seen}, fakeRunner{name: "openvas", seen: &seen},
-		fakeRunner{name: "trivy", seen: &seen}, fakeRunner{name: "vuls", seen: &seen},
+		fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost}, fakeRunner{name: "zap", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "testssl", seen: &seen, applies: appliesToHost}, fakeRunner{name: "openvas", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "trivy", seen: &seen, applies: appliesToHost}, fakeRunner{name: "vuls", seen: &seen, applies: appliesToHost},
 	}}
 	runs := p.Run(context.Background(), Request{Target: "example.com", Scanners: []string{"nuclei", "trivy"}}, nil,
 		func(e Event) { events = append(events, e) })
@@ -92,11 +117,12 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 	if !reflect.DeepEqual(seen, []string{"nuclei", "trivy"}) {
 		t.Fatalf("executed %v, want only the selected scanners", seen)
 	}
-	// Every scanner still reports a terminal status, in pipeline order.
-	if len(runs) != len(OrderedNames) {
-		t.Fatalf("runs = %d, want %d", len(runs), len(OrderedNames))
+	// The source scope adds a second scope's worth of rows; assert the deselection
+	// bookkeeping on the host scope, which is the first len(OrderedNames) rows.
+	if len(runs) != 2*len(OrderedNames) {
+		t.Fatalf("runs = %d, want %d", len(runs), 2*len(OrderedNames))
 	}
-	for i, run := range runs {
+	for i, run := range runs[:len(OrderedNames)] {
 		if run.Scanner != OrderedNames[i] {
 			t.Fatalf("run %d = %s, want %s", i, run.Scanner, OrderedNames[i])
 		}
@@ -120,16 +146,17 @@ func TestPipelineSelectionRecordsDeselectedScannersAsSkipped(t *testing.T) {
 			skippedEvents++
 		}
 	}
-	if skippedEvents != 4 {
-		t.Errorf("scanner_skipped events = %d, want 4", skippedEvents)
+	// 4 deselected scanners per scope * 2 scopes (host + source) = 8.
+	if skippedEvents != 8 {
+		t.Errorf("scanner_skipped events = %d, want 8", skippedEvents)
 	}
 }
 
 func TestPipelineResumeKeepsTerminalRunImmutable(t *testing.T) {
 	var seen []string
 	p := &Pipeline{Runners: []Runner{
-		fakeRunner{name: "nuclei", seen: &seen}, fakeRunner{name: "zap", seen: &seen},
-		fakeRunner{name: "openvas", seen: &seen}, fakeRunner{name: "trivy", seen: &seen}, fakeRunner{name: "vuls", seen: &seen},
+		fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost}, fakeRunner{name: "zap", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "openvas", seen: &seen, applies: appliesToHost}, fakeRunner{name: "trivy", seen: &seen, applies: appliesToHost}, fakeRunner{name: "vuls", seen: &seen, applies: appliesToHost},
 	}}
 	old := Run{Scanner: "nuclei", Target: "old", Status: "completed", Checksum: "immutable"}
 	runs := p.Run(context.Background(), Request{Target: "example.com"}, []Run{old}, nil)
@@ -152,8 +179,10 @@ func TestPipelineCancellationPreventsRemainingAttempts(t *testing.T) {
 	if !reflect.DeepEqual(seen, []string{"nuclei"}) {
 		t.Fatalf("executed after cancellation: %v", seen)
 	}
-	if len(runs) != 5 {
-		t.Fatalf("got %d statuses, want five", len(runs))
+	// 5 runners * (1 host scope + 1 source scope) = 10 rows; the source runners
+	// (applies unset -> apply to any scope) are also recorded cancelled.
+	if len(runs) != 10 {
+		t.Fatalf("got %d statuses, want ten", len(runs))
 	}
 	for _, run := range runs[1:] {
 		if run.Status != "cancelled" {
@@ -258,13 +287,16 @@ func TestRunStampsImplicitScope(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runs := p.Run(ctx, req, nil, nil)
-	if len(runs) != len(p.Runners) {
-		t.Fatalf("run count = %d, want %d", len(runs), len(p.Runners))
+	// One host scope + one appended source scope, each with len(p.Runners) rows.
+	if len(runs) != 2*len(p.Runners) {
+		t.Fatalf("run count = %d, want %d", len(runs), 2*len(p.Runners))
 	}
-	want := HostScope("example.com").Key()
+	hostKey := HostScope("example.com").Key()
 	for _, r := range runs {
-		if r.Scope != want {
-			t.Errorf("%s scope = %q, want %q", r.Scanner, r.Scope, want)
+		// Every run carries its scope: host rows the implicit host scope, source
+		// rows the single source scope.
+		if r.Scope != hostKey && r.Scope != sourceScopeID {
+			t.Errorf("%s scope = %q, want %q or %q", r.Scanner, r.Scope, hostKey, sourceScopeID)
 		}
 	}
 }
@@ -284,7 +316,10 @@ func TestResumeReusesLegacyEmptyScopeRuns(t *testing.T) {
 	runs := p.Run(ctx, req, []Run{legacy}, nil)
 	var got *Run
 	for i := range runs {
-		if runs[i].Scanner == "nuclei" {
+		// The source scope also yields a nuclei row (not_applicable); assert on the
+		// host-scope row. The reused legacy run keeps its original empty Scope, so it
+		// is identified as the non-source nuclei row.
+		if runs[i].Scanner == "nuclei" && runs[i].Scope != sourceScopeID {
 			got = &runs[i]
 		}
 	}
@@ -309,9 +344,9 @@ func TestPipelineFansOutPerHost(t *testing.T) {
 			[]Run{{Scanner: "subfinder", Scope: reconScopeKey(req.Target), Status: "completed", StartedAt: now, FinishedAt: now}}
 	}
 	runs := p.Run(context.Background(), Request{Target: "example.com", ScanDir: t.TempDir()}, nil, nil)
-	// 1 recon run + 2 hosts * 2 scan runners = 5.
+	// 1 recon run + (2 hosts + 1 source) scopes * 2 scan runners = 7.
 	reconRuns := 1
-	if want := reconRuns + 2*len(p.Runners); len(runs) != want {
+	if want := reconRuns + 3*len(p.Runners); len(runs) != want {
 		t.Fatalf("runs = %d, want %d", len(runs), want)
 	}
 	hostScopes := map[string]int{}
@@ -329,12 +364,54 @@ func TestPipelineFansOutPerHost(t *testing.T) {
 	}
 }
 
+// TestPipelineSourceScopeFanOut proves the appended source scope produces one row
+// per runner, that host runners are not_applicable on it, and that a source
+// runner is not_applicable on host scopes.
+func TestPipelineSourceScopeFanOut(t *testing.T) {
+	var seen []string
+	p := &Pipeline{Runners: []Runner{
+		fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost},
+		fakeRunner{name: "trivy", seen: &seen, applies: appliesToSource},
+	}}
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("a.example.com")}, nil
+	}
+	runs := p.Run(context.Background(), Request{Target: "a.example.com", ScanDir: t.TempDir()}, nil, nil)
+	// (1 host scope + 1 source scope) * 2 runners = 4 rows.
+	if want := 2 * len(p.Runners); len(runs) != want {
+		t.Fatalf("runs = %d, want %d", len(runs), want)
+	}
+	byScopeScanner := map[string]string{}
+	for _, r := range runs {
+		byScopeScanner[r.Scope+"/"+r.Scanner] = r.Status
+	}
+	// Host runner (nuclei) executes on the host scope, not_applicable on source.
+	if got := byScopeScanner["host:a.example.com/nuclei"]; got != "completed" {
+		t.Errorf("nuclei on host = %q, want completed", got)
+	}
+	if got := byScopeScanner[sourceScopeID+"/nuclei"]; got != "not_applicable" {
+		t.Errorf("nuclei on source = %q, want not_applicable", got)
+	}
+	// Source runner (trivy) is not_applicable on the host scope, executes on source.
+	if got := byScopeScanner["host:a.example.com/trivy"]; got != "not_applicable" {
+		t.Errorf("trivy on host = %q, want not_applicable", got)
+	}
+	if got := byScopeScanner[sourceScopeID+"/trivy"]; got != "completed" {
+		t.Errorf("trivy on source = %q, want completed", got)
+	}
+	// Only the applicable runners actually executed.
+	if !reflect.DeepEqual(seen, []string{"nuclei", "trivy"}) {
+		t.Errorf("executed %v, want [nuclei trivy]", seen)
+	}
+}
+
 func TestPipelineIsolatesPerHostScanDirs(t *testing.T) {
 	seen := []string{}
 	dirs := []string{}
 	root := t.TempDir()
 	p := &Pipeline{Runners: []Runner{
-		fakeRunner{name: "nuclei", seen: &seen, gotDir: &dirs},
+		// Host runner: executes per host only, not on the appended source scope.
+		fakeRunner{name: "nuclei", seen: &seen, gotDir: &dirs, applies: appliesToHost},
 	}}
 	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
 		return []Scope{HostScope("a.example.com"), HostScope("b.example.com")}, nil
@@ -356,7 +433,7 @@ func TestPipelineIsolatesPerHostScanDirs(t *testing.T) {
 func TestPipelineReusesReconOnResume(t *testing.T) {
 	seen := []string{}
 	p := &Pipeline{Runners: []Runner{
-		fakeRunner{name: "nuclei", seen: &seen},
+		fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost},
 	}}
 	called := false
 	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
@@ -395,7 +472,7 @@ func TestPipelineReusesReconOnResume(t *testing.T) {
 func TestPipelineResumeScansUnstartedDiscoveredHost(t *testing.T) {
 	seen := []string{}
 	p := &Pipeline{Runners: []Runner{
-		fakeRunner{name: "nuclei", seen: &seen},
+		fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost},
 	}}
 	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
 		t.Error("reconFn must not run when the discovered scope set is persisted")
@@ -481,9 +558,9 @@ func TestPipelineClassifierGatesTracks(t *testing.T) {
 	for _, r := range p.Runners {
 		switch r.Name() {
 		case "nuclei":
-			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackWeb}})
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackWeb}, applies: appliesToHost})
 		case "vuls":
-			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackServer}})
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackServer}, applies: appliesToHost})
 		}
 	}
 	p2 := &Pipeline{Runners: runners}
@@ -496,6 +573,9 @@ func TestPipelineClassifierGatesTracks(t *testing.T) {
 	runs := p2.Run(context.Background(), Request{Target: "web.example.com", ScanDir: t.TempDir()}, nil, nil)
 	byScanner := map[string]string{}
 	for _, r := range runs {
+		if r.Scope == sourceScopeID { // host-track assertions ignore the source scope
+			continue
+		}
 		byScanner[r.Scanner] = r.Status
 	}
 	// nuclei (web) runs; vuls (server) is not_applicable for a web-only host.
@@ -525,9 +605,9 @@ func TestPipelineFailOpenEmptyEvidence(t *testing.T) {
 	for _, r := range p.Runners {
 		switch r.Name() {
 		case "nuclei":
-			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackWeb}})
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackWeb}, applies: appliesToHost})
 		case "vuls":
-			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackServer}})
+			runners = append(runners, fakeRunner{name: r.Name(), seen: &seen, tracks: []Track{TrackServer}, applies: appliesToHost})
 		}
 	}
 	p2 := &Pipeline{Runners: runners}
@@ -538,6 +618,9 @@ func TestPipelineFailOpenEmptyEvidence(t *testing.T) {
 	runs := p2.Run(context.Background(), Request{Target: "x", ScanDir: t.TempDir()}, nil, nil)
 	byScanner := map[string]string{}
 	for _, r := range runs {
+		if r.Scope == sourceScopeID { // fail-open assertions concern the host scope only
+			continue
+		}
 		byScanner[r.Scanner] = r.Status
 	}
 	// Fail open: both web and server tracks are scanned, so neither is
@@ -588,25 +671,24 @@ func TestApplyDefaultsMaxWorkers(t *testing.T) {
 func TestEmittedEventsCarryScope(t *testing.T) {
 	var seen []string
 	var events []Event
-	p := &Pipeline{Runners: []Runner{fakeRunner{name: "nuclei", seen: &seen}}}
+	p := &Pipeline{Runners: []Runner{fakeRunner{name: "nuclei", seen: &seen, applies: appliesToHost}}}
 	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
 		return []Scope{HostScope("a.example.com")}, nil
 	}
 	_ = p.Run(context.Background(), Request{Target: "a.example.com", ScanDir: t.TempDir()}, nil, func(e Event) {
 		events = append(events, e)
 	})
-	// The fakeRunner emits an event; assert it carries the host scope.
+	// The fakeRunner emits an event on the host scope; assert it carries the host
+	// scope. (nuclei is also emitted not_applicable on the source scope, which
+	// carries the source scope — that is expected and not what this test asserts.)
 	found := false
 	for _, e := range events {
-		if e.Scanner == "nuclei" {
-			if e.Run.Scope != "host:a.example.com" {
-				t.Fatalf("emitted event scope = %q, want host:a.example.com", e.Run.Scope)
-			}
+		if e.Scanner == "nuclei" && e.Run.Scope == "host:a.example.com" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("no nuclei event observed")
+		t.Fatal("no host-scoped nuclei event observed")
 	}
 }
 
@@ -632,12 +714,13 @@ func TestScanPhaseResultOrderStable(t *testing.T) {
 		return []Scope{HostScope("a"), HostScope("b")}, nil
 	}
 	runs := p.Run(context.Background(), Request{Target: "t", ScanDir: t.TempDir()}, nil, nil)
-	// Expect order: (a,nuclei),(a,vuls),(b,nuclei),(b,vuls)
+	// Expect scope-major, runner-minor order across host scopes then the appended
+	// source scope: (a,nuclei),(a,vuls),(b,nuclei),(b,vuls),(source,nuclei),(source,vuls).
 	var got []string
 	for _, r := range runs {
 		got = append(got, r.Scope+"/"+r.Scanner)
 	}
-	want := []string{"host:a/nuclei", "host:a/vuls", "host:b/nuclei", "host:b/vuls"}
+	want := []string{"host:a/nuclei", "host:a/vuls", "host:b/nuclei", "host:b/vuls", "source:main/nuclei", "source:main/vuls"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
@@ -719,8 +802,10 @@ func TestSchedulerRespectsWorkerBoundAndHeavyLock(t *testing.T) {
 	if g.max < 2 {
 		t.Errorf("expected some parallelism, observed max %d", g.max)
 	}
-	if len(runs) != 3*len(runners) {
-		t.Errorf("runs = %d, want %d", len(runs), 3*len(runners))
+	// 3 host scopes + 1 appended source scope = 4 scopes; gaugeRunners have no
+	// Applies predicate, so they run on every scope.
+	if len(runs) != 4*len(runners) {
+		t.Errorf("runs = %d, want %d", len(runs), 4*len(runners))
 	}
 }
 

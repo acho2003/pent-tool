@@ -18,7 +18,7 @@ type vulsRunner struct{}
 func (vulsRunner) Name() string { return "vuls" }
 
 func (vulsRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "vuls", Phase: PhaseServer, Tracks: []Track{TrackServer}, Weight: WeightLight}
+	return Descriptor{Name: "vuls", Phase: PhaseServer, Tracks: []Track{TrackServer}, Weight: WeightLight, Applies: appliesToHost}
 }
 
 func (vulsRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {

@@ -32,12 +32,12 @@ type Pipeline struct {
 func NewPipeline(cfg Config) *Pipeline {
 	applyDefaults(&cfg)
 	return &Pipeline{Config: cfg, reconFn: runRecon, Runners: []Runner{
-		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}, build: buildNuclei},
+		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildNuclei},
 		zapRunner{},
-		commandRunner{name: "testssl", desc: Descriptor{Name: "testssl", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}, build: buildTestssl},
+		commandRunner{name: "testssl", desc: Descriptor{Name: "testssl", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildTestssl},
 		openVASRunner{},
-		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight}, build: buildTrivy},
 		vulsRunner{},
+		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildTrivy},
 	}}
 }
 
@@ -199,25 +199,39 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	// cancellation) resolve inline into their slot during the walk; executable
 	// pairs are collected as scanTasks and dispatched onto a bounded worker pool
 	// afterwards, each writing into its own pre-assigned slot.
+	//
+	// Append the single SAST source scope AFTER the host-scope set is finalized but
+	// BEFORE results is allocated, so its per-runner rows are counted in the slice
+	// size. Appending after the allocation would under-size results and panic when
+	// the source rows are written.
+	scopes = append(scopes, resolveSourceScope(ctx, req, p.Config, safeEmit))
 	results := make([]Run, len(scopes)*len(p.Runners))
 	var tasks []scanTask
 	slot := 0
 	for _, sc := range scopes {
 		scopeKey := sc.Key()
-		sc.Tracks = Classify(sc.Evidence)
-		if len(sc.Tracks) == 0 {
-			// Fail open: a host with no recon evidence (recon degraded/absent, or the
-			// single-host degrade path) is scanned on all tracks rather than downgraded
-			// to trivy-only, so a reachable host is never silently under-scanned.
-			sc.Tracks = []Track{TrackWeb, TrackServer}
+		scopeReq := req
+		scopeReq.Scope = scopeKey
+		if sc.Kind == ScopeSource {
+			// The source scope carries the resolved source path (or "" when no source
+			// resolved, in which case SAST tools record not_applicable). It has no
+			// tracks and is not classified; scope-kind gating alone decides runners.
+			scopeReq.Target = sc.Target
+			scopeReq.ScanDir = filepath.Join(req.ScanDir, "source")
+		} else {
+			sc.Tracks = Classify(sc.Evidence)
+			if len(sc.Tracks) == 0 {
+				// Fail open: a host with no recon evidence (recon degraded/absent, or the
+				// single-host degrade path) is scanned on all tracks rather than downgraded
+				// to trivy-only, so a reachable host is never silently under-scanned.
+				sc.Tracks = []Track{TrackWeb, TrackServer}
+			}
+			scopeReq.Target = sc.Target
+			// Isolate each host's scanner artifacts. Every scan runner derives its
+			// output base from req.ScanDir alone, so two scopes writing under one
+			// ScanDir would clobber each other's results and break VerifyChecksum.
+			scopeReq.ScanDir = filepath.Join(req.ScanDir, "hosts", sanitizeHost(sc.Target))
 		}
-		hostReq := req
-		hostReq.Target = sc.Target
-		hostReq.Scope = scopeKey
-		// Isolate each host's scanner artifacts. Every scan runner derives its
-		// output base from req.ScanDir alone, so two scopes writing under one
-		// ScanDir would clobber each other's results and break VerifyChecksum.
-		hostReq.ScanDir = filepath.Join(req.ScanDir, "hosts", sanitizeHost(sc.Target))
 		for i, runner := range p.Runners {
 			if old, ok := byKey[resumeKey(scopeKey, runner.Name())]; ok {
 				results[slot] = old
@@ -227,12 +241,12 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			// A deselected scanner still produces an explicit terminal record, so
 			// the scan's evidence shows what was not attempted and why.
 			if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
-				results[slot] = skippedRun(runner.Name(), scopeKey, hostReq, safeEmit)
+				results[slot] = skippedRun(runner.Name(), scopeKey, scopeReq, safeEmit)
 				slot++
 				continue
 			}
-			if !runnerAppliesToTracks(runner.Descriptor(), sc.Tracks) {
-				results[slot] = notApplicableClassifierRun(runner.Name(), scopeKey, hostReq, safeEmit)
+			if !runnerAppliesToScope(runner.Descriptor(), sc) {
+				results[slot] = notApplicableClassifierRun(runner.Name(), scopeKey, scopeReq, safeEmit)
 				slot++
 				continue
 			}
@@ -242,14 +256,14 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 				// scope. Slots are written by index, so the cancelled fan-out keeps its
 				// order and a cancelled pair never becomes an executable task.
 				for j, rest := range p.Runners[i:] {
-					results[slot+j] = cancelledRun(rest.Name(), scopeKey, hostReq, err, safeEmit)
+					results[slot+j] = cancelledRun(rest.Name(), scopeKey, scopeReq, err, safeEmit)
 				}
 				slot += len(p.Runners) - i
 				break
 			}
 			// Executable: defer to the worker pool, remembering the pre-assigned slot
 			// so the concurrent write lands in deterministic output order.
-			tasks = append(tasks, scanTask{runner: runner, scopeKey: scopeKey, hostReq: hostReq, slot: slot})
+			tasks = append(tasks, scanTask{runner: runner, scopeKey: scopeKey, hostReq: scopeReq, slot: slot})
 			slot++
 		}
 	}
@@ -428,12 +442,32 @@ func runnerAppliesToTracks(d Descriptor, tracks []Track) bool {
 	return false
 }
 
-// notApplicableClassifierRun builds the terminal record for a scanner whose
-// track does not match the host's classified tracks, scoped to scopeKey and
-// emitting the matching not-applicable event.
+// appliesToHost / appliesToSource are the Descriptor.Applies predicates that bind
+// a runner to one scope kind. Host runners scan discovered hosts; SAST runners
+// scan the single source scope.
+func appliesToHost(s Scope) bool   { return s.Kind == ScopeHost }
+func appliesToSource(s Scope) bool { return s.Kind == ScopeSource }
+
+// runnerAppliesToScope decides whether a runner attempts a given scope. The
+// Applies predicate gates by scope kind; host scopes additionally gate by the
+// classified tracks. A source scope that passes Applies always runs (no tracks).
+func runnerAppliesToScope(d Descriptor, sc Scope) bool {
+	if d.Applies != nil && !d.Applies(sc) {
+		return false
+	}
+	if sc.Kind == ScopeHost {
+		return runnerAppliesToTracks(d, sc.Tracks)
+	}
+	return true
+}
+
+// notApplicableClassifierRun builds the terminal record for a scanner that does
+// not apply to a scope — either its track does not match the host's classified
+// tracks or its scope kind does not match — scoped to scopeKey and emitting the
+// matching not-applicable event.
 func notApplicableClassifierRun(name, scope string, req Request, emit EmitFunc) Run {
 	now := time.Now().Format(time.RFC3339Nano)
-	r := Run{Scanner: name, Target: req.Target, Status: "not_applicable", Reason: "host tracks do not include this scanner's track", StartedAt: now, FinishedAt: now, Scope: scope}
+	r := Run{Scanner: name, Target: req.Target, Status: "not_applicable", Reason: "scanner does not apply to this scope", StartedAt: now, FinishedAt: now, Scope: scope}
 	if emit != nil {
 		emit(Event{Type: "scanner_not_applicable", Scanner: name, Run: r, Output: r.Reason})
 	}
@@ -470,8 +504,12 @@ type commandSpec struct {
 	// scanner name (e.g. per-host nmap) do not append to one another's sealed
 	// logs. Empty keeps the default scanner-output/<name> layout.
 	outputSubdir string
-	prepare      func() error
-	findOutput   func() string
+	// okExit lists non-zero process exit codes to treat as success. Some tools
+	// (gitleaks, osv-scanner) signal "findings present" with a non-zero code; a
+	// completed run must still parse. nil means only exit 0 succeeds.
+	okExit     map[int]bool
+	prepare    func() error
+	findOutput func() string
 }
 
 type commandBuilder func(Request, Config) commandSpec
@@ -574,7 +612,11 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 			run.Status, run.Reason = "failed", "scanner timeout exceeded"
 		default:
-			run.Status, run.Reason = "failed", err.Error()
+			if spec.okExit != nil && spec.okExit[run.ExitCode] {
+				run.Status = "completed"
+			} else {
+				run.Status, run.Reason = "failed", err.Error()
+			}
 		}
 	} else {
 		run.Status = "completed"
@@ -757,10 +799,17 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 }
 
 func buildTrivy(req Request, cfg Config) commandSpec {
+	// SAST source scope: filesystem-scan the resolved source directory.
+	if src := strings.TrimSpace(req.Target); src != "" {
+		artifact := filepath.Join(req.ScanDir, "scanner-output", "trivy", "results.json")
+		args := []string{"fs", "--format", "json", "--output", artifact, "--scanners", "vuln,misconfig,secret,license", src}
+		return commandSpec{path: cfg.TrivyPath, args: args, artifact: artifact, timeout: cfg.TrivyTimeout}
+	}
+	// Fallback: artifact-based scan (image/sbom/etc.) when no source path.
 	kind := strings.ToLower(strings.TrimSpace(req.Artifact.Kind))
 	ref := strings.TrimSpace(req.Artifact.Ref)
 	if kind == "" || ref == "" {
-		return commandSpec{notApp: "Trivy requires artifact.kind and artifact.ref", timeout: cfg.TrivyTimeout}
+		return commandSpec{notApp: "Trivy requires a source path or artifact.kind/ref", timeout: cfg.TrivyTimeout}
 	}
 	cmd := map[string]string{"filesystem": "fs", "repository": "repo", "image": "image", "sbom": "sbom"}[kind]
 	if cmd == "" {
