@@ -154,11 +154,13 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	//
 	// Each (scope, runner) pair owns one pre-assigned, ordered slot in results.
 	// Ordering is intrinsic to the slot index, decoupled from when a slot is
-	// written, so Task 4 can execute the runAttempt slots concurrently while the
-	// output order stays deterministic. Non-executing decisions (reuse, skip,
-	// not_applicable, cancellation) resolve inline into their slot; executable
-	// pairs run runAttempt sequentially (still) and write into their own slot.
+	// written, so the runAttempt slots run concurrently while the output order
+	// stays deterministic. Non-executing decisions (reuse, skip, not_applicable,
+	// cancellation) resolve inline into their slot during the walk; executable
+	// pairs are collected as scanTasks and dispatched onto a bounded worker pool
+	// afterwards, each writing into its own pre-assigned slot.
 	results := make([]Run, len(scopes)*len(p.Runners))
+	var tasks []scanTask
 	slot := 0
 	for _, sc := range scopes {
 		scopeKey := sc.Key()
@@ -195,23 +197,91 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 				continue
 			}
 			if err := ctx.Err(); err != nil {
-				// Cancellation observed: fill this and every remaining slot in the
-				// scope with a cancelled record, then stop scanning this scope. Slots
-				// are written by index, so the cancelled fan-out keeps its order.
+				// Cancellation observed during the walk: fill this and every remaining
+				// slot in the scope with a cancelled record, then stop scanning this
+				// scope. Slots are written by index, so the cancelled fan-out keeps its
+				// order and a cancelled pair never becomes an executable task.
 				for j, rest := range p.Runners[i:] {
 					results[slot+j] = cancelledRun(rest.Name(), scopeKey, hostReq, err, emit)
 				}
 				slot += len(p.Runners) - i
 				break
 			}
-			run := runAttempt(ctx, runner, hostReq, p.Config, emit)
-			run.Scope = scopeKey
-			results[slot] = run
+			// Executable: defer to the worker pool, remembering the pre-assigned slot
+			// so the concurrent write lands in deterministic output order.
+			tasks = append(tasks, scanTask{runner: runner, scopeKey: scopeKey, hostReq: hostReq, slot: slot})
 			slot++
 		}
 	}
+	p.runTasks(ctx, tasks, results, emit)
 	out = append(out, results...)
 	return out
+}
+
+// scanTask is one executable (scope, runner) pair captured during the walk, with
+// the pre-assigned results slot it must write so concurrent execution preserves
+// deterministic output order.
+type scanTask struct {
+	runner   Runner
+	scopeKey string
+	hostReq  Request
+	slot     int
+}
+
+// runTasks executes the collected executable tasks on a bounded worker pool.
+//
+// Two independent gates bound concurrency:
+//   - sem (buffer MaxWorkers) caps total in-flight scanners.
+//   - heavy (buffer 1) serializes WeightHeavy scanners (zap/openvas) to at most
+//     one globally, since a heavy tool holds a worker slot AND the exclusive
+//     heavy token, so two heavy tools never overlap even when MaxWorkers > 1.
+//
+// The worker slot is acquired by the launching goroutine BEFORE the task's
+// goroutine is spawned. This is the standard bounded-pool idiom and gives max==1
+// truly sequential, slot-ordered execution (dispatch blocks until the prior task
+// releases its slot), which keeps the existing deterministic-order tests valid
+// while enabling real parallelism when MaxWorkers > 1.
+//
+// LOCK ORDER: the worker slot (sem) is ALWAYS acquired before the heavy token,
+// and the launcher never touches heavy, so no goroutine holds heavy while blocked
+// on sem — the two gates cannot deadlock. The heavy holder already owns its
+// worker slot and never blocks on sem, so it always makes progress and releases
+// both tokens. Each task writes only its own distinct results[slot], so the
+// disjoint slot writes need no mutex. On a cancelled context a task writes a
+// cancelled run instead of executing.
+func (p *Pipeline) runTasks(ctx context.Context, tasks []scanTask, results []Run, emit EmitFunc) {
+	if len(tasks) == 0 {
+		return
+	}
+	max := p.Config.MaxWorkers
+	if max < 1 {
+		max = 1
+	}
+	sem := make(chan struct{}, max)
+	heavy := make(chan struct{}, 1)
+	var wg sync.WaitGroup
+	for _, task := range tasks {
+		sem <- struct{}{} // acquire worker slot before spawning (always before heavy)
+		wg.Add(1)
+		go func(task scanTask) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := ctx.Err(); err != nil {
+				// Cancelled after the walk: resolve to a cancelled run rather than
+				// executing. Written to the pre-assigned slot, so order is preserved.
+				results[task.slot] = cancelledRun(task.runner.Name(), task.scopeKey, task.hostReq, err, emit)
+				return
+			}
+			if task.runner.Descriptor().Weight == WeightHeavy {
+				heavy <- struct{}{} // exclusive heavy gate, only while holding a worker slot
+				defer func() { <-heavy }()
+			}
+			run := runAttempt(ctx, task.runner, task.hostReq, p.Config, emit)
+			run.Scope = task.scopeKey
+			results[task.slot] = run
+		}(task)
+	}
+	wg.Wait()
 }
 
 // indexTerminal maps each existing terminal run to its (scope, scanner) resume

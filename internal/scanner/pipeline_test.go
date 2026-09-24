@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -636,5 +637,86 @@ func TestScanPhaseResultOrderStable(t *testing.T) {
 	want := []string{"host:a/nuclei", "host:a/vuls", "host:b/nuclei", "host:b/vuls"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
+	}
+}
+
+// concGauge records max observed concurrency (overall and heavy-only) so the
+// scheduler's worker bound and heavy-tool exclusivity can be asserted
+// deterministically without -race.
+type concGauge struct {
+	mu       sync.Mutex
+	cur, max int
+	heavyCur int
+	heavyMax int
+}
+
+func (g *concGauge) enter(heavy bool) {
+	g.mu.Lock()
+	g.cur++
+	if g.cur > g.max {
+		g.max = g.cur
+	}
+	if heavy {
+		g.heavyCur++
+		if g.heavyCur > g.heavyMax {
+			g.heavyMax = g.heavyCur
+		}
+	}
+	g.mu.Unlock()
+}
+
+func (g *concGauge) leave(heavy bool) {
+	g.mu.Lock()
+	g.cur--
+	if heavy {
+		g.heavyCur--
+	}
+	g.mu.Unlock()
+}
+
+type gaugeRunner struct {
+	name  string
+	heavy bool
+	g     *concGauge
+}
+
+func (r gaugeRunner) Name() string { return r.name }
+func (r gaugeRunner) Descriptor() Descriptor {
+	w := WeightLight
+	if r.heavy {
+		w = WeightHeavy
+	}
+	return Descriptor{Name: r.name, Phase: PhaseWeb, Weight: w}
+}
+func (r gaugeRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	r.g.enter(r.heavy)
+	time.Sleep(20 * time.Millisecond) // widen the window deterministically
+	r.g.leave(r.heavy)
+	return Run{Scanner: r.name, Target: req.Target, Scope: req.Scope, Status: "completed"}
+}
+
+func TestSchedulerRespectsWorkerBoundAndHeavyLock(t *testing.T) {
+	g := &concGauge{}
+	// 6 light runners across 3 hosts, plus heavy runners, MaxWorkers=3.
+	runners := []Runner{
+		gaugeRunner{name: "l1", g: g}, gaugeRunner{name: "l2", g: g},
+		gaugeRunner{name: "h1", heavy: true, g: g}, gaugeRunner{name: "h2", heavy: true, g: g},
+	}
+	p := &Pipeline{Config: Config{MaxWorkers: 3}, Runners: runners}
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("a"), HostScope("b"), HostScope("c")}, nil
+	}
+	runs := p.Run(context.Background(), Request{Target: "t", ScanDir: t.TempDir()}, nil, nil)
+	if g.max > 3 {
+		t.Errorf("observed max concurrency %d > MaxWorkers 3", g.max)
+	}
+	if g.heavyMax > 1 {
+		t.Errorf("observed max heavy concurrency %d > 1", g.heavyMax)
+	}
+	if g.max < 2 {
+		t.Errorf("expected some parallelism, observed max %d", g.max)
+	}
+	if len(runs) != 3*len(runners) {
+		t.Errorf("runs = %d, want %d", len(runs), 3*len(runners))
 	}
 }
