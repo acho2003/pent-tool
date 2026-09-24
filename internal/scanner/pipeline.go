@@ -161,13 +161,18 @@ func runAttempt(ctx context.Context, runner Runner, req Request, cfg Config, emi
 }
 
 type commandSpec struct {
-	path       string
-	args       []string
-	artifact   string
-	timeout    time.Duration
-	notApp     string
-	prepare    func() error
-	findOutput func() string
+	path     string
+	args     []string
+	artifact string
+	timeout  time.Duration
+	notApp   string
+	// outputSubdir nests this run's stdout/stderr logs under
+	// scanner-output/<name>/<outputSubdir> so several invocations that share a
+	// scanner name (e.g. per-host nmap) do not append to one another's sealed
+	// logs. Empty keeps the default scanner-output/<name> layout.
+	outputSubdir string
+	prepare      func() error
+	findOutput   func() string
 }
 
 type commandBuilder func(Request, Config) commandSpec
@@ -189,6 +194,9 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	now := time.Now()
 	run := Run{Scanner: name, Target: req.Target, Status: "running", StartedAt: now.Format(time.RFC3339Nano), ExitCode: -1}
 	base := filepath.Join(req.ScanDir, "scanner-output", name)
+	if spec.outputSubdir != "" {
+		base = filepath.Join(base, spec.outputSubdir)
+	}
 	_ = os.MkdirAll(base, 0o700)
 	run.StdoutPath = filepath.Join(base, "stdout.log")
 	run.StderrPath = filepath.Join(base, "stderr.log")

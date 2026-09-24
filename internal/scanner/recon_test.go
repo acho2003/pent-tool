@@ -1,8 +1,10 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +53,30 @@ func TestParseHttpxLive(t *testing.T) {
 	}
 	if res[1].TLS {
 		t.Fatalf("result[1] TLS should be false for http scheme: %+v", res[1])
+	}
+}
+
+func TestExecuteSpecOutputSubdirIsolatesPerHost(t *testing.T) {
+	dir := t.TempDir()
+	req := Request{Target: "example.com", ScanDir: dir}
+	// A binary that cannot be found still gets its per-run log paths assigned
+	// before the LookPath check, so this exercises path isolation without nmap.
+	specA := commandSpec{path: "definitely-not-a-real-binary-xyz", outputSubdir: sanitizeHost("a.example.com")}
+	specB := commandSpec{path: "definitely-not-a-real-binary-xyz", outputSubdir: sanitizeHost("b.example.com")}
+	runA := executeSpec(context.Background(), "nmap", req, Config{}, specA, nil)
+	runB := executeSpec(context.Background(), "nmap", req, Config{}, specB, nil)
+	if runA.StdoutPath == runB.StdoutPath {
+		t.Fatalf("per-host stdout paths collided: %q", runA.StdoutPath)
+	}
+	if runA.StderrPath == runB.StderrPath {
+		t.Fatalf("per-host stderr paths collided: %q", runA.StderrPath)
+	}
+	if !strings.Contains(runA.StdoutPath, filepath.Join("nmap", "a.example.com")) {
+		t.Fatalf("stdout path not nested under per-host dir: %q", runA.StdoutPath)
+	}
+	// Scanner name is preserved so ParseRun's `case "nmap"` still matches.
+	if runA.Scanner != "nmap" {
+		t.Fatalf("scanner name = %q, want nmap", runA.Scanner)
 	}
 }
 

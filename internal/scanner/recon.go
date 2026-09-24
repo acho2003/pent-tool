@@ -232,16 +232,21 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 			}
 		}
 
-		artifact := filepath.Join(req.ScanDir, "scanner-output", "nmap", sanitizeHost(host)+".xml")
+		// Nest each host's nmap output under scanner-output/nmap/<host> so the
+		// per-host stdout/stderr/XML files never collide: executeSpec derives log
+		// paths from the scanner name alone, and a shared log would break the
+		// sealed per-run checksum once a second host appends to it.
+		subdir := sanitizeHost(host)
+		artifact := filepath.Join(req.ScanDir, "scanner-output", "nmap", subdir, "nmap.xml")
 		nmapSpec := commandSpec{
-			path:     cfg.NmapPath,
-			args:     []string{"-sV", "-oX", artifact, host},
-			artifact: artifact,
-			timeout:  cfg.NmapTimeout,
+			path:         cfg.NmapPath,
+			args:         []string{"-sV", "-oX", artifact, host},
+			artifact:     artifact,
+			timeout:      cfg.NmapTimeout,
+			outputSubdir: subdir,
 		}
 		nmapRun := executeSpec(ctx, "nmap", req, cfg, nmapSpec, emit)
 		nmapRun.Scope = scopeKey
-		nmapRun.ArtifactPath = artifact
 		runs = append(runs, nmapRun)
 		if nmapRun.Status == "completed" {
 			if findings, err := parseNmap(artifact); err == nil {
