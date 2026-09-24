@@ -605,3 +605,14 @@ func TestEmittedEventsCarryScope(t *testing.T) {
 		t.Fatal("no nuclei event observed")
 	}
 }
+
+func TestFailedServiceRunCarriesScope(t *testing.T) {
+	var got Event
+	r := failedServiceRun("zap", Request{Target: "x", Scope: "host:x", ScanDir: t.TempDir()}, "boom", func(e Event) { got = e })
+	if r.Scope != "host:x" {
+		t.Fatalf("returned run scope = %q, want host:x", r.Scope)
+	}
+	if got.Run.Scope != "host:x" {
+		t.Fatalf("emitted event scope = %q, want host:x", got.Run.Scope)
+	}
+}
