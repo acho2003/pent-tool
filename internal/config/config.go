@@ -45,6 +45,9 @@ type Config struct {
 	HttpxPath             string
 	NmapPath              string
 	TestsslPath           string
+	SemgrepPath           string
+	GitleaksPath          string
+	OsvPath               string
 	ZAPURL                string
 	ZAPAPIKey             string
 	GVMHost               string
@@ -63,6 +66,9 @@ type Config struct {
 	HttpxTimeoutSec       int
 	NmapTimeoutSec        int
 	TestsslTimeoutSec     int
+	SemgrepTimeoutSec     int
+	GitleaksTimeoutSec    int
+	OsvTimeoutSec         int
 
 	// ContextCompactTokens is an OPTIONAL absolute override for the compaction
 	// trigger. When > 0, the agent auto-compacts older turns into a structured
@@ -358,6 +364,9 @@ func load() *Config {
 		HttpxPath:             envOr("XALGORIX_HTTPX_PATH", "httpx"),
 		NmapPath:              envOr("XALGORIX_NMAP_PATH", "nmap"),
 		TestsslPath:           envOr("XALGORIX_TESTSSL_PATH", "testssl.sh"),
+		SemgrepPath:           envOr("XALGORIX_SEMGREP_PATH", "semgrep"),
+		GitleaksPath:          envOr("XALGORIX_GITLEAKS_PATH", "gitleaks"),
+		OsvPath:               envOr("XALGORIX_OSV_PATH", "osv-scanner"),
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
 		GVMHost:               envOr("XALGORIX_GVM_HOST", ""),
@@ -376,6 +385,9 @@ func load() *Config {
 		HttpxTimeoutSec:       envOrInt("XALGORIX_HTTPX_TIMEOUT_SECONDS", 600),
 		NmapTimeoutSec:        envOrInt("XALGORIX_NMAP_TIMEOUT_SECONDS", 1800),
 		TestsslTimeoutSec:     envOrInt("XALGORIX_TESTSSL_TIMEOUT_SECONDS", 1800),
+		SemgrepTimeoutSec:     envOrInt("XALGORIX_SEMGREP_TIMEOUT_SECONDS", 1800),
+		GitleaksTimeoutSec:    envOrInt("XALGORIX_GITLEAKS_TIMEOUT_SECONDS", 900),
+		OsvTimeoutSec:         envOrInt("XALGORIX_OSV_TIMEOUT_SECONDS", 900),
 
 		// Runtime
 		RuntimeBackend:      "native", // Always native in Go version

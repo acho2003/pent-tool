@@ -22,10 +22,16 @@ func TestScannerConfigThreadsReconAndTestsslPaths(t *testing.T) {
 		HttpxPath:           "/usr/local/bin/httpx",
 		NmapPath:            "/usr/local/bin/nmap",
 		TestsslPath:         "/opt/testssl.sh/testssl.sh",
+		SemgrepPath:         "/usr/local/bin/semgrep",
+		GitleaksPath:        "/usr/local/bin/gitleaks",
+		OsvPath:             "/usr/local/bin/osv-scanner",
 		SubfinderTimeoutSec: 111,
 		HttpxTimeoutSec:     222,
 		NmapTimeoutSec:      333,
 		TestsslTimeoutSec:   444,
+		SemgrepTimeoutSec:   555,
+		GitleaksTimeoutSec:  666,
+		OsvTimeoutSec:       777,
 	}
 
 	sc := scannerConfig(cfg)
@@ -53,6 +59,24 @@ func TestScannerConfigThreadsReconAndTestsslPaths(t *testing.T) {
 	}
 	if sc.TestsslTimeout != 444*time.Second {
 		t.Errorf("TestsslTimeout = %v, want 444s", sc.TestsslTimeout)
+	}
+	if sc.SemgrepPath != "/usr/local/bin/semgrep" {
+		t.Errorf("SemgrepPath = %q, want /usr/local/bin/semgrep", sc.SemgrepPath)
+	}
+	if sc.GitleaksPath != "/usr/local/bin/gitleaks" {
+		t.Errorf("GitleaksPath = %q, want /usr/local/bin/gitleaks", sc.GitleaksPath)
+	}
+	if sc.OsvPath != "/usr/local/bin/osv-scanner" {
+		t.Errorf("OsvPath = %q, want /usr/local/bin/osv-scanner", sc.OsvPath)
+	}
+	if sc.SemgrepTimeout != 555*time.Second {
+		t.Errorf("SemgrepTimeout = %v, want 555s", sc.SemgrepTimeout)
+	}
+	if sc.GitleaksTimeout != 666*time.Second {
+		t.Errorf("GitleaksTimeout = %v, want 666s", sc.GitleaksTimeout)
+	}
+	if sc.OsvTimeout != 777*time.Second {
+		t.Errorf("OsvTimeout = %v, want 777s", sc.OsvTimeout)
 	}
 }
 

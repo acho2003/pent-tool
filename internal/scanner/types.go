@@ -107,6 +107,9 @@ type Config struct {
 	HttpxPath         string
 	NmapPath          string
 	TestsslPath       string
+	SemgrepPath       string
+	GitleaksPath      string
+	OsvPath           string
 
 	ZAPURL    string
 	ZAPAPIKey string
@@ -129,6 +132,9 @@ type Config struct {
 	HttpxTimeout     time.Duration
 	NmapTimeout      time.Duration
 	TestsslTimeout   time.Duration
+	SemgrepTimeout   time.Duration
+	GitleaksTimeout  time.Duration
+	OsvTimeout       time.Duration
 }
 
 type EmitFunc func(Event)

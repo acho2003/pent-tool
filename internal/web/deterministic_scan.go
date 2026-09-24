@@ -19,6 +19,7 @@ func scannerConfig(cfg *config.Config) scanner.Config {
 	return scanner.Config{
 		NucleiPath: cfg.NucleiPath, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
 		SubfinderPath: cfg.SubfinderPath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, TestsslPath: cfg.TestsslPath,
+		SemgrepPath: cfg.SemgrepPath, GitleaksPath: cfg.GitleaksPath, OsvPath: cfg.OsvPath,
 		ZAPURL: cfg.ZAPURL, ZAPAPIKey: cfg.ZAPAPIKey, GVMHost: cfg.GVMHost, GVMPort: cfg.GVMPort, GVMSocket: cfg.GVMSocket, GVMUser: cfg.GVMUsername, GVMPass: cfg.GVMPassword,
 		RateRPS: int(cfg.RateLimitRPS), MaxWorkers: cfg.MaxWorkers, ScanHeaders: append([]string(nil), cfg.ScanHeaders...), MaxOutputBytes: cfg.ScannerMaxOutputBytes,
 		NucleiTimeout: time.Duration(cfg.NucleiTimeoutSec) * time.Second, ZAPTimeout: time.Duration(cfg.ZAPTimeoutSec) * time.Second,
@@ -27,6 +28,9 @@ func scannerConfig(cfg *config.Config) scanner.Config {
 		HttpxTimeout:     time.Duration(cfg.HttpxTimeoutSec) * time.Second,
 		NmapTimeout:      time.Duration(cfg.NmapTimeoutSec) * time.Second,
 		TestsslTimeout:   time.Duration(cfg.TestsslTimeoutSec) * time.Second,
+		SemgrepTimeout:   time.Duration(cfg.SemgrepTimeoutSec) * time.Second,
+		GitleaksTimeout:  time.Duration(cfg.GitleaksTimeoutSec) * time.Second,
+		OsvTimeout:       time.Duration(cfg.OsvTimeoutSec) * time.Second,
 	}
 }
 

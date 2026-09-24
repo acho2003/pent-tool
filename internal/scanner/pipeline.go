@@ -70,6 +70,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.TestsslPath == "" {
 		cfg.TestsslPath = "testssl.sh"
 	}
+	if cfg.SemgrepPath == "" {
+		cfg.SemgrepPath = "semgrep"
+	}
+	if cfg.GitleaksPath == "" {
+		cfg.GitleaksPath = "gitleaks"
+	}
+	if cfg.OsvPath == "" {
+		cfg.OsvPath = "osv-scanner"
+	}
 	if cfg.GVMPort == 0 {
 		cfg.GVMPort = 9390
 	}
@@ -108,6 +117,15 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.TestsslTimeout <= 0 {
 		cfg.TestsslTimeout = 30 * time.Minute
+	}
+	if cfg.SemgrepTimeout <= 0 {
+		cfg.SemgrepTimeout = 30 * time.Minute
+	}
+	if cfg.GitleaksTimeout <= 0 {
+		cfg.GitleaksTimeout = 15 * time.Minute
+	}
+	if cfg.OsvTimeout <= 0 {
+		cfg.OsvTimeout = 15 * time.Minute
 	}
 }
 
