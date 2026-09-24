@@ -113,6 +113,21 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	if recon == nil {
 		recon = singleScopeRecon
 	}
+	// The scan phase now invokes runners concurrently (up to MaxWorkers), so the
+	// caller's emit callback can be entered from several goroutines at once. Real
+	// sinks (e.g. the web session record) mutate shared state per event with no
+	// locking of their own and were written against a single-threaded-emit
+	// invariant. Serialize every emit invocation here so that invariant holds
+	// regardless of scan concurrency. This guards only the fast event dispatch;
+	// the scanning work itself stays parallel. The per-call emitMu inside
+	// executeSpec only serializes one run's own stdout/stderr drain, not across
+	// concurrent runs, so it is insufficient on its own.
+	var emitMu sync.Mutex
+	safeEmit := emit
+	if emit != nil {
+		inner := emit
+		safeEmit = func(e Event) { emitMu.Lock(); inner(e); emitMu.Unlock() }
+	}
 	byKey := indexTerminal(existing, HostScope(req.Target).Key())
 	out := make([]Run, 0, len(p.Runners))
 
@@ -137,7 +152,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 		}
 	}
 	if len(scopes) == 0 {
-		scopes, reconRuns = recon(ctx, req, p.Config, emit)
+		scopes, reconRuns = recon(ctx, req, p.Config, safeEmit)
 	}
 	for _, rr := range reconRuns {
 		if old, ok := byKey[resumeKey(rr.Scope, rr.Scanner)]; ok {
@@ -187,12 +202,12 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			// A deselected scanner still produces an explicit terminal record, so
 			// the scan's evidence shows what was not attempted and why.
 			if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
-				results[slot] = skippedRun(runner.Name(), scopeKey, hostReq, emit)
+				results[slot] = skippedRun(runner.Name(), scopeKey, hostReq, safeEmit)
 				slot++
 				continue
 			}
 			if !runnerAppliesToTracks(runner.Descriptor(), sc.Tracks) {
-				results[slot] = notApplicableClassifierRun(runner.Name(), scopeKey, hostReq, emit)
+				results[slot] = notApplicableClassifierRun(runner.Name(), scopeKey, hostReq, safeEmit)
 				slot++
 				continue
 			}
@@ -202,7 +217,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 				// scope. Slots are written by index, so the cancelled fan-out keeps its
 				// order and a cancelled pair never becomes an executable task.
 				for j, rest := range p.Runners[i:] {
-					results[slot+j] = cancelledRun(rest.Name(), scopeKey, hostReq, err, emit)
+					results[slot+j] = cancelledRun(rest.Name(), scopeKey, hostReq, err, safeEmit)
 				}
 				slot += len(p.Runners) - i
 				break
@@ -213,7 +228,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			slot++
 		}
 	}
-	p.runTasks(ctx, tasks, results, emit)
+	p.runTasks(ctx, tasks, results, safeEmit)
 	out = append(out, results...)
 	return out
 }

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -718,5 +719,35 @@ func TestSchedulerRespectsWorkerBoundAndHeavyLock(t *testing.T) {
 	}
 	if len(runs) != 3*len(runners) {
 		t.Errorf("runs = %d, want %d", len(runs), 3*len(runners))
+	}
+}
+
+// TestEmitCallbackNeverInvokedConcurrently proves the pipeline serializes every
+// emit invocation across the concurrent scan-phase workers. Real emit sinks (the
+// web session record) mutate shared state per event with no locking of their own,
+// so a concurrent entry would corrupt scan.json or panic. The callback widens its
+// window with a small sleep so overlap is observed deterministically at 3 workers
+// without -race (which cannot run on this Darwin host).
+func TestEmitCallbackNeverInvokedConcurrently(t *testing.T) {
+	var active, raced int32
+	emit := func(Event) {
+		if n := atomic.AddInt32(&active, 1); n > 1 {
+			atomic.StoreInt32(&raced, 1)
+		}
+		time.Sleep(2 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+	}
+	var s1, s2, s3 []string
+	p := &Pipeline{Config: Config{MaxWorkers: 3}, Runners: []Runner{
+		fakeRunner{name: "r1", seen: &s1},
+		fakeRunner{name: "r2", seen: &s2},
+		fakeRunner{name: "r3", seen: &s3},
+	}}
+	p.reconFn = func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run) {
+		return []Scope{HostScope("a")}, nil
+	}
+	p.Run(context.Background(), Request{Target: "t", ScanDir: t.TempDir()}, nil, emit)
+	if atomic.LoadInt32(&raced) != 0 {
+		t.Fatalf("emit callback was invoked concurrently across scan-phase workers")
 	}
 }
