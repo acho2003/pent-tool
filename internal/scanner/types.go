@@ -97,6 +97,9 @@ type Config struct {
 	TrivyPath         string
 	VulsPath          string
 	VulsSSHConfigPath string
+	SubfinderPath     string
+	HttpxPath         string
+	NmapPath          string
 
 	ZAPURL    string
 	ZAPAPIKey string
@@ -114,6 +117,9 @@ type Config struct {
 	OpenVASTimeout time.Duration
 	TrivyTimeout   time.Duration
 	VulsTimeout    time.Duration
+	SubfinderTimeout time.Duration
+	HttpxTimeout     time.Duration
+	NmapTimeout      time.Duration
 }
 
 type EmitFunc func(Event)

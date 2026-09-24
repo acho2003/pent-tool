@@ -276,3 +276,14 @@ func TestResumeReusesLegacyEmptyScopeRuns(t *testing.T) {
 		t.Fatalf("nuclei status = %q, want completed (legacy run should be reused)", got.Status)
 	}
 }
+
+func TestApplyDefaultsReconFields(t *testing.T) {
+	p := NewPipeline(Config{})
+	c := p.Config
+	if c.SubfinderPath != "subfinder" || c.HttpxPath != "httpx" || c.NmapPath != "nmap" {
+		t.Fatalf("recon paths = %q/%q/%q", c.SubfinderPath, c.HttpxPath, c.NmapPath)
+	}
+	if c.SubfinderTimeout != 10*time.Minute || c.HttpxTimeout != 10*time.Minute || c.NmapTimeout != 30*time.Minute {
+		t.Fatalf("recon timeouts = %v/%v/%v", c.SubfinderTimeout, c.HttpxTimeout, c.NmapTimeout)
+	}
+}

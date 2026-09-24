@@ -46,6 +46,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.VulsPath == "" {
 		cfg.VulsPath = "vuls"
 	}
+	if cfg.SubfinderPath == "" {
+		cfg.SubfinderPath = "subfinder"
+	}
+	if cfg.HttpxPath == "" {
+		cfg.HttpxPath = "httpx"
+	}
+	if cfg.NmapPath == "" {
+		cfg.NmapPath = "nmap"
+	}
 	if cfg.GVMPort == 0 {
 		cfg.GVMPort = 9390
 	}
@@ -69,6 +78,15 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.VulsTimeout <= 0 {
 		cfg.VulsTimeout = time.Hour
+	}
+	if cfg.SubfinderTimeout <= 0 {
+		cfg.SubfinderTimeout = 10 * time.Minute
+	}
+	if cfg.HttpxTimeout <= 0 {
+		cfg.HttpxTimeout = 10 * time.Minute
+	}
+	if cfg.NmapTimeout <= 0 {
+		cfg.NmapTimeout = 30 * time.Minute
 	}
 }
 
