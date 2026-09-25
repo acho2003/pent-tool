@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
@@ -18,6 +19,11 @@ func TestScannerStatusListsCatalog(t *testing.T) {
 	s.handleScannerStatus(rr, httptest.NewRequest(http.MethodGet, "/api/scanners/status", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d", rr.Code)
+	}
+	// The webui client parses JSON only when the response says so; without
+	// this header the page silently receives a string and lists no tools.
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
 	var body struct {
 		Scanners []struct {

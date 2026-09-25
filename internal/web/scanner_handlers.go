@@ -63,7 +63,10 @@ func (s *Server) handleScannerStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		entries = append(entries, e)
 	}
-	json.NewEncoder(w).Encode(map[string]any{"scanners": entries})
+	// The webui client parses a body as JSON only when Content-Type says so;
+	// without this header Go sniffs text/plain and the UI lists no tools.
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"scanners": entries})
 }
 
 func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
@@ -251,5 +254,6 @@ func (s *Server) handleReportAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "report generation failed", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]string{"status": "ready", "mode": rec.ReportMode, "url": "/api/report/" + rec.ID})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready", "mode": rec.ReportMode, "url": "/api/report/" + rec.ID})
 }
