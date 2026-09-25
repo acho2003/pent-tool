@@ -137,6 +137,9 @@ func applyDefaults(cfg *Config) {
 // Existing terminal runs are reused, which makes queue resume continue at the
 // first incomplete (scope, scanner) without mutating immutable raw artifacts.
 func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit EmitFunc) []Run {
+	// Before recon, so recon and every per-scope copy redact the clone URL's
+	// credentials from their output.
+	req = withCloneSecrets(req)
 	recon := p.reconFn
 	if recon == nil {
 		recon = singleScopeRecon
@@ -772,6 +775,7 @@ func redact(s string, secrets []string) string {
 }
 func secretValues(req Request, cfg Config) []string {
 	vals := []string{cfg.ZAPAPIKey, cfg.GVMPass}
+	vals = append(vals, req.Secrets...)
 	headers := append([]string(nil), cfg.ScanHeaders...)
 	headers = append(headers, strings.FieldsFunc(req.TargetAuth, func(r rune) bool { return r == '\n' || r == ';' })...)
 	for _, part := range headers {

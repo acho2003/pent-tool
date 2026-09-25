@@ -41,6 +41,101 @@ func gitClone(ctx context.Context, url, dir string) error {
 	return cmd.Run()
 }
 
+// cloneURL is the repository URL a scan clones — a repository artifact ref or a
+// git-URL target — or "" when the scan has none.
+func cloneURL(req Request) string {
+	if strings.EqualFold(req.Artifact.Kind, "repository") {
+		return strings.TrimSpace(req.Artifact.Ref)
+	}
+	if isGitURL(req.Target) {
+		return strings.TrimSpace(req.Target)
+	}
+	return ""
+}
+
+// cloneCredentials returns the secret part of a clone URL's userinfo: the
+// password, or the username when it stands alone (a token used as the user, as
+// in https://<token>@host). Both the decoded and the as-written form are
+// returned when they differ, since tool output may echo either. A URL net/url
+// cannot parse falls back to the raw text between "://" and the last "@" of
+// the authority, so an unparseable URL still has its secret redacted.
+func cloneCredentials(raw string) []string {
+	if !hasURLScheme(raw) {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		if s := rawUserinfoSecret(raw); s != "" {
+			return []string{s}
+		}
+		return nil
+	}
+	if u.User == nil {
+		return nil
+	}
+	userinfo := u.User.String() // as escaped in the URL
+	secret, hasPassword := u.User.Password()
+	written := userinfo
+	if hasPassword {
+		if _, after, ok := strings.Cut(userinfo, ":"); ok {
+			written = after
+		}
+	} else {
+		secret = u.User.Username()
+	}
+	if secret == "" {
+		return nil
+	}
+	out := []string{secret}
+	if written != "" && written != secret {
+		out = append(out, written)
+	}
+	return out
+}
+
+// rawUserinfoSecret extracts the password (or lone username) from the authority
+// of a URL string without parsing it.
+func rawUserinfoSecret(raw string) string {
+	_, rest, ok := strings.Cut(raw, "://")
+	if !ok {
+		return ""
+	}
+	authority, _, _ := strings.Cut(rest, "/")
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return ""
+	}
+	userinfo := authority[:at]
+	if _, pass, ok := strings.Cut(userinfo, ":"); ok {
+		return pass
+	}
+	return userinfo
+}
+
+// withCloneSecrets adds the clone URL's credentials to req.Secrets, so every
+// runner's output is redacted of them — including per-scope requests whose
+// Target has been replaced by a host or the checkout path.
+func withCloneSecrets(req Request) Request {
+	if creds := cloneCredentials(cloneURL(req)); len(creds) > 0 {
+		req.Secrets = append(append([]string(nil), req.Secrets...), creds...)
+	}
+	return req
+}
+
+// scrubCloneRemote rewrites a checkout's origin URL without credentials, so a
+// token used to clone is not left in .git/config for file-scanning tools,
+// backups, or anyone who can read the scan directory. Best-effort: on failure
+// the checkout stays usable.
+func scrubCloneRemote(ctx context.Context, dir, rawURL string) {
+	clean := RedactURL(rawURL)
+	if clean == rawURL {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_ = exec.CommandContext(cctx, "git", "-C", dir, "remote", "set-url", "origin", clean).Run()
+}
+
 // resolveSourceScope returns the single source scope for a scan. Its Target is a
 // local source path when one is resolvable — a provided filesystem dir, a
 // provided repository URL, or a git-URL target (cloned) — and empty otherwise,
@@ -60,20 +155,18 @@ func resolveSourceScope(ctx context.Context, req Request, cfg Config, emit EmitF
 	}
 
 	// 2. Repository URL (from artifact ref or a git-URL target) -> clone.
-	url := ""
-	if strings.EqualFold(req.Artifact.Kind, "repository") {
-		url = strings.TrimSpace(req.Artifact.Ref)
-	} else if isGitURL(req.Target) {
-		url = strings.TrimSpace(req.Target)
-	}
-	if url != "" {
+	if url := cloneURL(req); url != "" {
 		dir := sourceCheckoutDir(req.ScanDir)
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			sc.Target = dir // resume: reuse existing checkout
+			// Resume: reuse the existing checkout (scrubbing a checkout made
+			// before credentials were scrubbed at clone time).
+			scrubCloneRemote(ctx, dir, url)
+			sc.Target = dir
 			sc.Source = SourceRef{Path: dir, Provenance: "clone:" + url}
 			return sc
 		}
 		if err := gitClone(ctx, url, dir); err == nil {
+			scrubCloneRemote(ctx, dir, url)
 			sc.Target = dir
 			sc.Source = SourceRef{Path: dir, Provenance: "clone:" + url}
 			return sc

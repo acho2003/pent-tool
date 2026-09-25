@@ -3,7 +3,9 @@ package scanner
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -135,5 +137,64 @@ func TestRedactURL(t *testing.T) {
 	}
 	if got := redactCloneProvenance("clone:https://user:to%zz@h/a.git"); got != "clone:<redacted URL>" {
 		t.Errorf("unparseable clone URL must fail closed, got %q", got)
+	}
+}
+
+func TestCloneCredentials(t *testing.T) {
+	cases := []struct {
+		url  string
+		want []string
+	}{
+		{"https://user:tok123456@github.com/a/b.git", []string{"tok123456"}},
+		{"https://ghp_abcdef123@github.com/a/b.git", []string{"ghp_abcdef123"}},
+		{"https://user:to%2Fk9999@github.com/a/b.git", []string{"to/k9999", "to%2Fk9999"}},
+		{"https://user:to%zz9999@github.com/a/b.git", []string{"to%zz9999"}}, // unparseable: raw form
+		{"https://github.com/a/b.git", nil},
+		{"git@github.com:a/b.git", nil},
+		{"", nil},
+	}
+	for _, c := range cases {
+		if got := cloneCredentials(c.url); !slices.Equal(got, c.want) {
+			t.Errorf("cloneCredentials(%q) = %q, want %q", c.url, got, c.want)
+		}
+	}
+}
+
+func TestCloneSecretsAreRedactedFromScannerOutput(t *testing.T) {
+	repo := withCloneSecrets(Request{Target: "example.test", Artifact: Artifact{Kind: "repository", Ref: "https://user:tok123456@github.com/a/b.git"}})
+	if got := secretValues(repo, Config{}); !slices.Contains(got, "tok123456") {
+		t.Fatalf("repository artifact token missing from secrets: %q", got)
+	}
+	target := withCloneSecrets(Request{Target: "https://ghp_abcdef123@github.com/a/b.git"})
+	// Per-scope requests replace Target (with a host or the checkout path); the
+	// secret must survive that.
+	scoped := target
+	scoped.Target = "/scans/x/source/checkout"
+	if got := redact("fatal: could not read https://ghp_abcdef123@github.com/a/b.git", secretValues(scoped, Config{})); strings.Contains(got, "ghp_abcdef123") {
+		t.Fatalf("git-URL target token leaked into output: %q", got)
+	}
+	if plain := withCloneSecrets(Request{Target: "https://example.test"}); len(plain.Secrets) != 0 {
+		t.Fatalf("non-credentialed request gained secrets: %q", plain.Secrets)
+	}
+}
+
+func TestScrubCloneRemoteRemovesToken(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	const raw = "https://user:tok123456@github.com/a/b.git"
+	for _, args := range [][]string{{"init", "-q", dir}, {"-C", dir, "remote", "add", "origin", raw}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	scrubCloneRemote(context.Background(), dir, raw)
+	cfg, err := os.ReadFile(filepath.Join(dir, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(cfg), "tok123456") || !strings.Contains(string(cfg), "https://github.com/a/b.git") {
+		t.Fatalf(".git/config not scrubbed:\n%s", cfg)
 	}
 }
