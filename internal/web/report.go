@@ -1119,12 +1119,12 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		for _, sc := range scan.ReportScopes {
 			scopeLabels[sc.ID] = reportScopeLabel(sc)
 		}
-		prevScope := ""
+		prevScope, firstRow := "", true
 
 		// Table rows
 		for i, v := range scan.Vulns {
-			if len(scopeLabels) > 0 && v.Scope != prevScope {
-				prevScope = v.Scope
+			if len(scopeLabels) > 0 && (firstRow || v.Scope != prevScope) {
+				prevScope, firstRow = v.Scope, false
 				if pdf.GetY() > 260 {
 					pdf.AddPage()
 					drawRect(0, 0, 210, 297, darkBg)
