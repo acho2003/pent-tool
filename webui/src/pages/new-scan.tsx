@@ -68,7 +68,7 @@ export default function NewScanPage() {
   async function submit(saveOnly: boolean) {
     setError(null);
     if (!targets.length && (artifactKind === "none" || !artifactRef.trim())) {
-      setError("Add at least one target or a Trivy artifact.");
+      setError("Add at least one target or a source artifact.");
       return;
     }
     if (picked !== null && !picked.length) {
@@ -112,7 +112,7 @@ export default function NewScanPage() {
       </CardContent></Card>
       <Card><CardHeader><CardTitle>Scanners</CardTitle></CardHeader><CardContent className="space-y-4">
         {health.isLoading && <p className="text-xs text-muted-foreground">Loading scanners…</p>}
-        {health.isError && <p className="text-xs text-destructive">Could not load the scanner list. The scan will run every scanner.</p>}
+        {health.isError && !health.data && <p className="text-xs text-destructive">Could not load the scanner list. The scan will run every scanner.</p>}
         {recon.length > 0 && <p className="text-xs text-muted-foreground">Always runs: {recon.map((t) => t.name).join(", ")} (recon).</p>}
         {([["web", "Web"], ["server", "Server"], ["sast", "Source code"]] as const).map(([phase, label]) => {
           const group = selectable.filter((t) => t.phase === phase);
@@ -131,7 +131,7 @@ export default function NewScanPage() {
         <p className="text-xs text-muted-foreground">Deselected scanners are recorded as <span className="font-mono">skipped</span> on every scope, so the report still shows what was not attempted. Scanners that do not apply to a scope are recorded <span className="font-mono">not applicable</span>.</p>
       </CardContent></Card>
       <Card><CardHeader><CardTitle>Optional scanner inputs</CardTitle></CardHeader><CardContent className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Trivy artifact kind</Label><Select value={artifactKind} onValueChange={setArtifactKind}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No artifact</SelectItem><SelectItem value="filesystem">Filesystem</SelectItem><SelectItem value="repository">Repository</SelectItem><SelectItem value="image">Image</SelectItem><SelectItem value="sbom">SBOM</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="artifact">Artifact reference</Label><Input id="artifact" value={artifactRef} onChange={(e) => setArtifactRef(e.target.value)} placeholder="./repo or alpine:3.20" /></div></div>
+        <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Source / artifact kind</Label><Select value={artifactKind} onValueChange={setArtifactKind}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No artifact</SelectItem><SelectItem value="filesystem">Filesystem</SelectItem><SelectItem value="repository">Repository</SelectItem><SelectItem value="image">Image</SelectItem><SelectItem value="sbom">SBOM</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="artifact">Artifact reference</Label><Input id="artifact" value={artifactRef} onChange={(e) => setArtifactRef(e.target.value)} placeholder="./repo or alpine:3.20" /></div></div>
         <div className="space-y-2"><Label htmlFor="vuls">Vuls SSH host alias</Label><Input id="vuls" value={vulsHost} onChange={(e) => setVulsHost(e.target.value)} placeholder="prod-web" /><p className="text-xs text-muted-foreground">Must reference an operator-managed SSH configuration. Private key material is never stored in scan records.</p></div>
         <div className="space-y-2"><Label htmlFor="auth">Web authentication headers</Label><Textarea id="auth" value={targetAuth} onChange={(e) => setTargetAuth(e.target.value)} placeholder="Authorization: Bearer …" rows={3} /></div>
       </CardContent></Card>

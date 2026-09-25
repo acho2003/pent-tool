@@ -36,7 +36,7 @@ export default function SchedulesPage() {
   async function submit(e: FormEvent) {
     e.preventDefault(); setError(null);
     const targetList = targets.split(/[\n,]/).map((v) => v.trim()).filter(Boolean);
-    if (!targetList.length && (artifactKind === "none" || !artifactRef.trim())) { setError("Add a target or Trivy artifact."); return; }
+    if (!targetList.length && (artifactKind === "none" || !artifactRef.trim())) { setError("Add a target or a source artifact."); return; }
     try {
       await create.mutateAsync({
         name: name.trim() || "Scheduled scan", interval, enabled: true, targets: targetList,
@@ -57,7 +57,7 @@ export default function SchedulesPage() {
   const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
   return <div className="space-y-6">
-    <header><h1 className="text-2xl font-semibold">Deterministic schedules</h1><p className="mt-1 text-sm text-muted-foreground">Every scheduled run uses the same five-scanner order and report-only AI boundary.</p></header>
+    <header><h1 className="text-2xl font-semibold">Deterministic schedules</h1><p className="mt-1 text-sm text-muted-foreground">Every scheduled run uses the same deterministic pipeline (recon, per-host web and server scanners, source-code analysis) and report-only AI boundary.</p></header>
     <Card><CardHeader><CardTitle className="flex items-center gap-2"><Plus className="h-4 w-4" /> New schedule</CardTitle></CardHeader><CardContent><form onSubmit={submit} className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="space-y-2"><Label>Targets</Label><Input value={targets} onChange={(e) => setTargets(e.target.value)} placeholder="https://example.com, api.example.com" /></div></div>
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Interval</Label><Select value={interval} onValueChange={setInterval}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hourly">Hourly</SelectItem><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single</SelectItem><SelectItem value="wildcard">Wildcard</SelectItem></SelectContent></Select></div></div>
