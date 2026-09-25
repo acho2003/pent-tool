@@ -32,6 +32,14 @@ services:
       # Self-hosted opt-in: allow scanning locally-hosted apps. The
       # dashboard's own listener stays protected. Leave OFF on shared hosts.
       XALGORIX_ALLOW_LOCAL_TARGETS: "true"
+      # Gentle-scan knobs. Uncomment when a target defends itself (fail2ban,
+      # a WAF, or a cloud security group) and bans the source mid-scan — the
+      # symptom is nmap "all filtered" plus testssl/ZAP connect failures on a
+      # site that is otherwise reachable. These slow EVERY scan (one tool at a
+      # time instead of 3; Nuclei at 3 req/s instead of 10), so prefer
+      # allowlisting the scanner's source IP on the target and leave these off.
+      # XALGORIX_MAX_WORKERS: "1"
+      # XALGORIX_RATE_RPS: "3"
     depends_on:
       zap:
         condition: service_healthy
