@@ -62,6 +62,11 @@ type Request struct {
 	Artifact    Artifact `json:"artifact,omitempty"`
 	VulsSSHHost string   `json:"vuls_ssh_host,omitempty"`
 	TargetAuth  string   `json:"-"`
+	// Secrets are extra values redacted from every runner's output, such as the
+	// credentials embedded in a clone URL. Pipeline.Run derives them once from
+	// the original request, so they survive per-scope copies whose Target no
+	// longer holds that URL. Not serialized.
+	Secrets []string `json:"-"`
 }
 
 type Run struct {

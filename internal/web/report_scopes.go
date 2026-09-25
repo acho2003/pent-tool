@@ -16,6 +16,7 @@ type reportScope struct {
 	ID        string           `json:"id"`
 	Kind      string           `json:"kind"`
 	Target    string           `json:"target,omitempty"`
+	Origin    string           `json:"origin,omitempty"`
 	Tracks    []string         `json:"tracks,omitempty"`
 	OpenPorts []string         `json:"open_ports,omitempty"`
 	Services  []string         `json:"services,omitempty"`
@@ -66,6 +67,7 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 			evidence[sc.ID] = sc.Evidence
 		}
 	}
+	sourceScope, hasSourceScope := scanner.LoadSourceScope(scanDir)
 	var out []reportScope
 	index := map[string]int{}
 	for _, run := range runs {
@@ -78,6 +80,9 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 			rs := reportScope{ID: id, Kind: string(scanner.ScopeHost), Target: reportScopeTarget(run, id)}
 			if strings.HasPrefix(id, "source:") {
 				rs.Kind = string(scanner.ScopeSource)
+				if hasSourceScope && sourceScope.ID == id {
+					rs.Origin = sourceOrigin(sourceScope)
+				}
 			} else {
 				ev := evidence[id]
 				for _, t := range scanner.EffectiveTracks(ev) {
@@ -105,6 +110,20 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 		return out[a].Kind != string(scanner.ScopeSource) && out[b].Kind == string(scanner.ScopeSource)
 	})
 	return out
+}
+
+// sourceOrigin is how the report names a source scope: the repository it was
+// cloned from (redacted by scanner.RedactURL), or the directory the operator
+// provided. Empty when no source resolved.
+func sourceOrigin(sc scanner.Scope) string {
+	prov := sc.Source.Provenance
+	if u, ok := strings.CutPrefix(prov, "clone:"); ok {
+		return scanner.RedactURL(u)
+	}
+	if prov == "provided:filesystem" {
+		return sc.Source.Path
+	}
+	return ""
 }
 
 func formatReportPort(p scanner.Port) string {
@@ -136,8 +155,8 @@ func summarizeReportRecon(scopes []reportScope) reportReconSummary {
 }
 
 // orderReportFindings sorts findings in place by scope (report scope order,
-// unknown scopes last), then severity (highest first), then source ID, a total
-// order so the report is deterministic.
+// unknown scopes last), then severity (highest first), then source ID, target,
+// and endpoint, so the report is deterministic.
 func orderReportFindings(findings []reportFinding, scopes []reportScope) {
 	rank := make(map[string]int, len(scopes))
 	for i, sc := range scopes {
@@ -157,6 +176,12 @@ func orderReportFindings(findings []reportFinding, scopes []reportScope) {
 		if ra, rb := severityRankValue(a.Severity), severityRankValue(b.Severity); ra != rb {
 			return ra > rb
 		}
-		return a.SourceID < b.SourceID
+		if a.SourceID != b.SourceID {
+			return a.SourceID < b.SourceID
+		}
+		if a.Target != b.Target {
+			return a.Target < b.Target
+		}
+		return a.Endpoint < b.Endpoint
 	})
 }

@@ -271,3 +271,75 @@ func TestDedupIsScopeAware(t *testing.T) {
 		t.Fatalf("scopes = %q, %q", findings[0].Scope, findings[1].Scope)
 	}
 }
+
+func TestParseOSVSeverity(t *testing.T) {
+	body := `{"results":[{"source":{"path":"/src/go.mod"},"packages":[{"package":{"name":"golang.org/x/net","version":"0.1.0"},` +
+		`"groups":[{"ids":["GHSA-aaaa","CVE-2023-44487"],"max_severity":"7.5"}],` +
+		`"vulnerabilities":[` +
+		`{"id":"GHSA-aaaa","summary":"grouped","aliases":["CVE-2023-44487"]},` +
+		`{"id":"GHSA-bbbb","summary":"db-only","database_specific":{"severity":"MODERATE"}},` +
+		`{"id":"GO-2024-1","summary":"unrated"}]}]}]}`
+	got, err := ParseRun(Run{Scanner: "osv", ArtifactPath: writeFixture(t, "osv.json", body)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("parsed %#v", got)
+	}
+	if got[0].Severity != "high" || got[0].CVSS != 7.5 || got[0].SeverityUnrated {
+		t.Errorf("group max_severity: %#v", got[0])
+	}
+	if got[1].Severity != "medium" || got[1].SeverityUnrated {
+		t.Errorf("database_specific MODERATE must be a rated medium: %#v", got[1])
+	}
+	if got[2].Severity != "medium" || !got[2].SeverityUnrated {
+		t.Errorf("no severity data must be an unrated medium placeholder: %#v", got[2])
+	}
+	if got[0].Evidence != "golang.org/x/net@0.1.0" {
+		t.Errorf("evidence = %q, want package@version", got[0].Evidence)
+	}
+}
+
+func TestRelativeToRoot(t *testing.T) {
+	cases := []struct{ p, root, want string }{
+		{"/scan/src/web/package-lock.json", "/scan/src", "web/package-lock.json"},
+		{"/scan/src/app.go:12", "/scan/src/", "app.go:12"},
+		{"web/package-lock.json", "/scan/src", "web/package-lock.json"},
+		{"/other/x.go", "/scan/src", "/other/x.go"},
+		{"/scan/srcfoo/x.go", "/scan/src", "/scan/srcfoo/x.go"},
+		{"/scan/src/x.go", "", "/scan/src/x.go"},
+	}
+	for _, c := range cases {
+		if got := relativeToRoot(c.p, c.root); got != c.want {
+			t.Errorf("relativeToRoot(%q, %q) = %q, want %q", c.p, c.root, got, c.want)
+		}
+	}
+}
+
+func TestParseRunsSourcePathsAndFileAwareMerge(t *testing.T) {
+	root := t.TempDir()
+	trivy := writeFixture(t, "trivy.json", `{"Results":[{"Target":"web/package-lock.json","Vulnerabilities":[{"VulnerabilityID":"CVE-2023-1111","PkgName":"lib","Severity":"HIGH"}]}]}`)
+	osv := writeFixture(t, "osv.json", `{"results":[`+
+		`{"source":{"path":"`+root+`/web/package-lock.json"},"packages":[{"package":{"name":"lib"},"vulnerabilities":[{"id":"GHSA-1","aliases":["CVE-2023-1111"]}]}]},`+
+		`{"source":{"path":"`+root+`/api/package-lock.json"},"packages":[{"package":{"name":"lib"},"vulnerabilities":[{"id":"GHSA-1","aliases":["CVE-2023-1111"]}]}]}]}`)
+	findings, errs := ParseRuns([]Run{
+		{Scanner: "trivy", Scope: "source:main", Target: root, Status: "completed", ArtifactPath: trivy},
+		{Scanner: "osv", Scope: "source:main", Target: root, Status: "completed", ArtifactPath: osv},
+	})
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("want web merged (trivy+osv) and api separate, got %d: %#v", len(findings), findings)
+	}
+	web, api := findings[0], findings[1]
+	if web.Target != "web/package-lock.json" || len(web.Sources) != 2 {
+		t.Fatalf("web finding = %#v", web)
+	}
+	if api.Scanner != "osv" || api.Target != "api/package-lock.json" || api.Endpoint != "api/package-lock.json" || len(api.Sources) != 0 {
+		t.Fatalf("api finding must stay separate with relative paths, got %#v", api)
+	}
+	if !strings.HasPrefix(api.SourceID, "osv:lib:GHSA-1") {
+		t.Fatalf("SourceID must be unchanged, got %q", api.SourceID)
+	}
+}

@@ -1136,7 +1136,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				pdf.SetXY(12, groupY)
 				pdf.SetFont("Helvetica", "B", 7)
 				setColor(teal)
-				pdf.CellFormat(186, 6, firstNonBlank(scopeLabels[v.Scope], v.Scope, "UNSCOPED"), "", 1, "L", false, 0, "")
+				pdf.CellFormat(186, 6, fitPDFText(pdf, firstNonBlank(scopeLabels[v.Scope], v.Scope, "UNSCOPED"), 186), "", 1, "L", false, 0, "")
 			}
 			if pdf.GetY() > 268 {
 				pdf.AddPage()

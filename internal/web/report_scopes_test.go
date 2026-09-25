@@ -64,6 +64,50 @@ func TestBuildReportScopes(t *testing.T) {
 	}
 }
 
+// sourceOrigin redacts a clone URL with scanner.RedactURL (whose own table
+// test covers the edge cases).
+func TestSourceOriginRedactsCloneURL(t *testing.T) {
+	cases := map[string]string{
+		"https://user:tok@github.com/a/b.git":   "https://github.com/a/b.git",
+		"https://github.com/a/b.git":            "https://github.com/a/b.git",
+		"git@github.com:a/b.git":                "git@github.com:a/b.git",
+		"https://github.com/a/b.git?token=abc":  "https://github.com/a/b.git",
+		"https://user:to%zz@github.com/a/b.git": "<redacted URL>",
+	}
+	for in, want := range cases {
+		sc := scanner.Scope{ID: "source:main", Kind: scanner.ScopeSource, Source: scanner.SourceRef{Provenance: "clone:" + in}}
+		if got := sourceOrigin(sc); got != want {
+			t.Errorf("sourceOrigin(clone:%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBuildReportScopesSourceOrigin(t *testing.T) {
+	dir := t.TempDir()
+	writeSourceScope := func(sc scanner.Scope) {
+		data, _ := json.Marshal(sc)
+		p := filepath.Join(dir, "scanner-output", "source-scope.json")
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs := []scanner.Run{{Scanner: "trivy", Scope: "source:main", Target: "/scans/x/source/checkout", Status: "completed"}}
+	writeSourceScope(scanner.Scope{ID: "source:main", Kind: scanner.ScopeSource, Target: "/scans/x/source/checkout", Source: scanner.SourceRef{Path: "/scans/x/source/checkout", Provenance: "clone:https://user:tok@github.com/a/b.git"}})
+	if got := buildReportScopes(dir, runs); len(got) != 1 || got[0].Origin != "https://github.com/a/b.git" || reportScopeLabel(got[0]) != "SOURCE CODE  https://github.com/a/b.git" {
+		t.Fatalf("clone origin: %#v", got)
+	}
+	writeSourceScope(scanner.Scope{ID: "source:main", Kind: scanner.ScopeSource, Target: "/home/me/app", Source: scanner.SourceRef{Path: "/home/me/app", Provenance: "provided:filesystem"}})
+	if got := buildReportScopes(dir, runs); got[0].Origin != "/home/me/app" {
+		t.Fatalf("provided origin: %#v", got)
+	}
+	if got := buildReportScopes(t.TempDir(), runs); got[0].Origin != "" || reportScopeLabel(got[0]) != "SOURCE CODE  /scans/x/source/checkout" {
+		t.Fatalf("legacy scan without source-scope.json must keep the old label: %#v", got)
+	}
+}
+
 func TestOrderReportFindings(t *testing.T) {
 	scopes := []reportScope{{ID: "host:a"}, {ID: "host:b"}, {ID: "source:main"}}
 	in := []reportFinding{
@@ -101,5 +145,25 @@ func TestReportFindingsToVulnsCarriesScopeAndSources(t *testing.T) {
 	single := reportFindingsToVulns([]reportFinding{{SourceID: "zap:1", Scanner: "zap", Evidence: "e", EvidenceRef: "z.json#zap:1"}})[0]
 	if single.TechnicalAnalysis != "e\nEvidence reference: z.json#zap:1" || single.VerificationMethod != "zap" {
 		t.Fatalf("unmerged vuln must keep the existing shape, got %#v", single)
+	}
+}
+
+// Findings that tie on scope, severity, and source ID are ordered by Target,
+// then Endpoint, so the order never depends on the input order.
+func TestOrderReportFindingsTieBreaksOnTargetAndEndpoint(t *testing.T) {
+	scopes := []reportScope{{ID: "source:main"}}
+	in := []reportFinding{
+		{SourceID: "osv:lib:GHSA-1", Scope: "source:main", Severity: "high", Target: "web/package-lock.json"},
+		{SourceID: "osv:lib:GHSA-1", Scope: "source:main", Severity: "high", Target: "api/package-lock.json", Endpoint: "b"},
+		{SourceID: "osv:lib:GHSA-1", Scope: "source:main", Severity: "high", Target: "api/package-lock.json", Endpoint: "a"},
+	}
+	orderReportFindings(in, scopes)
+	var got []string
+	for _, f := range in {
+		got = append(got, f.Target+"|"+f.Endpoint)
+	}
+	want := []string{"api/package-lock.json|a", "api/package-lock.json|b", "web/package-lock.json|"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
 	}
 }

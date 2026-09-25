@@ -2,7 +2,10 @@ package web
 
 import (
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/go-pdf/fpdf"
 )
 
 func TestReportScopeLabel(t *testing.T) {
@@ -39,6 +42,21 @@ func TestScopeCoverageLines(t *testing.T) {
 	noPorts := reportScope{Kind: "host", Tracks: []string{"web", "server"}}
 	if got := scopeCoverageLines(noPorts); !slices.Equal(got, []string{"Tracks: web, server", "Open ports: none recorded"}) {
 		t.Fatalf("no-port lines = %q", got)
+	}
+}
+
+func TestFitPDFText(t *testing.T) {
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.AddPage()
+	pdf.SetFont("Helvetica", "B", 9)
+	short := "HOST  a.test  [web]"
+	if got := fitPDFText(pdf, short, 182); got != short {
+		t.Fatalf("short label changed: %q", got)
+	}
+	long := "HOST  " + strings.Repeat("very-long-subdomain.", 20) + "example.test  [web, server]"
+	got := fitPDFText(pdf, long, 182)
+	if !strings.HasSuffix(got, "...") || pdf.GetStringWidth(got) > 182 {
+		t.Fatalf("long label not fitted: %q (width %.1f)", got, pdf.GetStringWidth(got))
 	}
 }
 

@@ -296,6 +296,9 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
+	if manifest.SchemaVersion != 2 || manifest.PromptVersion != "scanner-report-v2" {
+		t.Fatalf("manifest version = %d / %q, want 2 / scanner-report-v2", manifest.SchemaVersion, manifest.PromptVersion)
+	}
 	var scopeIDs []string
 	for _, sc := range manifest.Scopes {
 		scopeIDs = append(scopeIDs, sc.ID)
@@ -359,5 +362,208 @@ func TestScannerReportRejectsChangedArtifact(t *testing.T) {
 	rec := &ScanRecord{SchemaVersion: 2, ID: "changed", ScannerRuns: []scanner.Run{run}}
 	if path := s.generateScannerReport(rec, dir, ""); path != "" {
 		t.Fatalf("generated report from changed artifact: %s", path)
+	}
+}
+
+// aiProvider answers every chat request with the given findings envelope.
+func aiProvider(t *testing.T, findings []map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content, _ := json.Marshal(map[string]any{"findings": findings})
+		resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": string(content)}}}})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(resp)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func aiServer(t *testing.T, provider *httptest.Server) *Server {
+	t.Helper()
+	s := newTestServer(t, nil)
+	s.cfg.LLM = "report-model"
+	s.cfg.APIBase = provider.URL
+	s.cfg.APIKey = "test-key"
+	s.cfg.LLMMaxRetries = 1
+	return s
+}
+
+// Two host scopes on one IP both report the same nmap SourceID; the AI must
+// keep each finding on its own host.
+func TestAIReportKeepsSameSourceIDOnItsOwnScope(t *testing.T) {
+	aiOut := func(scope string) map[string]any {
+		return map[string]any{"source_id": "nmap:10.0.0.5:443", "scope": scope, "scanner": "nmap", "title": "Open port 443", "severity": "info", "explanation": "Port 443 is open.", "evidence_reference": "x", "impact": "Exposed service.", "remediation": "Restrict if unneeded."}
+	}
+	s := aiServer(t, aiProvider(t, []map[string]any{aiOut("host:a.test"), aiOut("host:b.test")}))
+	in := []scanner.Finding{
+		{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Title: "https", Severity: "info", Scope: "host:a.test", Target: "a.test", EvidenceRef: "a.xml#nmap:10.0.0.5:443"},
+		{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Title: "https", Severity: "info", Scope: "host:b.test", Target: "b.test", EvidenceRef: "b.xml#nmap:10.0.0.5:443"},
+	}
+	out, err := s.aiReportFindings(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 || out[0].Scope == out[1].Scope {
+		t.Fatalf("each finding must keep its own scope, got %#v", out)
+	}
+	for _, f := range out {
+		want := map[string]string{"host:a.test": "a.xml#nmap:10.0.0.5:443", "host:b.test": "b.xml#nmap:10.0.0.5:443"}[f.Scope]
+		if f.EvidenceRef != want {
+			t.Fatalf("scope %s got evidence %q, want %q", f.Scope, f.EvidenceRef, want)
+		}
+	}
+}
+
+// An AI item that omits scope is accepted when its source_id is unique in the
+// chunk, and rejected (forcing the deterministic fallback) when it is ambiguous.
+func TestAIReportScopelessMatch(t *testing.T) {
+	item := map[string]any{"source_id": "nmap:10.0.0.5:443", "scanner": "nmap", "title": "Open port 443", "severity": "info", "explanation": "Port 443 is open.", "evidence_reference": "x", "impact": "Exposed service.", "remediation": "Restrict if unneeded."}
+	unique := []scanner.Finding{{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Severity: "info", Scope: "host:a.test", EvidenceRef: "a.xml#nmap:10.0.0.5:443"}}
+	s := aiServer(t, aiProvider(t, []map[string]any{item}))
+	out, err := s.aiReportFindings(unique)
+	if err != nil || len(out) != 1 || out[0].Scope != "host:a.test" {
+		t.Fatalf("unique scopeless match: out=%#v err=%v", out, err)
+	}
+	ambiguous := append(unique, scanner.Finding{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Severity: "info", Scope: "host:b.test", EvidenceRef: "b.xml#nmap:10.0.0.5:443"})
+	if _, err := s.aiReportFindings(ambiguous); err == nil {
+		t.Fatal("an ambiguous scopeless AI item must be rejected")
+	}
+}
+
+func TestAIReportUnratedSeverityIsNotAFloor(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{{"source_id": "osv:x:GO-1", "scanner": "osv", "title": "t", "severity": "low", "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}}))
+	out, err := s.aiReportFindings([]scanner.Finding{{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"}})
+	if err != nil || len(out) != 1 || out[0].Severity != "low" {
+		t.Fatalf("AI may rate an unrated finding freely: out=%#v err=%v", out, err)
+	}
+}
+
+// osvLockfilePair is one package on source:main reported from two lockfiles:
+// the osv SourceID carries no path, so the two inputs share (scope, source_id)
+// and differ only by Target.
+func osvLockfilePair() []scanner.Finding {
+	return []scanner.Finding{
+		{SourceID: "osv:lib:GHSA-1", Scanner: "osv", Title: "lib advisory", Severity: "critical", Scope: "source:main", Target: "web/package-lock.json", EvidenceRef: "osv.json#osv:lib:GHSA-1@web"},
+		{SourceID: "osv:lib:GHSA-1", Scanner: "osv", Title: "lib advisory", Severity: "low", Scope: "source:main", Target: "api/package-lock.json", EvidenceRef: "osv.json#osv:lib:GHSA-1@api"},
+	}
+}
+
+func osvAIItem(target string) map[string]any {
+	item := map[string]any{"source_id": "osv:lib:GHSA-1", "scope": "source:main", "scanner": "osv", "title": "lib advisory", "severity": "low", "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}
+	if target != "" {
+		item["target"] = target
+	}
+	return item
+}
+
+// Inputs sharing (scope, source_id) are disambiguated by the AI item's exact
+// target; each keeps its own location, evidence, and severity floor.
+func TestAIReportDisambiguatesSharedSourceIDByTarget(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem("web/package-lock.json"), osvAIItem("api/package-lock.json")}))
+	out, err := s.aiReportFindings(osvLockfilePair())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("want 2 findings, got %#v", out)
+	}
+	byTarget := map[string]reportFinding{}
+	for _, f := range out {
+		byTarget[f.Target] = f
+	}
+	web, api := byTarget["web/package-lock.json"], byTarget["api/package-lock.json"]
+	if web.Severity != "critical" || web.EvidenceRef != "osv.json#osv:lib:GHSA-1@web" {
+		t.Fatalf("web finding lost its floor or evidence: %#v", web)
+	}
+	if api.Severity != "low" || api.EvidenceRef != "osv.json#osv:lib:GHSA-1@api" {
+		t.Fatalf("api finding = %#v", api)
+	}
+}
+
+// Without a target, an AI item matching several inputs is ambiguous and must
+// reject the AI response.
+func TestAIReportRejectsAmbiguousSharedSourceIDWithoutTarget(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem(""), osvAIItem("")}))
+	if out, err := s.aiReportFindings(osvLockfilePair()); err == nil {
+		t.Fatalf("ambiguous AI items must be rejected, got %#v", out)
+	}
+}
+
+// AI output that ties on source_id and scope is ordered by target, whatever
+// order the model returned it in.
+func TestAIReportOrdersTiesByTarget(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem("web/package-lock.json"), osvAIItem("api/package-lock.json")}))
+	out, err := s.aiReportFindings(osvLockfilePair())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 || out[0].Target != "api/package-lock.json" || out[1].Target != "web/package-lock.json" {
+		t.Fatalf("want api then web, got %#v", out)
+	}
+}
+
+// An unrated scanner severity stays flagged in the deterministic report.
+func TestFallbackFindingKeepsSeverityUnrated(t *testing.T) {
+	in := []scanner.Finding{
+		{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"},
+		{SourceID: "osv:x:GO-2", Scanner: "osv", Severity: "high", Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-2"},
+	}
+	out := fallbackReportFindings(in)
+	if len(out) != 2 || !out[0].SeverityUnrated || out[1].SeverityUnrated {
+		t.Fatalf("unrated flag not carried: %#v", out)
+	}
+}
+
+// An AI report keeps the unrated flag only while the AI keeps the placeholder
+// severity; once the AI rates the finding it is no longer unrated.
+func TestAIReportSeverityUnratedOnlyWhilePlaceholderKept(t *testing.T) {
+	item := func(id, sev string) map[string]any {
+		return map[string]any{"source_id": id, "scope": "source:main", "scanner": "osv", "title": "t", "severity": sev, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}
+	}
+	s := aiServer(t, aiProvider(t, []map[string]any{item("osv:x:GO-1", "medium"), item("osv:x:GO-2", "low"), item("osv:x:GO-3", "low")}))
+	out, err := s.aiReportFindings([]scanner.Finding{
+		{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"},
+		{SourceID: "osv:x:GO-2", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-2"},
+		{SourceID: "osv:x:GO-3", Scanner: "osv", Severity: "low", Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-3"},
+	})
+	if err != nil || len(out) != 3 {
+		t.Fatalf("out=%#v err=%v", out, err)
+	}
+	if !out[0].SeverityUnrated || out[1].SeverityUnrated || out[2].SeverityUnrated {
+		t.Fatalf("want only the kept placeholder unrated, got %#v", out)
+	}
+}
+
+// The AI may explain and classify a finding, but the scanner's identifying
+// fields are authoritative: it cannot move a finding to another file or host,
+// or overwrite a scanner-reported CVE/CWE/CVSS. It may only fill classification
+// fields the scanner left blank.
+func TestAIReportKeepsScannerIdentifyingFields(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{
+		{"source_id": "trivy:CVE-2023-1111:go.mod", "scope": "source:main", "scanner": "trivy", "title": "t", "severity": "high", "target": "somewhere/else.lock", "endpoint": "https://attacker.example", "cve": "CVE-2099-9999", "cwe": "CWE-1", "cvss": 1.0, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"},
+		{"source_id": "zap:10038", "scope": "host:a.test", "scanner": "zap", "title": "t", "severity": "medium", "target": "b.test", "endpoint": "https://b.test/", "cve": "CVE-2021-44228", "cwe": "CWE-693", "cvss": 5.3, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"},
+	}))
+	in := []scanner.Finding{
+		{SourceID: "trivy:CVE-2023-1111:go.mod", Scanner: "trivy", Severity: "high", Scope: "source:main", Target: "go.mod", Endpoint: "go.mod", CVE: "CVE-2023-1111", CWE: "CWE-400", CVSS: 7.5, EvidenceRef: "trivy.json#trivy:CVE-2023-1111:go.mod"},
+		{SourceID: "zap:10038", Scanner: "zap", Severity: "medium", Scope: "host:a.test", Target: "a.test", Endpoint: "https://a.test/", EvidenceRef: "zap.json#zap:10038"},
+	}
+	out, err := s.aiReportFindings(in)
+	if err != nil || len(out) != 2 {
+		t.Fatalf("out=%#v err=%v", out, err)
+	}
+	byID := map[string]reportFinding{}
+	for _, f := range out {
+		byID[f.SourceID] = f
+	}
+	tr := byID["trivy:CVE-2023-1111:go.mod"]
+	if tr.Target != "go.mod" || tr.Endpoint != "go.mod" || tr.CVE != "CVE-2023-1111" || tr.CWE != "CWE-400" || tr.CVSS != 7.5 {
+		t.Fatalf("AI overwrote scanner fields: %#v", tr)
+	}
+	zp := byID["zap:10038"]
+	if zp.Target != "a.test" || zp.Endpoint != "https://a.test/" {
+		t.Fatalf("AI moved the finding: target=%q endpoint=%q", zp.Target, zp.Endpoint)
+	}
+	if zp.CVE != "CVE-2021-44228" || zp.CWE != "CWE-693" || zp.CVSS != 5.3 {
+		t.Fatalf("AI may fill classification the scanner left blank: %#v", zp)
 	}
 }

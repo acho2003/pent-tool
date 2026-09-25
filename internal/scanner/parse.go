@@ -27,6 +27,10 @@ type Finding struct {
 	CVE         string  `json:"cve,omitempty"`
 	CWE         string  `json:"cwe,omitempty"`
 	CVSS        float64 `json:"cvss,omitempty"`
+	// SeverityUnrated marks a placeholder severity: the scanner gave no rating
+	// (e.g. an OSV entry with no CVSS or database severity). Merge and the AI
+	// severity floor ignore it rather than treat the placeholder as a rating.
+	SeverityUnrated bool `json:"severity_unrated,omitempty"`
 	// Scope is the (scope) key of the run that produced this finding, e.g.
 	// "host:api.example.com" or "source:main", so the report can group by it.
 	Scope string `json:"scope,omitempty"`
@@ -48,14 +52,41 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 			errs = append(errs, fmt.Errorf("%s: %w", run.Scanner, err))
 		}
 		scope := FindingScope(run)
+		// Source-scope paths become relative to the checkout (run.Target). The
+		// SourceID and EvidenceRef keep the native path: they are trace keys.
+		sourceRoot := ""
+		if strings.HasPrefix(scope, "source:") {
+			sourceRoot = run.Target
+		}
 		for i := range parsed {
 			parsed[i].EvidenceRef = run.ArtifactPath + "#" + parsed[i].SourceID
 			parsed[i].Scope = scope
+			if sourceRoot != "" {
+				parsed[i].Target = relativeToRoot(parsed[i].Target, sourceRoot)
+				parsed[i].Endpoint = relativeToRoot(parsed[i].Endpoint, sourceRoot)
+			}
 		}
 		findings = append(findings, parsed...)
 	}
 	findings = mergeCrossScanner(dedupFindings(findings))
 	return findings, errs
+}
+
+// relativeToRoot rewrites a finding path under root (the source checkout) to be
+// relative to it, so finding Target/Endpoint never show the internal checkout
+// path (SourceIDs and evidence references keep native paths by design: they
+// are trace keys) and scanners that report absolute vs relative paths agree.
+// Paths outside root, and any path when root is empty, are returned unchanged.
+// p may carry a ":line" suffix.
+func relativeToRoot(p, root string) string {
+	root = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(root)), "/")
+	if root == "" || root == "." {
+		return p
+	}
+	if rest, ok := strings.CutPrefix(filepath.ToSlash(p), root+"/"); ok {
+		return rest
+	}
+	return p
 }
 
 // FindingScope is the report scope a run's findings belong to: its own scope,
@@ -316,20 +347,62 @@ func parseOSV(path string) ([]Finding, error) {
 						break
 					}
 				}
+				sev, cvss, rated := osvSeverity(pkgObj, v, id)
 				out = append(out, Finding{
-					SourceID:    "osv:" + name + ":" + id,
-					Scanner:     "osv",
-					Title:       firstNonEmpty(id, name),
-					Severity:    "medium",
-					Target:      name,
-					Endpoint:    srcPath,
-					Description: str(v["summary"]),
-					CVE:         cve,
+					SourceID:        "osv:" + name + ":" + id,
+					Scanner:         "osv",
+					Title:           firstNonEmpty(id, name),
+					Severity:        sev,
+					SeverityUnrated: !rated,
+					CVSS:            cvss,
+					Target:          srcPath,
+					Endpoint:        srcPath,
+					Description:     str(v["summary"]),
+					Evidence:        osvPackageLabel(pkg),
+					CVE:             cve,
 				})
 			}
 		}
 	}
 	return out, nil
+}
+
+// osvSeverity rates one OSV vulnerability. osv-scanner reports a numeric CVSS
+// max_severity per alias group; GHSA records also carry a textual
+// database_specific.severity. With neither, the finding is an unrated "medium"
+// placeholder.
+func osvSeverity(pkgObj map[string]any, v map[string]any, id string) (string, float64, bool) {
+	for _, gv := range array(pkgObj["groups"]) {
+		g, _ := gv.(map[string]any)
+		for _, gid := range array(g["ids"]) {
+			if str(gid) != id {
+				continue
+			}
+			if score, err := strconv.ParseFloat(str(g["max_severity"]), 64); err == nil && score > 0 {
+				return cvssSeverity(score, ""), score, true
+			}
+		}
+	}
+	db, _ := v["database_specific"].(map[string]any)
+	switch strings.ToLower(str(db["severity"])) {
+	case "critical":
+		return "critical", 0, true
+	case "high":
+		return "high", 0, true
+	case "moderate", "medium":
+		return "medium", 0, true
+	case "low":
+		return "low", 0, true
+	}
+	return "medium", 0, false
+}
+
+func osvPackageLabel(pkg map[string]any) string {
+	name, version := str(pkg["name"]), str(pkg["version"])
+	if version == "" {
+		return name
+	}
+	return name + "@" + version
 }
 
 func parseVuls(path string) ([]Finding, error) {

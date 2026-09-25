@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -47,14 +48,26 @@ func sourceOf(f Finding) FindingSource {
 	return FindingSource{Scanner: f.Scanner, SourceID: f.SourceID, Endpoint: f.Endpoint, EvidenceRef: f.EvidenceRef}
 }
 
+// mergeLocation is the extra merge-key component that keeps one CVE in two
+// files of a source tree apart: the file (Target) on source scopes, nothing on
+// host scopes (where different scanners describe the location differently —
+// a URL vs a port — so the scope alone identifies the asset).
+func mergeLocation(f Finding) string {
+	if strings.HasPrefix(f.Scope, "source:") {
+		return filepath.ToSlash(filepath.Clean(f.Target))
+	}
+	return ""
+}
+
 // mergeCrossScanner collapses findings that report the same CVE on the same
-// scope from different scanners (e.g. openvas and nuclei both flagging one CVE
-// on one host) into one finding that lists every source. The first-seen
-// contributor stays the primary record, keeping its SourceID and EvidenceRef, so
-// the report's source-ID trace is unchanged. Severity and CVSS are raised to the
-// highest any contributor reported, so a merge never downgrades a finding. A
-// scanner's own repeated reports (e.g. trivy flagging one CVE in two lockfiles)
-// stay separate. Output keeps first-seen order.
+// scope (and, on a source scope, the same file) from different scanners (e.g.
+// openvas and nuclei both flagging one CVE on one host, or trivy and osv both
+// flagging one CVE in one lockfile) into one finding that lists every source.
+// The first-seen contributor stays the primary record, keeping its SourceID and
+// EvidenceRef, so the report's source-ID trace is unchanged. Severity and CVSS
+// are raised to the highest any contributor reported, so a merge never
+// downgrades a finding. A scanner's own repeated reports (e.g. trivy flagging
+// one CVE in two lockfiles) stay separate. Output keeps first-seen order.
 func mergeCrossScanner(in []Finding) []Finding {
 	primary := map[string]int{} // scope\x00CVE -> index in out
 	out := make([]Finding, 0, len(in))
@@ -64,7 +77,7 @@ func mergeCrossScanner(in []Finding) []Finding {
 			out = append(out, f)
 			continue
 		}
-		key := f.Scope + "\x00" + cve
+		key := f.Scope + "\x00" + cve + "\x00" + mergeLocation(f)
 		i, ok := primary[key]
 		if !ok {
 			primary[key] = len(out)
@@ -80,7 +93,13 @@ func mergeCrossScanner(in []Finding) []Finding {
 			m.Sources = []FindingSource{sourceOf(*m)}
 		}
 		m.Sources = append(m.Sources, sourceOf(f))
-		if severityRank(f.Severity) > severityRank(m.Severity) {
+		// An unrated placeholder never raises a rating; a rated contributor
+		// replaces an unrated primary's placeholder outright.
+		switch {
+		case f.SeverityUnrated:
+		case m.SeverityUnrated:
+			m.Severity, m.SeverityUnrated = f.Severity, false
+		case severityRank(f.Severity) > severityRank(m.Severity):
 			m.Severity = f.Severity
 		}
 		if f.CVSS > m.CVSS {

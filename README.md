@@ -161,9 +161,9 @@ The legacy `dast` mode is accepted as an alias for `single`. Legacy scan records
 
 Schema-v2 records contain a `scanner_runs` collection with scanner name, scope (`recon:<target>`, `host:<host>`, or `source:main`), target, terminal status, timestamps, exit code, reason, output paths, checksum, and truncation state. Large output is not embedded in `scan.json`; stdout, stderr, and native artifacts are append-only files with deterministic credential redaction.
 
-Resume keys on the (scope, scanner) pair. A record written before scopes existed has an empty scope and is treated as the single implicit host scope (`host:<target>`), so older records resume and report unchanged. Recon's discovered host set, with per-host evidence, is persisted at `scanner-output/recon-scopes.json`.
+Resume keys on the (scope, scanner) pair. A record written before scopes existed has an empty scope and is treated as the single implicit host scope (`host:<target>`), so older records resume and report unchanged. Recon's discovered host set, with per-host evidence, is persisted at `scanner-output/recon-scopes.json`. The resolved source scope, with its provenance (clone URL or provided directory), is persisted at `scanner-output/source-scope.json`, so the report can name the source by origin.
 
-`report.json` records source run checksums, prompt version, provider/model when used, generation mode, timestamp, parse errors, the per-scope coverage list and recon summary, and validated report findings (each with its scope and, for merged findings, every contributing source).
+`report.json` (manifest schema 2) records source run checksums, prompt version, provider/model when used, generation mode, timestamp, parse errors, the per-scope coverage list and recon summary, and validated report findings (each with its scope and, for merged findings, every contributing source).
 
 ## Safety
 

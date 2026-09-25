@@ -16,7 +16,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-const reportPromptVersion = "scanner-report-v1"
+const reportPromptVersion = "scanner-report-v2"
 
 type reportManifest struct {
 	SchemaVersion int                 `json:"schema_version"`
@@ -33,22 +33,23 @@ type reportManifest struct {
 }
 
 type reportFinding struct {
-	SourceID    string                  `json:"source_id"`
-	Scanner     string                  `json:"scanner"`
-	Title       string                  `json:"title"`
-	Severity    string                  `json:"severity"`
-	Target      string                  `json:"target,omitempty"`
-	Endpoint    string                  `json:"endpoint,omitempty"`
-	Explanation string                  `json:"explanation"`
-	Evidence    string                  `json:"evidence,omitempty"`
-	EvidenceRef string                  `json:"evidence_reference"`
-	Impact      string                  `json:"impact,omitempty"`
-	Remediation string                  `json:"remediation,omitempty"`
-	CVE         string                  `json:"cve,omitempty"`
-	CWE         string                  `json:"cwe,omitempty"`
-	CVSS        float64                 `json:"cvss,omitempty"`
-	Scope       string                  `json:"scope,omitempty"`
-	Sources     []scanner.FindingSource `json:"sources,omitempty"`
+	SourceID        string                  `json:"source_id"`
+	Scanner         string                  `json:"scanner"`
+	Title           string                  `json:"title"`
+	Severity        string                  `json:"severity"`
+	SeverityUnrated bool                    `json:"severity_unrated,omitempty"` // placeholder severity the scanner did not rate
+	Target          string                  `json:"target,omitempty"`
+	Endpoint        string                  `json:"endpoint,omitempty"`
+	Explanation     string                  `json:"explanation"`
+	Evidence        string                  `json:"evidence,omitempty"`
+	EvidenceRef     string                  `json:"evidence_reference"`
+	Impact          string                  `json:"impact,omitempty"`
+	Remediation     string                  `json:"remediation,omitempty"`
+	CVE             string                  `json:"cve,omitempty"`
+	CWE             string                  `json:"cwe,omitempty"`
+	CVSS            float64                 `json:"cvss,omitempty"`
+	Scope           string                  `json:"scope,omitempty"`
+	Sources         []scanner.FindingSource `json:"sources,omitempty"`
 }
 
 // GenerateCLIReport runs the same report-only AI and deterministic fallback
@@ -92,7 +93,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	s.saveScanRecordTo(rec, scanDir)
 	s.broadcastToInstance(instanceID, startedEvent)
 	parsed, parseErrs := scanner.ParseRuns(rec.ScannerRuns)
-	manifest := reportManifest{SchemaVersion: 1, Mode: "deterministic_fallback", PromptVersion: reportPromptVersion, GeneratedAt: time.Now().Format(time.RFC3339Nano), SourceRuns: append([]scanner.Run(nil), rec.ScannerRuns...), Findings: fallbackReportFindings(parsed)}
+	manifest := reportManifest{SchemaVersion: 2, Mode: "deterministic_fallback", PromptVersion: reportPromptVersion, GeneratedAt: time.Now().Format(time.RFC3339Nano), SourceRuns: append([]scanner.Run(nil), rec.ScannerRuns...), Findings: fallbackReportFindings(parsed)}
 	for _, err := range parseErrs {
 		manifest.ParseErrors = append(manifest.ParseErrors, err.Error())
 	}
@@ -135,7 +136,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 func fallbackReportFindings(in []scanner.Finding) []reportFinding {
 	out := make([]reportFinding, 0, len(in))
 	for _, f := range in {
-		out = append(out, reportFinding{SourceID: f.SourceID, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, Target: f.Target, Endpoint: f.Endpoint, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: "Review the scanner evidence and apply the vendor or project remediation guidance.", Scope: f.Scope, Sources: f.Sources})
+		out = append(out, reportFinding{SourceID: f.SourceID, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: f.Endpoint, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: "Review the scanner evidence and apply the vendor or project remediation guidance.", Scope: f.Scope, Sources: f.Sources})
 	}
 	return out
 }
@@ -165,7 +166,7 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			projection[i].Sources = nil
 		}
 		payload, _ := json.Marshal(projection)
-		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"...","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
+		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scope":"exact input scope","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"exact input target","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id, scope, target, and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
 		resp, err := client.Chat([]llm.Message{{Role: "system", Content: "Report-generation stage only. Produce strict JSON grounded exclusively in supplied scanner records."}, {Role: "user", Content: prompt}})
 		if err != nil {
 			return nil, err
@@ -178,41 +179,100 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 		if err := json.Unmarshal([]byte(strings.TrimSpace(clean)), &envelope); err != nil {
 			return nil, fmt.Errorf("invalid Report AI JSON: %w", err)
 		}
-		allowed := map[string]scanner.Finding{}
+		allowed := map[string][]scanner.Finding{}
+		bySource := map[string][]scanner.Finding{}
 		for _, f := range chunk {
-			allowed[f.SourceID] = f
+			key := aiFindingKey(f.Scope, f.SourceID)
+			allowed[key] = append(allowed[key], f)
+			bySource[f.SourceID] = append(bySource[f.SourceID], f)
 		}
 		for _, f := range envelope.Findings {
-			src, ok := allowed[f.SourceID]
+			src, ok := matchAIFinding(allowed, bySource, f.Scope, f.SourceID, f.Target)
 			if !ok {
-				return nil, fmt.Errorf("Report AI introduced unknown source_id %q", f.SourceID)
+				return nil, fmt.Errorf("Report AI returned source_id %q (scope %q, target %q) that matches no single input finding", f.SourceID, f.Scope, f.Target)
 			}
+			// The scanner record is authoritative for what the finding is and
+			// where it is: the AI cannot move it to another file or host, or
+			// overwrite a scanner-reported CVE/CWE/CVSS. It may only fill the
+			// classification fields the scanner left blank.
 			f.Scanner = src.Scanner
-			f.Target = firstNonBlank(f.Target, src.Target)
-			f.Endpoint = firstNonBlank(f.Endpoint, src.Endpoint)
+			f.Target = src.Target
+			f.Endpoint = src.Endpoint
 			f.Evidence = firstNonBlank(f.Evidence, src.Evidence)
 			f.EvidenceRef = src.EvidenceRef
 			f.Scope = src.Scope
 			f.Sources = src.Sources
-			f.CVE = firstNonBlank(f.CVE, src.CVE)
-			f.CWE = firstNonBlank(f.CWE, src.CWE)
-			if f.CVSS == 0 {
+			f.CVE = firstNonBlank(src.CVE, f.CVE)
+			f.CWE = firstNonBlank(src.CWE, f.CWE)
+			if src.CVSS != 0 {
 				f.CVSS = src.CVSS
 			}
 			f.Severity = normalizeSeverityBucket(f.Severity)
 			// The scanner (or merged, highest-contributor) severity is a floor:
-			// the AI may explain and classify a finding, not downgrade it.
-			if srcSev := normalizeSeverityBucket(src.Severity); severityRankValue(srcSev) > severityRankValue(f.Severity) {
+			// the AI may explain and classify a finding, not downgrade it. An
+			// unrated placeholder severity is not a floor, so the AI may rate
+			// it freely.
+			if srcSev := normalizeSeverityBucket(src.Severity); !src.SeverityUnrated && severityRankValue(srcSev) > severityRankValue(f.Severity) {
 				f.Severity = srcSev
 			}
+			// It stays unrated only while the AI kept the placeholder severity.
+			f.SeverityUnrated = src.SeverityUnrated && f.Severity == normalizeSeverityBucket(src.Severity)
 			if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Explanation) == "" || strings.TrimSpace(f.EvidenceRef) == "" || strings.TrimSpace(f.Impact) == "" || strings.TrimSpace(f.Remediation) == "" {
 				return nil, fmt.Errorf("Report AI returned incomplete structured finding for source_id %q", f.SourceID)
 			}
 			out = append(out, f)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].SourceID < out[j].SourceID })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SourceID != out[j].SourceID {
+			return out[i].SourceID < out[j].SourceID
+		}
+		if out[i].Scope != out[j].Scope {
+			return out[i].Scope < out[j].Scope
+		}
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Endpoint < out[j].Endpoint
+	})
 	return out, nil
+}
+
+// aiFindingKey identifies the input findings an AI item may refer to. A
+// SourceID alone is not unique: two host scopes on one IP can both report
+// nmap:<ip>:<port>. Nor is (scope, source_id): an osv SourceID carries no path,
+// so one package in two lockfiles of a source scope yields two inputs that
+// differ only by Target.
+func aiFindingKey(scope, sourceID string) string { return scope + "\x00" + sourceID }
+
+// matchAIFinding resolves an AI output item to exactly one input finding. The
+// candidates are the inputs with the item's (scope, source_id), or, when the AI
+// omitted or garbled the scope, the inputs with its source_id. Several
+// candidates are narrowed by the item's exact target. ok is false unless
+// exactly one candidate remains, which rejects the AI response and forces the
+// deterministic fallback.
+func matchAIFinding(allowed, bySource map[string][]scanner.Finding, scope, sourceID, target string) (scanner.Finding, bool) {
+	cands := allowed[aiFindingKey(scope, sourceID)]
+	if len(cands) == 0 {
+		cands = bySource[sourceID]
+	}
+	if len(cands) == 1 {
+		return cands[0], true
+	}
+	if len(cands) == 0 || target == "" {
+		return scanner.Finding{}, false
+	}
+	want := filepath.ToSlash(filepath.Clean(target))
+	var match []scanner.Finding
+	for _, c := range cands {
+		if filepath.ToSlash(filepath.Clean(c.Target)) == want {
+			match = append(match, c)
+		}
+	}
+	if len(match) == 1 {
+		return match[0], true
+	}
+	return scanner.Finding{}, false
 }
 
 func reportFindingsToVulns(in []reportFinding) []VulnSummary {
