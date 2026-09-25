@@ -27,6 +27,13 @@ type Finding struct {
 	CVE         string  `json:"cve,omitempty"`
 	CWE         string  `json:"cwe,omitempty"`
 	CVSS        float64 `json:"cvss,omitempty"`
+	// Scope is the (scope) key of the run that produced this finding, e.g.
+	// "host:api.example.com" or "source:main", so the report can group by it.
+	Scope string `json:"scope,omitempty"`
+	// Sources is set only when cross-scanner merge collapsed several scanners'
+	// reports of one CVE on one scope into this finding; it lists every
+	// contributor, this finding's own report first.
+	Sources []FindingSource `json:"sources,omitempty"`
 }
 
 func ParseRuns(runs []Run) ([]Finding, []error) {
@@ -40,12 +47,19 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", run.Scanner, err))
 		}
+		// A pre-scope (Increment-1) run folds to the implicit host scope, the same
+		// rule indexTerminal applies on resume.
+		scope := run.Scope
+		if scope == "" {
+			scope = HostScope(run.Target).Key()
+		}
 		for i := range parsed {
 			parsed[i].EvidenceRef = run.ArtifactPath + "#" + parsed[i].SourceID
+			parsed[i].Scope = scope
 		}
 		findings = append(findings, parsed...)
 	}
-	findings = dedupFindings(findings)
+	findings = mergeCrossScanner(dedupFindings(findings))
 	return findings, errs
 }
 
