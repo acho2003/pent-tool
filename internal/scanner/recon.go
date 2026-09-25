@@ -319,6 +319,11 @@ func loadReconScopes(scanDir string) ([]Scope, bool) {
 	return scopes, true
 }
 
+// LoadReconScopes returns the discovered host-scope set (with per-host evidence)
+// persisted under scanDir by recon, for report generation. ok is false when the
+// file is absent or empty, e.g. a single-host scan with no recon evidence.
+func LoadReconScopes(scanDir string) ([]Scope, bool) { return loadReconScopes(scanDir) }
+
 // subfinderRunner is a descriptor stub for subfinder within the recon phase.
 type subfinderRunner struct{}
 

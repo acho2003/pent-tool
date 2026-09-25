@@ -102,3 +102,16 @@ func TestReconRunnerDescriptors(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadReconScopesRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := LoadReconScopes(dir); ok {
+		t.Fatal("missing file must report ok=false")
+	}
+	want := []Scope{{ID: "host:a.test", Kind: ScopeHost, Target: "a.test", Evidence: HostEvidence{LiveURLs: []string{"https://a.test"}, OpenPorts: []Port{{Number: 443, Protocol: "tcp", Service: "https"}}}}}
+	saveReconScopes(dir, want)
+	got, ok := LoadReconScopes(dir)
+	if !ok || len(got) != 1 || got[0].ID != "host:a.test" || len(got[0].Evidence.OpenPorts) != 1 || got[0].Evidence.OpenPorts[0].Number != 443 {
+		t.Fatalf("round trip = %#v, ok=%v", got, ok)
+	}
+}

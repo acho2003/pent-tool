@@ -3,6 +3,7 @@ package scanner
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -25,5 +26,15 @@ func TestClassify(t *testing.T) {
 		if got := Classify(c.ev); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: Classify = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestEffectiveTracksFailsOpen(t *testing.T) {
+	if got := EffectiveTracks(HostEvidence{}); !slices.Equal(got, []Track{TrackWeb, TrackServer}) {
+		t.Fatalf("no evidence must fail open to both tracks, got %v", got)
+	}
+	ev := HostEvidence{OpenPorts: []Port{{Number: 22, Protocol: "tcp", Service: "ssh"}}}
+	if got := EffectiveTracks(ev); !slices.Equal(got, []Track{TrackServer}) {
+		t.Fatalf("classified evidence must pass through, got %v", got)
 	}
 }

@@ -222,13 +222,9 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			scopeReq.Target = sc.Target
 			scopeReq.ScanDir = filepath.Join(req.ScanDir, "source")
 		} else {
-			sc.Tracks = Classify(sc.Evidence)
-			if len(sc.Tracks) == 0 {
-				// Fail open: a host with no recon evidence (recon degraded/absent, or the
-				// single-host degrade path) is scanned on all tracks rather than downgraded
-				// to trivy-only, so a reachable host is never silently under-scanned.
-				sc.Tracks = []Track{TrackWeb, TrackServer}
-			}
+			// Fail open to both tracks when recon produced no evidence; see
+			// EffectiveTracks.
+			sc.Tracks = EffectiveTracks(sc.Evidence)
 			scopeReq.Target = sc.Target
 			// Isolate each host's scanner artifacts. Every scan runner derives its
 			// output base from req.ScanDir alone, so two scopes writing under one

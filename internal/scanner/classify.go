@@ -35,3 +35,15 @@ func Classify(ev HostEvidence) []Track {
 	}
 	return out
 }
+
+// EffectiveTracks is the track set a host scope is actually scanned on: the
+// classifier's result, failing open to both tracks when recon produced no
+// evidence (recon degraded/absent, or the single-host degrade path) so a
+// reachable host is never silently under-scanned. The report uses the same rule
+// so its track labels always match what ran.
+func EffectiveTracks(ev HostEvidence) []Track {
+	if tracks := Classify(ev); len(tracks) > 0 {
+		return tracks
+	}
+	return []Track{TrackWeb, TrackServer}
+}
