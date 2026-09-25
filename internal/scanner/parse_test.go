@@ -207,3 +207,67 @@ func TestParseGitleaksFindings(t *testing.T) {
 		t.Fatalf("parsed %#v", got)
 	}
 }
+
+func TestFindingScope(t *testing.T) {
+	tests := []struct {
+		name string
+		run  Run
+		want string
+	}{
+		{"pre-scope run folds to host", Run{Scanner: "nuclei", Target: "example.test"}, "host:example.test"},
+		{"per-host nmap maps to host", Run{Scanner: "nmap", Scope: "recon:example.test:a.example.test", Target: "example.test"}, "host:a.example.test"},
+		{"per-host nmap on colon target", Run{Scanner: "nmap", Scope: "recon:localhost:3000:localhost", Target: "localhost:3000"}, "host:localhost"},
+		{"subfinder recon unchanged", Run{Scanner: "subfinder", Scope: "recon:example.test", Target: "example.test"}, "recon:example.test"},
+		{"httpx recon unchanged", Run{Scanner: "httpx", Scope: "recon:localhost:3000", Target: "localhost:3000"}, "recon:localhost:3000"},
+		{"host scope unchanged", Run{Scanner: "zap", Scope: "host:b.example.test", Target: "b.example.test"}, "host:b.example.test"},
+		{"source scope unchanged", Run{Scanner: "trivy", Scope: "source:main", Target: "/src"}, "source:main"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FindingScope(tc.run); got != tc.want {
+				t.Fatalf("FindingScope(%+v) = %q, want %q", tc.run, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseRunsStampsNmapFindingWithHostScope proves a per-host nmap recon run's
+// findings are stamped with that host's scope, not the recon scope the report
+// drops.
+func TestParseRunsStampsNmapFindingWithHostScope(t *testing.T) {
+	xmlBody := `<?xml version="1.0"?><nmaprun><host><address addr="10.0.0.5" addrtype="ipv4"/>` +
+		`<ports><port protocol="tcp" portid="22"><state state="open"/>` +
+		`<service name="ssh"/></port></ports></host></nmaprun>`
+	p := writeFixture(t, "nmap.xml", xmlBody)
+	findings, errs := ParseRuns([]Run{{Scanner: "nmap", Scope: "recon:example.test:a.example.test", Target: "example.test", Status: "completed", ArtifactPath: p}})
+	if len(errs) != 0 || len(findings) != 1 {
+		t.Fatalf("findings=%#v errors=%v", findings, errs)
+	}
+	if findings[0].Scope != "host:a.example.test" {
+		t.Fatalf("Scope = %q, want host:a.example.test", findings[0].Scope)
+	}
+}
+
+// TestDedupIsScopeAware proves two host scopes that resolve to one IP keep
+// their own nmap finding: nmap SourceIDs use the IP, so a scope-blind dedup
+// would collapse them.
+func TestDedupIsScopeAware(t *testing.T) {
+	xmlBody := `<?xml version="1.0"?><nmaprun><host><address addr="10.0.0.5" addrtype="ipv4"/>` +
+		`<ports><port protocol="tcp" portid="443"><state state="open"/>` +
+		`<service name="https"/></port></ports></host></nmaprun>`
+	pa := writeFixture(t, "nmap-a.xml", xmlBody)
+	pb := writeFixture(t, "nmap-b.xml", xmlBody)
+	findings, errs := ParseRuns([]Run{
+		{Scanner: "nmap", Scope: "recon:example.test:a.example.test", Target: "example.test", Status: "completed", ArtifactPath: pa},
+		{Scanner: "nmap", Scope: "recon:example.test:b.example.test", Target: "example.test", Status: "completed", ArtifactPath: pb},
+	})
+	if len(errs) != 0 {
+		t.Fatalf("errors = %v", errs)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("findings = %d, want 2 (one per scope): %#v", len(findings), findings)
+	}
+	if findings[0].Scope != "host:a.example.test" || findings[1].Scope != "host:b.example.test" {
+		t.Fatalf("scopes = %q, %q", findings[0].Scope, findings[1].Scope)
+	}
+}

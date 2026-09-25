@@ -161,6 +161,7 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	nucleiA := write("nuclei-a.jsonl", `{"template-id":"CVE-2021-41773","matched-at":"https://a.example.test/cgi-bin/","host":"a.example.test","info":{"name":"Apache Path Traversal","severity":"critical","classification":{"cve-id":["cve-2021-41773"],"cvss-score":9.8}}}`+"\n")
 	openvasA := write("openvas-a.xml", `<get_reports_response><report><results><result id="r1"><name>Apache Path Traversal</name><host>a.example.test</host><port>443/tcp</port><severity>7.5</severity><nvt oid="1.3.6"><cve>CVE-2021-41773</cve></nvt></result></results></report></get_reports_response>`)
 	nucleiB := write("nuclei-b.jsonl", `{"template-id":"missing-hsts","matched-at":"https://b.example.test","host":"b.example.test","info":{"name":"Missing HSTS","severity":"info"}}`+"\n")
+	nmapA := write("nmap-a.xml", `<?xml version="1.0"?><nmaprun><host><address addr="10.0.0.5" addrtype="ipv4"/><ports><port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" version="9.2"/></port></ports></host></nmaprun>`)
 	trivySrc := write("trivy.json", `{"Results":[{"Target":"go.sum","Vulnerabilities":[{"VulnerabilityID":"CVE-2023-1111","PkgName":"lib","Severity":"HIGH"}]}]}`)
 	writeReconScopes(t, dir, []scanner.Scope{
 		{ID: "host:a.example.test", Kind: scanner.ScopeHost, Target: "a.example.test", Evidence: scanner.HostEvidence{OpenPorts: []scanner.Port{{Number: 443, Protocol: "tcp", Service: "https"}, {Number: 22, Protocol: "tcp", Service: "ssh"}}}},
@@ -168,6 +169,8 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	})
 	runs := []scanner.Run{
 		{Scanner: "subfinder", Scope: "recon:example.test", Target: "example.test", Status: "completed"},
+		// A per-host nmap recon run: its findings belong to host a, not recon.
+		{Scanner: "nmap", Scope: "recon:example.test:a.example.test", Target: "example.test", Status: "completed", ArtifactPath: nmapA},
 		{Scanner: "nuclei", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: nucleiA},
 		{Scanner: "openvas", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: openvasA},
 		{Scanner: "trivy", Scope: "source:main", Target: filepath.Join(dir, "src"), Status: "completed", ArtifactPath: trivySrc},
@@ -195,6 +198,18 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	if want := []string{"host:a.example.test", "host:b.example.test", "source:main"}; !slices.Equal(scopeIDs, want) {
 		t.Fatalf("scopes = %v, want %v", scopeIDs, want)
 	}
+	// The nmap run is seen first but carries the request target; the host
+	// scope must still be labelled with its own host.
+	if got := manifest.Scopes[0].Target; got != "a.example.test" {
+		t.Fatalf("host a target = %q, want a.example.test", got)
+	}
+	var hostARuns []string
+	for _, r := range manifest.Scopes[0].Runs {
+		hostARuns = append(hostARuns, r.Scanner)
+	}
+	if want := []string{"nmap", "nuclei", "openvas"}; !slices.Equal(hostARuns, want) {
+		t.Fatalf("host a coverage runs = %v, want %v", hostARuns, want)
+	}
 	if got := manifest.Scopes[0].Tracks; !slices.Equal(got, []string{"web", "server"}) {
 		t.Fatalf("host a tracks = %v", got)
 	}
@@ -204,18 +219,23 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	if manifest.Recon == nil || manifest.Recon.Hosts != 2 || manifest.Recon.OpenPorts != 2 {
 		t.Fatalf("recon = %#v", manifest.Recon)
 	}
-	if len(manifest.Findings) != 3 {
-		t.Fatalf("want 3 findings (CVE merged), got %d: %#v", len(manifest.Findings), manifest.Findings)
+	// 4 = merged CVE (nuclei+openvas) + nmap open port on host a, HSTS on host
+	// b, trivy on source.
+	if len(manifest.Findings) != 4 {
+		t.Fatalf("want 4 findings (CVE merged), got %d: %#v", len(manifest.Findings), manifest.Findings)
 	}
 	var order []string
 	for _, f := range manifest.Findings {
 		order = append(order, f.Scope)
 	}
-	if want := []string{"host:a.example.test", "host:b.example.test", "source:main"}; !slices.Equal(order, want) {
+	if want := []string{"host:a.example.test", "host:a.example.test", "host:b.example.test", "source:main"}; !slices.Equal(order, want) {
 		t.Fatalf("finding scope order = %v, want %v", order, want)
 	}
 	if merged := manifest.Findings[0]; len(merged.Sources) != 2 || merged.Severity != "critical" {
 		t.Fatalf("merged finding = %#v", merged)
+	}
+	if nm := manifest.Findings[1]; nm.Scanner != "nmap" || nm.Scope != "host:a.example.test" {
+		t.Fatalf("nmap finding = %#v, want scanner nmap in host:a.example.test", nm)
 	}
 }
 

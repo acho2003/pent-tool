@@ -47,12 +47,7 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", run.Scanner, err))
 		}
-		// A pre-scope (Increment-1) run folds to the implicit host scope, the same
-		// rule indexTerminal applies on resume.
-		scope := run.Scope
-		if scope == "" {
-			scope = HostScope(run.Target).Key()
-		}
+		scope := FindingScope(run)
 		for i := range parsed {
 			parsed[i].EvidenceRef = run.ArtifactPath + "#" + parsed[i].SourceID
 			parsed[i].Scope = scope
@@ -61,6 +56,23 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 	}
 	findings = mergeCrossScanner(dedupFindings(findings))
 	return findings, errs
+}
+
+// FindingScope is the report scope a run's findings belong to: its own scope,
+// a pre-scope run folded to the implicit host scope, or — for a per-host nmap
+// recon run ("recon:<target>:<host>") — that host's scope.
+func FindingScope(run Run) string {
+	if run.Scope == "" {
+		// A pre-scope (Increment-1) run folds to the implicit host scope, the
+		// same rule indexTerminal applies on resume.
+		return HostScope(run.Target).Key()
+	}
+	// Strip the known "recon:<target>:" prefix rather than splitting on the last
+	// ":" — targets such as "localhost:3000" contain colons themselves.
+	if prefix := reconScopeKey(run.Target) + ":"; strings.HasPrefix(run.Scope, prefix) {
+		return HostScope(strings.TrimPrefix(run.Scope, prefix)).Key()
+	}
+	return run.Scope
 }
 
 func ParseRun(run Run) ([]Finding, error) {
@@ -462,11 +474,14 @@ func parseTestssl(path string) ([]Finding, error) {
 	return out, nil
 }
 
+// dedupFindings drops exact repeats within one scope. Scope is part of the key:
+// nmap SourceIDs use the resolved IP, so two host scopes on one IP would
+// otherwise collapse into one finding and lose a host's report.
 func dedupFindings(in []Finding) []Finding {
 	seen := map[string]bool{}
 	out := make([]Finding, 0, len(in))
 	for _, f := range in {
-		k := strings.ToLower(strings.Join([]string{f.Scanner, f.SourceID, f.Target, f.Endpoint}, "|"))
+		k := strings.ToLower(strings.Join([]string{f.Scope, f.Scanner, f.SourceID, f.Target, f.Endpoint}, "|"))
 		if !seen[k] {
 			seen[k] = true
 			out = append(out, f)

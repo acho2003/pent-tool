@@ -37,13 +37,21 @@ type reportReconSummary struct {
 	Services  []string `json:"services,omitempty"`
 }
 
-// reportScopeID is the scope a run belongs to. A pre-scope run folds to the
-// implicit host scope, matching the scanner's resume rule.
+// reportScopeID is the scope a run belongs to: the same scope its findings are
+// stamped with (a pre-scope run folds to the implicit host scope; a per-host
+// nmap recon run belongs to that host).
 func reportScopeID(run scanner.Run) string {
-	if run.Scope != "" {
-		return run.Scope
+	return scanner.FindingScope(run)
+}
+
+// reportScopeTarget is the target a run contributes to its report scope. A run
+// folded into a host scope from another scope (a per-host nmap recon run, whose
+// Target is the request target) contributes the host itself.
+func reportScopeTarget(run scanner.Run, id string) string {
+	if run.Scope != "" && run.Scope != id {
+		return strings.TrimPrefix(id, "host:")
 	}
-	return scanner.HostScope(run.Target).Key()
+	return run.Target
 }
 
 // buildReportScopes derives the report's scope list from the scan's runs and the
@@ -67,7 +75,7 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 		}
 		i, ok := index[id]
 		if !ok {
-			rs := reportScope{ID: id, Kind: string(scanner.ScopeHost), Target: run.Target}
+			rs := reportScope{ID: id, Kind: string(scanner.ScopeHost), Target: reportScopeTarget(run, id)}
 			if strings.HasPrefix(id, "source:") {
 				rs.Kind = string(scanner.ScopeSource)
 			} else {
@@ -89,7 +97,7 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 			out = append(out, rs)
 		}
 		if out[i].Target == "" {
-			out[i].Target = run.Target
+			out[i].Target = reportScopeTarget(run, id)
 		}
 		out[i].Runs = append(out[i].Runs, reportScopeRun{Scanner: run.Scanner, Status: run.Status, Reason: run.Reason})
 	}
