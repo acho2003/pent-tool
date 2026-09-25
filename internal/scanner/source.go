@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,4 +81,40 @@ func resolveSourceScope(ctx context.Context, req Request, cfg Config, emit EmitF
 
 	// 3. No source resolved: Target stays empty -> SAST tools not_applicable.
 	return sc
+}
+
+func sourceScopePath(scanDir string) string {
+	return filepath.Join(scanDir, "scanner-output", "source-scope.json")
+}
+
+// saveSourceScope records the resolved source scope (including its provenance)
+// so the report can label it by origin rather than by the local checkout path.
+// A write failure is non-fatal.
+func saveSourceScope(scanDir string, sc Scope) {
+	if strings.TrimSpace(scanDir) == "" {
+		return
+	}
+	path := sourceScopePath(scanDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(sc, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0o600)
+}
+
+// LoadSourceScope returns the source scope persisted for a scan. ok is false for
+// scans that predate it or whose file is unreadable.
+func LoadSourceScope(scanDir string) (Scope, bool) {
+	data, err := os.ReadFile(sourceScopePath(scanDir))
+	if err != nil {
+		return Scope{}, false
+	}
+	var sc Scope
+	if err := json.Unmarshal(data, &sc); err != nil || sc.ID == "" {
+		return Scope{}, false
+	}
+	return sc, true
 }

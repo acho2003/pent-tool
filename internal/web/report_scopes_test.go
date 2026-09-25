@@ -64,6 +64,45 @@ func TestBuildReportScopes(t *testing.T) {
 	}
 }
 
+func TestRedactURL(t *testing.T) {
+	cases := map[string]string{
+		"https://user:tok@github.com/a/b.git": "https://github.com/a/b.git",
+		"https://github.com/a/b.git":          "https://github.com/a/b.git",
+		"git@github.com:a/b.git":              "git@github.com:a/b.git",
+	}
+	for in, want := range cases {
+		if got := redactURL(in); got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBuildReportScopesSourceOrigin(t *testing.T) {
+	dir := t.TempDir()
+	writeSourceScope := func(sc scanner.Scope) {
+		data, _ := json.Marshal(sc)
+		p := filepath.Join(dir, "scanner-output", "source-scope.json")
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs := []scanner.Run{{Scanner: "trivy", Scope: "source:main", Target: "/scans/x/source/checkout", Status: "completed"}}
+	writeSourceScope(scanner.Scope{ID: "source:main", Kind: scanner.ScopeSource, Target: "/scans/x/source/checkout", Source: scanner.SourceRef{Path: "/scans/x/source/checkout", Provenance: "clone:https://user:tok@github.com/a/b.git"}})
+	if got := buildReportScopes(dir, runs); len(got) != 1 || got[0].Origin != "https://github.com/a/b.git" || reportScopeLabel(got[0]) != "SOURCE CODE  https://github.com/a/b.git" {
+		t.Fatalf("clone origin: %#v", got)
+	}
+	writeSourceScope(scanner.Scope{ID: "source:main", Kind: scanner.ScopeSource, Target: "/home/me/app", Source: scanner.SourceRef{Path: "/home/me/app", Provenance: "provided:filesystem"}})
+	if got := buildReportScopes(dir, runs); got[0].Origin != "/home/me/app" {
+		t.Fatalf("provided origin: %#v", got)
+	}
+	if got := buildReportScopes(t.TempDir(), runs); got[0].Origin != "" || reportScopeLabel(got[0]) != "SOURCE CODE  /scans/x/source/checkout" {
+		t.Fatalf("legacy scan without source-scope.json must keep the old label: %#v", got)
+	}
+}
+
 func TestOrderReportFindings(t *testing.T) {
 	scopes := []reportScope{{ID: "host:a"}, {ID: "host:b"}, {ID: "source:main"}}
 	in := []reportFinding{

@@ -10,13 +10,27 @@ import (
 // reportScopeLabel is the one-line heading for a scope in the scanner report.
 func reportScopeLabel(sc reportScope) string {
 	if sc.Kind == "source" {
-		return "SOURCE CODE  " + firstNonBlank(sc.Target, "none provided")
+		return "SOURCE CODE  " + firstNonBlank(sc.Origin, sc.Target, "none provided")
 	}
 	label := "HOST  " + sc.Target
 	if len(sc.Tracks) > 0 {
 		label += "  [" + strings.Join(sc.Tracks, ", ") + "]"
 	}
 	return label
+}
+
+// fitPDFText truncates s with "..." so it fits width w (mm) in the pdf's current
+// font. Call it after SetFont. Labels are single-line cells, so an over-long
+// hostname would otherwise overflow the page.
+func fitPDFText(pdf *fpdf.Fpdf, s string, w float64) string {
+	if pdf.GetStringWidth(s) <= w {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 && pdf.GetStringWidth(string(runes)+"...") > w {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "..."
 }
 
 // scopeCoverageLines lists what the classifier decided for a host (tracks, open
@@ -87,7 +101,7 @@ func drawScanCoverage(pdf *fpdf.Fpdf, pal reportPalette, recon reportReconSummar
 		pdf.SetXY(14, y+1)
 		pdf.SetFont("Helvetica", "B", 9)
 		text(pal.accent)
-		pdf.CellFormat(182, 6, reportScopeLabel(sc), "", 1, "L", false, 0, "")
+		pdf.CellFormat(182, 6, fitPDFText(pdf, reportScopeLabel(sc), 182), "", 1, "L", false, 0, "")
 		pdf.Ln(1)
 		pdf.SetFont("Courier", "", 7)
 		for _, line := range scopeCoverageLines(sc) {

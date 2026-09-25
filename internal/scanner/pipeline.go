@@ -207,7 +207,9 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	// BEFORE results is allocated, so its per-runner rows are counted in the slice
 	// size. Appending after the allocation would under-size results and panic when
 	// the source rows are written.
-	scopes = append(scopes, resolveSourceScope(ctx, req, p.Config, safeEmit))
+	sourceScope := resolveSourceScope(ctx, req, p.Config, safeEmit)
+	saveSourceScope(req.ScanDir, sourceScope)
+	scopes = append(scopes, sourceScope)
 	results := make([]Run, len(scopes)*len(p.Runners))
 	var tasks []scanTask
 	slot := 0

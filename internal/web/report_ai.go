@@ -92,7 +92,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	s.saveScanRecordTo(rec, scanDir)
 	s.broadcastToInstance(instanceID, startedEvent)
 	parsed, parseErrs := scanner.ParseRuns(rec.ScannerRuns)
-	manifest := reportManifest{SchemaVersion: 1, Mode: "deterministic_fallback", PromptVersion: reportPromptVersion, GeneratedAt: time.Now().Format(time.RFC3339Nano), SourceRuns: append([]scanner.Run(nil), rec.ScannerRuns...), Findings: fallbackReportFindings(parsed)}
+	manifest := reportManifest{SchemaVersion: 2, Mode: "deterministic_fallback", PromptVersion: reportPromptVersion, GeneratedAt: time.Now().Format(time.RFC3339Nano), SourceRuns: append([]scanner.Run(nil), rec.ScannerRuns...), Findings: fallbackReportFindings(parsed)}
 	for _, err := range parseErrs {
 		manifest.ParseErrors = append(manifest.ParseErrors, err.Error())
 	}

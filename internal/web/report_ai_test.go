@@ -296,6 +296,9 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
+	if manifest.SchemaVersion != 2 || manifest.PromptVersion != "scanner-report-v2" {
+		t.Fatalf("manifest version = %d / %q, want 2 / scanner-report-v2", manifest.SchemaVersion, manifest.PromptVersion)
+	}
 	var scopeIDs []string
 	for _, sc := range manifest.Scopes {
 		scopeIDs = append(scopeIDs, sc.ID)

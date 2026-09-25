@@ -58,6 +58,19 @@ func TestIsGitURL(t *testing.T) {
 	}
 }
 
+func TestSourceScopePersistedByPipeline(t *testing.T) {
+	scanDir, src := t.TempDir(), t.TempDir()
+	if _, ok := LoadSourceScope(scanDir); ok {
+		t.Fatal("no file yet must report ok=false")
+	}
+	p := &Pipeline{}
+	p.Run(context.Background(), Request{Target: "example.test", ScanDir: scanDir, Artifact: Artifact{Kind: "filesystem", Ref: src}}, nil, nil)
+	got, ok := LoadSourceScope(scanDir)
+	if !ok || got.ID != "source:main" || got.Target != src || got.Source.Provenance != "provided:filesystem" {
+		t.Fatalf("persisted source scope = %#v ok=%v", got, ok)
+	}
+}
+
 func mkGitDir(dir string) error {
 	return mkdirAll(filepath.Join(dir, ".git"))
 }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ type reportScope struct {
 	ID        string           `json:"id"`
 	Kind      string           `json:"kind"`
 	Target    string           `json:"target,omitempty"`
+	Origin    string           `json:"origin,omitempty"`
 	Tracks    []string         `json:"tracks,omitempty"`
 	OpenPorts []string         `json:"open_ports,omitempty"`
 	Services  []string         `json:"services,omitempty"`
@@ -66,6 +68,7 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 			evidence[sc.ID] = sc.Evidence
 		}
 	}
+	sourceScope, hasSourceScope := scanner.LoadSourceScope(scanDir)
 	var out []reportScope
 	index := map[string]int{}
 	for _, run := range runs {
@@ -78,6 +81,9 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 			rs := reportScope{ID: id, Kind: string(scanner.ScopeHost), Target: reportScopeTarget(run, id)}
 			if strings.HasPrefix(id, "source:") {
 				rs.Kind = string(scanner.ScopeSource)
+				if hasSourceScope && sourceScope.ID == id {
+					rs.Origin = sourceOrigin(sourceScope)
+				}
 			} else {
 				ev := evidence[id]
 				for _, t := range scanner.EffectiveTracks(ev) {
@@ -105,6 +111,31 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 		return out[a].Kind != string(scanner.ScopeSource) && out[b].Kind == string(scanner.ScopeSource)
 	})
 	return out
+}
+
+// sourceOrigin is how the report names a source scope: the repository it was
+// cloned from (credentials removed), or the directory the operator provided.
+// Empty when no source resolved.
+func sourceOrigin(sc scanner.Scope) string {
+	prov := sc.Source.Provenance
+	if u, ok := strings.CutPrefix(prov, "clone:"); ok {
+		return redactURL(u)
+	}
+	if prov == "provided:filesystem" {
+		return sc.Source.Path
+	}
+	return ""
+}
+
+// redactURL drops any userinfo (e.g. a token in https://user:tok@host/...) from
+// a URL. Non-URL forms such as scp-style git@host:path are returned unchanged.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
 }
 
 func formatReportPort(p scanner.Port) string {
