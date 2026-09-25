@@ -123,7 +123,7 @@ export default function ScanDetailPage() {
       />
     );
 	if ((scan.schema_version ?? 0) >= 2) {
-		return <DeterministicScanDetail scan={scan} onRefresh={() => void refetch()} />;
+		return <DeterministicScanDetail key={scan.id} scan={scan} onRefresh={() => void refetch()} />;
 	}
 
   const status = (scan.status || "").toLowerCase();
@@ -395,7 +395,12 @@ function DeterministicScanDetail({ scan, onRefresh }: { scan: ScanRecord; onRefr
 		const sc = scopes.find((s) => s.runs.length);
 		return sc ? keyOf(sc.runs[0], sc.id) : null;
 	}, [recon, scopes]);
-	const selected = picked ?? firstKey;
+	const pickedPresent = useMemo(() => {
+		if (!picked) return false;
+		if (recon.some((x) => sameKey(picked, keyOf(x, "")))) return true;
+		return scopes.some((sc) => sc.runs.some((x) => sameKey(picked, keyOf(x, sc.id))));
+	}, [picked, recon, scopes]);
+	const selected = picked && pickedPresent ? picked : firstKey;
 	const located = useMemo(() => {
 		if (!selected) return null;
 		const r = recon.find((x) => sameKey(selected, keyOf(x, "")));
