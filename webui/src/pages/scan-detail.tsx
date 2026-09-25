@@ -386,7 +386,7 @@ function DeterministicScanDetail({ scan, onRefresh }: { scan: ScanRecord; onRefr
 	const [openState, setOpenState] = useState<Record<string, boolean>>({});
 	// Refetch the grouping whenever any run is added or changes status.
 	const runsSignature = useMemo(() => (scan.scanner_runs ?? []).map((r) => `${r.scope ?? ""}|${r.scanner}|${r.status}`).join(","), [scan.scanner_runs]);
-	const scopesQuery = useQuery({ queryKey: ["scan-scopes", scan.id, runsSignature], queryFn: () => api.scanScopes(scan.id) });
+	const scopesQuery = useQuery({ queryKey: ["scan-scopes", scan.id, runsSignature], queryFn: () => api.scanScopes(scan.id), placeholderData: (prev) => prev });
 	const recon = scopesQuery.data?.recon ?? [];
 	const scopes = scopesQuery.data?.scopes ?? [];
 	const hostCount = scopes.filter((s) => s.kind !== "source").length;
@@ -425,7 +425,27 @@ function DeterministicScanDetail({ scan, onRefresh }: { scan: ScanRecord; onRefr
 		setRegenerating(true);
 		try { await api.regenerateReport(scan.id); onRefresh(); } finally { setRegenerating(false); }
 	}
-	const isOpen = (sc: ReportScope) => openState[sc.id] ?? (sc.kind === "source" || hostCount <= 3 || sc.runs.some((r) => ATTENTION.has(r.status)));
+	// The default-open decision (few hosts, or a scope needing attention) is only
+	// meaningful the first time a scope is seen — otherwise an untoggled section
+	// would open and close on its own as runs change status underneath it. Snapshot
+	// it into openState once per scope id; isOpen only falls back to recomputing it
+	// for the render(s) before this effect has run.
+	const defaultOpen = (sc: ReportScope) => sc.kind === "source" || hostCount <= 3 || sc.runs.some((r) => ATTENTION.has(r.status));
+	useEffect(() => {
+		setOpenState((prev) => {
+			let changed = false;
+			const next = { ...prev };
+			for (const sc of scopes) {
+				if (!(sc.id in prev)) {
+					next[sc.id] = defaultOpen(sc);
+					changed = true;
+				}
+			}
+			return changed ? next : prev;
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [scopes, hostCount]);
+	const isOpen = (sc: ReportScope) => openState[sc.id] ?? defaultOpen(sc);
 	const grid = (runs: ScopeRun[], fallbackScope: string) => <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{runs.map((r) => {
 		const k = keyOf(r, fallbackScope);
 		return <ScannerStatusCard key={`${k.scope}|${k.scanner}`} name={r.scanner} run={r} active={sameKey(selected, k)} onClick={() => setPicked(k)} />;
