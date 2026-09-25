@@ -155,7 +155,16 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			end = len(in)
 		}
 		chunk := in[start:end]
-		payload, _ := json.Marshal(chunk)
+		// The model sees only primary records: a merged finding's sources[] hold
+		// secondary source_ids the allow-map rejects, so an echoed one would
+		// force a fallback. Sources are restored from the chunk below. Copy, so
+		// the caller's findings are not mutated.
+		projection := make([]scanner.Finding, len(chunk))
+		copy(projection, chunk)
+		for i := range projection {
+			projection[i].Sources = nil
+		}
+		payload, _ := json.Marshal(projection)
 		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"...","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
 		resp, err := client.Chat([]llm.Message{{Role: "system", Content: "Report-generation stage only. Produce strict JSON grounded exclusively in supplied scanner records."}, {Role: "user", Content: prompt}})
 		if err != nil {
@@ -191,6 +200,11 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 				f.CVSS = src.CVSS
 			}
 			f.Severity = normalizeSeverityBucket(f.Severity)
+			// The scanner (or merged, highest-contributor) severity is a floor:
+			// the AI may explain and classify a finding, not downgrade it.
+			if srcSev := normalizeSeverityBucket(src.Severity); severityRankValue(srcSev) > severityRankValue(f.Severity) {
+				f.Severity = srcSev
+			}
 			if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Explanation) == "" || strings.TrimSpace(f.EvidenceRef) == "" || strings.TrimSpace(f.Impact) == "" || strings.TrimSpace(f.Remediation) == "" {
 				return nil, fmt.Errorf("Report AI returned incomplete structured finding for source_id %q", f.SourceID)
 			}

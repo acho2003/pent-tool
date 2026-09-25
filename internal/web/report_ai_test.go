@@ -2,11 +2,14 @@ package web
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
@@ -136,6 +139,108 @@ func TestScannerReportFallsBackOnProviderFailure(t *testing.T) {
 	rec := &ScanRecord{SchemaVersion: 2, ID: "provider-fallback", Target: "example.test", Status: "finished", ScannerRuns: runs, Events: []WSEvent{}, Vulns: []VulnSummary{}}
 	if got := s.generateScannerReport(rec, dir, ""); got == "" || rec.ReportMode != "deterministic_fallback" {
 		t.Fatalf("report=%q mode=%q", got, rec.ReportMode)
+	}
+}
+
+// TestScannerReportAIKeepsMergedTraceAndSeverityFloor is the AI success path
+// for a cross-scanner merged finding. The provider must only see primary
+// source_ids (a secondary one in sources[] would be echoed back and rejected by
+// the allow-map, forcing a fallback), the finding must keep its scope and both
+// sources, and the AI may not lower the scanner-reported severity.
+func TestScannerReportAIKeepsMergedTraceAndSeverityFloor(t *testing.T) {
+	const primaryID = "nuclei:CVE-2021-41773:https://a.example.test/cgi-bin/"
+	const secondaryID = "openvas:r1"
+	var (
+		mu     sync.Mutex
+		bodies []string
+	)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		content, _ := json.Marshal(map[string]any{"findings": []map[string]any{{
+			"source_id":          primaryID,
+			"scanner":            "nuclei",
+			"title":              "Apache HTTP Server path traversal",
+			"severity":           "low", // below the merged scanner severity
+			"explanation":        "Scanners reported CVE-2021-41773 on this host.",
+			"evidence_reference": "ignored; restored from the source",
+			"impact":             "File disclosure outside the document root.",
+			"remediation":        "Upgrade Apache HTTP Server to 2.4.51 or later.",
+		}}})
+		resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": string(content)}}}})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(resp)
+	}))
+	defer provider.Close()
+	s := newTestServer(t, nil)
+	s.cfg.LLM = "report-model"
+	s.cfg.APIBase = provider.URL
+	s.cfg.APIKey = "test-key"
+	s.cfg.LLMMaxRetries = 1
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	nucleiA := write("nuclei-a.jsonl", `{"template-id":"CVE-2021-41773","matched-at":"https://a.example.test/cgi-bin/","host":"a.example.test","info":{"name":"Apache Path Traversal","severity":"critical","classification":{"cve-id":["cve-2021-41773"],"cvss-score":9.8}}}`+"\n")
+	openvasA := write("openvas-a.xml", `<get_reports_response><report><results><result id="r1"><name>Apache Path Traversal</name><host>a.example.test</host><port>443/tcp</port><severity>7.5</severity><nvt oid="1.3.6"><cve>CVE-2021-41773</cve></nvt></result></results></report></get_reports_response>`)
+	runs := []scanner.Run{
+		{Scanner: "nuclei", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: nucleiA},
+		{Scanner: "openvas", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: openvasA},
+	}
+	for i := range runs {
+		runs[i].Checksum = scanner.CalculateChecksum(runs[i])
+	}
+	rec := &ScanRecord{SchemaVersion: scanner.SchemaVersion, ID: "ai-report", Target: "a.example.test", Status: "finished", ScannerRuns: runs, Events: []WSEvent{}, Vulns: []VulnSummary{}}
+	if path := s.generateScannerReport(rec, dir, ""); path == "" {
+		t.Fatal("report generation failed")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest reportManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Mode != "ai" {
+		t.Fatalf("mode = %q, want ai", manifest.Mode)
+	}
+	if len(manifest.Findings) != 1 {
+		t.Fatalf("findings = %#v, want the one merged finding", manifest.Findings)
+	}
+	f := manifest.Findings[0]
+	if f.SourceID != primaryID || f.Scope != "host:a.example.test" || len(f.Sources) != 2 {
+		t.Fatalf("merged finding lost its trace: %#v", f)
+	}
+	if f.Severity != "critical" {
+		t.Fatalf("severity = %q, want the source severity critical (AI may not downgrade)", f.Severity)
+	}
+	// The projection sent to the model must not mutate the caller's findings.
+	parsed, _ := scanner.ParseRuns(runs)
+	if _, err := s.aiReportFindings(parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != 1 || len(parsed[0].Sources) != 2 {
+		t.Fatalf("aiReportFindings mutated its input: %#v", parsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) == 0 {
+		t.Fatal("provider received no request")
+	}
+	for _, b := range bodies {
+		if !strings.Contains(b, primaryID) {
+			t.Fatalf("provider request lacks the primary source_id: %s", b)
+		}
+		if strings.Contains(b, secondaryID) {
+			t.Fatalf("provider request exposes secondary source_id %q: %s", secondaryID, b)
+		}
 	}
 }
 
