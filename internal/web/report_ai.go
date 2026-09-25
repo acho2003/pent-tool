@@ -16,7 +16,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-const reportPromptVersion = "scanner-report-v1"
+const reportPromptVersion = "scanner-report-v2"
 
 type reportManifest struct {
 	SchemaVersion int                 `json:"schema_version"`
@@ -165,7 +165,7 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			projection[i].Sources = nil
 		}
 		payload, _ := json.Marshal(projection)
-		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"...","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
+		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scope":"exact input scope","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"...","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id, scope, and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
 		resp, err := client.Chat([]llm.Message{{Role: "system", Content: "Report-generation stage only. Produce strict JSON grounded exclusively in supplied scanner records."}, {Role: "user", Content: prompt}})
 		if err != nil {
 			return nil, err
@@ -179,13 +179,15 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			return nil, fmt.Errorf("invalid Report AI JSON: %w", err)
 		}
 		allowed := map[string]scanner.Finding{}
+		bySource := map[string][]scanner.Finding{}
 		for _, f := range chunk {
-			allowed[f.SourceID] = f
+			allowed[aiFindingKey(f.Scope, f.SourceID)] = f
+			bySource[f.SourceID] = append(bySource[f.SourceID], f)
 		}
 		for _, f := range envelope.Findings {
-			src, ok := allowed[f.SourceID]
+			src, ok := matchAIFinding(allowed, bySource, f.Scope, f.SourceID)
 			if !ok {
-				return nil, fmt.Errorf("Report AI introduced unknown source_id %q", f.SourceID)
+				return nil, fmt.Errorf("Report AI returned source_id %q (scope %q) that matches no single input finding", f.SourceID, f.Scope)
 			}
 			f.Scanner = src.Scanner
 			f.Target = firstNonBlank(f.Target, src.Target)
@@ -211,8 +213,31 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			out = append(out, f)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].SourceID < out[j].SourceID })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SourceID != out[j].SourceID {
+			return out[i].SourceID < out[j].SourceID
+		}
+		return out[i].Scope < out[j].Scope
+	})
 	return out, nil
+}
+
+// aiFindingKey identifies one input finding for AI validation. A SourceID alone
+// is not unique: two host scopes on one IP can both report nmap:<ip>:<port>.
+func aiFindingKey(scope, sourceID string) string { return scope + "\x00" + sourceID }
+
+// matchAIFinding resolves an AI output item to exactly one input finding: by
+// (scope, source_id), or, when the AI omitted or garbled the scope, by source_id
+// alone if that is unambiguous in the chunk. ok is false otherwise, which
+// rejects the AI response and forces the deterministic fallback.
+func matchAIFinding(allowed map[string]scanner.Finding, bySource map[string][]scanner.Finding, scope, sourceID string) (scanner.Finding, bool) {
+	if src, ok := allowed[aiFindingKey(scope, sourceID)]; ok {
+		return src, true
+	}
+	if cands := bySource[sourceID]; len(cands) == 1 {
+		return cands[0], true
+	}
+	return scanner.Finding{}, false
 }
 
 func reportFindingsToVulns(in []reportFinding) []VulnSummary {

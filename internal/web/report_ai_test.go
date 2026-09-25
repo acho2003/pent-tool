@@ -361,3 +361,68 @@ func TestScannerReportRejectsChangedArtifact(t *testing.T) {
 		t.Fatalf("generated report from changed artifact: %s", path)
 	}
 }
+
+// aiProvider answers every chat request with the given findings envelope.
+func aiProvider(t *testing.T, findings []map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content, _ := json.Marshal(map[string]any{"findings": findings})
+		resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": string(content)}}}})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(resp)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func aiServer(t *testing.T, provider *httptest.Server) *Server {
+	t.Helper()
+	s := newTestServer(t, nil)
+	s.cfg.LLM = "report-model"
+	s.cfg.APIBase = provider.URL
+	s.cfg.APIKey = "test-key"
+	s.cfg.LLMMaxRetries = 1
+	return s
+}
+
+// Two host scopes on one IP both report the same nmap SourceID; the AI must
+// keep each finding on its own host.
+func TestAIReportKeepsSameSourceIDOnItsOwnScope(t *testing.T) {
+	aiOut := func(scope string) map[string]any {
+		return map[string]any{"source_id": "nmap:10.0.0.5:443", "scope": scope, "scanner": "nmap", "title": "Open port 443", "severity": "info", "explanation": "Port 443 is open.", "evidence_reference": "x", "impact": "Exposed service.", "remediation": "Restrict if unneeded."}
+	}
+	s := aiServer(t, aiProvider(t, []map[string]any{aiOut("host:a.test"), aiOut("host:b.test")}))
+	in := []scanner.Finding{
+		{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Title: "https", Severity: "info", Scope: "host:a.test", Target: "a.test", EvidenceRef: "a.xml#nmap:10.0.0.5:443"},
+		{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Title: "https", Severity: "info", Scope: "host:b.test", Target: "b.test", EvidenceRef: "b.xml#nmap:10.0.0.5:443"},
+	}
+	out, err := s.aiReportFindings(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 || out[0].Scope == out[1].Scope {
+		t.Fatalf("each finding must keep its own scope, got %#v", out)
+	}
+	for _, f := range out {
+		want := map[string]string{"host:a.test": "a.xml#nmap:10.0.0.5:443", "host:b.test": "b.xml#nmap:10.0.0.5:443"}[f.Scope]
+		if f.EvidenceRef != want {
+			t.Fatalf("scope %s got evidence %q, want %q", f.Scope, f.EvidenceRef, want)
+		}
+	}
+}
+
+// An AI item that omits scope is accepted when its source_id is unique in the
+// chunk, and rejected (forcing the deterministic fallback) when it is ambiguous.
+func TestAIReportScopelessMatch(t *testing.T) {
+	item := map[string]any{"source_id": "nmap:10.0.0.5:443", "scanner": "nmap", "title": "Open port 443", "severity": "info", "explanation": "Port 443 is open.", "evidence_reference": "x", "impact": "Exposed service.", "remediation": "Restrict if unneeded."}
+	unique := []scanner.Finding{{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Severity: "info", Scope: "host:a.test", EvidenceRef: "a.xml#nmap:10.0.0.5:443"}}
+	s := aiServer(t, aiProvider(t, []map[string]any{item}))
+	out, err := s.aiReportFindings(unique)
+	if err != nil || len(out) != 1 || out[0].Scope != "host:a.test" {
+		t.Fatalf("unique scopeless match: out=%#v err=%v", out, err)
+	}
+	ambiguous := append(unique, scanner.Finding{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Severity: "info", Scope: "host:b.test", EvidenceRef: "b.xml#nmap:10.0.0.5:443"})
+	if _, err := s.aiReportFindings(ambiguous); err == nil {
+		t.Fatal("an ambiguous scopeless AI item must be rejected")
+	}
+}
