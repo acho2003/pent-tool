@@ -12,7 +12,7 @@ import (
 
 const SchemaVersion = 2
 
-var OrderedNames = []string{"nuclei", "zap", "openvas", "trivy", "vuls"}
+var OrderedNames = []string{"nuclei", "zap", "testssl", "openvas", "trivy", "semgrep", "gitleaks", "vuls", "osv"}
 
 // NormalizeScanners validates an operator's scanner selection and returns it in
 // pipeline order, deduplicated. An empty selection means the whole pipeline, so
@@ -51,8 +51,14 @@ type Request struct {
 	Target string `json:"target"`
 	// Scanners restricts this request to the named scanners. Empty runs the
 	// whole pipeline; every name must be one of OrderedNames.
-	Scanners    []string `json:"-"`
-	ScanDir     string   `json:"-"`
+	Scanners []string `json:"-"`
+	ScanDir  string   `json:"-"`
+	// Scope stamps every Run a runner constructs (including the initial "running"
+	// record whose scanner_started event is emitted) so live-emitted events — and
+	// the crash-persisted record built from them — carry their per-host scope
+	// instead of collapsing per-host same-named runs. Pipeline.Run sets it per
+	// scope; recon sets it per tool. Not serialized: it is derived, not input.
+	Scope       string   `json:"-"`
 	Artifact    Artifact `json:"artifact,omitempty"`
 	VulsSSHHost string   `json:"vuls_ssh_host,omitempty"`
 	TargetAuth  string   `json:"-"`
@@ -60,6 +66,7 @@ type Request struct {
 
 type Run struct {
 	Scanner      string `json:"scanner"`
+	Scope        string `json:"scope,omitempty"`
 	Target       string `json:"target"`
 	Status       string `json:"status"`
 	StartedAt    string `json:"started_at,omitempty"`
@@ -96,6 +103,13 @@ type Config struct {
 	TrivyPath         string
 	VulsPath          string
 	VulsSSHConfigPath string
+	SubfinderPath     string
+	HttpxPath         string
+	NmapPath          string
+	TestsslPath       string
+	SemgrepPath       string
+	GitleaksPath      string
+	OsvPath           string
 
 	ZAPURL    string
 	ZAPAPIKey string
@@ -105,19 +119,28 @@ type Config struct {
 	GVMUser   string
 	GVMPass   string
 
-	RateRPS        int
-	ScanHeaders    []string
-	MaxOutputBytes int64
-	NucleiTimeout  time.Duration
-	ZAPTimeout     time.Duration
-	OpenVASTimeout time.Duration
-	TrivyTimeout   time.Duration
-	VulsTimeout    time.Duration
+	RateRPS          int
+	MaxWorkers       int
+	ScanHeaders      []string
+	MaxOutputBytes   int64
+	NucleiTimeout    time.Duration
+	ZAPTimeout       time.Duration
+	OpenVASTimeout   time.Duration
+	TrivyTimeout     time.Duration
+	VulsTimeout      time.Duration
+	SubfinderTimeout time.Duration
+	HttpxTimeout     time.Duration
+	NmapTimeout      time.Duration
+	TestsslTimeout   time.Duration
+	SemgrepTimeout   time.Duration
+	GitleaksTimeout  time.Duration
+	OsvTimeout       time.Duration
 }
 
 type EmitFunc func(Event)
 
 type Runner interface {
 	Name() string
+	Descriptor() Descriptor
 	Run(context.Context, Request, Config, EmitFunc) Run
 }

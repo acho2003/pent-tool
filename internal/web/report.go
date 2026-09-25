@@ -998,6 +998,11 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		drawReconList("Observed URLs & Endpoints", recon.URLs)
 	}
 
+	// ─── SCAN COVERAGE (scanner reports only) ────────────
+	if len(scan.ReportScopes) > 0 {
+		drawScanCoverage(pdf, palette, summarizeReportRecon(scan.ReportScopes), scan.ReportScopes)
+	}
+
 	// ─── BLUE TEAM TIMESTAMPS ─────────────────────────────
 	pdf.Ln(10)
 	if pdf.GetY() > 230 {
@@ -1110,8 +1115,29 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.CellFormat(20, 6, "OWASP", "", 0, "L", false, 0, "")
 		pdf.Ln(8)
 
+		scopeLabels := make(map[string]string, len(scan.ReportScopes))
+		for _, sc := range scan.ReportScopes {
+			scopeLabels[sc.ID] = reportScopeLabel(sc)
+		}
+		prevScope, firstRow := "", true
+
 		// Table rows
 		for i, v := range scan.Vulns {
+			if len(scopeLabels) > 0 && (firstRow || v.Scope != prevScope) {
+				prevScope, firstRow = v.Scope, false
+				if pdf.GetY() > 260 {
+					pdf.AddPage()
+					drawRect(0, 0, 210, 297, darkBg)
+					drawRect(0, 0, 210, 1.5, coral)
+					pdf.SetY(15)
+				}
+				groupY := pdf.GetY()
+				drawRect(10, groupY, 190, 6, palette.muted)
+				pdf.SetXY(12, groupY)
+				pdf.SetFont("Helvetica", "B", 7)
+				setColor(teal)
+				pdf.CellFormat(186, 6, firstNonBlank(scopeLabels[v.Scope], v.Scope, "UNSCOPED"), "", 1, "L", false, 0, "")
+			}
 			if pdf.GetY() > 268 {
 				pdf.AddPage()
 				drawRect(0, 0, 210, 297, darkBg)
@@ -1336,6 +1362,9 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			}
 
 			sections := []section{}
+			if label, ok := scopeLabels[v.Scope]; ok {
+				sections = append(sections, section{"SCOPE", label})
+			}
 			if v.Endpoint != "" {
 				sections = append(sections, section{"ENDPOINT", v.Endpoint})
 			}

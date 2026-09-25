@@ -196,6 +196,64 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 	}
 }
 
+// TestLoad_ReadsReconAndTestsslPathsAndTimeouts guards the config-plumbing
+// wiring for the recon tools (subfinder/httpx/nmap) and the new testssl
+// scanner: their paths and timeouts must come from env, and fall back to the
+// documented defaults when unset.
+func TestLoad_ReadsReconAndTestsslPathsAndTimeouts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("XALGORIX_DEBUG_CONFIG", "")
+
+	envFile := filepath.Join(home, ".xalgorix.env")
+	content := strings.Join([]string{
+		"XALGORIX_SUBFINDER_PATH=/usr/local/bin/subfinder",
+		"XALGORIX_HTTPX_PATH=/usr/local/bin/httpx",
+		"XALGORIX_NMAP_PATH=/usr/local/bin/nmap",
+		"XALGORIX_TESTSSL_PATH=/opt/testssl.sh/testssl.sh",
+		"XALGORIX_SUBFINDER_TIMEOUT_SECONDS=111",
+		"XALGORIX_HTTPX_TIMEOUT_SECONDS=222",
+		"XALGORIX_NMAP_TIMEOUT_SECONDS=333",
+		"XALGORIX_TESTSSL_TIMEOUT_SECONDS=444",
+	}, "\n")
+	if err := os.WriteFile(envFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	cfg := load()
+	if cfg.SubfinderPath != "/usr/local/bin/subfinder" || cfg.HttpxPath != "/usr/local/bin/httpx" || cfg.NmapPath != "/usr/local/bin/nmap" || cfg.TestsslPath != "/opt/testssl.sh/testssl.sh" {
+		t.Fatalf("recon/testssl paths not loaded: %#v", cfg)
+	}
+	if cfg.SubfinderTimeoutSec != 111 || cfg.HttpxTimeoutSec != 222 || cfg.NmapTimeoutSec != 333 || cfg.TestsslTimeoutSec != 444 {
+		t.Fatalf("recon/testssl timeouts not loaded: %#v", cfg)
+	}
+}
+
+// TestLoad_DefaultsReconAndTestsslPathsAndTimeouts guards the bare-name/
+// documented-seconds fallbacks when no env vars are set.
+func TestLoad_DefaultsReconAndTestsslPathsAndTimeouts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("XALGORIX_DEBUG_CONFIG", "")
+	for _, key := range []string{
+		"XALGORIX_SUBFINDER_PATH", "XALGORIX_HTTPX_PATH", "XALGORIX_NMAP_PATH", "XALGORIX_TESTSSL_PATH",
+		"XALGORIX_SUBFINDER_TIMEOUT_SECONDS", "XALGORIX_HTTPX_TIMEOUT_SECONDS", "XALGORIX_NMAP_TIMEOUT_SECONDS", "XALGORIX_TESTSSL_TIMEOUT_SECONDS",
+	} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+
+	cfg := load()
+	if cfg.SubfinderPath != "subfinder" || cfg.HttpxPath != "httpx" || cfg.NmapPath != "nmap" || cfg.TestsslPath != "testssl.sh" {
+		t.Fatalf("recon/testssl path defaults wrong: %#v", cfg)
+	}
+	if cfg.SubfinderTimeoutSec != 600 || cfg.HttpxTimeoutSec != 600 || cfg.NmapTimeoutSec != 1800 || cfg.TestsslTimeoutSec != 1800 {
+		t.Fatalf("recon/testssl timeout defaults wrong: %#v", cfg)
+	}
+}
+
 func TestConfig_Validate(t *testing.T) {
 	cfg := &Config{}
 	// First failure mode: empty DataDir (R6.5 guard runs before the LLM/API checks).

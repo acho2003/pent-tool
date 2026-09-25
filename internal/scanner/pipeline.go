@@ -23,17 +23,32 @@ import (
 type Pipeline struct {
 	Config  Config
 	Runners []Runner
+	// reconFn discovers host scopes and returns the recon-phase runs. NewPipeline
+	// wires the real runRecon; a hand-built &Pipeline{} leaves it nil, which Run
+	// falls back to singleScopeRecon so tests keep their single implicit scope.
+	reconFn func(context.Context, Request, Config, EmitFunc) ([]Scope, []Run)
 }
 
 func NewPipeline(cfg Config) *Pipeline {
 	applyDefaults(&cfg)
-	return &Pipeline{Config: cfg, Runners: []Runner{
-		commandRunner{name: "nuclei", build: buildNuclei},
+	return &Pipeline{Config: cfg, reconFn: runRecon, Runners: []Runner{
+		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildNuclei},
 		zapRunner{},
+		commandRunner{name: "testssl", desc: Descriptor{Name: "testssl", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildTestssl},
 		openVASRunner{},
-		commandRunner{name: "trivy", build: buildTrivy},
 		vulsRunner{},
+		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildTrivy},
+		commandRunner{name: "semgrep", desc: Descriptor{Name: "semgrep", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildSemgrep},
+		commandRunner{name: "gitleaks", desc: Descriptor{Name: "gitleaks", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildGitleaks},
+		commandRunner{name: "osv", desc: Descriptor{Name: "osv", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildOSV},
 	}}
+}
+
+// singleScopeRecon is the nil-reconFn fallback: it discovers no new hosts and
+// runs no recon commands, so Run scans the single implicit host scope exactly as
+// it did before recon fan-out existed.
+func singleScopeRecon(_ context.Context, req Request, _ Config, _ EmitFunc) ([]Scope, []Run) {
+	return []Scope{HostScope(req.Target)}, nil
 }
 
 func applyDefaults(cfg *Config) {
@@ -46,11 +61,35 @@ func applyDefaults(cfg *Config) {
 	if cfg.VulsPath == "" {
 		cfg.VulsPath = "vuls"
 	}
+	if cfg.SubfinderPath == "" {
+		cfg.SubfinderPath = "subfinder"
+	}
+	if cfg.HttpxPath == "" {
+		cfg.HttpxPath = "httpx"
+	}
+	if cfg.NmapPath == "" {
+		cfg.NmapPath = "nmap"
+	}
+	if cfg.TestsslPath == "" {
+		cfg.TestsslPath = "testssl.sh"
+	}
+	if cfg.SemgrepPath == "" {
+		cfg.SemgrepPath = "semgrep"
+	}
+	if cfg.GitleaksPath == "" {
+		cfg.GitleaksPath = "gitleaks"
+	}
+	if cfg.OsvPath == "" {
+		cfg.OsvPath = "osv-scanner"
+	}
 	if cfg.GVMPort == 0 {
 		cfg.GVMPort = 9390
 	}
 	if cfg.RateRPS <= 0 {
 		cfg.RateRPS = 10
+	}
+	if cfg.MaxWorkers <= 0 {
+		cfg.MaxWorkers = 3
 	}
 	if cfg.MaxOutputBytes <= 0 {
 		cfg.MaxOutputBytes = 100 << 20
@@ -70,51 +109,371 @@ func applyDefaults(cfg *Config) {
 	if cfg.VulsTimeout <= 0 {
 		cfg.VulsTimeout = time.Hour
 	}
+	if cfg.SubfinderTimeout <= 0 {
+		cfg.SubfinderTimeout = 10 * time.Minute
+	}
+	if cfg.HttpxTimeout <= 0 {
+		cfg.HttpxTimeout = 10 * time.Minute
+	}
+	if cfg.NmapTimeout <= 0 {
+		cfg.NmapTimeout = 30 * time.Minute
+	}
+	if cfg.TestsslTimeout <= 0 {
+		cfg.TestsslTimeout = 30 * time.Minute
+	}
+	if cfg.SemgrepTimeout <= 0 {
+		cfg.SemgrepTimeout = 30 * time.Minute
+	}
+	if cfg.GitleaksTimeout <= 0 {
+		cfg.GitleaksTimeout = 15 * time.Minute
+	}
+	if cfg.OsvTimeout <= 0 {
+		cfg.OsvTimeout = 15 * time.Minute
+	}
 }
 
-// Run executes the five scanner attempts in a stable order. Existing terminal
-// runs are reused, which makes queue resume continue at the first incomplete
-// scanner without mutating immutable raw artifacts.
+// Run executes the recon phase, then fans the scan phase out over every
+// discovered host scope, running each scanner per host in a stable order.
+// Existing terminal runs are reused, which makes queue resume continue at the
+// first incomplete (scope, scanner) without mutating immutable raw artifacts.
 func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit EmitFunc) []Run {
-	byName := make(map[string]Run, len(existing))
-	for _, run := range existing {
-		if run.Terminal() {
-			byName[run.Scanner] = run
+	recon := p.reconFn
+	if recon == nil {
+		recon = singleScopeRecon
+	}
+	// The scan phase now invokes runners concurrently (up to MaxWorkers), so the
+	// caller's emit callback can be entered from several goroutines at once. Real
+	// sinks (e.g. the web session record) mutate shared state per event with no
+	// locking of their own and were written against a single-threaded-emit
+	// invariant. Serialize every emit invocation here so that invariant holds
+	// regardless of scan concurrency. This guards only the fast event dispatch;
+	// the scanning work itself stays parallel. The per-call emitMu inside
+	// executeSpec only serializes one run's own stdout/stderr drain, not across
+	// concurrent runs, so it is insufficient on its own.
+	var emitMu sync.Mutex
+	safeEmit := emit
+	if emit != nil {
+		inner := emit
+		safeEmit = func(e Event) { emitMu.Lock(); defer emitMu.Unlock(); inner(e) }
+	}
+	byKey := indexTerminal(existing, HostScope(req.Target).Key())
+	out := make([]Run, 0, len(p.Runners))
+
+	// Recon phase runs first. Its runs carry their own recon:<target> scope and
+	// are reused on resume by (scope, scanner) just like scan runs. On resume we
+	// reconstruct scopes from the prior run rather than re-invoking the real recon
+	// tools, which would waste work and could drop a host (and its completed scan
+	// evidence) that recon no longer reports.
+	var scopes []Scope
+	var reconRuns []Run
+	if hasTerminalReconRuns(existing) {
+		// Primary resume source: the complete discovered scope set persisted by
+		// recon. This includes hosts recon found that have no terminal scan run yet,
+		// so a mid-scan resume never silently drops an unstarted host.
+		if persisted, ok := loadReconScopes(req.ScanDir); ok {
+			scopes = persisted
+			reconRuns = terminalReconRunsFrom(existing)
+		} else {
+			// Fallback (missing recon-scopes.json): rebuild the scope set from the
+			// host scopes already present in existing.
+			scopes, reconRuns = reusePriorRecon(existing)
 		}
 	}
-	out := make([]Run, 0, len(p.Runners))
-	for i, runner := range p.Runners {
-		if old, ok := byName[runner.Name()]; ok {
+	if len(scopes) == 0 {
+		scopes, reconRuns = recon(ctx, req, p.Config, safeEmit)
+	}
+	for _, rr := range reconRuns {
+		if old, ok := byKey[resumeKey(rr.Scope, rr.Scanner)]; ok {
 			out = append(out, old)
 			continue
 		}
-		// A deselected scanner still produces an explicit terminal record, so
-		// the scan's evidence shows what was not attempted and why.
-		if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
-			now := time.Now().Format(time.RFC3339Nano)
-			r := Run{Scanner: runner.Name(), Target: req.Target, Status: "skipped", Reason: "not selected for this scan", StartedAt: now, FinishedAt: now}
-			out = append(out, r)
-			if emit != nil {
-				emit(Event{Type: "scanner_skipped", Scanner: runner.Name(), Run: r, Output: r.Reason})
+		out = append(out, rr)
+	}
+	if len(scopes) == 0 {
+		scopes = []Scope{HostScope(req.Target)} // degrade: scan the single implicit host
+	}
+
+	// Scan phase, fanned out per discovered host scope in discovery order.
+	//
+	// Each (scope, runner) pair owns one pre-assigned, ordered slot in results.
+	// Ordering is intrinsic to the slot index, decoupled from when a slot is
+	// written, so the runAttempt slots run concurrently while the output order
+	// stays deterministic. Non-executing decisions (reuse, skip, not_applicable,
+	// cancellation) resolve inline into their slot during the walk; executable
+	// pairs are collected as scanTasks and dispatched onto a bounded worker pool
+	// afterwards, each writing into its own pre-assigned slot.
+	//
+	// Append the single SAST source scope AFTER the host-scope set is finalized but
+	// BEFORE results is allocated, so its per-runner rows are counted in the slice
+	// size. Appending after the allocation would under-size results and panic when
+	// the source rows are written.
+	scopes = append(scopes, resolveSourceScope(ctx, req, p.Config, safeEmit))
+	results := make([]Run, len(scopes)*len(p.Runners))
+	var tasks []scanTask
+	slot := 0
+	for _, sc := range scopes {
+		scopeKey := sc.Key()
+		scopeReq := req
+		scopeReq.Scope = scopeKey
+		if sc.Kind == ScopeSource {
+			// The source scope carries the resolved source path (or "" when no source
+			// resolved, in which case SAST tools record not_applicable). It has no
+			// tracks and is not classified; scope-kind gating alone decides runners.
+			scopeReq.Target = sc.Target
+			scopeReq.ScanDir = filepath.Join(req.ScanDir, "source")
+		} else {
+			// Fail open to both tracks when recon produced no evidence; see
+			// EffectiveTracks.
+			sc.Tracks = EffectiveTracks(sc.Evidence)
+			scopeReq.Target = sc.Target
+			// Isolate each host's scanner artifacts. Every scan runner derives its
+			// output base from req.ScanDir alone, so two scopes writing under one
+			// ScanDir would clobber each other's results and break VerifyChecksum.
+			scopeReq.ScanDir = filepath.Join(req.ScanDir, "hosts", sanitizeHost(sc.Target))
+		}
+		for i, runner := range p.Runners {
+			if old, ok := byKey[resumeKey(scopeKey, runner.Name())]; ok {
+				results[slot] = old
+				slot++
+				continue
 			}
+			// A deselected scanner still produces an explicit terminal record, so
+			// the scan's evidence shows what was not attempted and why.
+			if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
+				results[slot] = skippedRun(runner.Name(), scopeKey, scopeReq, safeEmit)
+				slot++
+				continue
+			}
+			if !runnerAppliesToScope(runner.Descriptor(), sc) {
+				results[slot] = notApplicableClassifierRun(runner.Name(), scopeKey, scopeReq, safeEmit)
+				slot++
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				// Cancellation observed during the walk: fill this and every remaining
+				// slot in the scope with a cancelled record, then stop scanning this
+				// scope. Slots are written by index, so the cancelled fan-out keeps its
+				// order and a cancelled pair never becomes an executable task.
+				for j, rest := range p.Runners[i:] {
+					results[slot+j] = cancelledRun(rest.Name(), scopeKey, scopeReq, err, safeEmit)
+				}
+				slot += len(p.Runners) - i
+				break
+			}
+			// Executable: defer to the worker pool, remembering the pre-assigned slot
+			// so the concurrent write lands in deterministic output order.
+			tasks = append(tasks, scanTask{runner: runner, scopeKey: scopeKey, hostReq: scopeReq, slot: slot})
+			slot++
+		}
+	}
+	p.runTasks(ctx, tasks, results, safeEmit)
+	out = append(out, results...)
+	return out
+}
+
+// scanTask is one executable (scope, runner) pair captured during the walk, with
+// the pre-assigned results slot it must write so concurrent execution preserves
+// deterministic output order.
+type scanTask struct {
+	runner   Runner
+	scopeKey string
+	hostReq  Request
+	slot     int
+}
+
+// runTasks executes the collected executable tasks on a bounded worker pool.
+//
+// Two independent gates bound concurrency:
+//   - sem (buffer MaxWorkers) caps total in-flight scanners.
+//   - heavy (buffer 1) serializes WeightHeavy scanners (zap/openvas) to at most
+//     one globally, since a heavy tool holds a worker slot AND the exclusive
+//     heavy token, so two heavy tools never overlap even when MaxWorkers > 1.
+//
+// The worker slot is acquired by the launching goroutine BEFORE the task's
+// goroutine is spawned. This is the standard bounded-pool idiom and gives max==1
+// truly sequential, slot-ordered execution (dispatch blocks until the prior task
+// releases its slot), which keeps the existing deterministic-order tests valid
+// while enabling real parallelism when MaxWorkers > 1.
+//
+// LOCK ORDER: the worker slot (sem) is ALWAYS acquired before the heavy token,
+// and the launcher never touches heavy, so no goroutine holds heavy while blocked
+// on sem — the two gates cannot deadlock. The heavy holder already owns its
+// worker slot and never blocks on sem, so it always makes progress and releases
+// both tokens. Each task writes only its own distinct results[slot], so the
+// disjoint slot writes need no mutex. On a cancelled context a task writes a
+// cancelled run instead of executing.
+func (p *Pipeline) runTasks(ctx context.Context, tasks []scanTask, results []Run, emit EmitFunc) {
+	if len(tasks) == 0 {
+		return
+	}
+	max := p.Config.MaxWorkers
+	if max < 1 {
+		max = 1
+	}
+	sem := make(chan struct{}, max)
+	heavy := make(chan struct{}, 1)
+	var wg sync.WaitGroup
+	for _, task := range tasks {
+		sem <- struct{}{} // acquire worker slot before spawning (always before heavy)
+		wg.Add(1)
+		go func(task scanTask) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := ctx.Err(); err != nil {
+				// Cancelled after the walk: resolve to a cancelled run rather than
+				// executing. Written to the pre-assigned slot, so order is preserved.
+				results[task.slot] = cancelledRun(task.runner.Name(), task.scopeKey, task.hostReq, err, emit)
+				return
+			}
+			if task.runner.Descriptor().Weight == WeightHeavy {
+				heavy <- struct{}{} // exclusive heavy gate, only while holding a worker slot
+				defer func() { <-heavy }()
+			}
+			run := runAttempt(ctx, task.runner, task.hostReq, p.Config, emit)
+			run.Scope = task.scopeKey
+			results[task.slot] = run
+		}(task)
+	}
+	wg.Wait()
+}
+
+// indexTerminal maps each existing terminal run to its (scope, scanner) resume
+// key. A legacy run with empty Scope predates scoping and folds to fallbackScope
+// (the implicit host scope) so Increment-1 resume records still match.
+func indexTerminal(existing []Run, fallbackScope string) map[string]Run {
+	byKey := make(map[string]Run, len(existing))
+	for _, run := range existing {
+		if !run.Terminal() {
 			continue
 		}
-		if err := ctx.Err(); err != nil {
-			for _, rest := range p.Runners[i:] {
-				now := time.Now().Format(time.RFC3339Nano)
-				r := Run{Scanner: rest.Name(), Target: req.Target, Status: "cancelled", Reason: err.Error(), StartedAt: now, FinishedAt: now}
-				out = append(out, r)
-				if emit != nil {
-					emit(Event{Type: "scanner_failed", Scanner: rest.Name(), Run: r, Output: r.Reason})
-				}
-			}
-			break
+		s := run.Scope
+		if s == "" {
+			s = fallbackScope
 		}
-		run := runAttempt(ctx, runner, req, p.Config, emit)
-		out = append(out, run)
+		byKey[resumeKey(s, run.Scanner)] = run
+	}
+	return byKey
+}
+
+// hasTerminalReconRuns reports whether existing carries at least one terminal
+// recon-phase run, i.e. a prior scan already completed the recon phase.
+func hasTerminalReconRuns(existing []Run) bool {
+	for _, run := range existing {
+		if run.Terminal() && strings.HasPrefix(run.Scope, "recon:") {
+			return true
+		}
+	}
+	return false
+}
+
+// terminalReconRunsFrom returns the terminal recon-phase runs (Scope prefix
+// "recon:") from existing, preserving order, so a resume re-emits them via byKey.
+func terminalReconRunsFrom(existing []Run) []Run {
+	var out []Run
+	for _, run := range existing {
+		if run.Terminal() && strings.HasPrefix(run.Scope, "recon:") {
+			out = append(out, run)
+		}
 	}
 	return out
 }
+
+// reusePriorRecon reconstructs the recon result from a prior run so a resume does
+// not re-invoke the real recon tools. It returns the terminal recon runs and the
+// host scopes rebuilt from the distinct host:<target> scan-run scopes seen in
+// existing, in first-seen order.
+func reusePriorRecon(existing []Run) (scopes []Scope, reconRuns []Run) {
+	seen := make(map[string]bool)
+	for _, run := range existing {
+		if !run.Terminal() {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(run.Scope, "recon:"):
+			reconRuns = append(reconRuns, run)
+		case strings.HasPrefix(run.Scope, "host:"):
+			if seen[run.Scope] {
+				continue
+			}
+			seen[run.Scope] = true
+			scopes = append(scopes, HostScope(strings.TrimPrefix(run.Scope, "host:")))
+		}
+	}
+	return scopes, reconRuns
+}
+
+// skippedRun builds the terminal record for a scanner deselected from this scan,
+// scoped to scopeKey and emitting the matching skip event.
+func skippedRun(name, scopeKey string, req Request, emit EmitFunc) Run {
+	now := time.Now().Format(time.RFC3339Nano)
+	r := Run{Scanner: name, Target: req.Target, Status: "skipped", Reason: "not selected for this scan", StartedAt: now, FinishedAt: now, Scope: scopeKey}
+	if emit != nil {
+		emit(Event{Type: "scanner_skipped", Scanner: name, Run: r, Output: r.Reason})
+	}
+	return r
+}
+
+// cancelledRun builds the terminal record for a scanner not attempted because the
+// context was cancelled, scoped to scopeKey and emitting the failure event.
+func cancelledRun(name, scopeKey string, req Request, reason error, emit EmitFunc) Run {
+	now := time.Now().Format(time.RFC3339Nano)
+	r := Run{Scanner: name, Target: req.Target, Status: "cancelled", Reason: reason.Error(), StartedAt: now, FinishedAt: now, Scope: scopeKey}
+	if emit != nil {
+		emit(Event{Type: "scanner_failed", Scanner: name, Run: r, Output: r.Reason})
+	}
+	return r
+}
+
+// runnerAppliesToTracks reports whether a runner should attempt a host, given
+// the host's classified tracks. A runner with no declared tracks (e.g. trivy)
+// always applies; otherwise at least one of its tracks must match the host's.
+func runnerAppliesToTracks(d Descriptor, tracks []Track) bool {
+	if len(d.Tracks) == 0 {
+		return true // no-track runners (e.g. trivy) always run per host
+	}
+	for _, dt := range d.Tracks {
+		for _, ht := range tracks {
+			if dt == ht {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// appliesToHost / appliesToSource are the Descriptor.Applies predicates that bind
+// a runner to one scope kind. Host runners scan discovered hosts; SAST runners
+// scan the single source scope.
+func appliesToHost(s Scope) bool   { return s.Kind == ScopeHost }
+func appliesToSource(s Scope) bool { return s.Kind == ScopeSource }
+
+// runnerAppliesToScope decides whether a runner attempts a given scope. The
+// Applies predicate gates by scope kind; host scopes additionally gate by the
+// classified tracks. A source scope that passes Applies always runs (no tracks).
+func runnerAppliesToScope(d Descriptor, sc Scope) bool {
+	if d.Applies != nil && !d.Applies(sc) {
+		return false
+	}
+	if sc.Kind == ScopeHost {
+		return runnerAppliesToTracks(d, sc.Tracks)
+	}
+	return true
+}
+
+// notApplicableClassifierRun builds the terminal record for a scanner that does
+// not apply to a scope — either its track does not match the host's classified
+// tracks or its scope kind does not match — scoped to scopeKey and emitting the
+// matching not-applicable event.
+func notApplicableClassifierRun(name, scope string, req Request, emit EmitFunc) Run {
+	now := time.Now().Format(time.RFC3339Nano)
+	r := Run{Scanner: name, Target: req.Target, Status: "not_applicable", Reason: "scanner does not apply to this scope", StartedAt: now, FinishedAt: now, Scope: scope}
+	if emit != nil {
+		emit(Event{Type: "scanner_not_applicable", Scanner: name, Run: r, Output: r.Reason})
+	}
+	return r
+}
+
+func resumeKey(scope, scanner string) string { return scope + "\x00" + scanner }
 
 func runAttempt(ctx context.Context, runner Runner, req Request, cfg Config, emit EmitFunc) (run Run) {
 	defer func() {
@@ -134,11 +493,20 @@ func runAttempt(ctx context.Context, runner Runner, req Request, cfg Config, emi
 }
 
 type commandSpec struct {
-	path       string
-	args       []string
-	artifact   string
-	timeout    time.Duration
-	notApp     string
+	path     string
+	args     []string
+	artifact string
+	timeout  time.Duration
+	notApp   string
+	// outputSubdir nests this run's stdout/stderr logs under
+	// scanner-output/<name>/<outputSubdir> so several invocations that share a
+	// scanner name (e.g. per-host nmap) do not append to one another's sealed
+	// logs. Empty keeps the default scanner-output/<name> layout.
+	outputSubdir string
+	// okExit lists non-zero process exit codes to treat as success. Some tools
+	// (gitleaks, osv-scanner) signal "findings present" with a non-zero code; a
+	// completed run must still parse. nil means only exit 0 succeeds.
+	okExit     map[int]bool
 	prepare    func() error
 	findOutput func() string
 }
@@ -147,10 +515,12 @@ type commandBuilder func(Request, Config) commandSpec
 
 type commandRunner struct {
 	name  string
+	desc  Descriptor
 	build commandBuilder
 }
 
-func (r commandRunner) Name() string { return r.name }
+func (r commandRunner) Name() string           { return r.name }
+func (r commandRunner) Descriptor() Descriptor { return r.desc }
 func (r commandRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
 	spec := r.build(req, cfg)
 	return executeSpec(ctx, r.name, req, cfg, spec, emit)
@@ -158,8 +528,11 @@ func (r commandRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 
 func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec commandSpec, emit EmitFunc) Run {
 	now := time.Now()
-	run := Run{Scanner: name, Target: req.Target, Status: "running", StartedAt: now.Format(time.RFC3339Nano), ExitCode: -1}
+	run := Run{Scanner: name, Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: now.Format(time.RFC3339Nano), ExitCode: -1}
 	base := filepath.Join(req.ScanDir, "scanner-output", name)
+	if spec.outputSubdir != "" {
+		base = filepath.Join(base, spec.outputSubdir)
+	}
 	_ = os.MkdirAll(base, 0o700)
 	run.StdoutPath = filepath.Join(base, "stdout.log")
 	run.StderrPath = filepath.Join(base, "stderr.log")
@@ -238,7 +611,11 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 			run.Status, run.Reason = "failed", "scanner timeout exceeded"
 		default:
-			run.Status, run.Reason = "failed", err.Error()
+			if spec.okExit != nil && spec.okExit[run.ExitCode] {
+				run.Status = "completed"
+			} else {
+				run.Status, run.Reason = "failed", err.Error()
+			}
 		}
 	} else {
 		run.Status = "completed"
@@ -421,10 +798,17 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 }
 
 func buildTrivy(req Request, cfg Config) commandSpec {
+	// SAST source scope: filesystem-scan the resolved source directory.
+	if src := strings.TrimSpace(req.Target); src != "" {
+		artifact := filepath.Join(req.ScanDir, "scanner-output", "trivy", "results.json")
+		args := []string{"fs", "--format", "json", "--output", artifact, "--scanners", "vuln,misconfig,secret,license", src}
+		return commandSpec{path: cfg.TrivyPath, args: args, artifact: artifact, timeout: cfg.TrivyTimeout}
+	}
+	// Fallback: artifact-based scan (image/sbom/etc.) when no source path.
 	kind := strings.ToLower(strings.TrimSpace(req.Artifact.Kind))
 	ref := strings.TrimSpace(req.Artifact.Ref)
 	if kind == "" || ref == "" {
-		return commandSpec{notApp: "Trivy requires artifact.kind and artifact.ref", timeout: cfg.TrivyTimeout}
+		return commandSpec{notApp: "Trivy requires a source path or artifact.kind/ref", timeout: cfg.TrivyTimeout}
 	}
 	cmd := map[string]string{"filesystem": "fs", "repository": "repo", "image": "image", "sbom": "sbom"}[kind]
 	if cmd == "" {

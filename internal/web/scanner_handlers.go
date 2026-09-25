@@ -180,7 +180,7 @@ func (s *Server) handleReportAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "scan not found", http.StatusNotFound)
 		return
 	}
-	if len(rec.ScannerRuns) != len(scanner.OrderedNames) {
+	if len(rec.ScannerRuns) == 0 || rec.Status != "finished" {
 		http.Error(w, "all scanner attempts must finish before report regeneration", http.StatusConflict)
 		return
 	}

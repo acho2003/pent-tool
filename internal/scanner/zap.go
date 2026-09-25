@@ -24,6 +24,10 @@ type zapRunner struct{}
 
 func (zapRunner) Name() string { return "zap" }
 
+func (zapRunner) Descriptor() Descriptor {
+	return Descriptor{Name: "zap", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightHeavy, Applies: appliesToHost}
+}
+
 func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
 	target, ok := normalizedWebTarget(req.Target)
 	if !ok {
@@ -34,7 +38,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	base := filepath.Join(req.ScanDir, "scanner-output", "zap")
 	_ = os.MkdirAll(base, 0o700)
-	run := Run{Scanner: "zap", Target: req.Target, Status: "running", StartedAt: time.Now().Format(time.RFC3339Nano), ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: filepath.Join(base, "results.json")}
+	run := Run{Scanner: "zap", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().Format(time.RFC3339Nano), ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: filepath.Join(base, "results.json")}
 	logFile, _ := os.OpenFile(run.StdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if logFile != nil {
 		defer logFile.Close()
@@ -302,7 +306,7 @@ func failedServiceRun(name string, req Request, reason string, emit EmitFunc) Ru
 	base := filepath.Join(req.ScanDir, "scanner-output", name)
 	_ = os.MkdirAll(base, 0o700)
 	now := time.Now().Format(time.RFC3339Nano)
-	r := Run{Scanner: name, Target: req.Target, Status: "failed", Reason: reason, StartedAt: now, FinishedAt: now, ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log")}
+	r := Run{Scanner: name, Target: req.Target, Scope: req.Scope, Status: "failed", Reason: reason, StartedAt: now, FinishedAt: now, ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log")}
 	_ = os.WriteFile(r.StdoutPath, nil, 0o600)
 	_ = os.WriteFile(r.StderrPath, []byte(reason+"\n"), 0o600)
 	r = finalizeRun(r)

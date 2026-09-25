@@ -27,6 +27,13 @@ type Finding struct {
 	CVE         string  `json:"cve,omitempty"`
 	CWE         string  `json:"cwe,omitempty"`
 	CVSS        float64 `json:"cvss,omitempty"`
+	// Scope is the (scope) key of the run that produced this finding, e.g.
+	// "host:api.example.com" or "source:main", so the report can group by it.
+	Scope string `json:"scope,omitempty"`
+	// Sources is set only when cross-scanner merge collapsed several scanners'
+	// reports of one CVE on one scope into this finding; it lists every
+	// contributor, this finding's own report first.
+	Sources []FindingSource `json:"sources,omitempty"`
 }
 
 func ParseRuns(runs []Run) ([]Finding, []error) {
@@ -40,13 +47,32 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", run.Scanner, err))
 		}
+		scope := FindingScope(run)
 		for i := range parsed {
 			parsed[i].EvidenceRef = run.ArtifactPath + "#" + parsed[i].SourceID
+			parsed[i].Scope = scope
 		}
 		findings = append(findings, parsed...)
 	}
-	findings = dedupFindings(findings)
+	findings = mergeCrossScanner(dedupFindings(findings))
 	return findings, errs
+}
+
+// FindingScope is the report scope a run's findings belong to: its own scope,
+// a pre-scope run folded to the implicit host scope, or — for a per-host nmap
+// recon run ("recon:<target>:<host>") — that host's scope.
+func FindingScope(run Run) string {
+	if run.Scope == "" {
+		// A pre-scope (Increment-1) run folds to the implicit host scope, the
+		// same rule indexTerminal applies on resume.
+		return HostScope(run.Target).Key()
+	}
+	// Strip the known "recon:<target>:" prefix rather than splitting on the last
+	// ":" — targets such as "localhost:3000" contain colons themselves.
+	if prefix := reconScopeKey(run.Target) + ":"; strings.HasPrefix(run.Scope, prefix) {
+		return HostScope(strings.TrimPrefix(run.Scope, prefix)).Key()
+	}
+	return run.Scope
 }
 
 func ParseRun(run Run) ([]Finding, error) {
@@ -59,8 +85,20 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseOpenVAS(run.ArtifactPath)
 	case "trivy":
 		return parseTrivy(run.ArtifactPath)
+	case "semgrep":
+		return parseSemgrep(run.ArtifactPath)
+	case "gitleaks":
+		return parseGitleaks(run.ArtifactPath)
+	case "osv":
+		return parseOSV(run.ArtifactPath)
 	case "vuls":
 		return parseVuls(run.ArtifactPath)
+	case "nmap":
+		return parseNmap(run.ArtifactPath)
+	case "testssl":
+		return parseTestssl(run.ArtifactPath)
+	case "subfinder", "httpx":
+		return nil, nil // recon evidence tools produce no findings
 	default:
 		return nil, fmt.Errorf("unsupported scanner %q", run.Scanner)
 	}
@@ -188,6 +226,112 @@ func parseOpenVAS(path string) ([]Finding, error) {
 	return out, nil
 }
 
+// parseSemgrep reads semgrep --json output. SourceID is semgrep:rule:file:line.
+func parseSemgrep(path string) ([]Finding, error) {
+	var root map[string]any
+	if err := readJSON(path, &root); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, rv := range array(root["results"]) {
+		r, _ := rv.(map[string]any)
+		rule := str(r["check_id"])
+		file := str(r["path"])
+		start, _ := r["start"].(map[string]any)
+		line := str(start["line"])
+		extra, _ := r["extra"].(map[string]any)
+		out = append(out, Finding{
+			SourceID:    "semgrep:" + rule + ":" + file + ":" + line,
+			Scanner:     "semgrep",
+			Title:       firstNonEmpty(rule, "semgrep finding"),
+			Severity:    semgrepSeverity(str(extra["severity"])),
+			Target:      file,
+			Endpoint:    file + ":" + line,
+			Description: str(extra["message"]),
+		})
+	}
+	return out, nil
+}
+
+// semgrepSeverity maps semgrep's ERROR/WARNING/INFO to the shared scale.
+func semgrepSeverity(s string) string {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "ERROR":
+		return "high"
+	case "WARNING":
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+// parseGitleaks reads gitleaks' JSON array. Secrets have no native severity;
+// they are reported high. SourceID is gitleaks:rule:file:commit.
+func parseGitleaks(path string) ([]Finding, error) {
+	var entries []map[string]any
+	if err := readJSON(path, &entries); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, m := range entries {
+		rule := str(m["RuleID"])
+		file := str(m["File"])
+		commit := str(m["Commit"])
+		out = append(out, Finding{
+			SourceID:    "gitleaks:" + rule + ":" + file + ":" + commit,
+			Scanner:     "gitleaks",
+			Title:       firstNonEmpty(rule, "secret"),
+			Severity:    "high",
+			Target:      file,
+			Endpoint:    file + ":" + str(m["StartLine"]),
+			Description: firstNonEmpty(str(m["Description"]), "secret detected"),
+		})
+	}
+	return out, nil
+}
+
+// parseOSV reads osv-scanner --format json. SourceID is osv:pkg:vulnID; the CVE
+// is taken from the first CVE alias when present.
+func parseOSV(path string) ([]Finding, error) {
+	var root map[string]any
+	if err := readJSON(path, &root); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, rv := range array(root["results"]) {
+		r, _ := rv.(map[string]any)
+		src, _ := r["source"].(map[string]any)
+		srcPath := str(src["path"])
+		for _, pv := range array(r["packages"]) {
+			pkgObj, _ := pv.(map[string]any)
+			pkg, _ := pkgObj["package"].(map[string]any)
+			name := str(pkg["name"])
+			for _, vv := range array(pkgObj["vulnerabilities"]) {
+				v, _ := vv.(map[string]any)
+				id := str(v["id"])
+				cve := ""
+				for _, a := range array(v["aliases"]) {
+					if c := asCVE(str(a)); c != "" {
+						cve = c
+						break
+					}
+				}
+				out = append(out, Finding{
+					SourceID:    "osv:" + name + ":" + id,
+					Scanner:     "osv",
+					Title:       firstNonEmpty(id, name),
+					Severity:    "medium",
+					Target:      name,
+					Endpoint:    srcPath,
+					Description: str(v["summary"]),
+					CVE:         cve,
+				})
+			}
+		}
+	}
+	return out, nil
+}
+
 func parseVuls(path string) ([]Finding, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -225,11 +369,119 @@ func parseVuls(path string) ([]Finding, error) {
 	return out, nil
 }
 
+type nmapRun struct {
+	Hosts []nmapHost `xml:"host"`
+}
+type nmapHost struct {
+	Addresses []nmapAddr `xml:"address"`
+	Ports     []nmapPort `xml:"ports>port"`
+}
+type nmapAddr struct {
+	Addr string `xml:"addr,attr"`
+	Type string `xml:"addrtype,attr"`
+}
+type nmapPort struct {
+	Protocol string    `xml:"protocol,attr"`
+	PortID   string    `xml:"portid,attr"`
+	State    nmapState `xml:"state"`
+	Service  nmapSvc   `xml:"service"`
+}
+type nmapState struct {
+	State string `xml:"state,attr"`
+}
+type nmapSvc struct {
+	Name    string `xml:"name,attr"`
+	Product string `xml:"product,attr"`
+	Version string `xml:"version,attr"`
+}
+
+func parseNmap(path string) ([]Finding, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var run nmapRun
+	if err := xml.Unmarshal(b, &run); err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, h := range run.Hosts {
+		host := ""
+		for _, a := range h.Addresses {
+			if a.Type == "ipv4" || a.Type == "ipv6" {
+				host = a.Addr
+				break
+			}
+		}
+		for _, p := range h.Ports {
+			if p.State.State != "open" {
+				continue
+			}
+			out = append(out, Finding{
+				SourceID: "nmap:" + host + ":" + p.PortID,
+				Scanner:  "nmap",
+				Title:    firstNonEmpty(p.Service.Name, "open port "+p.PortID),
+				Severity: "info",
+				Target:   host,
+				Endpoint: p.PortID,
+				Evidence: strings.TrimSpace(p.Service.Product + " " + p.Service.Version),
+			})
+		}
+	}
+	return out, nil
+}
+
+// parseTestssl reads testssl.sh's flat --jsonfile array and emits one Finding
+// per actionable entry (severity LOW and above). OK/INFO/DEBUG/WARN entries are
+// status lines, not vulnerabilities, and are dropped so the report stays focused.
+func parseTestssl(path string) ([]Finding, error) {
+	var entries []map[string]any
+	if err := readJSON(path, &entries); err != nil {
+		return nil, err
+	}
+	actionable := map[string]bool{"LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
+	var out []Finding
+	for _, m := range entries {
+		sev := strings.ToUpper(strings.TrimSpace(str(m["severity"])))
+		if !actionable[sev] {
+			continue
+		}
+		id := str(m["id"])
+		host := str(m["ip"])
+		if i := strings.IndexByte(host, '/'); i >= 0 { // "fqdn/ip" -> "fqdn"
+			host = host[:i]
+		}
+		port := str(m["port"])
+		// testssl can list several space-separated CVEs in one entry
+		// (e.g. "CVE-2016-2183 CVE-2016-6329"); keep the first, matching the
+		// single-CVE convention the other parsers use via firstCSV.
+		cve := str(m["cve"])
+		if fields := strings.Fields(cve); len(fields) > 0 {
+			cve = fields[0]
+		}
+		out = append(out, Finding{
+			SourceID:    "testssl:" + host + ":" + port + ":" + id,
+			Scanner:     "testssl",
+			Title:       firstNonEmpty(id, "TLS finding"),
+			Severity:    severity(sev),
+			Target:      host,
+			Endpoint:    host + ":" + port,
+			Description: str(m["finding"]),
+			CVE:         asCVE(firstCSV(cve)),
+			CWE:         str(m["cwe"]),
+		})
+	}
+	return out, nil
+}
+
+// dedupFindings drops exact repeats within one scope. Scope is part of the key:
+// nmap SourceIDs use the resolved IP, so two host scopes on one IP would
+// otherwise collapse into one finding and lose a host's report.
 func dedupFindings(in []Finding) []Finding {
 	seen := map[string]bool{}
 	out := make([]Finding, 0, len(in))
 	for _, f := range in {
-		k := strings.ToLower(strings.Join([]string{f.Scanner, f.SourceID, f.Target, f.Endpoint}, "|"))
+		k := strings.ToLower(strings.Join([]string{f.Scope, f.Scanner, f.SourceID, f.Target, f.Endpoint}, "|"))
 		if !seen[k] {
 			seen[k] = true
 			out = append(out, f)

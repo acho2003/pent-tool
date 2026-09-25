@@ -17,6 +17,10 @@ type vulsRunner struct{}
 
 func (vulsRunner) Name() string { return "vuls" }
 
+func (vulsRunner) Descriptor() Descriptor {
+	return Descriptor{Name: "vuls", Phase: PhaseServer, Tracks: []Track{TrackServer}, Weight: WeightLight, Applies: appliesToHost}
+}
+
 func (vulsRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
 	host := strings.TrimSpace(req.VulsSSHHost)
 	if host == "" {
@@ -32,7 +36,7 @@ func (vulsRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFun
 	if err := os.WriteFile(configPath, []byte(vulsConfig(host, cfg.VulsSSHConfigPath)), 0o600); err != nil {
 		return failedServiceRun("vuls", req, err.Error(), emit)
 	}
-	run := Run{Scanner: "vuls", Target: req.Target, Status: "running", ExitCode: -1, StartedAt: time.Now().Format(time.RFC3339Nano), StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: results}
+	run := Run{Scanner: "vuls", Target: req.Target, Scope: req.Scope, Status: "running", ExitCode: -1, StartedAt: time.Now().Format(time.RFC3339Nano), StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: results}
 	if emit != nil {
 		emit(Event{Type: "scanner_started", Scanner: "vuls", Run: run})
 	}

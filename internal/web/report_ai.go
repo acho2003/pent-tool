@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -18,32 +19,36 @@ import (
 const reportPromptVersion = "scanner-report-v1"
 
 type reportManifest struct {
-	SchemaVersion int             `json:"schema_version"`
-	Mode          string          `json:"mode"`
-	PromptVersion string          `json:"prompt_version"`
-	GeneratedAt   string          `json:"generated_at"`
-	Model         string          `json:"model,omitempty"`
-	Provider      string          `json:"provider,omitempty"`
-	SourceRuns    []scanner.Run   `json:"source_runs"`
-	ParseErrors   []string        `json:"parse_errors,omitempty"`
-	Findings      []reportFinding `json:"findings"`
+	SchemaVersion int                 `json:"schema_version"`
+	Mode          string              `json:"mode"`
+	PromptVersion string              `json:"prompt_version"`
+	GeneratedAt   string              `json:"generated_at"`
+	Model         string              `json:"model,omitempty"`
+	Provider      string              `json:"provider,omitempty"`
+	SourceRuns    []scanner.Run       `json:"source_runs"`
+	ParseErrors   []string            `json:"parse_errors,omitempty"`
+	Scopes        []reportScope       `json:"scopes,omitempty"`
+	Recon         *reportReconSummary `json:"recon,omitempty"`
+	Findings      []reportFinding     `json:"findings"`
 }
 
 type reportFinding struct {
-	SourceID    string  `json:"source_id"`
-	Scanner     string  `json:"scanner"`
-	Title       string  `json:"title"`
-	Severity    string  `json:"severity"`
-	Target      string  `json:"target,omitempty"`
-	Endpoint    string  `json:"endpoint,omitempty"`
-	Explanation string  `json:"explanation"`
-	Evidence    string  `json:"evidence,omitempty"`
-	EvidenceRef string  `json:"evidence_reference"`
-	Impact      string  `json:"impact,omitempty"`
-	Remediation string  `json:"remediation,omitempty"`
-	CVE         string  `json:"cve,omitempty"`
-	CWE         string  `json:"cwe,omitempty"`
-	CVSS        float64 `json:"cvss,omitempty"`
+	SourceID    string                  `json:"source_id"`
+	Scanner     string                  `json:"scanner"`
+	Title       string                  `json:"title"`
+	Severity    string                  `json:"severity"`
+	Target      string                  `json:"target,omitempty"`
+	Endpoint    string                  `json:"endpoint,omitempty"`
+	Explanation string                  `json:"explanation"`
+	Evidence    string                  `json:"evidence,omitempty"`
+	EvidenceRef string                  `json:"evidence_reference"`
+	Impact      string                  `json:"impact,omitempty"`
+	Remediation string                  `json:"remediation,omitempty"`
+	CVE         string                  `json:"cve,omitempty"`
+	CWE         string                  `json:"cwe,omitempty"`
+	CVSS        float64                 `json:"cvss,omitempty"`
+	Scope       string                  `json:"scope,omitempty"`
+	Sources     []scanner.FindingSource `json:"sources,omitempty"`
 }
 
 // GenerateCLIReport runs the same report-only AI and deterministic fallback
@@ -52,8 +57,8 @@ func GenerateCLIReport(cfg *config.Config, target, scanDir string, runs []scanne
 	if cfg == nil {
 		return "", fmt.Errorf("configuration is required")
 	}
-	if len(runs) != len(scanner.OrderedNames) {
-		return "", fmt.Errorf("expected five scanner statuses, got %d", len(runs))
+	if len(runs) == 0 {
+		return "", fmt.Errorf("no scanner runs to report")
 	}
 	for _, run := range runs {
 		if !run.Terminal() {
@@ -99,12 +104,17 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	} else if err != nil {
 		log.Printf("[report] AI unavailable or invalid; deterministic fallback: %v", err)
 	}
+	scopes := buildReportScopes(scanDir, rec.ScannerRuns)
+	recon := summarizeReportRecon(scopes)
+	manifest.Scopes, manifest.Recon = scopes, &recon
+	orderReportFindings(manifest.Findings, scopes)
 	data, _ := json.MarshalIndent(manifest, "", "  ")
 	_ = os.WriteFile(filepath.Join(scanDir, "report.json"), data, 0o600)
 	copyRec := *rec
 	copyRec.Vulns = reportFindingsToVulns(manifest.Findings)
 	copyRec.ReportMode = manifest.Mode
 	copyRec.ReportGeneratedAt = manifest.GeneratedAt
+	copyRec.ReportScopes = scopes
 	path, err := s.generateReportAt(&copyRec, scanDir)
 	if err != nil {
 		log.Printf("[report] PDF generation failed: %v", err)
@@ -125,7 +135,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 func fallbackReportFindings(in []scanner.Finding) []reportFinding {
 	out := make([]reportFinding, 0, len(in))
 	for _, f := range in {
-		out = append(out, reportFinding{SourceID: f.SourceID, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, Target: f.Target, Endpoint: f.Endpoint, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: "Review the scanner evidence and apply the vendor or project remediation guidance."})
+		out = append(out, reportFinding{SourceID: f.SourceID, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, Target: f.Target, Endpoint: f.Endpoint, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: "Review the scanner evidence and apply the vendor or project remediation guidance.", Scope: f.Scope, Sources: f.Sources})
 	}
 	return out
 }
@@ -145,7 +155,16 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			end = len(in)
 		}
 		chunk := in[start:end]
-		payload, _ := json.Marshal(chunk)
+		// The model sees only primary records: a merged finding's sources[] hold
+		// secondary source_ids the allow-map rejects, so an echoed one would
+		// force a fallback. Sources are restored from the chunk below. Copy, so
+		// the caller's findings are not mutated.
+		projection := make([]scanner.Finding, len(chunk))
+		copy(projection, chunk)
+		for i := range projection {
+			projection[i].Sources = nil
+		}
+		payload, _ := json.Marshal(projection)
 		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"...","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
 		resp, err := client.Chat([]llm.Message{{Role: "system", Content: "Report-generation stage only. Produce strict JSON grounded exclusively in supplied scanner records."}, {Role: "user", Content: prompt}})
 		if err != nil {
@@ -173,12 +192,19 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			f.Endpoint = firstNonBlank(f.Endpoint, src.Endpoint)
 			f.Evidence = firstNonBlank(f.Evidence, src.Evidence)
 			f.EvidenceRef = src.EvidenceRef
+			f.Scope = src.Scope
+			f.Sources = src.Sources
 			f.CVE = firstNonBlank(f.CVE, src.CVE)
 			f.CWE = firstNonBlank(f.CWE, src.CWE)
 			if f.CVSS == 0 {
 				f.CVSS = src.CVSS
 			}
 			f.Severity = normalizeSeverityBucket(f.Severity)
+			// The scanner (or merged, highest-contributor) severity is a floor:
+			// the AI may explain and classify a finding, not downgrade it.
+			if srcSev := normalizeSeverityBucket(src.Severity); severityRankValue(srcSev) > severityRankValue(f.Severity) {
+				f.Severity = srcSev
+			}
 			if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Explanation) == "" || strings.TrimSpace(f.EvidenceRef) == "" || strings.TrimSpace(f.Impact) == "" || strings.TrimSpace(f.Remediation) == "" {
 				return nil, fmt.Errorf("Report AI returned incomplete structured finding for source_id %q", f.SourceID)
 			}
@@ -192,7 +218,36 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 func reportFindingsToVulns(in []reportFinding) []VulnSummary {
 	out := make([]VulnSummary, 0, len(in))
 	for i, f := range in {
-		out = append(out, VulnSummary{ID: fmt.Sprintf("SCAN-%04d", i+1), Title: f.Title, Severity: f.Severity, Target: f.Target, Endpoint: f.Endpoint, CVSS: f.CVSS, Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, TechnicalAnalysis: f.Evidence + "\nEvidence reference: " + f.EvidenceRef, Remediation: f.Remediation, ExploitationProof: "Scanner-reported evidence; no independent exploitation was performed.", VerificationMethod: f.Scanner, Verified: false, Tags: []string{"scanner-reported", f.Scanner}})
+		scanners := reportScanners(f)
+		tags := append([]string{"scanner-reported"}, scanners...)
+		out = append(out, VulnSummary{ID: fmt.Sprintf("SCAN-%04d", i+1), Title: f.Title, Severity: f.Severity, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, CVSS: f.CVSS, Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, TechnicalAnalysis: f.Evidence + "\n" + reportEvidenceRefs(f), Remediation: f.Remediation, ExploitationProof: "Scanner-reported evidence; no independent exploitation was performed.", VerificationMethod: strings.Join(scanners, ", "), Verified: false, Tags: tags})
 	}
 	return out
+}
+
+// reportScanners lists the distinct scanners that reported f, primary first.
+func reportScanners(f reportFinding) []string {
+	if len(f.Sources) == 0 {
+		return []string{f.Scanner}
+	}
+	var out []string
+	for _, s := range f.Sources {
+		if !slices.Contains(out, s.Scanner) {
+			out = append(out, s.Scanner)
+		}
+	}
+	return out
+}
+
+// reportEvidenceRefs renders f's evidence trace: the single reference for an
+// unmerged finding (unchanged shape), or one labelled line per source.
+func reportEvidenceRefs(f reportFinding) string {
+	if len(f.Sources) == 0 {
+		return "Evidence reference: " + f.EvidenceRef
+	}
+	lines := make([]string, 0, len(f.Sources))
+	for _, s := range f.Sources {
+		lines = append(lines, fmt.Sprintf("Evidence reference (%s): %s", s.Scanner, s.EvidenceRef))
+	}
+	return strings.Join(lines, "\n")
 }
