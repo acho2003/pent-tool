@@ -26,5 +26,27 @@ func buildTestssl(req Request, cfg Config) commandSpec {
 		"--jsonfile", artifact,
 		target, // must remain the final arg
 	}
-	return commandSpec{path: cfg.TestsslPath, args: args, artifact: artifact, timeout: cfg.TestsslTimeout}
+	return commandSpec{path: cfg.TestsslPath, args: args, artifact: artifact, timeout: cfg.TestsslTimeout, classify: testsslConnectFailure}
+}
+
+// testsslConnectFailure recognizes testssl's own "cannot reach the TLS port"
+// output. testssl only assesses TLS, so a host it cannot connect to on the
+// scanned port has nothing for it to test — a not_applicable with a plain
+// reason, rather than a bare non-zero exit code, tells the operator why. This
+// covers both an HTTP-only host and a target that blocked the scan; the reason
+// names both so a blocked HTTPS host is still worth investigating.
+func testsslConnectFailure(_ int, output string) (string, string, bool) {
+	low := strings.ToLower(output)
+	for _, marker := range []string{
+		"unable to open a socket",
+		"can't connect",
+		"cannot connect",
+		"tcp connect problem",
+		"connection refused",
+	} {
+		if strings.Contains(low, marker) {
+			return "not_applicable", "no reachable TLS service on the target — testssl could not connect on the scanned port (the host may serve only HTTP, or may have blocked the scan)", true
+		}
+	}
+	return "", "", false
 }

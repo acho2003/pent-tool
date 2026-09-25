@@ -138,6 +138,18 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		rules = append(rules, description)
 	}
 
+	// Seed the target into ZAP's Sites tree before crawling. The spider and the
+	// active scan both operate on tree nodes; when the spider finds nothing
+	// crawlable (a JS app with no links, or a target that drops the crawl) the
+	// tree would be empty and the active scan would fail with an opaque "URL Not
+	// Found in the Scan Tree". accessUrl fetches the URL, following redirects, so
+	// a node always exists — and it surfaces an unreachable target as a clear
+	// failure here instead of a confusing 400 later.
+	if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {"true"}}); err != nil {
+		return finishServiceFailure(run, fmt.Errorf("ZAP could not reach the target %s (it may be down or blocking the scan): %w", target, err), secrets, cfg.MaxOutputBytes, emit)
+	}
+	logLine("ZAP seeded target into scan tree: " + target)
+
 	// Fixed pipeline: spider the target, drain the passive scanner, then active
 	// scan what was discovered. The stages and their parameters are constant —
 	// nothing about them is model-generated.

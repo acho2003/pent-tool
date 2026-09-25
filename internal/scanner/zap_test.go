@@ -63,6 +63,8 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = map[string]string{"status": "100"}
 	case "/JSON/pscan/view/recordsToScan/":
 		body = map[string]string{"recordsToScan": "0"}
+	case "/JSON/core/action/accessUrl/":
+		// acknowledged; body stays {"Result":"OK"}
 	case "/JSON/ascan/action/disableScanners/":
 		// acknowledged; body stays {"Result":"OK"}
 	case "/JSON/ascan/action/scan/":
@@ -137,5 +139,54 @@ func TestZAPRunFailsWhenAPIRejectsTheCall(t *testing.T) {
 		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 10 * time.Second, MaxOutputBytes: 1 << 20}, nil)
 	if run.Status != "failed" || !strings.Contains(run.Reason, "does_not_exist") {
 		t.Fatalf("status = %q reason = %q", run.Status, run.Reason)
+	}
+}
+
+func TestZAPSeedsTargetBeforeSpider(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir()},
+		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+	if run.Status != "completed" {
+		t.Fatalf("status = %q reason = %q", run.Status, run.Reason)
+	}
+	if !fake.called("/JSON/core/action/accessUrl/") {
+		t.Fatal("runner must seed the target into ZAP's tree via accessUrl")
+	}
+	// accessUrl must precede the spider so the tree is never empty when the
+	// active scan starts.
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	ai, si := -1, -1
+	for i, p := range fake.paths {
+		if p == "/JSON/core/action/accessUrl/" && ai < 0 {
+			ai = i
+		}
+		if p == "/JSON/spider/action/scan/" && si < 0 {
+			si = i
+		}
+	}
+	if ai < 0 || si < 0 || ai > si {
+		t.Errorf("accessUrl (index %d) must come before spider (index %d)", ai, si)
+	}
+}
+
+func TestZAPClearErrorWhenTargetUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/JSON/core/view/version/":
+			_ = json.NewEncoder(w).Encode(map[string]string{"version": "2.15.0"})
+		case "/JSON/core/action/accessUrl/":
+			http.Error(w, `{"code":"io_error","message":"IO Exception reaching the target"}`, http.StatusBadRequest)
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]string{"Result": "OK"})
+		}
+	}))
+	defer srv.Close()
+	run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir()},
+		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 10 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+	if run.Status != "failed" || !strings.Contains(run.Reason, "could not reach") {
+		t.Fatalf("status = %q reason = %q, want a clear 'could not reach the target' failure", run.Status, run.Reason)
 	}
 }

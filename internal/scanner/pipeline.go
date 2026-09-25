@@ -514,6 +514,12 @@ type commandSpec struct {
 	okExit     map[int]bool
 	prepare    func() error
 	findOutput func() string
+	// classify, when set, may reinterpret a failed run (a non-zero exit that is
+	// not a timeout, cancellation, or okExit) by inspecting the exit code and
+	// captured output. Returning ok=true replaces the run's status and reason —
+	// e.g. testssl turns "cannot connect to :443" into a clear not_applicable
+	// instead of an opaque exit code. It never runs on a successful run.
+	classify func(exitCode int, output string) (status, reason string, ok bool)
 }
 
 type commandBuilder func(Request, Config) commandSpec
@@ -620,6 +626,15 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 				run.Status = "completed"
 			} else {
 				run.Status, run.Reason = "failed", err.Error()
+				// Let the runner reinterpret a hard failure into a clearer
+				// terminal status from its own output (e.g. testssl on a host
+				// with no reachable TLS).
+				if spec.classify != nil {
+					output := readCapped(run.StdoutPath, 1<<20) + "\n" + readCapped(run.StderrPath, 1<<20)
+					if status, reason, ok := spec.classify(run.ExitCode, output); ok {
+						run.Status, run.Reason = status, reason
+					}
+				}
 			}
 		}
 	} else {
@@ -650,6 +665,21 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		emit(Event{Type: t, Scanner: name, Run: run, Output: run.Reason})
 	}
 	return run
+}
+
+// readCapped returns up to max bytes of the file at path, or "" if it cannot be
+// read. Used to inspect a scanner's own output when reclassifying a failure.
+func readCapped(path string, max int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, max))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func finalizeRun(run Run) Run {
