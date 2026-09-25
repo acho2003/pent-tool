@@ -437,3 +437,54 @@ func TestAIReportUnratedSeverityIsNotAFloor(t *testing.T) {
 		t.Fatalf("AI may rate an unrated finding freely: out=%#v err=%v", out, err)
 	}
 }
+
+// osvLockfilePair is one package on source:main reported from two lockfiles:
+// the osv SourceID carries no path, so the two inputs share (scope, source_id)
+// and differ only by Target.
+func osvLockfilePair() []scanner.Finding {
+	return []scanner.Finding{
+		{SourceID: "osv:lib:GHSA-1", Scanner: "osv", Title: "lib advisory", Severity: "critical", Scope: "source:main", Target: "web/package-lock.json", EvidenceRef: "osv.json#osv:lib:GHSA-1@web"},
+		{SourceID: "osv:lib:GHSA-1", Scanner: "osv", Title: "lib advisory", Severity: "low", Scope: "source:main", Target: "api/package-lock.json", EvidenceRef: "osv.json#osv:lib:GHSA-1@api"},
+	}
+}
+
+func osvAIItem(target string) map[string]any {
+	item := map[string]any{"source_id": "osv:lib:GHSA-1", "scope": "source:main", "scanner": "osv", "title": "lib advisory", "severity": "low", "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}
+	if target != "" {
+		item["target"] = target
+	}
+	return item
+}
+
+// Inputs sharing (scope, source_id) are disambiguated by the AI item's exact
+// target; each keeps its own location, evidence, and severity floor.
+func TestAIReportDisambiguatesSharedSourceIDByTarget(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem("web/package-lock.json"), osvAIItem("api/package-lock.json")}))
+	out, err := s.aiReportFindings(osvLockfilePair())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("want 2 findings, got %#v", out)
+	}
+	byTarget := map[string]reportFinding{}
+	for _, f := range out {
+		byTarget[f.Target] = f
+	}
+	web, api := byTarget["web/package-lock.json"], byTarget["api/package-lock.json"]
+	if web.Severity != "critical" || web.EvidenceRef != "osv.json#osv:lib:GHSA-1@web" {
+		t.Fatalf("web finding lost its floor or evidence: %#v", web)
+	}
+	if api.Severity != "low" || api.EvidenceRef != "osv.json#osv:lib:GHSA-1@api" {
+		t.Fatalf("api finding = %#v", api)
+	}
+}
+
+// Without a target, an AI item matching several inputs is ambiguous and must
+// reject the AI response.
+func TestAIReportRejectsAmbiguousSharedSourceIDWithoutTarget(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem(""), osvAIItem("")}))
+	if out, err := s.aiReportFindings(osvLockfilePair()); err == nil {
+		t.Fatalf("ambiguous AI items must be rejected, got %#v", out)
+	}
+}

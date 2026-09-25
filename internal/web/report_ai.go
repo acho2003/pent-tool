@@ -165,7 +165,7 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			projection[i].Sources = nil
 		}
 		payload, _ := json.Marshal(projection)
-		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scope":"exact input scope","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"...","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id, scope, and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
+		prompt := `You generate a security report from scanner records. You may explain, deduplicate, classify, and recommend remediation, but must not invent findings, claim exploitation, or claim independent verification. Return JSON only: {"findings":[{"source_id":"exact input source_id","scope":"exact input scope","scanner":"exact input scanner","title":"...","severity":"critical|high|medium|low|info","target":"exact input target","endpoint":"...","explanation":"...","evidence":"concise input-backed evidence","evidence_reference":"exact input evidence_reference","impact":"...","remediation":"...","cve":"...","cwe":"...","cvss":0.0}]}. Every output item must use an exact source_id, scope, target, and evidence_reference from the input.` + "\nINPUT:\n" + string(payload)
 		resp, err := client.Chat([]llm.Message{{Role: "system", Content: "Report-generation stage only. Produce strict JSON grounded exclusively in supplied scanner records."}, {Role: "user", Content: prompt}})
 		if err != nil {
 			return nil, err
@@ -178,16 +178,17 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 		if err := json.Unmarshal([]byte(strings.TrimSpace(clean)), &envelope); err != nil {
 			return nil, fmt.Errorf("invalid Report AI JSON: %w", err)
 		}
-		allowed := map[string]scanner.Finding{}
+		allowed := map[string][]scanner.Finding{}
 		bySource := map[string][]scanner.Finding{}
 		for _, f := range chunk {
-			allowed[aiFindingKey(f.Scope, f.SourceID)] = f
+			key := aiFindingKey(f.Scope, f.SourceID)
+			allowed[key] = append(allowed[key], f)
 			bySource[f.SourceID] = append(bySource[f.SourceID], f)
 		}
 		for _, f := range envelope.Findings {
-			src, ok := matchAIFinding(allowed, bySource, f.Scope, f.SourceID)
+			src, ok := matchAIFinding(allowed, bySource, f.Scope, f.SourceID, f.Target)
 			if !ok {
-				return nil, fmt.Errorf("Report AI returned source_id %q (scope %q) that matches no single input finding", f.SourceID, f.Scope)
+				return nil, fmt.Errorf("Report AI returned source_id %q (scope %q, target %q) that matches no single input finding", f.SourceID, f.Scope, f.Target)
 			}
 			f.Scanner = src.Scanner
 			f.Target = firstNonBlank(f.Target, src.Target)
@@ -224,20 +225,39 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 	return out, nil
 }
 
-// aiFindingKey identifies one input finding for AI validation. A SourceID alone
-// is not unique: two host scopes on one IP can both report nmap:<ip>:<port>.
+// aiFindingKey identifies the input findings an AI item may refer to. A
+// SourceID alone is not unique: two host scopes on one IP can both report
+// nmap:<ip>:<port>. Nor is (scope, source_id): an osv SourceID carries no path,
+// so one package in two lockfiles of a source scope yields two inputs that
+// differ only by Target.
 func aiFindingKey(scope, sourceID string) string { return scope + "\x00" + sourceID }
 
-// matchAIFinding resolves an AI output item to exactly one input finding: by
-// (scope, source_id), or, when the AI omitted or garbled the scope, by source_id
-// alone if that is unambiguous in the chunk. ok is false otherwise, which
-// rejects the AI response and forces the deterministic fallback.
-func matchAIFinding(allowed map[string]scanner.Finding, bySource map[string][]scanner.Finding, scope, sourceID string) (scanner.Finding, bool) {
-	if src, ok := allowed[aiFindingKey(scope, sourceID)]; ok {
-		return src, true
+// matchAIFinding resolves an AI output item to exactly one input finding. The
+// candidates are the inputs with the item's (scope, source_id), or, when the AI
+// omitted or garbled the scope, the inputs with its source_id. Several
+// candidates are narrowed by the item's exact target. ok is false unless
+// exactly one candidate remains, which rejects the AI response and forces the
+// deterministic fallback.
+func matchAIFinding(allowed, bySource map[string][]scanner.Finding, scope, sourceID, target string) (scanner.Finding, bool) {
+	cands := allowed[aiFindingKey(scope, sourceID)]
+	if len(cands) == 0 {
+		cands = bySource[sourceID]
 	}
-	if cands := bySource[sourceID]; len(cands) == 1 {
+	if len(cands) == 1 {
 		return cands[0], true
+	}
+	if len(cands) == 0 || target == "" {
+		return scanner.Finding{}, false
+	}
+	want := filepath.ToSlash(filepath.Clean(target))
+	var match []scanner.Finding
+	for _, c := range cands {
+		if filepath.ToSlash(filepath.Clean(c.Target)) == want {
+			match = append(match, c)
+		}
+	}
+	if len(match) == 1 {
+		return match[0], true
 	}
 	return scanner.Finding{}, false
 }
