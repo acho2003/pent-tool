@@ -28,6 +28,33 @@ type reportScopeRun struct {
 	Scanner string `json:"scanner"`
 	Status  string `json:"status"`
 	Reason  string `json:"reason,omitempty"`
+	// Scope is the run's own scope key (a per-host nmap run keeps its
+	// "recon:<t>:<h>" key), so a UI can fetch exactly this run's output.
+	Scope       string `json:"scope,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
+	HasArtifact bool   `json:"has_artifact,omitempty"`
+}
+
+// scopeRunOf is one run's coverage row within the scope id it is grouped under.
+func scopeRunOf(run scanner.Run, id string) reportScopeRun {
+	return reportScopeRun{
+		Scanner: run.Scanner, Status: run.Status, Reason: run.Reason,
+		Scope:       firstNonBlank(run.Scope, id),
+		Truncated:   run.Truncated,
+		HasArtifact: run.Status == "completed" && run.ArtifactPath != "",
+	}
+}
+
+// reconRuns lists the recon-phase runs that belong to no host (subfinder,
+// httpx), in run order. Per-host nmap runs are grouped under their host.
+func reconRuns(runs []scanner.Run) []reportScopeRun {
+	out := []reportScopeRun{}
+	for _, run := range runs {
+		if id := scanner.FindingScope(run); strings.HasPrefix(id, "recon:") {
+			out = append(out, scopeRunOf(run, id))
+		}
+	}
+	return out
 }
 
 // reportReconSummary is the scan-wide recon rollup shown above the per-scope
@@ -104,7 +131,7 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 		if out[i].Target == "" {
 			out[i].Target = reportScopeTarget(run, id)
 		}
-		out[i].Runs = append(out[i].Runs, reportScopeRun{Scanner: run.Scanner, Status: run.Status, Reason: run.Reason})
+		out[i].Runs = append(out[i].Runs, scopeRunOf(run, id))
 	}
 	sort.SliceStable(out, func(a, b int) bool {
 		return out[a].Kind != string(scanner.ScopeSource) && out[b].Kind == string(scanner.ScopeSource)

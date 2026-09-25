@@ -49,7 +49,7 @@ func TestBuildReportScopes(t *testing.T) {
 	if a.Kind != "host" || !slices.Equal(a.Tracks, []string{"web", "server"}) || !slices.Equal(a.OpenPorts, []string{"443/tcp https nginx", "22/tcp ssh"}) || !slices.Equal(a.Services, []string{"https", "ssh"}) {
 		t.Fatalf("host scope = %#v", a)
 	}
-	if len(a.Runs) != 2 || a.Runs[1] != (reportScopeRun{Scanner: "vuls", Status: "skipped", Reason: "not selected for this scan"}) {
+	if len(a.Runs) != 2 || a.Runs[1] != (reportScopeRun{Scanner: "vuls", Status: "skipped", Reason: "not selected for this scan", Scope: "host:a.test"}) {
 		t.Fatalf("host runs = %#v", a.Runs)
 	}
 	if legacy := got[1]; !slices.Equal(legacy.Tracks, []string{"web", "server"}) || legacy.Target != "legacy.test" {

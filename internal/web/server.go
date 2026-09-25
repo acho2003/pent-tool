@@ -985,6 +985,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/legacy-import/status", s.handleLegacyImportStatus)
 	mux.HandleFunc("/api/scans", s.handleListScans)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/scopes") {
+			s.handleScanScopes(w, r)
+			return
+		}
 		if strings.Contains(r.URL.Path, "/output/") || strings.HasSuffix(r.URL.Path, "/artifact") {
 			s.handleScannerOutput(w, r)
 			return

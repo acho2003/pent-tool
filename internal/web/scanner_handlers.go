@@ -95,12 +95,22 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid scanner output path", http.StatusBadRequest)
 		return
 	}
+	// ?scope= picks the run on one scope (a scan has one run per tool per
+	// host). Without it the first run by name is served, as before. A legacy
+	// run with empty Scope, or a per-host nmap run, also matches its folded
+	// report scope.
+	scope := r.URL.Query().Get("scope")
 	var run *scanner.Run
 	for i := range rec.ScannerRuns {
-		if rec.ScannerRuns[i].Scanner == name {
-			run = &rec.ScannerRuns[i]
-			break
+		candidate := &rec.ScannerRuns[i]
+		if candidate.Scanner != name {
+			continue
 		}
+		if scope != "" && candidate.Scope != scope && scanner.FindingScope(*candidate) != scope {
+			continue
+		}
+		run = candidate
+		break
 	}
 	if run == nil {
 		http.Error(w, "scanner run not found", http.StatusNotFound)
@@ -165,6 +175,34 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Next-Offset", strconv.FormatInt(offset+int64(len(data)), 10))
 	_, _ = w.Write(data)
+}
+
+// handleScanScopes serves GET /api/scans/{id}/scopes: the scan's runs grouped
+// by scope exactly as the report's Scan Coverage section groups them, plus the
+// host-less recon runs. Legacy (schema < 2) scans have no scopes.
+func (s *Server) handleScanScopes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/scans/"), "/scopes")
+	scanDir, rec := s.findScanByID(id)
+	if rec == nil {
+		http.Error(w, "scan not found", http.StatusNotFound)
+		return
+	}
+	resp := struct {
+		Recon  []reportScopeRun `json:"recon"`
+		Scopes []reportScope    `json:"scopes"`
+	}{Recon: []reportScopeRun{}, Scopes: []reportScope{}}
+	if rec.SchemaVersion >= scanner.SchemaVersion {
+		resp.Recon = reconRuns(rec.ScannerRuns)
+		if scopes := buildReportScopes(scanDir, rec.ScannerRuns); scopes != nil {
+			resp.Scopes = scopes
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func safeScannerPath(scanDir, path string) (string, bool) {
