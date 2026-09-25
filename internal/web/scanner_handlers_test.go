@@ -144,3 +144,18 @@ func TestScanScopesEndpoint(t *testing.T) {
 		t.Fatalf("missing scan: %d", missing.Code)
 	}
 }
+
+func TestIsScanScopesPath(t *testing.T) {
+	cases := map[string]bool{
+		"/api/scans/abc/scopes":       true,
+		"/api/scans/abc/vulns/scopes": false,
+		"/api/scans//scopes":          false,
+		"/api/scans/abc/scopes/x":     false,
+		"/api/scans/scopes":           false,
+	}
+	for path, want := range cases {
+		if got := isScanScopesPath(path); got != want {
+			t.Errorf("isScanScopesPath(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

@@ -177,6 +177,12 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// isScanScopesPath reports whether path is exactly /api/scans/{id}/scopes.
+func isScanScopesPath(path string) bool {
+	parts := strings.Split(strings.TrimPrefix(path, "/api/scans/"), "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] == "scopes"
+}
+
 // handleScanScopes serves GET /api/scans/{id}/scopes: the scan's runs grouped
 // by scope exactly as the report's Scan Coverage section groups them, plus the
 // host-less recon runs. Legacy (schema < 2) scans have no scopes.
