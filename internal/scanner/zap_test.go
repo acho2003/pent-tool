@@ -15,11 +15,13 @@ import (
 // spider → passive → active scan → report sequence is exercised without a ZAP
 // daemon or a shared filesystem.
 type fakeZAP struct {
-	mu         sync.Mutex
-	paths      []string
-	rules      map[string]bool
-	report     string
-	alertScope string
+	mu          sync.Mutex
+	paths       []string
+	rules       map[string]bool
+	report      string
+	alertScope  string
+	accessFails bool // accessUrl returns 500
+	ascanNoTree bool // ascan/action/scan returns url_not_found
 }
 
 func (f *fakeZAP) record(path string) {
@@ -64,10 +66,17 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/JSON/pscan/view/recordsToScan/":
 		body = map[string]string{"recordsToScan": "0"}
 	case "/JSON/core/action/accessUrl/":
-		// acknowledged; body stays {"Result":"OK"}
+		if f.accessFails {
+			http.Error(w, `{"code":"internal_error","message":"Internal Error"}`, http.StatusInternalServerError)
+			return
+		}
 	case "/JSON/ascan/action/disableScanners/":
 		// acknowledged; body stays {"Result":"OK"}
 	case "/JSON/ascan/action/scan/":
+		if f.ascanNoTree {
+			http.Error(w, `{"code":"url_not_found","message":"URL Not Found in the Scan Tree"}`, http.StatusBadRequest)
+			return
+		}
 		body = map[string]string{"scan": "9"}
 	case "/JSON/ascan/view/status/":
 		body = map[string]string{"status": "100"}
@@ -172,21 +181,31 @@ func TestZAPSeedsTargetBeforeSpider(t *testing.T) {
 	}
 }
 
-func TestZAPClearErrorWhenTargetUnreachable(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/JSON/core/view/version/":
-			_ = json.NewEncoder(w).Encode(map[string]string{"version": "2.15.0"})
-		case "/JSON/core/action/accessUrl/":
-			http.Error(w, `{"code":"io_error","message":"IO Exception reaching the target"}`, http.StatusBadRequest)
-		default:
-			_ = json.NewEncoder(w).Encode(map[string]string{"Result": "OK"})
-		}
-	}))
+func TestZAPContinuesWhenSeedFails(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, accessFails: true}
+	srv := httptest.NewServer(fake)
 	defer srv.Close()
-	run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir()},
-		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 10 * time.Second, MaxOutputBytes: 1 << 20}, nil)
-	if run.Status != "failed" || !strings.Contains(run.Reason, "could not reach") {
-		t.Fatalf("status = %q reason = %q, want a clear 'could not reach the target' failure", run.Status, run.Reason)
+	run := zapRunner{}.Run(t.Context(), Request{Target: "https://example.test", ScanDir: t.TempDir()},
+		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+	if run.Status != "completed" {
+		t.Fatalf("a failed pre-seed must not abort a spiderable target: status=%q reason=%q", run.Status, run.Reason)
+	}
+	if !fake.called("/JSON/spider/action/scan/") || !fake.called("/JSON/ascan/action/scan/") {
+		t.Error("scan must proceed to spider and active scan after a seed failure")
+	}
+	log, _ := os.ReadFile(run.StdoutPath)
+	if !strings.Contains(string(log), "could not pre-seed") {
+		t.Error("a seed failure should be logged as a non-fatal warning")
+	}
+}
+
+func TestZAPClearErrorWhenNoPagesFound(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, ascanNoTree: true}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	run := zapRunner{}.Run(t.Context(), Request{Target: "https://example.test", ScanDir: t.TempDir()},
+		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+	if run.Status != "failed" || !strings.Contains(run.Reason, "no reachable pages") {
+		t.Fatalf("empty scan tree must read clearly: status=%q reason=%q", run.Status, run.Reason)
 	}
 }

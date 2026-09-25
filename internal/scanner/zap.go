@@ -138,17 +138,17 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		rules = append(rules, description)
 	}
 
-	// Seed the target into ZAP's Sites tree before crawling. The spider and the
-	// active scan both operate on tree nodes; when the spider finds nothing
-	// crawlable (a JS app with no links, or a target that drops the crawl) the
-	// tree would be empty and the active scan would fail with an opaque "URL Not
-	// Found in the Scan Tree". accessUrl fetches the URL, following redirects, so
-	// a node always exists — and it surfaces an unreachable target as a clear
-	// failure here instead of a confusing 400 later.
+	// Best-effort: seed the target into ZAP's Sites tree before crawling, so a
+	// site the spider can't harvest links from (a JS app, or one with no crawlable
+	// anchors) still gets a node for the active scan. accessUrl is not fatal: it
+	// fails on targets ZAP's classic fetcher can't handle (e.g. HTTP/2-only sites)
+	// that the spider may still reach, so a failure here is logged and the scan
+	// continues rather than aborting a reachable target.
 	if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {"true"}}); err != nil {
-		return finishServiceFailure(run, fmt.Errorf("ZAP could not reach the target %s (it may be down or blocking the scan): %w", target, err), secrets, cfg.MaxOutputBytes, emit)
+		logLine("ZAP could not pre-seed the target (continuing to spider): " + err.Error())
+	} else {
+		logLine("ZAP seeded target into scan tree: " + target)
 	}
-	logLine("ZAP seeded target into scan tree: " + target)
 
 	// Fixed pipeline: spider the target, drain the passive scanner, then active
 	// scan what was discovered. The stages and their parameters are constant —
@@ -183,6 +183,13 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	active, err := call("/JSON/ascan/action/scan/", url.Values{"url": {target}, "recurse": {"true"}, "inScopeOnly": {"false"}})
 	if err != nil {
+		// The active scan runs over the Sites tree. An empty tree (the spider
+		// found nothing reachable and the pre-seed did not land) surfaces as
+		// this ZAP error; translate it into a plain explanation instead of the
+		// raw API string.
+		if strings.Contains(err.Error(), "url_not_found") || strings.Contains(err.Error(), "URL Not Found in the Scan Tree") {
+			return finishServiceFailure(run, fmt.Errorf("ZAP found no reachable pages to scan on %s — the spider returned nothing (the target may block automated crawling, require JavaScript rendering, or speak only HTTP/2, which ZAP's crawler does not fetch)", target), secrets, cfg.MaxOutputBytes, emit)
+		}
 		return finishServiceFailure(run, fmt.Errorf("start ZAP active scan: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}
 	activeID := valueString(active, "scan")
