@@ -2,7 +2,6 @@ package web
 
 import (
 	"fmt"
-	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -114,28 +113,17 @@ func buildReportScopes(scanDir string, runs []scanner.Run) []reportScope {
 }
 
 // sourceOrigin is how the report names a source scope: the repository it was
-// cloned from (credentials removed), or the directory the operator provided.
-// Empty when no source resolved.
+// cloned from (redacted by scanner.RedactURL), or the directory the operator
+// provided. Empty when no source resolved.
 func sourceOrigin(sc scanner.Scope) string {
 	prov := sc.Source.Provenance
 	if u, ok := strings.CutPrefix(prov, "clone:"); ok {
-		return redactURL(u)
+		return scanner.RedactURL(u)
 	}
 	if prov == "provided:filesystem" {
 		return sc.Source.Path
 	}
 	return ""
-}
-
-// redactURL drops any userinfo (e.g. a token in https://user:tok@host/...) from
-// a URL. Non-URL forms such as scp-style git@host:path are returned unchanged.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.User == nil {
-		return raw
-	}
-	u.User = nil
-	return u.String()
 }
 
 func formatReportPort(p scanner.Port) string {

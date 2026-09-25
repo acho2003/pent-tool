@@ -73,10 +73,11 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 }
 
 // relativeToRoot rewrites a finding path under root (the source checkout) to be
-// relative to it, so the report never shows the internal checkout path and
-// scanners that report absolute vs relative paths agree. Paths outside root, and
-// any path when root is empty, are returned unchanged. p may carry a ":line"
-// suffix.
+// relative to it, so finding Target/Endpoint never show the internal checkout
+// path (SourceIDs and evidence references keep native paths by design: they
+// are trace keys) and scanners that report absolute vs relative paths agree.
+// Paths outside root, and any path when root is empty, are returned unchanged.
+// p may carry a ":line" suffix.
 func relativeToRoot(p, root string) string {
 	root = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(root)), "/")
 	if root == "" || root == "." {

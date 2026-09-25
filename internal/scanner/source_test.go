@@ -116,3 +116,24 @@ func mkGitDir(dir string) error {
 func mkdirAll(p string) error {
 	return os.MkdirAll(p, 0o750)
 }
+
+func TestRedactURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://user:tok@h/a.git", "https://h/a.git"},
+		{"https://:tok@h/a.git", "https://h/a.git"},
+		{"https://h/a.git?token=abc#x", "https://h/a.git"},
+		{"https://user:to%zz@h/a.git", "<redacted URL>"},     // unparseable: fail closed
+		{"https:user:tok@h/a.git", "<redacted URL>"},         // opaque with userinfo: fail closed
+		{"git@github.com:a/b.git", "git@github.com:a/b.git"}, // scp-style: no scheme
+		{"https://h/a.git", "https://h/a.git"},
+		{"https://H/a%2fb.git", "https://H/a%2fb.git"}, // nothing to strip: no normalization drift
+	}
+	for _, c := range cases {
+		if got := RedactURL(c.in); got != c.want {
+			t.Errorf("RedactURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if got := redactCloneProvenance("clone:https://user:to%zz@h/a.git"); got != "clone:<redacted URL>" {
+		t.Errorf("unparseable clone URL must fail closed, got %q", got)
+	}
+}

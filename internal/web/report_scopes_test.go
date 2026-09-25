@@ -64,15 +64,20 @@ func TestBuildReportScopes(t *testing.T) {
 	}
 }
 
-func TestRedactURL(t *testing.T) {
+// sourceOrigin redacts a clone URL with scanner.RedactURL (whose own table
+// test covers the edge cases).
+func TestSourceOriginRedactsCloneURL(t *testing.T) {
 	cases := map[string]string{
-		"https://user:tok@github.com/a/b.git": "https://github.com/a/b.git",
-		"https://github.com/a/b.git":          "https://github.com/a/b.git",
-		"git@github.com:a/b.git":              "git@github.com:a/b.git",
+		"https://user:tok@github.com/a/b.git":   "https://github.com/a/b.git",
+		"https://github.com/a/b.git":            "https://github.com/a/b.git",
+		"git@github.com:a/b.git":                "git@github.com:a/b.git",
+		"https://github.com/a/b.git?token=abc":  "https://github.com/a/b.git",
+		"https://user:to%zz@github.com/a/b.git": "<redacted URL>",
 	}
 	for in, want := range cases {
-		if got := redactURL(in); got != want {
-			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		sc := scanner.Scope{ID: "source:main", Kind: scanner.ScopeSource, Source: scanner.SourceRef{Provenance: "clone:" + in}}
+		if got := sourceOrigin(sc); got != want {
+			t.Errorf("sourceOrigin(clone:%q) = %q, want %q", in, got, want)
 		}
 	}
 }
