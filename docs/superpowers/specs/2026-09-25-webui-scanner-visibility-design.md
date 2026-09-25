@@ -72,7 +72,7 @@ type ToolInfo struct {
 func Catalog() []ToolInfo
 ```
 
-The order is recon tools (subfinder, httpx, nmap), then the `NewPipeline` runners in `OrderedNames` order. `Selectable` is true exactly for names in `OrderedNames`. The catalog is derived from the recon runner descriptors and `NewPipeline(Config{}).Runners` descriptors, so there is no parallel list. A test asserts every `OrderedNames` entry appears exactly once, every entry has a non-empty Summary, and the recon tools are not selectable.
+The order is recon tools (subfinder, httpx, nmap), then the `NewPipeline` runners in their pipeline order, which groups them by phase: nuclei, zap, testssl, openvas, vuls, trivy, semgrep, gitleaks, osv. `Selectable` is true exactly for names in `OrderedNames`. The catalog is derived from the recon runner descriptors and `NewPipeline(Config{}).Runners` descriptors, so there is no parallel list. A test asserts every `OrderedNames` entry appears exactly once, every entry has a non-empty Summary, and the recon tools are not selectable.
 
 ### 4.3 `GET /api/scanners/status`
 Returns one entry per `Catalog()` tool: `{name, phase, selectable, summary, available, path?, endpoint_configured?}`.
