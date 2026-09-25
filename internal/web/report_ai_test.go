@@ -426,3 +426,11 @@ func TestAIReportScopelessMatch(t *testing.T) {
 		t.Fatal("an ambiguous scopeless AI item must be rejected")
 	}
 }
+
+func TestAIReportUnratedSeverityIsNotAFloor(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{{"source_id": "osv:x:GO-1", "scanner": "osv", "title": "t", "severity": "low", "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}}))
+	out, err := s.aiReportFindings([]scanner.Finding{{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"}})
+	if err != nil || len(out) != 1 || out[0].Severity != "low" {
+		t.Fatalf("AI may rate an unrated finding freely: out=%#v err=%v", out, err)
+	}
+}

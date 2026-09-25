@@ -271,3 +271,31 @@ func TestDedupIsScopeAware(t *testing.T) {
 		t.Fatalf("scopes = %q, %q", findings[0].Scope, findings[1].Scope)
 	}
 }
+
+func TestParseOSVSeverity(t *testing.T) {
+	body := `{"results":[{"source":{"path":"/src/go.mod"},"packages":[{"package":{"name":"golang.org/x/net","version":"0.1.0"},` +
+		`"groups":[{"ids":["GHSA-aaaa","CVE-2023-44487"],"max_severity":"7.5"}],` +
+		`"vulnerabilities":[` +
+		`{"id":"GHSA-aaaa","summary":"grouped","aliases":["CVE-2023-44487"]},` +
+		`{"id":"GHSA-bbbb","summary":"db-only","database_specific":{"severity":"MODERATE"}},` +
+		`{"id":"GO-2024-1","summary":"unrated"}]}]}]}`
+	got, err := ParseRun(Run{Scanner: "osv", ArtifactPath: writeFixture(t, "osv.json", body)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("parsed %#v", got)
+	}
+	if got[0].Severity != "high" || got[0].CVSS != 7.5 || got[0].SeverityUnrated {
+		t.Errorf("group max_severity: %#v", got[0])
+	}
+	if got[1].Severity != "medium" || got[1].SeverityUnrated {
+		t.Errorf("database_specific MODERATE must be a rated medium: %#v", got[1])
+	}
+	if got[2].Severity != "medium" || !got[2].SeverityUnrated {
+		t.Errorf("no severity data must be an unrated medium placeholder: %#v", got[2])
+	}
+	if got[0].Evidence != "golang.org/x/net@0.1.0" {
+		t.Errorf("evidence = %q, want package@version", got[0].Evidence)
+	}
+}

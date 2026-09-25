@@ -74,3 +74,15 @@ func TestParseRunsStampsScopeAndMerges(t *testing.T) {
 		t.Fatalf("legacy empty-scope run must fold to host:<target>, got %q", findings[1].Scope)
 	}
 }
+
+func TestMergeIgnoresUnratedSeverity(t *testing.T) {
+	trivyLow := Finding{SourceID: "trivy:CVE-2023-1000:go.mod", Scanner: "trivy", Severity: "low", CVE: "CVE-2023-1000", Scope: "source:main", Target: "go.mod"}
+	osvUnrated := Finding{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, CVE: "CVE-2023-1000", Scope: "source:main", Target: "go.mod"}
+	if out := mergeCrossScanner([]Finding{trivyLow, osvUnrated}); len(out) != 1 || out[0].Severity != "low" {
+		t.Fatalf("unrated contributor must not raise severity, got %#v", out)
+	}
+	out := mergeCrossScanner([]Finding{osvUnrated, trivyLow})
+	if len(out) != 1 || out[0].Severity != "low" || out[0].SeverityUnrated {
+		t.Fatalf("a rated contributor must replace an unrated primary's placeholder, got %#v", out)
+	}
+}

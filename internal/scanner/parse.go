@@ -27,6 +27,10 @@ type Finding struct {
 	CVE         string  `json:"cve,omitempty"`
 	CWE         string  `json:"cwe,omitempty"`
 	CVSS        float64 `json:"cvss,omitempty"`
+	// SeverityUnrated marks a placeholder severity: the scanner gave no rating
+	// (e.g. an OSV entry with no CVSS or database severity). Merge and the AI
+	// severity floor ignore it rather than treat the placeholder as a rating.
+	SeverityUnrated bool `json:"severity_unrated,omitempty"`
 	// Scope is the (scope) key of the run that produced this finding, e.g.
 	// "host:api.example.com" or "source:main", so the report can group by it.
 	Scope string `json:"scope,omitempty"`
@@ -316,20 +320,62 @@ func parseOSV(path string) ([]Finding, error) {
 						break
 					}
 				}
+				sev, cvss, rated := osvSeverity(pkgObj, v, id)
 				out = append(out, Finding{
-					SourceID:    "osv:" + name + ":" + id,
-					Scanner:     "osv",
-					Title:       firstNonEmpty(id, name),
-					Severity:    "medium",
-					Target:      name,
-					Endpoint:    srcPath,
-					Description: str(v["summary"]),
-					CVE:         cve,
+					SourceID:        "osv:" + name + ":" + id,
+					Scanner:         "osv",
+					Title:           firstNonEmpty(id, name),
+					Severity:        sev,
+					SeverityUnrated: !rated,
+					CVSS:            cvss,
+					Target:          name,
+					Endpoint:        srcPath,
+					Description:     str(v["summary"]),
+					Evidence:        osvPackageLabel(pkg),
+					CVE:             cve,
 				})
 			}
 		}
 	}
 	return out, nil
+}
+
+// osvSeverity rates one OSV vulnerability. osv-scanner reports a numeric CVSS
+// max_severity per alias group; GHSA records also carry a textual
+// database_specific.severity. With neither, the finding is an unrated "medium"
+// placeholder.
+func osvSeverity(pkgObj map[string]any, v map[string]any, id string) (string, float64, bool) {
+	for _, gv := range array(pkgObj["groups"]) {
+		g, _ := gv.(map[string]any)
+		for _, gid := range array(g["ids"]) {
+			if str(gid) != id {
+				continue
+			}
+			if score, err := strconv.ParseFloat(str(g["max_severity"]), 64); err == nil && score > 0 {
+				return cvssSeverity(score, ""), score, true
+			}
+		}
+	}
+	db, _ := v["database_specific"].(map[string]any)
+	switch strings.ToLower(str(db["severity"])) {
+	case "critical":
+		return "critical", 0, true
+	case "high":
+		return "high", 0, true
+	case "moderate", "medium":
+		return "medium", 0, true
+	case "low":
+		return "low", 0, true
+	}
+	return "medium", 0, false
+}
+
+func osvPackageLabel(pkg map[string]any) string {
+	name, version := str(pkg["name"]), str(pkg["version"])
+	if version == "" {
+		return name
+	}
+	return name + "@" + version
 }
 
 func parseVuls(path string) ([]Finding, error) {

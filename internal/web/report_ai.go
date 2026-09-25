@@ -203,8 +203,10 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			}
 			f.Severity = normalizeSeverityBucket(f.Severity)
 			// The scanner (or merged, highest-contributor) severity is a floor:
-			// the AI may explain and classify a finding, not downgrade it.
-			if srcSev := normalizeSeverityBucket(src.Severity); severityRankValue(srcSev) > severityRankValue(f.Severity) {
+			// the AI may explain and classify a finding, not downgrade it. An
+			// unrated placeholder severity is not a floor, so the AI may rate
+			// it freely.
+			if srcSev := normalizeSeverityBucket(src.Severity); !src.SeverityUnrated && severityRankValue(srcSev) > severityRankValue(f.Severity) {
 				f.Severity = srcSev
 			}
 			if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Explanation) == "" || strings.TrimSpace(f.EvidenceRef) == "" || strings.TrimSpace(f.Impact) == "" || strings.TrimSpace(f.Remediation) == "" {

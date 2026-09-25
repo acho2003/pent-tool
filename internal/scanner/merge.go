@@ -80,7 +80,13 @@ func mergeCrossScanner(in []Finding) []Finding {
 			m.Sources = []FindingSource{sourceOf(*m)}
 		}
 		m.Sources = append(m.Sources, sourceOf(f))
-		if severityRank(f.Severity) > severityRank(m.Severity) {
+		// An unrated placeholder never raises a rating; a rated contributor
+		// replaces an unrated primary's placeholder outright.
+		switch {
+		case f.SeverityUnrated:
+		case m.SeverityUnrated:
+			m.Severity, m.SeverityUnrated = f.Severity, false
+		case severityRank(f.Severity) > severityRank(m.Severity):
 			m.Severity = f.Severity
 		}
 		if f.CVSS > m.CVSS {
