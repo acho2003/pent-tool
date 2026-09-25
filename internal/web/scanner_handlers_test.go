@@ -95,6 +95,66 @@ func TestScannerOutputSelectsRunByScope(t *testing.T) {
 	}
 }
 
+// TestScannerOutputMatchesLegacyRunByHostScope locks in that a pre-scope
+// (Increment-1) run with an empty Scope still answers a ?scope=host:<target>
+// request, via scanner.FindingScope's empty-Scope fold to the target's host
+// scope.
+func TestScannerOutputMatchesLegacyRunByHostScope(t *testing.T) {
+	s := newTestServer(t, nil)
+	saveScannerScan(t, s, "legacy-scope", func(dir string) []scanner.Run {
+		return []scanner.Run{
+			{Scanner: "nuclei", Scope: "", Target: "legacy.test", Status: "completed", StdoutPath: writeFile(t, filepath.Join(dir, "nuclei.out"), "legacy output")},
+		}
+	})
+	rr := httptest.NewRecorder()
+	s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, "/api/scans/legacy-scope/output/nuclei/stdout?scope=host:legacy.test", nil))
+	if rr.Code != 200 || rr.Body.String() != "legacy output" {
+		t.Fatalf("legacy run by host scope: %d %q", rr.Code, rr.Body.String())
+	}
+}
+
+// TestScannerOutputMatchesPerHostReconRunByHostScope locks in that a per-host
+// recon run (Scope "recon:<target>:<host>") answers a ?scope=host:<host>
+// request, folding via scanner.FindingScope the same way the report's Scan
+// Coverage section groups it under its host.
+func TestScannerOutputMatchesPerHostReconRunByHostScope(t *testing.T) {
+	s := newTestServer(t, nil)
+	saveScannerScan(t, s, "recon-scope", func(dir string) []scanner.Run {
+		return []scanner.Run{
+			{Scanner: "nmap", Scope: "recon:example.test:a.example.test", Target: "example.test", Status: "completed", StdoutPath: writeFile(t, filepath.Join(dir, "nmap.out"), "nmap for a")},
+		}
+	})
+	rr := httptest.NewRecorder()
+	s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, "/api/scans/recon-scope/output/nmap/stdout?scope=host:a.example.test", nil))
+	if rr.Code != 200 || rr.Body.String() != "nmap for a" {
+		t.Fatalf("per-host recon run by host scope: %d %q", rr.Code, rr.Body.String())
+	}
+}
+
+// TestScannerArtifactSelectsRunByScope mirrors
+// TestScannerOutputSelectsRunByScope for the artifact endpoint: ?scope=
+// picks one host's artifact file, and without it the first run by name wins.
+func TestScannerArtifactSelectsRunByScope(t *testing.T) {
+	s := newTestServer(t, nil)
+	saveScannerScan(t, s, "artifact-scope", func(dir string) []scanner.Run {
+		return []scanner.Run{
+			{Scanner: "nuclei", Scope: "host:a.test", Target: "a.test", Status: "completed", ArtifactPath: writeFile(t, filepath.Join(dir, "hosts", "a.test", "nuclei.jsonl"), "artifact for A")},
+			{Scanner: "nuclei", Scope: "host:b.test", Target: "b.test", Status: "completed", ArtifactPath: writeFile(t, filepath.Join(dir, "hosts", "b.test", "nuclei.jsonl"), "artifact for B")},
+		}
+	})
+	get := func(url string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, url, nil))
+		return rr
+	}
+	if rr := get("/api/scans/artifact-scope/nuclei/artifact?scope=host:b.test"); rr.Code != 200 || rr.Body.String() != "artifact for B" {
+		t.Fatalf("scoped artifact: %d %q", rr.Code, rr.Body.String())
+	}
+	if rr := get("/api/scans/artifact-scope/nuclei/artifact"); rr.Code != 200 || rr.Body.String() != "artifact for A" {
+		t.Fatalf("unscoped artifact must keep first-run behaviour: %d %q", rr.Code, rr.Body.String())
+	}
+}
+
 func TestScanScopesEndpoint(t *testing.T) {
 	s := newTestServer(t, nil)
 	saveScannerScan(t, s, "scopes-1", func(dir string) []scanner.Run {
