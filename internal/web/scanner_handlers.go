@@ -45,13 +45,25 @@ func (s *Server) handleScannerStatus(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close()
 		}
 	}
-	json.NewEncoder(w).Encode(map[string]any{"scanners": []map[string]any{
-		{"name": "nuclei", "available": available(s.cfg.NucleiPath), "path": s.cfg.NucleiPath},
-		{"name": "zap", "available": zapHealthy, "endpoint_configured": zapConfigured},
-		{"name": "openvas", "available": gvmHealthy, "endpoint_configured": gvmConfigured},
-		{"name": "trivy", "available": available(s.cfg.TrivyPath), "path": s.cfg.TrivyPath},
-		{"name": "vuls", "available": available(s.cfg.VulsPath), "path": s.cfg.VulsPath},
-	}})
+	paths := map[string]string{
+		"subfinder": s.cfg.SubfinderPath, "httpx": s.cfg.HttpxPath, "nmap": s.cfg.NmapPath,
+		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "vuls": s.cfg.VulsPath,
+		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
+	}
+	entries := make([]map[string]any, 0, len(scanner.Catalog()))
+	for _, tool := range scanner.Catalog() {
+		e := map[string]any{"name": tool.Name, "phase": tool.Phase, "selectable": tool.Selectable, "summary": tool.Summary}
+		switch tool.Name {
+		case "zap":
+			e["available"], e["endpoint_configured"] = zapHealthy, zapConfigured
+		case "openvas":
+			e["available"], e["endpoint_configured"] = gvmHealthy, gvmConfigured
+		default:
+			e["available"], e["path"] = available(paths[tool.Name]), paths[tool.Name]
+		}
+		entries = append(entries, e)
+	}
+	json.NewEncoder(w).Encode(map[string]any{"scanners": entries})
 }
 
 func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
