@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Card,
@@ -54,6 +55,8 @@ import {
 } from "@/lib/utils";
 import {
   ChevronLeft,
+  ChevronDown,
+  ChevronRight,
   Download,
   ExternalLink,
   MoreHorizontal,
@@ -69,7 +72,7 @@ import {
 } from "lucide-react";
 import { LiveFeed, type FeedFilter } from "@/components/live-feed";
 import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination";
-import type { ScanRecord, ScannerRun, SubScanSummary, VulnSummary } from "@/types/api";
+import type { ScanRecord, ReportScope, ScopeRun, SubScanSummary, VulnSummary } from "@/types/api";
 
 export default function ScanDetailPage() {
   const navigate = useNavigate();
@@ -364,35 +367,88 @@ export default function ScanDetailPage() {
   );
 }
 
-const SCANNER_NAMES = ["nuclei", "zap", "openvas", "trivy", "vuls"] as const;
+type RunKey = { scanner: string; scope: string };
+const sameKey = (a: RunKey | null, b: RunKey) => !!a && a.scanner === b.scanner && a.scope === b.scope;
+const keyOf = (r: ScopeRun, fallbackScope: string): RunKey => ({ scanner: r.scanner, scope: r.scope || fallbackScope });
+const ATTENTION = new Set(["failed", "running", "cancelled"]);
+
+function scopeHeading(sc: ReportScope): string {
+	if (sc.kind === "source") return `SOURCE CODE  ${sc.origin || sc.target || "none provided"}`;
+	return `HOST  ${sc.target || sc.id.replace(/^host:/, "")}`;
+}
 
 function DeterministicScanDetail({ scan, onRefresh }: { scan: ScanRecord; onRefresh: () => void }) {
-	const [selected, setSelected] = useState<string>("nuclei");
 	const [stream, setStream] = useState<"stdout" | "stderr">("stdout");
 	const [output, setOutput] = useState("");
 	const [loading, setLoading] = useState(false);
 	const [regenerating, setRegenerating] = useState(false);
-	const byName = useMemo(() => new Map((scan.scanner_runs ?? []).map((r) => [r.scanner, r])), [scan.scanner_runs]);
+	const [picked, setPicked] = useState<RunKey | null>(null);
+	const [openState, setOpenState] = useState<Record<string, boolean>>({});
+	// Refetch the grouping whenever any run is added or changes status.
+	const runsSignature = useMemo(() => (scan.scanner_runs ?? []).map((r) => `${r.scope ?? ""}|${r.scanner}|${r.status}`).join(","), [scan.scanner_runs]);
+	const scopesQuery = useQuery({ queryKey: ["scan-scopes", scan.id, runsSignature], queryFn: () => api.scanScopes(scan.id) });
+	const recon = scopesQuery.data?.recon ?? [];
+	const scopes = scopesQuery.data?.scopes ?? [];
+	const hostCount = scopes.filter((s) => s.kind !== "source").length;
+	const firstKey = useMemo<RunKey | null>(() => {
+		if (recon[0]) return keyOf(recon[0], "");
+		const sc = scopes.find((s) => s.runs.length);
+		return sc ? keyOf(sc.runs[0], sc.id) : null;
+	}, [recon, scopes]);
+	const selected = picked ?? firstKey;
+	const located = useMemo(() => {
+		if (!selected) return null;
+		const r = recon.find((x) => sameKey(selected, keyOf(x, "")));
+		if (r) return { run: r, label: "recon" };
+		for (const sc of scopes) {
+			const hit = sc.runs.find((x) => sameKey(selected, keyOf(x, sc.id)));
+			if (hit) return { run: hit, label: scopeHeading(sc).replace(/\s+/g, " ").toLowerCase() };
+		}
+		return null;
+	}, [selected, recon, scopes]);
 	useEffect(() => {
+		if (!selected) { setOutput(""); return; }
 		let active = true;
 		setLoading(true);
-		api.scannerOutput(scan.id, selected, stream).then((text) => { if (active) setOutput(text); }).catch((e) => { if (active) setOutput(e instanceof Error ? e.message : "Output unavailable"); }).finally(() => { if (active) setLoading(false); });
+		api.scannerOutput(scan.id, selected.scanner, stream, selected.scope || undefined)
+			.then((text) => { if (active) setOutput(text); })
+			.catch((e) => { if (active) setOutput(e instanceof Error ? e.message : "Output unavailable"); })
+			.finally(() => { if (active) setLoading(false); });
 		return () => { active = false; };
-	}, [scan.id, selected, stream, scan.scanner_runs]);
+	}, [scan.id, selected?.scanner, selected?.scope, stream, runsSignature]);
 	async function regenerate() {
 		setRegenerating(true);
 		try { await api.regenerateReport(scan.id); onRefresh(); } finally { setRegenerating(false); }
 	}
+	const isOpen = (sc: ReportScope) => openState[sc.id] ?? (sc.kind === "source" || hostCount <= 3 || sc.runs.some((r) => ATTENTION.has(r.status)));
+	const grid = (runs: ScopeRun[], fallbackScope: string) => <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{runs.map((r) => {
+		const k = keyOf(r, fallbackScope);
+		return <ScannerStatusCard key={`${k.scope}|${k.scanner}`} name={r.scanner} run={r} active={sameKey(selected, k)} onClick={() => setPicked(k)} />;
+	})}</div>;
 	return <div className="space-y-6">
 		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>
 		<header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h1 className="font-mono text-2xl font-semibold">{scan.target}</h1><div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{scan.id}</span><span>·</span><span>{formatDuration(scan.started_at, scan.finished_at)}</span><Badge variant="outline">schema v2</Badge></div></div><div className="flex gap-2"><ScanStatusPill status={scan.status} /><Button variant="outline" size="sm" asChild><a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer"><Download className="mr-1 h-4 w-4" /> Report</a></Button><Button variant="outline" size="sm" onClick={() => void regenerate()} disabled={regenerating}>{regenerating ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1 h-4 w-4" />} Regenerate report</Button></div></header>
-		<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{SCANNER_NAMES.map((name) => <ScannerStatusCard key={name} name={name} run={byName.get(name)} active={selected === name} onClick={() => setSelected(name)} />)}</div>
-		<Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle className="capitalize">{selected} raw output</CardTitle><CardDescription>Native scanner output only. AI is not used in scan execution or this view.</CardDescription></div><div className="flex gap-2"><Button size="sm" variant={stream === "stdout" ? "default" : "outline"} onClick={() => setStream("stdout")}>stdout</Button><Button size="sm" variant={stream === "stderr" ? "default" : "outline"} onClick={() => setStream("stderr")}>stderr</Button>{byName.get(selected)?.artifact_path && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></div></CardHeader><CardContent><pre className="max-h-[32rem] min-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-4 text-xs text-neutral-200">{loading ? "Loading…" : output || "No output recorded."}</pre></CardContent></Card>
+		{scopesQuery.isError && <Card><CardContent className="flex items-center justify-between gap-3 p-4 text-sm"><span className="text-destructive">Could not load scanner runs.</span><Button size="sm" variant="outline" onClick={() => void scopesQuery.refetch()}>Retry</Button></CardContent></Card>}
+		{scopesQuery.isSuccess && !recon.length && !scopes.length && <p className="text-sm text-muted-foreground">No scanner runs yet.</p>}
+		{recon.length > 0 && <section className="space-y-2"><h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Recon</h2>{grid(recon, "")}</section>}
+		{scopes.map((sc) => {
+			const open = isOpen(sc);
+			return <section key={sc.id} className="space-y-2">
+				<button type="button" onClick={() => setOpenState((prev) => ({ ...prev, [sc.id]: !open }))} className="flex w-full flex-wrap items-center gap-2 text-left">
+					{open ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+					<span className="font-mono text-xs font-medium uppercase tracking-wider">{scopeHeading(sc)}</span>
+					{(sc.tracks ?? []).map((t) => <Badge key={t} variant="outline" className="text-[10px]">{t}</Badge>)}
+					{sc.kind !== "source" && <span className="text-[11px] text-muted-foreground">{(sc.open_ports ?? []).length} open port{(sc.open_ports ?? []).length === 1 ? "" : "s"}</span>}
+				</button>
+				{open && grid(sc.runs, sc.id)}
+			</section>;
+		})}
+		{selected && <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle><span className="capitalize">{selected.scanner}</span>{located && <span className="font-normal text-muted-foreground"> @ {located.label}</span>}</CardTitle><CardDescription>Native scanner output only. AI is not used in scan execution or this view.</CardDescription></div><div className="flex gap-2"><Button size="sm" variant={stream === "stdout" ? "default" : "outline"} onClick={() => setStream("stdout")}>stdout</Button><Button size="sm" variant={stream === "stderr" ? "default" : "outline"} onClick={() => setStream("stderr")}>stderr</Button>{located?.run.has_artifact && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected.scanner, selected.scope || undefined)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></div></CardHeader><CardContent><pre className="max-h-[32rem] min-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-4 text-xs text-neutral-200">{loading ? "Loading…" : output || "No output recorded."}</pre></CardContent></Card>}
 		<Card><CardHeader><CardTitle>Report state</CardTitle></CardHeader><CardContent className="text-sm"><div className="grid gap-2 sm:grid-cols-3"><div><span className="text-muted-foreground">Mode</span><p className="font-medium">{scan.report_mode || "pending"}</p></div><div><span className="text-muted-foreground">Generated</span><p>{scan.report_generated_at ? formatTime(scan.report_generated_at) : "—"}</p></div><div><span className="text-muted-foreground">Artifact</span><p>{scan.artifact ? `${scan.artifact.kind}: ${scan.artifact.ref}` : "Not supplied"}</p></div></div></CardContent></Card>
 	</div>;
 }
 
-function ScannerStatusCard({ name, run, active, onClick }: { name: string; run?: ScannerRun; active: boolean; onClick: () => void }) {
+function ScannerStatusCard({ name, run, active, onClick }: { name: string; run?: { status: string; reason?: string; truncated?: boolean }; active: boolean; onClick: () => void }) {
 	const status = run?.status ?? "pending";
 	return <button type="button" onClick={onClick} className={cn("rounded-lg border p-4 text-left transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>;
 }
