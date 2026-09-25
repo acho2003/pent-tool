@@ -52,14 +52,40 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 			errs = append(errs, fmt.Errorf("%s: %w", run.Scanner, err))
 		}
 		scope := FindingScope(run)
+		// Source-scope paths become relative to the checkout (run.Target). The
+		// SourceID and EvidenceRef keep the native path: they are trace keys.
+		sourceRoot := ""
+		if strings.HasPrefix(scope, "source:") {
+			sourceRoot = run.Target
+		}
 		for i := range parsed {
 			parsed[i].EvidenceRef = run.ArtifactPath + "#" + parsed[i].SourceID
 			parsed[i].Scope = scope
+			if sourceRoot != "" {
+				parsed[i].Target = relativeToRoot(parsed[i].Target, sourceRoot)
+				parsed[i].Endpoint = relativeToRoot(parsed[i].Endpoint, sourceRoot)
+			}
 		}
 		findings = append(findings, parsed...)
 	}
 	findings = mergeCrossScanner(dedupFindings(findings))
 	return findings, errs
+}
+
+// relativeToRoot rewrites a finding path under root (the source checkout) to be
+// relative to it, so the report never shows the internal checkout path and
+// scanners that report absolute vs relative paths agree. Paths outside root, and
+// any path when root is empty, are returned unchanged. p may carry a ":line"
+// suffix.
+func relativeToRoot(p, root string) string {
+	root = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(root)), "/")
+	if root == "" || root == "." {
+		return p
+	}
+	if rest, ok := strings.CutPrefix(filepath.ToSlash(p), root+"/"); ok {
+		return rest
+	}
+	return p
 }
 
 // FindingScope is the report scope a run's findings belong to: its own scope,
@@ -328,7 +354,7 @@ func parseOSV(path string) ([]Finding, error) {
 					Severity:        sev,
 					SeverityUnrated: !rated,
 					CVSS:            cvss,
-					Target:          name,
+					Target:          srcPath,
 					Endpoint:        srcPath,
 					Description:     str(v["summary"]),
 					Evidence:        osvPackageLabel(pkg),
