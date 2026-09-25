@@ -330,7 +330,7 @@ type subfinderRunner struct{}
 func (subfinderRunner) Name() string { return "subfinder" }
 
 func (subfinderRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "subfinder", Phase: PhaseRecon, Weight: WeightLight}
+	return Descriptor{Name: "subfinder", Summary: "Subdomain enumeration of the submitted domain", Phase: PhaseRecon, Weight: WeightLight}
 }
 
 func (subfinderRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
@@ -343,7 +343,7 @@ type httpxRunner struct{}
 func (httpxRunner) Name() string { return "httpx" }
 
 func (httpxRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "httpx", Phase: PhaseRecon, Weight: WeightLight}
+	return Descriptor{Name: "httpx", Summary: "Live-host and HTTP/TLS probing of discovered hosts", Phase: PhaseRecon, Weight: WeightLight}
 }
 
 func (httpxRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
@@ -356,7 +356,7 @@ type nmapRunner struct{}
 func (nmapRunner) Name() string { return "nmap" }
 
 func (nmapRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "nmap", Phase: PhaseRecon, Weight: WeightLight}
+	return Descriptor{Name: "nmap", Summary: "Port and service detection per live host", Phase: PhaseRecon, Weight: WeightLight}
 }
 
 func (nmapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {

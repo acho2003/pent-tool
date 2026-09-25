@@ -25,7 +25,7 @@ type zapRunner struct{}
 func (zapRunner) Name() string { return "zap" }
 
 func (zapRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "zap", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightHeavy, Applies: appliesToHost}
+	return Descriptor{Name: "zap", Summary: "Spider and active scan of each HTTP/HTTPS host", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightHeavy, Applies: appliesToHost}
 }
 
 func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {

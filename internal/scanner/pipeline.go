@@ -32,15 +32,15 @@ type Pipeline struct {
 func NewPipeline(cfg Config) *Pipeline {
 	applyDefaults(&cfg)
 	return &Pipeline{Config: cfg, reconFn: runRecon, Runners: []Runner{
-		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildNuclei},
+		commandRunner{name: "nuclei", desc: Descriptor{Name: "nuclei", Summary: "Template scan of each web host", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildNuclei},
 		zapRunner{},
-		commandRunner{name: "testssl", desc: Descriptor{Name: "testssl", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildTestssl},
+		commandRunner{name: "testssl", desc: Descriptor{Name: "testssl", Summary: "TLS and certificate checks of each TLS host", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}, build: buildTestssl},
 		openVASRunner{},
 		vulsRunner{},
-		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildTrivy},
-		commandRunner{name: "semgrep", desc: Descriptor{Name: "semgrep", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildSemgrep},
-		commandRunner{name: "gitleaks", desc: Descriptor{Name: "gitleaks", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildGitleaks},
-		commandRunner{name: "osv", desc: Descriptor{Name: "osv", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildOSV},
+		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Summary: "Dependency, misconfiguration and secret scan of the source", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildTrivy},
+		commandRunner{name: "semgrep", desc: Descriptor{Name: "semgrep", Summary: "Static code analysis of the source", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildSemgrep},
+		commandRunner{name: "gitleaks", desc: Descriptor{Name: "gitleaks", Summary: "Secret detection in the source repository", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildGitleaks},
+		commandRunner{name: "osv", desc: Descriptor{Name: "osv", Summary: "Known-vulnerability check of dependency lockfiles", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildOSV},
 	}}
 }
 
