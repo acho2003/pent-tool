@@ -533,3 +533,37 @@ func TestAIReportSeverityUnratedOnlyWhilePlaceholderKept(t *testing.T) {
 		t.Fatalf("want only the kept placeholder unrated, got %#v", out)
 	}
 }
+
+// The AI may explain and classify a finding, but the scanner's identifying
+// fields are authoritative: it cannot move a finding to another file or host,
+// or overwrite a scanner-reported CVE/CWE/CVSS. It may only fill classification
+// fields the scanner left blank.
+func TestAIReportKeepsScannerIdentifyingFields(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{
+		{"source_id": "trivy:CVE-2023-1111:go.mod", "scope": "source:main", "scanner": "trivy", "title": "t", "severity": "high", "target": "somewhere/else.lock", "endpoint": "https://attacker.example", "cve": "CVE-2099-9999", "cwe": "CWE-1", "cvss": 1.0, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"},
+		{"source_id": "zap:10038", "scope": "host:a.test", "scanner": "zap", "title": "t", "severity": "medium", "target": "b.test", "endpoint": "https://b.test/", "cve": "CVE-2021-44228", "cwe": "CWE-693", "cvss": 5.3, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"},
+	}))
+	in := []scanner.Finding{
+		{SourceID: "trivy:CVE-2023-1111:go.mod", Scanner: "trivy", Severity: "high", Scope: "source:main", Target: "go.mod", Endpoint: "go.mod", CVE: "CVE-2023-1111", CWE: "CWE-400", CVSS: 7.5, EvidenceRef: "trivy.json#trivy:CVE-2023-1111:go.mod"},
+		{SourceID: "zap:10038", Scanner: "zap", Severity: "medium", Scope: "host:a.test", Target: "a.test", Endpoint: "https://a.test/", EvidenceRef: "zap.json#zap:10038"},
+	}
+	out, err := s.aiReportFindings(in)
+	if err != nil || len(out) != 2 {
+		t.Fatalf("out=%#v err=%v", out, err)
+	}
+	byID := map[string]reportFinding{}
+	for _, f := range out {
+		byID[f.SourceID] = f
+	}
+	tr := byID["trivy:CVE-2023-1111:go.mod"]
+	if tr.Target != "go.mod" || tr.Endpoint != "go.mod" || tr.CVE != "CVE-2023-1111" || tr.CWE != "CWE-400" || tr.CVSS != 7.5 {
+		t.Fatalf("AI overwrote scanner fields: %#v", tr)
+	}
+	zp := byID["zap:10038"]
+	if zp.Target != "a.test" || zp.Endpoint != "https://a.test/" {
+		t.Fatalf("AI moved the finding: target=%q endpoint=%q", zp.Target, zp.Endpoint)
+	}
+	if zp.CVE != "CVE-2021-44228" || zp.CWE != "CWE-693" || zp.CVSS != 5.3 {
+		t.Fatalf("AI may fill classification the scanner left blank: %#v", zp)
+	}
+}

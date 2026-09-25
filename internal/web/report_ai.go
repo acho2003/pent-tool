@@ -191,16 +191,20 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			if !ok {
 				return nil, fmt.Errorf("Report AI returned source_id %q (scope %q, target %q) that matches no single input finding", f.SourceID, f.Scope, f.Target)
 			}
+			// The scanner record is authoritative for what the finding is and
+			// where it is: the AI cannot move it to another file or host, or
+			// overwrite a scanner-reported CVE/CWE/CVSS. It may only fill the
+			// classification fields the scanner left blank.
 			f.Scanner = src.Scanner
-			f.Target = firstNonBlank(f.Target, src.Target)
-			f.Endpoint = firstNonBlank(f.Endpoint, src.Endpoint)
+			f.Target = src.Target
+			f.Endpoint = src.Endpoint
 			f.Evidence = firstNonBlank(f.Evidence, src.Evidence)
 			f.EvidenceRef = src.EvidenceRef
 			f.Scope = src.Scope
 			f.Sources = src.Sources
-			f.CVE = firstNonBlank(f.CVE, src.CVE)
-			f.CWE = firstNonBlank(f.CWE, src.CWE)
-			if f.CVSS == 0 {
+			f.CVE = firstNonBlank(src.CVE, f.CVE)
+			f.CWE = firstNonBlank(src.CWE, f.CWE)
+			if src.CVSS != 0 {
 				f.CVSS = src.CVSS
 			}
 			f.Severity = normalizeSeverityBucket(f.Severity)
