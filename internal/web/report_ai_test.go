@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
@@ -143,6 +144,78 @@ func TestFallbackFindingTraceIsPreserved(t *testing.T) {
 	out := fallbackReportFindings(in)
 	if len(out) != 1 || out[0].SourceID != in[0].SourceID || out[0].Scanner != "trivy" || out[0].Evidence != "1.0" || out[0].EvidenceRef != in[0].EvidenceRef {
 		t.Fatalf("trace lost: %#v", out)
+	}
+}
+
+func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.cfg.LLM = ""
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	nucleiA := write("nuclei-a.jsonl", `{"template-id":"CVE-2021-41773","matched-at":"https://a.example.test/cgi-bin/","host":"a.example.test","info":{"name":"Apache Path Traversal","severity":"critical","classification":{"cve-id":["cve-2021-41773"],"cvss-score":9.8}}}`+"\n")
+	openvasA := write("openvas-a.xml", `<get_reports_response><report><results><result id="r1"><name>Apache Path Traversal</name><host>a.example.test</host><port>443/tcp</port><severity>7.5</severity><nvt oid="1.3.6"><cve>CVE-2021-41773</cve></nvt></result></results></report></get_reports_response>`)
+	nucleiB := write("nuclei-b.jsonl", `{"template-id":"missing-hsts","matched-at":"https://b.example.test","host":"b.example.test","info":{"name":"Missing HSTS","severity":"info"}}`+"\n")
+	trivySrc := write("trivy.json", `{"Results":[{"Target":"go.sum","Vulnerabilities":[{"VulnerabilityID":"CVE-2023-1111","PkgName":"lib","Severity":"HIGH"}]}]}`)
+	writeReconScopes(t, dir, []scanner.Scope{
+		{ID: "host:a.example.test", Kind: scanner.ScopeHost, Target: "a.example.test", Evidence: scanner.HostEvidence{OpenPorts: []scanner.Port{{Number: 443, Protocol: "tcp", Service: "https"}, {Number: 22, Protocol: "tcp", Service: "ssh"}}}},
+		{ID: "host:b.example.test", Kind: scanner.ScopeHost, Target: "b.example.test", Evidence: scanner.HostEvidence{LiveURLs: []string{"https://b.example.test"}}},
+	})
+	runs := []scanner.Run{
+		{Scanner: "subfinder", Scope: "recon:example.test", Target: "example.test", Status: "completed"},
+		{Scanner: "nuclei", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: nucleiA},
+		{Scanner: "openvas", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: openvasA},
+		{Scanner: "trivy", Scope: "source:main", Target: filepath.Join(dir, "src"), Status: "completed", ArtifactPath: trivySrc},
+		{Scanner: "nuclei", Scope: "host:b.example.test", Target: "b.example.test", Status: "completed", ArtifactPath: nucleiB},
+	}
+	for i := range runs {
+		runs[i].Checksum = scanner.CalculateChecksum(runs[i])
+	}
+	rec := &ScanRecord{SchemaVersion: scanner.SchemaVersion, ID: "scope-report", Target: "example.test", Status: "finished", ScannerRuns: runs, Events: []WSEvent{}, Vulns: []VulnSummary{}}
+	if path := s.generateScannerReport(rec, dir, ""); path == "" {
+		t.Fatal("report generation failed")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest reportManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	var scopeIDs []string
+	for _, sc := range manifest.Scopes {
+		scopeIDs = append(scopeIDs, sc.ID)
+	}
+	if want := []string{"host:a.example.test", "host:b.example.test", "source:main"}; !slices.Equal(scopeIDs, want) {
+		t.Fatalf("scopes = %v, want %v", scopeIDs, want)
+	}
+	if got := manifest.Scopes[0].Tracks; !slices.Equal(got, []string{"web", "server"}) {
+		t.Fatalf("host a tracks = %v", got)
+	}
+	if got := manifest.Scopes[1].Tracks; !slices.Equal(got, []string{"web"}) {
+		t.Fatalf("host b tracks = %v", got)
+	}
+	if manifest.Recon == nil || manifest.Recon.Hosts != 2 || manifest.Recon.OpenPorts != 2 {
+		t.Fatalf("recon = %#v", manifest.Recon)
+	}
+	if len(manifest.Findings) != 3 {
+		t.Fatalf("want 3 findings (CVE merged), got %d: %#v", len(manifest.Findings), manifest.Findings)
+	}
+	var order []string
+	for _, f := range manifest.Findings {
+		order = append(order, f.Scope)
+	}
+	if want := []string{"host:a.example.test", "host:b.example.test", "source:main"}; !slices.Equal(order, want) {
+		t.Fatalf("finding scope order = %v, want %v", order, want)
+	}
+	if merged := manifest.Findings[0]; len(merged.Sources) != 2 || merged.Severity != "critical" {
+		t.Fatalf("merged finding = %#v", merged)
 	}
 }
 

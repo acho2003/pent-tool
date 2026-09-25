@@ -378,6 +378,7 @@ type VulnSummary struct {
 	Title              string   `json:"title"`
 	Severity           string   `json:"severity"`
 	Target             string   `json:"target,omitempty"`
+	Scope              string   `json:"scope,omitempty"` // scanner reports: host:<h> or source:main
 	Endpoint           string   `json:"endpoint"`
 	CVSS               float64  `json:"cvss"`
 	CVSSVector         string   `json:"cvss_vector,omitempty"`
@@ -449,6 +450,10 @@ type ScanRecord struct {
 	VulsSSHHost              string           `json:"vuls_ssh_host,omitempty"`
 	ReportMode               string           `json:"report_mode,omitempty"`
 	ReportGeneratedAt        string           `json:"report_generated_at,omitempty"`
+	// ReportScopes feeds the scanner report's coverage section and scope grouping.
+	// It is derived at report time from ScannerRuns + recon-scopes.json and is
+	// never persisted.
+	ReportScopes []reportScope `json:"-"`
 }
 
 // QueueState persists scan queue state for recovery after restart
