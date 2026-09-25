@@ -93,16 +93,15 @@ export default function LoginPage() {
 			  Deterministic multi-scanner security assessments.
             </h1>
             <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-			  Nuclei, ZAP, OpenVAS, Trivy, and Vuls in a fixed pipeline, with optional report-only AI — managed from a single
+			  Recon, per-host web and server scanners, and source-code analysis in a deterministic pipeline, with optional report-only AI — managed from a single
               console.
             </p>
           </div>
-          <dl className="grid grid-cols-3 gap-6 border-t border-border pt-6">
-            <Stat label="Nuclei" value="01" />
-            <Stat label="ZAP" value="02" />
-            <Stat label="OpenVAS" value="03" />
-            <Stat label="Trivy" value="04" />
-            <Stat label="Vuls" value="05" />
+          <dl className="grid grid-cols-4 gap-6 border-t border-border pt-6">
+            <Stat label="Recon" value="01" />
+            <Stat label="Web" value="02" />
+            <Stat label="Server" value="03" />
+            <Stat label="Source code" value="04" />
           </dl>
         </div>
         <p className="text-xs text-muted-foreground">© Xalgorix · Internal use only</p>

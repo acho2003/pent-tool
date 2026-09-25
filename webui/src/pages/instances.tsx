@@ -24,7 +24,7 @@ import { ScanStatusPill } from "@/components/scan-status-pill"
 import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination"
 import { useDebounced } from "@/lib/use-debounced"
 import { timeAgo, formatDuration, shortId } from "@/lib/utils"
-import { SCANNER_ORDER, type InstancesResponse, type ScanInstance } from "@/types/api"
+import { type InstancesResponse, type ScanInstance } from "@/types/api"
 import {
   Cpu,
   MemoryStick,
@@ -312,8 +312,8 @@ function InstanceCard({ instance }: { instance: ScanInstance }) {
 		  />
 		  <Stat
 			icon={<Layers className="h-3 w-3" />}
-			label="REMAINING"
-			value={String(Math.max(0, SCANNER_ORDER.length - (instance.scanner_runs ?? []).length))}
+			label="RUNNING"
+			value={String((instance.scanner_runs ?? []).filter((r) => !["completed", "failed", "cancelled", "not_applicable", "skipped"].includes(r.status)).length)}
 		  />
 		</div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">

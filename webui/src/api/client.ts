@@ -16,7 +16,9 @@ import type {
   ScanRecord,
   ScanRequest,
   ScanSchedule,
+  ScanScopes,
   StatusResponse,
+  ToolInfo,
   VersionInfo,
   WSEvent,
 } from "@/types/api";
@@ -192,6 +194,8 @@ function listQuery(params: ListParams): string {
   return qs ? `?${qs}` : "";
 }
 
+const scopeQuery = (scope?: string) => (scope ? `?scope=${encodeURIComponent(scope)}` : "");
+
 export const api = {
   authStatus: () => http<AuthStatus>("/api/auth/status"),
   login: (username: string, password: string) =>
@@ -312,10 +316,11 @@ export const api = {
   reportUrl: (scanId: string) => `/api/report/${scanId}`,
 	regenerateReport: (scanId: string) =>
 		http<{ status: string; mode: string; url: string }>(`/api/reports/${scanId}/regenerate`, { method: "POST" }),
-	scannerOutput: (scanId: string, scanner: string, stream: "stdout" | "stderr") =>
-		http<string>(`/api/scans/${scanId}/output/${scanner}/${stream}`),
-	scannerArtifactUrl: (scanId: string, scanner: string) => `/api/scans/${scanId}/${scanner}/artifact`,
-	scannerStatus: () => http<{ scanners: Array<{ name: string; available: boolean; path?: string; endpoint_configured?: boolean }> }>("/api/scanners/status"),
+	scannerOutput: (scanId: string, scanner: string, stream: "stdout" | "stderr", scope?: string) =>
+		http<string>(`/api/scans/${scanId}/output/${scanner}/${stream}${scopeQuery(scope)}`),
+	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
+	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
+	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
 
   legacyImportStatus: () =>
     http<{ count: number; dismissed: boolean }>("/api/legacy-import/status"),

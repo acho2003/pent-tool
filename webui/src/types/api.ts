@@ -53,18 +53,52 @@ export interface WSEvent {
   sequence?: number;
 }
 
-// Fixed execution order of the deterministic pipeline. Mirrors
-// scanner.OrderedNames (internal/scanner/types.go); its length is the
-// number of attempts every scan produces.
-export const SCANNER_ORDER = ["nuclei", "zap", "openvas", "trivy", "vuls"] as const;
-
 export interface ScannerArtifact { kind: "filesystem" | "repository" | "image" | "sbom" | string; ref: string; }
 export interface ScannerRun {
-  scanner: "nuclei" | "zap" | "openvas" | "trivy" | "vuls" | string;
+  scanner: string;
+  scope?: string;
   target: string;
   status: "completed" | "failed" | "cancelled" | "not_applicable" | "skipped" | "running";
   started_at?: string; finished_at?: string; exit_code?: number; reason?: string;
   stdout_path?: string; stderr_path?: string; artifact_path?: string; checksum?: string; truncated?: boolean;
+}
+
+// One pipeline tool, from GET /api/scanners/status (backend scanner.Catalog).
+export interface ToolInfo {
+  name: string;
+  phase: "recon" | "web" | "server" | "sast" | string;
+  selectable: boolean;
+  summary: string;
+  available: boolean;
+  path?: string;
+  endpoint_configured?: boolean;
+}
+
+// One run within a scope, from GET /api/scans/{id}/scopes.
+export interface ScopeRun {
+  scanner: string;
+  status: string;
+  reason?: string;
+  scope?: string;
+  truncated?: boolean;
+  has_artifact?: boolean;
+}
+
+export interface ReportScope {
+  id: string;
+  kind: "host" | "source" | string;
+  target?: string;
+  origin?: string;
+  tracks?: string[];
+  open_ports?: string[];
+  services?: string[];
+  live_urls?: string[];
+  runs: ScopeRun[];
+}
+
+export interface ScanScopes {
+  recon: ScopeRun[];
+  scopes: ReportScope[];
 }
 
 export interface ScanInstance {
@@ -250,7 +284,7 @@ export interface ScanRequest {
   // severities. Empty/omitted = all severities. Accepted by the backend
   // ScanRequest (`severity_filter`).
   severity_filter?: string[];
-  // Restrict the run to these scanners (names from SCANNER_ORDER). Omitted or
+  // Restrict the run to these scanners (the selectable tools from /api/scanners/status). Omitted or
   // empty runs the whole pipeline; deselected scanners are recorded as
   // "skipped" rather than omitted from the scan record.
   scanners?: string[];
