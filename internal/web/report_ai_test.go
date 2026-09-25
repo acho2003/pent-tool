@@ -488,3 +488,48 @@ func TestAIReportRejectsAmbiguousSharedSourceIDWithoutTarget(t *testing.T) {
 		t.Fatalf("ambiguous AI items must be rejected, got %#v", out)
 	}
 }
+
+// AI output that ties on source_id and scope is ordered by target, whatever
+// order the model returned it in.
+func TestAIReportOrdersTiesByTarget(t *testing.T) {
+	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem("web/package-lock.json"), osvAIItem("api/package-lock.json")}))
+	out, err := s.aiReportFindings(osvLockfilePair())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 || out[0].Target != "api/package-lock.json" || out[1].Target != "web/package-lock.json" {
+		t.Fatalf("want api then web, got %#v", out)
+	}
+}
+
+// An unrated scanner severity stays flagged in the deterministic report.
+func TestFallbackFindingKeepsSeverityUnrated(t *testing.T) {
+	in := []scanner.Finding{
+		{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"},
+		{SourceID: "osv:x:GO-2", Scanner: "osv", Severity: "high", Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-2"},
+	}
+	out := fallbackReportFindings(in)
+	if len(out) != 2 || !out[0].SeverityUnrated || out[1].SeverityUnrated {
+		t.Fatalf("unrated flag not carried: %#v", out)
+	}
+}
+
+// An AI report keeps the unrated flag only while the AI keeps the placeholder
+// severity; once the AI rates the finding it is no longer unrated.
+func TestAIReportSeverityUnratedOnlyWhilePlaceholderKept(t *testing.T) {
+	item := func(id, sev string) map[string]any {
+		return map[string]any{"source_id": id, "scope": "source:main", "scanner": "osv", "title": "t", "severity": sev, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}
+	}
+	s := aiServer(t, aiProvider(t, []map[string]any{item("osv:x:GO-1", "medium"), item("osv:x:GO-2", "low"), item("osv:x:GO-3", "low")}))
+	out, err := s.aiReportFindings([]scanner.Finding{
+		{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"},
+		{SourceID: "osv:x:GO-2", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-2"},
+		{SourceID: "osv:x:GO-3", Scanner: "osv", Severity: "low", Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-3"},
+	})
+	if err != nil || len(out) != 3 {
+		t.Fatalf("out=%#v err=%v", out, err)
+	}
+	if !out[0].SeverityUnrated || out[1].SeverityUnrated || out[2].SeverityUnrated {
+		t.Fatalf("want only the kept placeholder unrated, got %#v", out)
+	}
+}

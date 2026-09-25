@@ -167,8 +167,8 @@ func summarizeReportRecon(scopes []reportScope) reportReconSummary {
 }
 
 // orderReportFindings sorts findings in place by scope (report scope order,
-// unknown scopes last), then severity (highest first), then source ID, a total
-// order so the report is deterministic.
+// unknown scopes last), then severity (highest first), then source ID, target,
+// and endpoint, so the report is deterministic.
 func orderReportFindings(findings []reportFinding, scopes []reportScope) {
 	rank := make(map[string]int, len(scopes))
 	for i, sc := range scopes {
@@ -188,6 +188,12 @@ func orderReportFindings(findings []reportFinding, scopes []reportScope) {
 		if ra, rb := severityRankValue(a.Severity), severityRankValue(b.Severity); ra != rb {
 			return ra > rb
 		}
-		return a.SourceID < b.SourceID
+		if a.SourceID != b.SourceID {
+			return a.SourceID < b.SourceID
+		}
+		if a.Target != b.Target {
+			return a.Target < b.Target
+		}
+		return a.Endpoint < b.Endpoint
 	})
 }

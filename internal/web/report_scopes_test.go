@@ -142,3 +142,23 @@ func TestReportFindingsToVulnsCarriesScopeAndSources(t *testing.T) {
 		t.Fatalf("unmerged vuln must keep the existing shape, got %#v", single)
 	}
 }
+
+// Findings that tie on scope, severity, and source ID are ordered by Target,
+// then Endpoint, so the order never depends on the input order.
+func TestOrderReportFindingsTieBreaksOnTargetAndEndpoint(t *testing.T) {
+	scopes := []reportScope{{ID: "source:main"}}
+	in := []reportFinding{
+		{SourceID: "osv:lib:GHSA-1", Scope: "source:main", Severity: "high", Target: "web/package-lock.json"},
+		{SourceID: "osv:lib:GHSA-1", Scope: "source:main", Severity: "high", Target: "api/package-lock.json", Endpoint: "b"},
+		{SourceID: "osv:lib:GHSA-1", Scope: "source:main", Severity: "high", Target: "api/package-lock.json", Endpoint: "a"},
+	}
+	orderReportFindings(in, scopes)
+	var got []string
+	for _, f := range in {
+		got = append(got, f.Target+"|"+f.Endpoint)
+	}
+	want := []string{"api/package-lock.json|a", "api/package-lock.json|b", "web/package-lock.json|"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+}

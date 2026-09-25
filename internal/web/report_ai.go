@@ -33,22 +33,23 @@ type reportManifest struct {
 }
 
 type reportFinding struct {
-	SourceID    string                  `json:"source_id"`
-	Scanner     string                  `json:"scanner"`
-	Title       string                  `json:"title"`
-	Severity    string                  `json:"severity"`
-	Target      string                  `json:"target,omitempty"`
-	Endpoint    string                  `json:"endpoint,omitempty"`
-	Explanation string                  `json:"explanation"`
-	Evidence    string                  `json:"evidence,omitempty"`
-	EvidenceRef string                  `json:"evidence_reference"`
-	Impact      string                  `json:"impact,omitempty"`
-	Remediation string                  `json:"remediation,omitempty"`
-	CVE         string                  `json:"cve,omitempty"`
-	CWE         string                  `json:"cwe,omitempty"`
-	CVSS        float64                 `json:"cvss,omitempty"`
-	Scope       string                  `json:"scope,omitempty"`
-	Sources     []scanner.FindingSource `json:"sources,omitempty"`
+	SourceID        string                  `json:"source_id"`
+	Scanner         string                  `json:"scanner"`
+	Title           string                  `json:"title"`
+	Severity        string                  `json:"severity"`
+	SeverityUnrated bool                    `json:"severity_unrated,omitempty"` // placeholder severity the scanner did not rate
+	Target          string                  `json:"target,omitempty"`
+	Endpoint        string                  `json:"endpoint,omitempty"`
+	Explanation     string                  `json:"explanation"`
+	Evidence        string                  `json:"evidence,omitempty"`
+	EvidenceRef     string                  `json:"evidence_reference"`
+	Impact          string                  `json:"impact,omitempty"`
+	Remediation     string                  `json:"remediation,omitempty"`
+	CVE             string                  `json:"cve,omitempty"`
+	CWE             string                  `json:"cwe,omitempty"`
+	CVSS            float64                 `json:"cvss,omitempty"`
+	Scope           string                  `json:"scope,omitempty"`
+	Sources         []scanner.FindingSource `json:"sources,omitempty"`
 }
 
 // GenerateCLIReport runs the same report-only AI and deterministic fallback
@@ -135,7 +136,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 func fallbackReportFindings(in []scanner.Finding) []reportFinding {
 	out := make([]reportFinding, 0, len(in))
 	for _, f := range in {
-		out = append(out, reportFinding{SourceID: f.SourceID, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, Target: f.Target, Endpoint: f.Endpoint, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: "Review the scanner evidence and apply the vendor or project remediation guidance.", Scope: f.Scope, Sources: f.Sources})
+		out = append(out, reportFinding{SourceID: f.SourceID, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: f.Endpoint, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: "Review the scanner evidence and apply the vendor or project remediation guidance.", Scope: f.Scope, Sources: f.Sources})
 	}
 	return out
 }
@@ -210,6 +211,8 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 			if srcSev := normalizeSeverityBucket(src.Severity); !src.SeverityUnrated && severityRankValue(srcSev) > severityRankValue(f.Severity) {
 				f.Severity = srcSev
 			}
+			// It stays unrated only while the AI kept the placeholder severity.
+			f.SeverityUnrated = src.SeverityUnrated && f.Severity == normalizeSeverityBucket(src.Severity)
 			if strings.TrimSpace(f.Title) == "" || strings.TrimSpace(f.Explanation) == "" || strings.TrimSpace(f.EvidenceRef) == "" || strings.TrimSpace(f.Impact) == "" || strings.TrimSpace(f.Remediation) == "" {
 				return nil, fmt.Errorf("Report AI returned incomplete structured finding for source_id %q", f.SourceID)
 			}
@@ -220,7 +223,13 @@ func (s *Server) aiReportFindings(in []scanner.Finding) ([]reportFinding, error)
 		if out[i].SourceID != out[j].SourceID {
 			return out[i].SourceID < out[j].SourceID
 		}
-		return out[i].Scope < out[j].Scope
+		if out[i].Scope != out[j].Scope {
+			return out[i].Scope < out[j].Scope
+		}
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Endpoint < out[j].Endpoint
 	})
 	return out, nil
 }
