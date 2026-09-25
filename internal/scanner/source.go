@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,9 +88,29 @@ func sourceScopePath(scanDir string) string {
 	return filepath.Join(scanDir, "scanner-output", "source-scope.json")
 }
 
+// redactCloneProvenance strips embedded credentials (e.g. the token in
+// "clone:https://user:tok@github.com/a/b.git") from a Source.Provenance value.
+// Only the "clone:" form is inspected; scp-style URLs (git@host:path) and
+// unparseable strings are returned unchanged, as is any other provenance kind
+// (e.g. "provided:filesystem").
+func redactCloneProvenance(prov string) string {
+	u, ok := strings.CutPrefix(prov, "clone:")
+	if !ok {
+		return prov
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme == "" || parsed.User == nil {
+		return prov
+	}
+	parsed.User = nil
+	return "clone:" + parsed.String()
+}
+
 // saveSourceScope records the resolved source scope (including its provenance)
 // so the report can label it by origin rather than by the local checkout path.
-// A write failure is non-fatal.
+// The persisted copy has any credentials embedded in a clone URL redacted; the
+// caller's Scope (still used to scan) is left unmodified. A write failure is
+// non-fatal.
 func saveSourceScope(scanDir string, sc Scope) {
 	if strings.TrimSpace(scanDir) == "" {
 		return
@@ -98,7 +119,9 @@ func saveSourceScope(scanDir string, sc Scope) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
-	data, err := json.MarshalIndent(sc, "", "  ")
+	redacted := sc
+	redacted.Source.Provenance = redactCloneProvenance(sc.Source.Provenance)
+	data, err := json.MarshalIndent(redacted, "", "  ")
 	if err != nil {
 		return
 	}

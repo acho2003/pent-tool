@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +69,43 @@ func TestSourceScopePersistedByPipeline(t *testing.T) {
 	got, ok := LoadSourceScope(scanDir)
 	if !ok || got.ID != "source:main" || got.Target != src || got.Source.Provenance != "provided:filesystem" {
 		t.Fatalf("persisted source scope = %#v ok=%v", got, ok)
+	}
+}
+
+func TestRedactCloneProvenance(t *testing.T) {
+	cases := map[string]string{
+		"clone:https://user:tok@github.com/a/b.git": "clone:https://github.com/a/b.git",
+		"clone:https://github.com/a/b.git":          "clone:https://github.com/a/b.git",
+		"clone:git@github.com:a/b.git":              "clone:git@github.com:a/b.git",
+		"provided:filesystem":                       "provided:filesystem",
+	}
+	for in, want := range cases {
+		if got := redactCloneProvenance(in); got != want {
+			t.Errorf("redactCloneProvenance(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSaveSourceScopeRedactsCredentials(t *testing.T) {
+	scanDir := t.TempDir()
+	sc := Scope{ID: sourceScopeID, Kind: ScopeSource, Target: "/scans/x/source/checkout", Source: SourceRef{Path: "/scans/x/source/checkout", Provenance: "clone:https://user:tok@github.com/a/b.git"}}
+	original := sc.Source.Provenance
+
+	saveSourceScope(scanDir, sc)
+
+	raw, err := os.ReadFile(sourceScopePath(scanDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "tok") || strings.Contains(string(raw), "user:") {
+		t.Fatalf("persisted file still contains credentials: %s", raw)
+	}
+	got, ok := LoadSourceScope(scanDir)
+	if !ok || got.ID != "source:main" || got.Source.Provenance != "clone:https://github.com/a/b.git" {
+		t.Fatalf("loaded source scope = %#v ok=%v", got, ok)
+	}
+	if sc.Source.Provenance != original {
+		t.Fatalf("caller's Scope was mutated: %q, want %q", sc.Source.Provenance, original)
 	}
 }
 
