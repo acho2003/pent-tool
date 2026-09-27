@@ -52,6 +52,21 @@ func singleScopeRecon(_ context.Context, req Request, _ Config, _ EmitFunc) ([]S
 }
 
 func applyDefaults(cfg *Config) {
+	if cfg.WebProfile == "" {
+		cfg.WebProfile = ProfileGentle
+	}
+	if p, ok := ResolveWebProfile(cfg.WebProfile); ok {
+		if cfg.RateRPS <= 0 {
+			cfg.RateRPS = p.RateRPS
+		}
+		if cfg.WebMaxEndpoints <= 0 {
+			cfg.WebMaxEndpoints = p.MaxEndpoints
+		}
+		if cfg.WebBudget <= 0 {
+			cfg.WebBudget = p.Budget
+		}
+		cfg.WebBrowser = p.Browser
+	}
 	if cfg.NucleiPath == "" {
 		cfg.NucleiPath = "nuclei"
 	}

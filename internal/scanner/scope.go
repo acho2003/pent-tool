@@ -4,8 +4,9 @@ package scanner
 type ScopeKind string
 
 const (
-	ScopeHost   ScopeKind = "host"
-	ScopeSource ScopeKind = "source"
+	ScopeHost        ScopeKind = "host"
+	ScopeApplication ScopeKind = "application"
+	ScopeSource      ScopeKind = "source"
 )
 
 type Track string
@@ -35,12 +36,14 @@ type SourceRef struct {
 }
 
 type Scope struct {
-	ID       string
-	Kind     ScopeKind
-	Target   string
-	Evidence HostEvidence
-	Source   SourceRef
-	Tracks   []Track
+	ID         string
+	Kind       ScopeKind
+	Target     string
+	Evidence   HostEvidence
+	Source     SourceRef
+	Tracks     []Track
+	Origin     string `json:"origin,omitempty"`
+	PathPrefix string `json:"path_prefix,omitempty"`
 }
 
 func HostScope(target string) Scope {
@@ -48,3 +51,7 @@ func HostScope(target string) Scope {
 }
 
 func (s Scope) Key() string { return s.ID }
+
+func ApplicationScope(entry string) Scope {
+	return Scope{ID: "app:" + entry, Kind: ScopeApplication, Target: entry, Origin: entry}
+}

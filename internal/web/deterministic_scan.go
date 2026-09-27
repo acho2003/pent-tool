@@ -68,7 +68,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 	}
 
 	pipeline := scanner.NewPipeline(scannerConfig(sess.cfg))
-	runs := pipeline.Run(ctx, scanner.Request{Target: sess.target, Scanners: sess.scanners, ScanDir: sess.scanDir, Artifact: sess.artifact, VulsSSHHost: sess.vulsSSHHost, TargetAuth: sess.targetAuth}, sess.record.ScannerRuns, func(evt scanner.Event) {
+	runs := pipeline.Run(ctx, scanner.Request{Target: sess.target, Scanners: sess.scanners, ScanDir: sess.scanDir, Artifact: sess.artifact, VulsSSHHost: sess.vulsSSHHost, TargetAuth: sess.targetAuth, Profile: sess.profile, ApplicationURL: sess.target}, sess.record.ScannerRuns, func(evt scanner.Event) {
 		ws := WSEvent{Type: evt.Type, Scanner: evt.Scanner, Stream: evt.Stream, Sequence: evt.Sequence, Output: evt.Output, Content: evt.Output, Target: sess.target, AgentID: sess.id, Timestamp: time.Now().Format(time.RFC3339Nano)}
 		if evt.Type != "scanner_output" {
 			ws.Content = firstNonBlank(evt.Run.Reason, fmt.Sprintf("%s: %s", evt.Scanner, evt.Run.Status))

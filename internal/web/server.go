@@ -268,14 +268,17 @@ func logRecover(label string) {
 
 // ScanRequest is the JSON body for starting a scan.
 type ScanRequest struct {
-	Targets        []string `json:"targets"`
-	Instruction    string   `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
-	ScanMode       string   `json:"scan_mode"` // "single" or "wildcard"
-	Model          string   `json:"-"`
-	APIKey         string   `json:"-"`
-	APIBase        string   `json:"-"`
-	DiscordWebhook string   `json:"discord_webhook"` // Discord webhook URL
-	SeverityFilter []string `json:"severity_filter"` // e.g. ["critical", "high"]
+	Targets          []string `json:"targets"`
+	Instruction      string   `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
+	ScanMode         string   `json:"scan_mode"` // "single" or "wildcard"
+	Profile          string   `json:"profile,omitempty"`
+	WebScope         string   `json:"web_scope,omitempty"`
+	APIDefinitionIDs []string `json:"api_definition_ids,omitempty"`
+	Model            string   `json:"-"`
+	APIKey           string   `json:"-"`
+	APIBase          string   `json:"-"`
+	DiscordWebhook   string   `json:"discord_webhook"` // Discord webhook URL
+	SeverityFilter   []string `json:"severity_filter"` // e.g. ["critical", "high"]
 	// Scanners selects which of scanner.OrderedNames run. Empty = all scanners.
 	// Deselected scanners still produce an explicit "skipped" run.
 	Scanners      []string `json:"scanners"`
@@ -1492,6 +1495,13 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "scan_mode must be single or wildcard", http.StatusBadRequest)
 		return
 	}
+	if req.Profile == "" {
+		req.Profile = scanner.ProfileGentle
+	}
+	if _, ok := scanner.ResolveWebProfile(req.Profile); !ok {
+		http.Error(w, "profile must be web-gentle or web-thorough", http.StatusBadRequest)
+		return
+	}
 	selectedScanners, err := scanner.NormalizeScanners(req.Scanners)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2559,6 +2569,7 @@ type scanSession struct {
 	resetState         bool
 	instanceID         string               // parent instance ID for multi-instance tracking
 	scanMode           string               // single, wildcard, dast — persisted so dashboard shows correct mode
+	profile            string               // web-gentle or web-thorough
 	sctx               *scanctx.ScanContext // per-session isolated state
 	companyName        string               // report branding: company name
 	logoPath           string               // report branding: logo path
