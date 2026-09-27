@@ -152,6 +152,15 @@ func applyDefaults(cfg *Config) {
 // Existing terminal runs are reused, which makes queue resume continue at the
 // first incomplete (scope, scanner) without mutating immutable raw artifacts.
 func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit EmitFunc) []Run {
+	if req.Profile != "" {
+		if profile, ok := ResolveWebProfile(req.Profile); ok {
+			p.Config.WebProfile = profile.Name
+			p.Config.RateRPS = profile.RateRPS
+			p.Config.WebMaxEndpoints = profile.MaxEndpoints
+			p.Config.WebBudget = profile.Budget
+			p.Config.WebBrowser = profile.Browser
+		}
+	}
 	// Before recon, so recon and every per-scope copy redact the clone URL's
 	// credentials from their output.
 	req = withCloneSecrets(req)
