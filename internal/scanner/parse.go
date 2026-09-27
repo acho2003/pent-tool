@@ -196,19 +196,24 @@ func parseZAP(path string) ([]Finding, error) {
 	for i, a := range alerts {
 		m, _ := a.(map[string]any)
 		instances := array(m["instances"])
-		// Grouped report alerts carry their URLs in instances; the alerts view
-		// returns one record per URL instead.
-		endpoint := str(m["url"])
-		evidence := str(m["evidence"])
-		if len(instances) > 0 {
-			im, _ := instances[0].(map[string]any)
-			endpoint = firstNonEmpty(str(im["uri"]), endpoint)
-			if evidence == "" {
-				evidence = str(im["evidence"])
-			}
+		if len(instances) == 0 {
+			instances = []any{nil}
 		}
-		id := firstNonEmpty(str(m["pluginId"]), str(m["pluginid"]), strconv.Itoa(i))
-		out = append(out, Finding{SourceID: "zap:" + id + ":" + endpoint, Scanner: "zap", Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, CWE: str(m["cweid"])})
+		for j, instance := range instances {
+			im, _ := instance.(map[string]any)
+			// Grouped report alerts carry their URLs in instances; the alerts view
+			// returns one record per URL instead.
+			endpoint := str(m["url"])
+			evidence := str(m["evidence"])
+			if instance != nil {
+				endpoint = firstNonEmpty(str(im["uri"]), endpoint)
+				if evidence == "" {
+					evidence = str(im["evidence"])
+				}
+			}
+			id := firstNonEmpty(str(m["pluginId"]), str(m["pluginid"]), strconv.Itoa(i))
+			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, CWE: str(m["cweid"]), Confidence: firstNonEmpty(str(m["confidence"]), str(m["confidencecode"]))})
+		}
 	}
 	return out, nil
 }
