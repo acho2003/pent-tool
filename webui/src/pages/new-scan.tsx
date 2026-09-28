@@ -30,6 +30,7 @@ export default function NewScanPage() {
   const [severities, setSeverities] = useState<string[]>([]);
   const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("BLACK_BOX");
   const [assessmentTypes, setAssessmentTypes] = useState<AssessmentType[]>(["WEB_APPLICATION"]);
+  const [subdomainDiscovery, setSubdomainDiscovery] = useState(false);
   const [assessmentPlan, setAssessmentPlan] = useState<AssessmentPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -63,6 +64,7 @@ export default function NewScanPage() {
         assessment_types: assessmentTypes,
         assessment_targets: targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
         profile: "web-gentle",
+        subdomain_discovery: subdomainDiscovery,
       });
       setAssessmentPlan(plan);
     } catch (err) {
@@ -144,6 +146,7 @@ export default function NewScanPage() {
         <div className="space-y-2"><Label>Profile</Label><Input value="web-gentle" disabled /><p className="text-xs text-muted-foreground">Production-safe default for web coverage.</p></div>
       </div>
       <div className="space-y-2"><Label>Assessment types</Label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ASSESSMENT_TYPES.map((type) => <label key={type} className="flex items-center gap-2 rounded-md border p-2 text-xs"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} />{type.replaceAll("_", " ")}</label>)}</div></div>
+      <label className="flex items-start gap-2 rounded-md border p-3 text-sm"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-0.5" /><span>Authorize subdomain discovery for domain targets<p className="mt-1 text-xs text-muted-foreground">Off by default. This adds Subfinder coverage to the plan when a domain target is supplied.</p></span></label>
       <Button type="button" variant="outline" onClick={() => void previewAssessmentPlan()} disabled={planning}>{planning ? "Planning…" : "Preview plan"}</Button>
       {planError && <p className="text-sm text-destructive">{planError}</p>}
       {assessmentPlan && <div className="space-y-4 border-t pt-4">

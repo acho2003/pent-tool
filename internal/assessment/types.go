@@ -193,13 +193,14 @@ type CapabilityEvidence struct {
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
-	Mode             Mode             `json:"assessment_mode"`
-	Types            []Type           `json:"assessment_types"`
-	Targets          []Target         `json:"assessment_targets"`
-	Access           []AccessBinding  `json:"access,omitempty"`
-	Profile          string           `json:"profile,omitempty"`
-	ScannerSelection ScannerSelection `json:"scanner_selection,omitempty"`
-	APIDefinitionIDs []string         `json:"api_definition_ids,omitempty"`
+	Mode               Mode             `json:"assessment_mode"`
+	Types              []Type           `json:"assessment_types"`
+	Targets            []Target         `json:"assessment_targets"`
+	Access             []AccessBinding  `json:"access,omitempty"`
+	Profile            string           `json:"profile,omitempty"`
+	ScannerSelection   ScannerSelection `json:"scanner_selection,omitempty"`
+	APIDefinitionIDs   []string         `json:"api_definition_ids,omitempty"`
+	SubdomainDiscovery bool             `json:"subdomain_discovery,omitempty"`
 }
 
 // ScannerSelection chooses auto planning or an explicit custom variant list.

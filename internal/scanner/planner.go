@@ -128,7 +128,14 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					continue
 				}
 				state, code, reason := eligibility(def, target, plan.Capabilities, input.Availability)
-				if requestedCustom && custom[def.ID] && state == PlanOptional {
+				if def.ID == "subfinder" && target.Kind == assessment.KindDomain {
+					if cfg.SubdomainDiscovery {
+						state, code, reason = PlanConditional, "discovery.subdomain_opt_in", "Subdomain discovery was explicitly authorized and will be attempted during preparation."
+					} else {
+						state, code, reason = PlanOptional, "discovery.subdomain_opt_in_required", "Subdomain discovery is off by default; enable it to authorize enumeration under this domain."
+					}
+				}
+				if requestedCustom && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
 					state, code, reason = PlanSelected, "scanner.explicitly_selected", "This optional scanner was explicitly selected by the operator."
 				}
 				if state == PlanSelected || state == PlanConditional {

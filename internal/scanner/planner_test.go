@@ -114,3 +114,37 @@ func TestOptionalScannerNeedsExplicitSelectionAndUnknownSelectionDoesNotCreateJo
 		t.Fatalf("invalid selection must block planning without jobs: %+v", invalid)
 	}
 }
+
+func TestDomainSubdomainDiscoveryRequiresSeparateExplicitPermission(t *testing.T) {
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "domain", Kind: assessment.KindDomain, Value: "example.test"}}}
+	withoutPermission := PlanAssessment(PlanInput{Config: cfg})
+	foundDecision := false
+	for _, d := range withoutPermission.Decisions {
+		if d.Scanner == "subfinder" && d.TargetID == "domain" {
+			foundDecision = true
+			if d.State != PlanOptional || d.ReasonCode != "discovery.subdomain_opt_in_required" {
+				t.Fatalf("subfinder state without permission = %+v", d)
+			}
+		}
+	}
+	if !foundDecision {
+		t.Fatal("missing target-bound Subfinder decision")
+	}
+	for _, job := range withoutPermission.Jobs {
+		if job.Scanner == "subfinder" {
+			t.Fatal("subfinder job created without explicit subdomain permission")
+		}
+	}
+
+	cfg.SubdomainDiscovery = true
+	withPermission := PlanAssessment(PlanInput{Config: cfg})
+	found := false
+	for _, job := range withPermission.Jobs {
+		if job.Scanner == "subfinder" && job.TargetID == "domain" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("authorized subdomain discovery job missing: %+v", withPermission.Decisions)
+	}
+}

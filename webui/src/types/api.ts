@@ -82,6 +82,7 @@ export interface AssessmentConfig {
   assessment_types: AssessmentType[];
   assessment_targets: AssessmentTarget[];
   profile?: string;
+  subdomain_discovery?: boolean;
 }
 export interface AssessmentPlan {
   config: AssessmentConfig;
