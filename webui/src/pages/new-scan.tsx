@@ -38,6 +38,13 @@ export default function NewScanPage() {
   const [apiDefinitionInfo, setAPIDefinitionInfo] = useState("");
   const [apiTargetId, setAPITargetId] = useState("");
   const [uploadingDefinition, setUploadingDefinition] = useState(false);
+  const [credentialId, setCredentialId] = useState("");
+  const [credentialTargetId, setCredentialTargetId] = useState("target-1");
+  const [credentialName, setCredentialName] = useState("Web scan headers");
+  const [headerName, setHeaderName] = useState("Authorization");
+  const [headerValue, setHeaderValue] = useState("");
+  const [savingCredential, setSavingCredential] = useState(false);
+  const [credentialSaved, setCredentialSaved] = useState(false);
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
   const tools: ToolInfo[] = health.data?.scanners ?? [];
   const selectable = useMemo(() => tools.filter((t) => t.selectable), [tools]);
@@ -69,6 +76,7 @@ export default function NewScanPage() {
         assessment_targets: targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
         profile: "web-gentle",
         subdomain_discovery: subdomainDiscovery,
+        access: credentialId ? [{ target_ids: [credentialTargetId], kind: "APPLICATION_HEADERS", credential_id: credentialId }] : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
       });
       setAssessmentPlan(plan);
@@ -76,6 +84,36 @@ export default function NewScanPage() {
       setPlanError(err instanceof Error ? err.message : "Could not create assessment plan");
     } finally {
       setPlanning(false);
+    }
+  }
+
+  async function saveHeaderCredential() {
+    setPlanError(null);
+    if (!targets.length || !headerName.trim() || !headerValue) {
+      setPlanError("Add a target, header name, and header value before saving the credential.");
+      return;
+    }
+    const credentialTargetIndex = Number(credentialTargetId.replace("target-", "")) - 1;
+    if (!/^https?:\/\//i.test(targets[credentialTargetIndex] ?? "")) {
+      setPlanError("Application authentication headers must be bound to an explicit HTTP(S) URL target.");
+      return;
+    }
+    setSavingCredential(true);
+    try {
+      const credential = await api.createCredential({
+        name: credentialName.trim() || "Web scan headers",
+        kind: "APPLICATION_HEADERS",
+        target_ids: [credentialTargetId],
+        values: { [headerName.trim()]: headerValue },
+      });
+      setCredentialId(credential.id);
+      setHeaderValue("");
+      setAssessmentPlan(null);
+      setCredentialSaved(true);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : "Could not save credential");
+    } finally {
+      setSavingCredential(false);
     }
   }
 
@@ -176,11 +214,13 @@ export default function NewScanPage() {
       <div className="space-y-2"><Label>Assessment types</Label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ASSESSMENT_TYPES.map((type) => <label key={type} className="flex items-center gap-2 rounded-md border p-2 text-xs"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} />{type.replaceAll("_", " ")}</label>)}</div></div>
       <label className="flex items-start gap-2 rounded-md border p-3 text-sm"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-0.5" /><span>Authorize subdomain discovery for domain targets<p className="mt-1 text-xs text-muted-foreground">Off by default. This adds Subfinder coverage to the plan when a domain target is supplied.</p></span></label>
       <div className="space-y-3 rounded-md border p-3"><div className="space-y-1"><Label htmlFor="api-definition">OpenAPI / Swagger definition</Label><Input id="api-definition" type="file" accept=".json,.yaml,.yml,application/json" onChange={(e) => void uploadAPIDefinition(e)} disabled={uploadingDefinition} /><p className="text-xs text-muted-foreground">Definitions are size-limited, external references are rejected, and spec server URLs do not change target scope.</p></div>{apiDefinitionId && <><p className="break-all font-mono text-xs text-muted-foreground">Uploaded {apiDefinitionInfo} · {apiDefinitionId}</p><div className="space-y-2"><Label>Map this definition to a target</Label><Select value={apiTargetId || "target-1"} onValueChange={(value) => { setAPITargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">The selected target must be an explicit HTTP(S) URL.</p></div></>}</div>
+      <div className="space-y-3 rounded-md border p-3"><div><p className="text-sm font-medium">Target-bound authentication headers</p><p className="mt-1 text-xs text-muted-foreground">Header values are encrypted by the server and kept out of the assessment configuration. Saving a credential does not verify login or enable execution.</p></div>{credentialSaved && <p className="text-xs text-emerald-400">Encrypted credential saved. Preview can confirm that it is available for this target.</p>}{credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <><div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div></div><div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div><Button type="button" variant="outline" onClick={() => void saveHeaderCredential()} disabled={savingCredential || !headerValue}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button></>}</div>
       <Button type="button" variant="outline" onClick={() => void previewAssessmentPlan()} disabled={planning}>{planning ? "Planning…" : "Preview plan"}</Button>
       {planError && <p className="text-sm text-destructive">{planError}</p>}
       {assessmentPlan && <div className="space-y-4 border-t pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">Coverage preview · registry {assessmentPlan.registry_version}</p><p className="font-mono text-xs text-muted-foreground">{assessmentPlan.fingerprint.slice(0, 24)}…</p></div>
         <div className="grid gap-2 sm:grid-cols-2">{assessmentPlan.coverage.map((item) => <div key={item.type} className="rounded-md border p-3"><p className="text-xs font-medium">{item.type.replaceAll("_", " ")} · {item.state}</p><p className="mt-1 text-xs text-muted-foreground">{item.reason}</p></div>)}</div>
+        {assessmentPlan.capabilities.filter((item) => item.capability === "authenticated_web").length > 0 && <div><p className="mb-2 text-sm font-medium">Authentication readiness</p><ul className="space-y-1 text-xs">{assessmentPlan.capabilities.filter((item) => item.capability === "authenticated_web").map((item, i) => <li key={`${item.target_id}-${i}`} className="font-mono">{item.target_id} · {item.state}: {item.reason}</li>)}</ul></div>}
         <div><p className="mb-2 text-sm font-medium">Planned jobs ({assessmentPlan.jobs.length})</p>{assessmentPlan.jobs.length ? <ul className="space-y-1 text-xs">{assessmentPlan.jobs.map((job) => <li key={job.id} className="font-mono">{job.scanner} · {job.assessment_type} · {job.state} · {job.target}</li>)}</ul> : <p className="text-xs text-muted-foreground">No runnable jobs are available for these inputs.</p>}</div>
         {assessmentPlan.api_endpoints?.length ? <div><p className="mb-2 text-sm font-medium">Imported API operations ({assessmentPlan.api_endpoints.length})</p><ul className="space-y-1 text-xs">{assessmentPlan.api_endpoints.map((endpoint, i) => <li key={`${endpoint.target_id}-${endpoint.method}-${endpoint.path}-${i}`} className="font-mono">{endpoint.method} {endpoint.path} · {endpoint.origin}</li>)}</ul></div> : null}
         <details><summary className="cursor-pointer text-xs font-medium">Scanner decisions ({assessmentPlan.decisions.length})</summary><ul className="mt-2 space-y-2">{assessmentPlan.decisions.map((decision, i) => <li key={`${decision.scanner}-${decision.target_id ?? "all"}-${i}`} className="border-l-2 pl-3 text-xs"><span className="font-medium">{decision.scanner} · {decision.state}</span><p className="text-muted-foreground">{decision.reason}</p></li>)}</ul></details>
@@ -189,7 +229,7 @@ export default function NewScanPage() {
     <form onSubmit={onSubmit} className="space-y-5">
       <Card><CardHeader><CardTitle>Target and mode</CardTitle></CardHeader><CardContent className="space-y-4">
         <div className="space-y-2"><Label htmlFor="name">Scan name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Quarterly external scan" /></div>
-        <div className="space-y-2"><Label htmlFor="targets">Hosts or URLs</Label><Textarea id="targets" value={targetsText} onChange={(e) => { setTargetsText(e.target.value); setAssessmentPlan(null); }} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One per line. Recon discovers live hosts; each host is scanned on its web and/or server track.</p></div>
+        <div className="space-y-2"><Label htmlFor="targets">Hosts or URLs</Label><Textarea id="targets" value={targetsText} onChange={(e) => { setTargetsText(e.target.value); setAssessmentPlan(null); setCredentialId(""); setCredentialTargetId("target-1"); setCredentialSaved(false); }} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One per line. Recon discovers live hosts; each host is scanned on its web and/or server track.</p></div>
         <div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single target</SelectItem><SelectItem value="wildcard">Wildcard discovery</SelectItem></SelectContent></Select></div>
         <div className="space-y-2"><Label>Report severity filter</Label><div className="flex flex-wrap gap-3">{SEVERITIES.map((sev) => (<label key={sev} className="flex items-center gap-1.5 text-sm capitalize"><input type="checkbox" checked={severities.includes(sev)} onChange={() => toggleSeverity(sev)} className="h-3.5 w-3.5 rounded border-border" />{sev}</label>))}</div><p className="text-xs text-muted-foreground">Leave all unchecked to report every severity.</p></div>
       </CardContent></Card>

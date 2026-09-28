@@ -186,6 +186,7 @@ type CapabilityEvidence struct {
 	Capability  Capability    `json:"capability"`
 	TargetID    string        `json:"target_id"`
 	ReferenceID string        `json:"reference_id,omitempty"`
+	AccessKind  AccessKind    `json:"access_kind,omitempty"`
 	State       EvidenceState `json:"state"`
 	Provenance  string        `json:"provenance"`
 	Reason      string        `json:"reason"`

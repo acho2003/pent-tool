@@ -55,7 +55,7 @@ type PlanInput struct {
 	// Availability is an execution capability snapshot, keyed by registry ID.
 	// Missing entries use the build's registry default.
 	Availability map[string]bool `json:"-"`
-	// CredentialAvailability is keyed by targetID + NUL + credentialID. A
+	// CredentialAvailability is keyed by targetID + NUL + accessKind + NUL + credentialID. A
 	// declared ID alone is not evidence that a secret exists or is target-bound.
 	CredentialAvailability map[string]bool `json:"-"`
 }
@@ -89,7 +89,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			evidence.Reason = "authenticated access is not backed by a credential reference"
 			continue
 		}
-		if input.CredentialAvailability[credentialAvailabilityKey(evidence.TargetID, credentialID)] {
+		if input.CredentialAvailability[credentialAvailabilityKey(evidence.TargetID, evidence.AccessKind, credentialID)] {
 			evidence.State = assessment.StateAvailable
 			evidence.Reason = "encrypted credential exists and is bound to this target; verification is still pending"
 		} else {
@@ -228,8 +228,8 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	return plan
 }
 
-func credentialAvailabilityKey(targetID, credentialID string) string {
-	return targetID + "\x00" + credentialID
+func credentialAvailabilityKey(targetID string, accessKind assessment.AccessKind, credentialID string) string {
+	return targetID + "\x00" + string(accessKind) + "\x00" + credentialID
 }
 
 func eligibility(def ScannerDefinition, target assessment.Target, evidence []assessment.CapabilityEvidence, availability map[string]bool) (PlanState, string, string) {

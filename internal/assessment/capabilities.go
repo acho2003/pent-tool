@@ -83,6 +83,7 @@ func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 				}
 				evidence := ev(CapAuthWeb, id, st, prov, reason)
 				evidence.ReferenceID = strings.TrimSpace(ab.CredentialID)
+				evidence.AccessKind = ab.Kind
 				out = append(out, evidence)
 			case AccessRepositoryCreds:
 				out = append(out, ev(CapGit, id, StateAvailable, "credential_ref", "repository credentials supplied"))

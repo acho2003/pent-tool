@@ -84,9 +84,12 @@ export interface AssessmentConfig {
   profile?: string;
   subdomain_discovery?: boolean;
   api_definitions?: Array<{ target_id: string; definition_id: string }>;
+  access?: Array<{ target_ids: string[]; kind: string; credential_id: string; verify_url?: string }>;
 }
+export interface CredentialMetadata { id: string; name: string; kind: string; target_ids: string[]; created_at: string; }
 export interface AssessmentPlan {
   config: AssessmentConfig;
+  capabilities: Array<{ capability: string; target_id: string; reference_id?: string; access_kind?: string; state: string; provenance: string; reason: string }>;
   decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
   jobs: Array<{ id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; variant: string; execution_mode?: string }>;
   coverage: Array<{ type: AssessmentType; state: string; reason: string }>;

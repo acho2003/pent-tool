@@ -163,7 +163,13 @@ func TestPlannerRequiresResolvableTargetBoundCredentialAndNeverClaimsVerifiedAut
 	}) {
 		t.Fatalf("unresolved credential was treated as available: %+v", missing.Capabilities)
 	}
-	available := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: map[string]bool{"app\x00cred-1": true}})
+	wrongKind := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: map[string]bool{"app\x00APPLICATION_COOKIES\x00cred-1": true}})
+	if !slices.ContainsFunc(wrongKind.Capabilities, func(e assessment.CapabilityEvidence) bool {
+		return e.TargetID == "app" && e.Capability == assessment.CapAuthWeb && e.State == assessment.StateUnavailable
+	}) {
+		t.Fatalf("credential of a different access kind was treated as available: %+v", wrongKind.Capabilities)
+	}
+	available := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: map[string]bool{"app\x00APPLICATION_HEADERS\x00cred-1": true}})
 	if !slices.ContainsFunc(available.Capabilities, func(e assessment.CapabilityEvidence) bool {
 		return e.TargetID == "app" && e.Capability == assessment.CapAuthWeb && e.State == assessment.StateAvailable
 	}) {

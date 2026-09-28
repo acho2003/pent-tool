@@ -1,6 +1,7 @@
 import type {
 	AssessmentConfig,
 	AssessmentPlan,
+	CredentialMetadata,
   AuthStatus,
   EnvironmentSettings,
   InstancesResponse,
@@ -311,6 +312,8 @@ export const api = {
 	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
 	planAssessment: (config: AssessmentConfig) =>
 		http<AssessmentPlan>("/api/scans/plan", { method: "POST", json: config }),
+	createCredential: (credential: { name: string; kind: string; target_ids: string[]; values: Record<string, string> }) =>
+		http<CredentialMetadata>("/api/credentials", { method: "POST", json: credential }),
 	uploadAPIDefinition: async (file: File) =>
 		http<{ id: string; format: string; operation_count: number; size_bytes: number }>("/api/api-definitions", {
 			method: "POST",

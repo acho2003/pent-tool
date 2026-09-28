@@ -54,9 +54,9 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			for _, targetID := range binding.TargetIDs {
-				key := targetID + "\x00" + binding.CredentialID
-				_, lookupErr := vault.Get(binding.CredentialID, targetID)
-				credentialAvailability[key] = lookupErr == nil
+				key := targetID + "\x00" + string(binding.Kind) + "\x00" + binding.CredentialID
+				record, lookupErr := vault.Get(binding.CredentialID, targetID)
+				credentialAvailability[key] = lookupErr == nil && record.Kind == binding.Kind
 			}
 		}
 	}
