@@ -128,6 +128,7 @@ Core v2 endpoints:
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `POST` | `/api/scans/plan` | Validate and preview a typed assessment without contacting targets |
+| `GET` | `/api/scans/:id/coverage` | Show planned jobs, actual outcomes, verified artifacts, and coverage gaps |
 | `POST` | `/api/scan` | Start a legacy scan or a typed assessment with its current `plan_fingerprint` |
 | `GET` | `/api/scanners/registry` | Typed scanner variants and runtime availability |
 | `GET` | `/api/scanners/status` | Scanner health/configuration |
