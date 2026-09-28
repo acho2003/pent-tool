@@ -85,6 +85,39 @@ func TestAssessmentPlanPreviewReturnsReasonsAndDoesNotStartScan(t *testing.T) {
 	}
 }
 
+func TestAssessmentPlanDoesNotTreatSharedZAPAsTypedCapability(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.cfg.ZAPURL = "http://zap.internal:8080"
+	s.cfg.ZAPDedicated = false
+	body := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/"}]}`
+	rr := httptest.NewRecorder()
+	s.handleAssessmentPlan(rr, httptest.NewRequest(http.MethodPost, "/api/scans/plan", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var plan struct {
+		Decisions []struct {
+			Scanner  string `json:"scanner"`
+			TargetID string `json:"target_id"`
+			State    string `json:"state"`
+			Reason   string `json:"reason"`
+		} `json:"decisions"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(plan.Decisions, func(d struct {
+		Scanner  string `json:"scanner"`
+		TargetID string `json:"target_id"`
+		State    string `json:"state"`
+		Reason   string `json:"reason"`
+	}) bool {
+		return d.Scanner == "zap" && d.TargetID == "app" && d.State == "unavailable" && strings.Contains(d.Reason, "unavailable")
+	}) {
+		t.Fatalf("shared ZAP daemon was advertised as a typed scanner: %+v", plan.Decisions)
+	}
+}
+
 func TestAssessmentPlanRejectsInvalidConfiguration(t *testing.T) {
 	s := newTestServer(t, nil)
 	rr := httptest.NewRecorder()

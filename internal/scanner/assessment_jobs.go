@@ -69,7 +69,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			Scope:  scope,
 			ScanDir: filepath.Join(scanDir, "jobs", stableJobPath(job.TargetID), stableJobPath(plan.Fingerprint),
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
-			Profile: plan.Config.Profile,
+			Profile: plan.Config.Profile, TypedAssessment: true,
 		}
 		if parsed, err := url.Parse(job.Target); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
 			req.ApplicationURL = job.Target

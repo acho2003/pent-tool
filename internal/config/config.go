@@ -32,6 +32,7 @@ type Config struct {
 	OsvPath               string
 	ZAPURL                string
 	ZAPAPIKey             string
+	ZAPDedicated          bool
 	GVMHost               string
 	GVMPort               int
 	GVMSocket             string
@@ -244,6 +245,7 @@ func load() *Config {
 		OsvPath:               envOr("XALGORIX_OSV_PATH", "osv-scanner"),
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
+		ZAPDedicated:          strings.EqualFold(envOr("XALGORIX_ZAP_DEDICATED", "false"), "true"),
 		GVMHost:               envOr("XALGORIX_GVM_HOST", ""),
 		GVMPort:               envOrInt("XALGORIX_GVM_PORT", 9390),
 		GVMSocket:             envOr("XALGORIX_GVM_SOCKET", ""),

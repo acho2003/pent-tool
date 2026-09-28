@@ -62,6 +62,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if strings.TrimSpace(cfg.ZAPURL) == "" {
 		return failedServiceRun("zap", req, "ZAP service URL is not configured", emit)
 	}
+	if req.TypedAssessment && !cfg.ZAPDedicated {
+		return failedServiceRun("zap", req, "typed assessments require XALGORIX_ZAP_DEDICATED=true for a dedicated managed ZAP daemon", emit)
+	}
 	release, err := acquireZAPServiceLease(ctx, cfg.ZAPURL)
 	if err != nil {
 		run := cancelledRun("zap", req.Scope, req, err, emit)

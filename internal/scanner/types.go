@@ -60,12 +60,13 @@ type Request struct {
 	// the crash-persisted record built from them — carry their per-host scope
 	// instead of collapsing per-host same-named runs. Pipeline.Run sets it per
 	// scope; recon sets it per tool. Not serialized: it is derived, not input.
-	Scope          string   `json:"-"`
-	Artifact       Artifact `json:"artifact,omitempty"`
-	VulsSSHHost    string   `json:"vuls_ssh_host,omitempty"`
-	TargetAuth     string   `json:"-"`
-	Profile        string   `json:"-"`
-	ApplicationURL string   `json:"-"`
+	Scope           string   `json:"-"`
+	Artifact        Artifact `json:"artifact,omitempty"`
+	VulsSSHHost     string   `json:"vuls_ssh_host,omitempty"`
+	TargetAuth      string   `json:"-"`
+	Profile         string   `json:"-"`
+	ApplicationURL  string   `json:"-"`
+	TypedAssessment bool     `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -124,13 +125,14 @@ type Config struct {
 	GitleaksPath      string
 	OsvPath           string
 
-	ZAPURL    string
-	ZAPAPIKey string
-	GVMHost   string
-	GVMPort   int
-	GVMSocket string
-	GVMUser   string
-	GVMPass   string
+	ZAPURL       string
+	ZAPAPIKey    string
+	ZAPDedicated bool
+	GVMHost      string
+	GVMPort      int
+	GVMSocket    string
+	GVMUser      string
+	GVMPass      string
 
 	RateRPS          int
 	WebProfile       string

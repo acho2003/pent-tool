@@ -166,6 +166,19 @@ func TestZAPServiceLeaseSerializesPipelinesAndHonorsCancellation(t *testing.T) {
 	secondRelease()
 }
 
+func TestZAPTypedAssessmentRequiresDedicatedDaemon(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	run := zapRunner{}.Run(t.Context(), Request{Target: "https://app.example.test/Portal/", ScanDir: t.TempDir(), TypedAssessment: true}, Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key"}, nil)
+	if run.Status != "failed" || !strings.Contains(run.Reason, "XALGORIX_ZAP_DEDICATED") {
+		t.Fatalf("typed scan on an unclaimed shared daemon = %+v", run)
+	}
+	if len(fake.paths) != 0 {
+		t.Fatalf("runner contacted a shared daemon before refusing the typed job: %v", fake.paths)
+	}
+}
+
 func TestZAPRunFailsWhenAPIRejectsTheCall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"code":"does_not_exist","message":"Does Not Exist"}`, http.StatusBadRequest)

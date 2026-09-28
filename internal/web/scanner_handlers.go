@@ -28,7 +28,9 @@ func (s *Server) scannerAvailability() map[string]bool {
 		_, err := exec.LookPath(path)
 		available[id] = err == nil
 	}
-	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != ""
+	// Typed assessment planning requires an explicitly dedicated managed ZAP
+	// backend; a configured shared daemon is not sufficient evidence.
+	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated
 	available["openvas"] = (strings.TrimSpace(s.cfg.GVMHost) != "" || strings.TrimSpace(s.cfg.GVMSocket) != "") && s.cfg.GVMUsername != "" && s.cfg.GVMPassword != ""
 	for _, id := range []string{"masscan", "nikto", "sqlmap", "lynis"} {
 		available[id] = false

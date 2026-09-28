@@ -26,6 +26,7 @@ services:
     environment:
       XALGORIX_ZAP_URL: http://zap:8080
       XALGORIX_ZAP_API_KEY: ${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
+      XALGORIX_ZAP_DEDICATED: "true"
       XALGORIX_GVM_SOCKET: /run/gvmd/gvmd.sock
       XALGORIX_GVM_USERNAME: ${XALGORIX_GVM_USERNAME:-admin}
       XALGORIX_GVM_PASSWORD: ${XALGORIX_GVM_PASSWORD:-admin}

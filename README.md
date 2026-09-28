@@ -110,6 +110,7 @@ Key environment variables:
 | `XALGORIX_MAX_WORKERS` | `3` | Concurrent scanner limit (ZAP/OpenVAS are additionally serialized) |
 | `XALGORIX_ZAP_URL` | empty | Internal ZAP API URL |
 | `XALGORIX_ZAP_API_KEY` | empty | ZAP API key |
+| `XALGORIX_ZAP_DEDICATED` | `false` | Set `true` only when this deployment owns a dedicated ZAP daemon for isolated assessments |
 | `XALGORIX_GVM_HOST` | empty | Greenbone GMP host |
 | `XALGORIX_GVM_PORT` | `9390` | Greenbone GMP port (TLS) |
 | `XALGORIX_GVM_SOCKET` | empty | Greenbone GMP UNIX socket; takes precedence over host/port |

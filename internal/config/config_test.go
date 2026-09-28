@@ -196,6 +196,7 @@ func TestLoad_ReadsReconAndTestsslPathsAndTimeouts(t *testing.T) {
 		"XALGORIX_HTTPX_PATH=/usr/local/bin/httpx",
 		"XALGORIX_NMAP_PATH=/usr/local/bin/nmap",
 		"XALGORIX_TESTSSL_PATH=/opt/testssl.sh/testssl.sh",
+		"XALGORIX_ZAP_DEDICATED=true",
 		"XALGORIX_SUBFINDER_TIMEOUT_SECONDS=111",
 		"XALGORIX_HTTPX_TIMEOUT_SECONDS=222",
 		"XALGORIX_NMAP_TIMEOUT_SECONDS=333",
@@ -212,6 +213,9 @@ func TestLoad_ReadsReconAndTestsslPathsAndTimeouts(t *testing.T) {
 	if cfg.SubfinderTimeoutSec != 111 || cfg.HttpxTimeoutSec != 222 || cfg.NmapTimeoutSec != 333 || cfg.TestsslTimeoutSec != 444 {
 		t.Fatalf("recon/testssl timeouts not loaded: %#v", cfg)
 	}
+	if !cfg.ZAPDedicated {
+		t.Fatal("dedicated ZAP setting was not loaded")
+	}
 }
 
 // TestLoad_DefaultsReconAndTestsslPathsAndTimeouts guards the bare-name/
@@ -224,6 +228,7 @@ func TestLoad_DefaultsReconAndTestsslPathsAndTimeouts(t *testing.T) {
 	for _, key := range []string{
 		"XALGORIX_SUBFINDER_PATH", "XALGORIX_HTTPX_PATH", "XALGORIX_NMAP_PATH", "XALGORIX_TESTSSL_PATH",
 		"XALGORIX_SUBFINDER_TIMEOUT_SECONDS", "XALGORIX_HTTPX_TIMEOUT_SECONDS", "XALGORIX_NMAP_TIMEOUT_SECONDS", "XALGORIX_TESTSSL_TIMEOUT_SECONDS",
+		"XALGORIX_ZAP_DEDICATED",
 	} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
@@ -235,6 +240,9 @@ func TestLoad_DefaultsReconAndTestsslPathsAndTimeouts(t *testing.T) {
 	}
 	if cfg.SubfinderTimeoutSec != 600 || cfg.HttpxTimeoutSec != 600 || cfg.NmapTimeoutSec != 1800 || cfg.TestsslTimeoutSec != 1800 {
 		t.Fatalf("recon/testssl timeout defaults wrong: %#v", cfg)
+	}
+	if cfg.ZAPDedicated {
+		t.Fatal("dedicated ZAP mode must default to false")
 	}
 }
 
