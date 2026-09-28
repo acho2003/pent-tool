@@ -99,6 +99,10 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			plan.Errors = append(plan.Errors, assessment.Problem{Code: "selection.unknown", Message: fmt.Sprintf("unknown scanner variant %q", id), Blocking: true})
 		}
 	}
+	if len(plan.Errors) > 0 {
+		plan.Fingerprint = planFingerprint(cfg, plan.Jobs)
+		return plan
+	}
 
 	for _, def := range defs {
 		matchedTargets := make([]assessment.Target, 0)
@@ -124,6 +128,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					continue
 				}
 				state, code, reason := eligibility(def, target, plan.Capabilities, input.Availability)
+				if requestedCustom && custom[def.ID] && state == PlanOptional {
+					state, code, reason = PlanSelected, "scanner.explicitly_selected", "This optional scanner was explicitly selected by the operator."
+				}
 				if state == PlanSelected || state == PlanConditional {
 					if !selected {
 						state, code, reason = PlanSkipped, "selection.customized", "This scanner is applicable but omitted from the custom scanner selection."
@@ -203,8 +210,8 @@ func eligibility(def ScannerDefinition, target assessment.Target, evidence []ass
 			return PlanNotApplicable, "capability.missing", fmt.Sprintf("Required capability %s is unavailable for target %s.", required, target.ID)
 		}
 	}
-	if def.DefaultSelection == "explicit_opt_in" {
-		return PlanOptional, "scanner.explicit_opt_in", "This scanner requires explicit operator opt-in because it can send intrusive requests."
+	if def.DefaultSelection == "optional" || def.DefaultSelection == "explicit_opt_in" {
+		return PlanOptional, "scanner.explicit_opt_in", "This scanner is optional and requires explicit operator selection."
 	}
 	if conditional {
 		return PlanConditional, "resource.preparation_required", "The scanner is relevant; target reachability or resource preparation must succeed before it runs."

@@ -83,3 +83,34 @@ func TestPlanFingerprintStableAcrossCallsAndUnsupportedTypesExplainCoverage(t *t
 		t.Fatalf("unexpected coverage: %+v", a.Coverage)
 	}
 }
+
+func TestOptionalScannerNeedsExplicitSelectionAndUnknownSelectionDoesNotCreateJobs(t *testing.T) {
+	base := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/search?q=x"}}}
+	defaultPlan := PlanAssessment(PlanInput{Config: base, Availability: map[string]bool{"nikto": true, "sqlmap": true}})
+	for _, d := range defaultPlan.Decisions {
+		if d.Scanner == "nikto" && d.TargetID == "app" && d.State != PlanOptional {
+			t.Fatalf("Nikto should remain optional by default, got %+v", d)
+		}
+		if d.Scanner == "sqlmap" && d.TargetID == "app" && d.State != PlanOptional {
+			t.Fatalf("SQLMap should remain opt-in by default, got %+v", d)
+		}
+	}
+
+	base.ScannerSelection = assessment.ScannerSelection{Mode: "custom", Variants: []string{"sqlmap"}}
+	selected := PlanAssessment(PlanInput{Config: base, Availability: map[string]bool{"sqlmap": true}})
+	foundJob := false
+	for _, job := range selected.Jobs {
+		if job.Scanner == "sqlmap" && job.TargetID == "app" {
+			foundJob = true
+		}
+	}
+	if !foundJob {
+		t.Fatalf("explicitly selected and available SQLMap should create a planned job: %+v", selected)
+	}
+
+	base.ScannerSelection.Variants = []string{"missing"}
+	invalid := PlanAssessment(PlanInput{Config: base})
+	if len(invalid.Errors) == 0 || len(invalid.Jobs) != 0 {
+		t.Fatalf("invalid selection must block planning without jobs: %+v", invalid)
+	}
+}
