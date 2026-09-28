@@ -209,6 +209,12 @@ func TestApplicabilityAndArguments(t *testing.T) {
 	if got := buildNuclei(Request{Target: "artifact://filesystem"}, cfg).notApp; got == "" {
 		t.Error("artifact-only Nuclei must be not applicable")
 	}
+	typedNuclei := strings.Join(buildNuclei(Request{Target: "https://example.com/Portal/", TypedAssessment: true}, cfg).args, " ")
+	for _, want := range []string{"-dr", "-ni"} {
+		if !strings.Contains(typedNuclei, want) {
+			t.Errorf("typed Nuclei args %q missing scope-safety flag %q", typedNuclei, want)
+		}
+	}
 	if got := buildTrivy(Request{}, cfg).notApp; got == "" {
 		t.Error("missing Trivy artifact must be not applicable")
 	}

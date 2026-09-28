@@ -30,7 +30,7 @@ func (s *Server) scannerAvailability() map[string]bool {
 	}
 	// Typed assessment planning requires an explicitly dedicated managed ZAP
 	// backend; a configured shared daemon is not sufficient evidence.
-	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated
+	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
 	available["openvas"] = (strings.TrimSpace(s.cfg.GVMHost) != "" || strings.TrimSpace(s.cfg.GVMSocket) != "") && s.cfg.GVMUsername != "" && s.cfg.GVMPassword != ""
 	for _, id := range []string{"masscan", "nikto", "sqlmap", "lynis"} {
 		available[id] = false
@@ -130,7 +130,7 @@ func (s *Server) handleScannerStatus(w http.ResponseWriter, r *http.Request) {
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Get(strings.TrimRight(s.cfg.ZAPURL, "/") + "/JSON/core/view/version/?apikey=" + url.QueryEscape(s.cfg.ZAPAPIKey))
 		if err == nil {
-			zapHealthy = resp.StatusCode/100 == 2
+			zapHealthy = resp.StatusCode/100 == 2 && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
 			_ = resp.Body.Close()
 		}
 	}

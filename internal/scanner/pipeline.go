@@ -846,6 +846,11 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 	}
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "nuclei", "results.jsonl")
 	args := []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut", "-rl", strconv.Itoa(cfg.RateRPS), "-ot"}
+	if req.TypedAssessment {
+		// Typed targets retain strict URL scope; do not let a redirect change
+		// the destination or hand template callbacks to an external service.
+		args = append(args, "-dr", "-ni")
+	}
 	for _, h := range cfg.ScanHeaders {
 		args = append(args, "-H", h)
 	}

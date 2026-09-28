@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,11 @@ var zapLeases = struct {
 	sync.Mutex
 	byService map[string]chan struct{}
 }{byService: make(map[string]chan struct{})}
+
+var zapServiceState = struct {
+	sync.RWMutex
+	quarantined map[string]string
+}{quarantined: make(map[string]string)}
 
 // acquireZAPServiceLease serializes access to a configured daemon across every
 // pipeline instance in this process. ZAP replacer rules and its Sites tree are
@@ -44,6 +51,45 @@ func acquireZAPServiceLease(ctx context.Context, serviceURL string) (func(), err
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func ZAPServiceQuarantined(serviceURL string) bool {
+	key := strings.TrimRight(strings.TrimSpace(serviceURL), "/")
+	zapServiceState.RLock()
+	defer zapServiceState.RUnlock()
+	return zapServiceState.quarantined[key] != ""
+}
+
+func quarantineZAPService(serviceURL, reason string) {
+	key := strings.TrimRight(strings.TrimSpace(serviceURL), "/")
+	zapServiceState.Lock()
+	zapServiceState.quarantined[key] = reason
+	zapServiceState.Unlock()
+}
+
+func applicationContextRegex(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" {
+		return "", fmt.Errorf("invalid application URL for ZAP context")
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	authority := host
+	if port != "" {
+		authority = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		authority = "[" + host + "]"
+	}
+	origin := regexp.QuoteMeta(strings.ToLower(u.Scheme) + "://" + strings.ToLower(authority))
+	path := strings.TrimSuffix(u.EscapedPath(), "/")
+	pathRule := `(?:/.*)?`
+	if path != "" {
+		pathRule = regexp.QuoteMeta(path) + `(?:/.*)?`
+	}
+	return "^" + origin + pathRule + `(?:\?.*)?$`, nil
 }
 
 type zapRunner struct{}
@@ -71,6 +117,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return run
 	}
 	defer release()
+	if ZAPServiceQuarantined(cfg.ZAPURL) {
+		return failedServiceRun("zap", req, "ZAP daemon is quarantined after a cleanup failure; restart the managed daemon and Xalgorix before retrying", emit)
+	}
 	base := filepath.Join(req.ScanDir, "scanner-output", "zap")
 	_ = os.MkdirAll(base, 0o700)
 	run := Run{Scanner: "zap", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().Format(time.RFC3339Nano), ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: filepath.Join(base, "results.json")}
@@ -145,6 +194,44 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if _, err := call("/JSON/core/view/version/", url.Values{}); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
+	contextName, contextID, scopeRegex := "", "", ""
+	if req.TypedAssessment {
+		var err error
+		scopeRegex, err = applicationContextRegex(target)
+		if err != nil {
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		}
+		contextName = "xalgorix-" + stableJobPath(req.Scope+"\x00"+target)
+		if _, err := call("/JSON/core/action/newSession/", url.Values{}); err != nil {
+			return finishServiceFailure(run, fmt.Errorf("create fresh ZAP session: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+		defer func() {
+			if err := zapPost(cfg, "/JSON/core/action/newSession/", url.Values{}); err != nil {
+				quarantineZAPService(cfg.ZAPURL, "reset ZAP session: "+err.Error())
+				logLine("ZAP cleanup failed; daemon quarantined: " + err.Error())
+			}
+		}()
+		created, err := call("/JSON/context/action/newContext/", url.Values{"contextName": {contextName}})
+		if err != nil {
+			return finishServiceFailure(run, fmt.Errorf("create target context: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+		defer func() {
+			if err := zapPost(cfg, "/JSON/context/action/removeContext/", url.Values{"contextName": {contextName}}); err != nil {
+				quarantineZAPService(cfg.ZAPURL, "remove target context: "+err.Error())
+				logLine("ZAP cleanup failed; daemon quarantined: " + err.Error())
+			}
+		}()
+		contextID = valueString(created, "contextId")
+		if contextID == "" || contextID == "<nil>" {
+			return finishServiceFailure(run, errors.New("ZAP did not return a context ID"), secrets, cfg.MaxOutputBytes, emit)
+		}
+		if _, err := call("/JSON/context/action/includeInContext/", url.Values{"contextName": {contextName}, "regex": {scopeRegex}}); err != nil {
+			return finishServiceFailure(run, fmt.Errorf("scope ZAP context to the submitted application: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+		if _, err := call("/JSON/context/action/setContextInScope/", url.Values{"contextName": {contextName}, "booleanInScope": {"true"}}); err != nil {
+			return finishServiceFailure(run, fmt.Errorf("enable target context scope: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+	}
 	// Apply configured scan and per-target authentication headers through
 	// deterministic ZAP replacer rules before crawling. No model interprets
 	// authentication material.
@@ -157,7 +244,10 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		// Detached from cctx on purpose: the rules must come off even when the
 		// scan was cancelled or timed out.
 		for _, description := range rules {
-			zapRemoveRule(cfg, description)
+			if err := zapRemoveRule(cfg, description); err != nil && req.TypedAssessment {
+				quarantineZAPService(cfg.ZAPURL, "remove target authentication rule: "+err.Error())
+				logLine("ZAP cleanup failed; daemon quarantined: " + err.Error())
+			}
 		}
 	}()
 	for i, raw := range headers {
@@ -166,15 +256,19 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			continue
 		}
 		description := fmt.Sprintf("xalgorix-%s-%d", filepath.Base(req.ScanDir), i)
-		_, err := call("/JSON/replacer/action/addRule/", url.Values{
+		rules = append(rules, description)
+		params := url.Values{
 			"description": {description},
 			"enabled":     {"true"}, "matchType": {"REQ_HEADER"}, "matchRegex": {"false"},
 			"matchString": {strings.TrimSpace(name)}, "replacement": {strings.TrimSpace(value)},
-		})
+		}
+		if req.TypedAssessment {
+			params.Set("url", scopeRegex)
+		}
+		_, err := call("/JSON/replacer/action/addRule/", params)
 		if err != nil {
 			return finishServiceFailure(run, fmt.Errorf("configure ZAP header %s: %w", strings.TrimSpace(name), err), secrets, cfg.MaxOutputBytes, emit)
 		}
-		rules = append(rules, description)
 	}
 
 	// Best-effort: seed the target into ZAP's Sites tree before crawling, so a
@@ -183,7 +277,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// fails on targets ZAP's classic fetcher can't handle (e.g. HTTP/2-only sites)
 	// that the spider may still reach, so a failure here is logged and the scan
 	// continues rather than aborting a reachable target.
-	if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {"true"}}); err != nil {
+	followRedirects := "true"
+	if req.TypedAssessment {
+		followRedirects = "false"
+	}
+	if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {followRedirects}}); err != nil {
 		logLine("ZAP could not pre-seed the target (continuing to spider): " + err.Error())
 	} else {
 		logLine("ZAP seeded target into scan tree: " + target)
@@ -196,7 +294,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if maxChildren <= 0 {
 		maxChildren = DefaultWebProfile(ProfileGentle).MaxEndpoints
 	}
-	spider, err := call("/JSON/spider/action/scan/", url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}})
+	spiderParams := url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}}
+	if req.TypedAssessment {
+		spiderParams.Set("contextName", contextName)
+	}
+	spider, err := call("/JSON/spider/action/scan/", spiderParams)
 	if err != nil {
 		return finishServiceFailure(run, fmt.Errorf("start ZAP spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}
@@ -212,6 +314,26 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if err := zapWaitPassive(cctx, call, logLine); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
+	// Typed jobs restore daemon-global scan rule state after execution. Legacy
+	// jobs retain the historical DOM XSS mitigation behavior.
+	if req.TypedAssessment {
+		state, err := call("/JSON/ascan/view/scanners/", url.Values{"ids": {zapDomXSSPluginID}})
+		if err != nil {
+			return finishServiceFailure(run, fmt.Errorf("read ZAP DOM XSS rule state: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+		wasEnabled, found := zapScannerEnabled(state, zapDomXSSPluginID)
+		if !found {
+			return finishServiceFailure(run, errors.New("ZAP did not report the DOM XSS rule state; refusing to change daemon-global policy"), secrets, cfg.MaxOutputBytes, emit)
+		}
+		if wasEnabled {
+			defer func() {
+				if err := zapPost(cfg, "/JSON/ascan/action/enableScanners/", url.Values{"ids": {zapDomXSSPluginID}}); err != nil {
+					quarantineZAPService(cfg.ZAPURL, "restore DOM XSS rule: "+err.Error())
+					logLine("ZAP cleanup failed; daemon quarantined: " + err.Error())
+				}
+			}()
+		}
+	}
 	// Disable the DOM XSS active scan rule (plugin 40026). It drives headless
 	// Firefox through Selenium, whose memory lands on top of the JVM heap and
 	// exceeds ZAP's container limit mid-scan; the browser child is OOM-killed and
@@ -224,7 +346,12 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	} else {
 		logLine("ZAP DOM XSS scan rule disabled (avoids headless-browser OOM)")
 	}
-	active, err := call("/JSON/ascan/action/scan/", url.Values{"url": {target}, "recurse": {"true"}, "inScopeOnly": {"false"}})
+	activeParams := url.Values{"url": {target}, "recurse": {"true"}, "inScopeOnly": {"false"}}
+	if req.TypedAssessment {
+		activeParams.Set("contextId", contextID)
+		activeParams.Set("inScopeOnly", "true")
+	}
+	active, err := call("/JSON/ascan/action/scan/", activeParams)
 	if err != nil {
 		// The active scan runs over the Sites tree. An empty tree (the spider
 		// found nothing reachable and the pre-seed did not land) surfaces as
@@ -271,6 +398,28 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		emit(Event{Type: "scanner_completed", Scanner: "zap", Run: run})
 	}
 	return run
+}
+
+func zapScannerEnabled(response map[string]any, id string) (bool, bool) {
+	items, ok := response["scanners"].([]any)
+	if !ok {
+		return false, false
+	}
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok || valueString(entry, "id") != id {
+			continue
+		}
+		state := strings.ToLower(valueString(entry, "enabled"))
+		if state == "true" || state == "1" {
+			return true, true
+		}
+		if state == "false" || state == "0" {
+			return false, true
+		}
+		return false, false
+	}
+	return false, false
 }
 
 type zapCallFunc func(string, url.Values) (map[string]any, error)
@@ -327,27 +476,43 @@ func zapWaitPassive(ctx context.Context, call zapCallFunc, log func(string)) err
 	}
 }
 
-func zapRemoveRule(cfg Config, description string) {
-	zapPost(cfg, "/JSON/replacer/action/removeRule/", url.Values{"description": {description}})
+func zapRemoveRule(cfg Config, description string) error {
+	return zapPost(cfg, "/JSON/replacer/action/removeRule/", url.Values{"description": {description}})
 }
 
 func zapStopScan(cfg Config, path, scanID string) {
-	zapPost(cfg, path, url.Values{"scanId": {scanID}})
+	_ = zapPost(cfg, path, url.Values{"scanId": {scanID}})
 }
 
 // zapPost issues a best-effort ZAP API call on its own short-lived context, for
 // teardown that has to outlive a cancelled scan.
-func zapPost(cfg Config, path string, q url.Values) {
+func zapPost(cfg Config, path string, q url.Values) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	q.Set("apikey", cfg.ZAPAPIKey)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cfg.ZAPURL, "/")+path+"?"+q.Encode(), nil)
-	if err == nil {
-		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("ZAP API %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var response map[string]any
+	if json.Unmarshal(body, &response) == nil {
+		if code := valueString(response, "code"); code != "" && code != "<nil>" {
+			return fmt.Errorf("ZAP API %s: %s", code, valueString(response, "message"))
 		}
 	}
+	return nil
 }
 
 func valueString(m map[string]any, key string) string {
