@@ -914,6 +914,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/reports/", s.handleReportAction)
 	mux.HandleFunc("/api/scanners/status", s.handleScannerStatus)
 	mux.HandleFunc("/api/scanners/registry", s.handleScannerRegistry)
+	mux.HandleFunc("/api/credentials", s.handleCredentials)
+	mux.HandleFunc("/api/credentials/", s.handleCredentialDetail)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
 	mux.HandleFunc("/api/settings/environment", s.handleEnvironmentSettings)
 	mux.HandleFunc("/api/queue/status", s.handleQueueStatus)
