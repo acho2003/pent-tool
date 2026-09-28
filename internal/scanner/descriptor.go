@@ -1,6 +1,6 @@
 package scanner
 
-import "slices"
+import "github.com/xalgord/xalgorix/v4/internal/assessment"
 
 type Phase string
 
@@ -36,16 +36,37 @@ type ToolInfo struct {
 	Summary    string `json:"summary"`
 }
 
+// ScannerDefinition is the registry entry used by planning and discovery UI.
+// Availability is supplied at planning time because installed tools and
+// configured services vary by deployment.
+type ScannerDefinition struct {
+	ID                     string                  `json:"id"`
+	Name                   string                  `json:"name"`
+	Category               Phase                   `json:"category"`
+	AssessmentTypes        []assessment.Type       `json:"assessment_types"`
+	TargetKinds            []assessment.TargetKind `json:"target_types"`
+	RequiredCapabilities   []assessment.Capability `json:"required_capabilities,omitempty"`
+	OptionalCapabilities   []assessment.Capability `json:"optional_capabilities,omitempty"`
+	SupportsAuthentication bool                    `json:"supports_authentication"`
+	DefaultSelection       string                  `json:"default_selection"`
+	Risk                   string                  `json:"risk"`
+	Selectable             bool                    `json:"selectable"`
+	Available              bool                    `json:"available"`
+	Summary                string                  `json:"summary"`
+}
+
 // Catalog lists every tool a scan runs: the recon tools, which always run, then
 // the scan runners in pipeline order (grouped by phase). It is derived from the
 // runners' own descriptors so the UI never needs its own tool list. Selectable
 // tools are exactly those a scan may deselect (OrderedNames).
 func Catalog() []ToolInfo {
-	runners := append([]Runner{subfinderRunner{}, httpxRunner{}, nmapRunner{}}, NewPipeline(Config{}).Runners...)
-	out := make([]ToolInfo, 0, len(runners))
-	for _, r := range runners {
-		d := r.Descriptor()
-		out = append(out, ToolInfo{Name: d.Name, Phase: d.Phase, Selectable: slices.Contains(OrderedNames, d.Name), Summary: d.Summary})
+	defs := ScannerRegistry()
+	out := make([]ToolInfo, 0, 12)
+	for _, d := range defs {
+		if !d.Available {
+			continue
+		}
+		out = append(out, ToolInfo{Name: d.Name, Phase: d.Category, Selectable: d.Selectable, Summary: d.Summary})
 	}
 	return out
 }
