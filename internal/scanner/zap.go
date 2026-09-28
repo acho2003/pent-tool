@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,31 @@ import (
 // add-on). It is disabled per scan because it launches headless Firefox, which
 // OOM-kills the daemon on a memory-constrained host.
 const zapDomXSSPluginID = "40026"
+
+var zapLeases = struct {
+	sync.Mutex
+	byService map[string]chan struct{}
+}{byService: make(map[string]chan struct{})}
+
+// acquireZAPServiceLease serializes access to a configured daemon across every
+// pipeline instance in this process. ZAP replacer rules and its Sites tree are
+// daemon-global state, so a per-Pipeline worker semaphore is insufficient.
+func acquireZAPServiceLease(ctx context.Context, serviceURL string) (func(), error) {
+	key := strings.TrimRight(strings.TrimSpace(serviceURL), "/")
+	zapLeases.Lock()
+	lease := zapLeases.byService[key]
+	if lease == nil {
+		lease = make(chan struct{}, 1)
+		zapLeases.byService[key] = lease
+	}
+	zapLeases.Unlock()
+	select {
+	case lease <- struct{}{}:
+		return func() { <-lease }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
 type zapRunner struct{}
 
@@ -36,6 +62,12 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if strings.TrimSpace(cfg.ZAPURL) == "" {
 		return failedServiceRun("zap", req, "ZAP service URL is not configured", emit)
 	}
+	release, err := acquireZAPServiceLease(ctx, cfg.ZAPURL)
+	if err != nil {
+		run := cancelledRun("zap", req.Scope, req, err, emit)
+		return run
+	}
+	defer release()
 	base := filepath.Join(req.ScanDir, "scanner-output", "zap")
 	_ = os.MkdirAll(base, 0o700)
 	run := Run{Scanner: "zap", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().Format(time.RFC3339Nano), ExitCode: -1, StdoutPath: filepath.Join(base, "stdout.log"), StderrPath: filepath.Join(base, "stderr.log"), ArtifactPath: filepath.Join(base, "results.json")}

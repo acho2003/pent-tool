@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -145,6 +146,24 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 	if strings.Contains(string(log), "sekret-token") {
 		t.Error("target auth secret leaked into the scanner log")
 	}
+}
+
+func TestZAPServiceLeaseSerializesPipelinesAndHonorsCancellation(t *testing.T) {
+	release, err := acquireZAPServiceLease(context.Background(), "http://zap.example.test:8080/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := acquireZAPServiceLease(ctx, "http://zap.example.test:8080"); err != context.DeadlineExceeded {
+		t.Fatalf("queued ZAP lease error = %v, want deadline exceeded", err)
+	}
+	release()
+	secondRelease, err := acquireZAPServiceLease(context.Background(), "http://zap.example.test:8080")
+	if err != nil {
+		t.Fatalf("lease was not released: %v", err)
+	}
+	secondRelease()
 }
 
 func TestZAPRunFailsWhenAPIRejectsTheCall(t *testing.T) {
