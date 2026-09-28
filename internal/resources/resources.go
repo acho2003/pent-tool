@@ -18,6 +18,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/load"
+	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v3/process"
 )
 
 // ── Resource Levels ──
@@ -935,7 +939,11 @@ func ProtectCurrentProcess() {
 func readLoadAvg() float64 {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
-		log.Printf("[RESOURCES] Cannot read /proc/loadavg: %v", err)
+		stats, fallbackErr := load.Avg()
+		if fallbackErr == nil && stats != nil {
+			return stats.Load1
+		}
+		log.Printf("[RESOURCES] Cannot read /proc/loadavg (%v) or system load average (%v)", err, fallbackErr)
 		return 0
 	}
 	fields := strings.Fields(string(data))
@@ -953,7 +961,11 @@ func readLoadAvg() float64 {
 func readMemInfo() (totalMB, availableMB int64) {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		log.Printf("[RESOURCES] Cannot read /proc/meminfo: %v", err)
+		stats, fallbackErr := mem.VirtualMemory()
+		if fallbackErr == nil && stats != nil {
+			return int64(stats.Total / (1024 * 1024)), int64(stats.Available / (1024 * 1024))
+		}
+		log.Printf("[RESOURCES] Cannot read /proc/meminfo (%v) or system memory (%v)", err, fallbackErr)
 		return 0, 0
 	}
 
@@ -980,7 +992,15 @@ func readMemInfo() (totalMB, availableMB int64) {
 func readProcessRSSMB() int64 {
 	data, err := os.ReadFile("/proc/self/status")
 	if err != nil {
-		return 0
+		proc, fallbackErr := process.NewProcess(int32(os.Getpid()))
+		if fallbackErr != nil {
+			return 0
+		}
+		info, fallbackErr := proc.MemoryInfo()
+		if fallbackErr != nil || info == nil {
+			return 0
+		}
+		return int64(info.RSS / (1024 * 1024))
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if !strings.HasPrefix(line, "VmRSS:") {

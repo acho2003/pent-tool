@@ -11,6 +11,7 @@ require (
 	github.com/go-rod/rod v0.116.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/projectdiscovery/interactsh v1.3.1
+	github.com/shirou/gopsutil/v3 v3.24.5
 	golang.org/x/crypto v0.52.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/time v0.14.0
@@ -114,7 +115,6 @@ require (
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d // indirect
-	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/sorairolake/lzip-go v0.3.8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect

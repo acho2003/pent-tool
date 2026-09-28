@@ -32,13 +32,17 @@ func TestCheckRead_AllowsOutsideAllowList(t *testing.T) {
 func TestCheckRead_AllowsInsideAllowList(t *testing.T) {
 	root := t.TempDir()
 	p := New(root)
+	wantRoot, err := canonicalize(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	canonical, err := p.CheckRead(nil, "test", filepath.Join(root, "any-file"))
 	if err != nil {
 		t.Fatalf("read inside allow-list rejected: %v", err)
 	}
-	if !strings.HasPrefix(canonical, root) {
-		t.Fatalf("canonical = %q, want prefix %q", canonical, root)
+	if !strings.HasPrefix(canonical, wantRoot) {
+		t.Fatalf("canonical = %q, want prefix %q", canonical, wantRoot)
 	}
 }
 

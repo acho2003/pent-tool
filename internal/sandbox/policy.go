@@ -83,14 +83,12 @@ func canonicalizeRootList(roots []string) []string {
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		abs, err := filepath.Abs(raw)
+		clean, err := canonicalize(raw)
 		if err != nil {
-			// An Abs failure is almost impossible (it only fails when
-			// os.Getwd fails), but if it does happen we skip the entry
-			// rather than poisoning the policy with a relative root.
+			// A root that cannot be resolved is ignored rather than
+			// poisoning the policy with a non-canonical boundary.
 			continue
 		}
-		clean := filepath.Clean(abs)
 		if _, ok := seen[clean]; ok {
 			continue
 		}
