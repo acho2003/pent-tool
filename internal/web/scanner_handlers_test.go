@@ -94,6 +94,32 @@ func TestAssessmentPlanRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestTypedAssessmentScanDoesNotFallThroughToLegacyExecution(t *testing.T) {
+	s := newTestServer(t, nil)
+	body := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/Portal/"}]}`
+	rr := httptest.NewRecorder()
+	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(body)))
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(s.instances) != 0 {
+		t.Fatal("unsupported typed assessment execution created a legacy scan")
+	}
+}
+
+func TestScanRequestAcceptsFlatAssessmentAndRejectsAmbiguousDualForms(t *testing.T) {
+	var req ScanRequest
+	if err := json.Unmarshal([]byte(`{"assessment_mode":"GRAY_BOX","assessment_types":["API"],"assessment_targets":[{"id":"api","type":"URL","value":"https://api.example.test/v1"}],"profile":"web-gentle"}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Assessment == nil || req.Assessment.Mode != "GRAY_BOX" || req.Assessment.Profile != "web-gentle" {
+		t.Fatalf("flat assessment was not decoded: %+v", req.Assessment)
+	}
+	if err := json.Unmarshal([]byte(`{"assessment_mode":"BLACK_BOX","assessment":{"assessment_mode":"GRAY_BOX"}}`), &req); err == nil {
+		t.Fatal("expected ambiguous flat and nested assessment forms to be rejected")
+	}
+}
+
 func TestScannerRegistryIncludesUnavailableAdapters(t *testing.T) {
 	s := newTestServer(t, nil)
 	rr := httptest.NewRecorder()

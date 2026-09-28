@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -332,6 +333,42 @@ type ScanRequest struct {
 	// allowLoopbackPorts is the per-scan loopback allowlist the scope guard
 	// honors (resolved server-side).
 	allowLoopbackPorts []int `json:"-"`
+}
+
+// UnmarshalJSON accepts the canonical flat assessment fields documented by
+// the assessment API, plus the nested form used by persisted schedule/queue
+// records. Supplying both is rejected so the server never has to guess which
+// configuration the operator intended.
+func (req *ScanRequest) UnmarshalJSON(data []byte) error {
+	type plainScanRequest ScanRequest
+	var decoded plainScanRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	canonicalFields := false
+	for _, name := range []string{"assessment_mode", "assessment_types", "assessment_targets", "access", "scanner_selection"} {
+		if _, ok := fields[name]; ok {
+			canonicalFields = true
+			break
+		}
+	}
+	if canonicalFields && decoded.Assessment != nil {
+		return errors.New("use either flat assessment fields or assessment, not both")
+	}
+	if canonicalFields {
+		var cfg assessment.AssessmentConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return err
+		}
+		cfg.Profile = decoded.Profile
+		decoded.Assessment = &cfg
+	}
+	*req = ScanRequest(decoded)
+	return nil
 }
 
 // WSEvent is a WebSocket message sent to clients.
@@ -1228,6 +1265,35 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+	if req.Assessment != nil {
+		for _, problem := range assessment.Validate(*req.Assessment) {
+			if problem.Blocking {
+				http.Error(w, problem.Message, http.StatusBadRequest)
+				return
+			}
+		}
+		if req.Profile != "" && req.Assessment.Profile != "" && req.Profile != req.Assessment.Profile {
+			http.Error(w, "profile conflicts with assessment.profile", http.StatusBadRequest)
+			return
+		}
+		if req.Profile == "" {
+			req.Profile = req.Assessment.Profile
+		}
+		canonicalTargets := make([]string, 0, len(req.Assessment.Targets))
+		for _, target := range req.Assessment.Targets {
+			canonicalTargets = append(canonicalTargets, target.Value)
+		}
+		if len(req.Targets) == 0 {
+			req.Targets = canonicalTargets
+		} else if !slices.Equal(req.Targets, canonicalTargets) {
+			http.Error(w, "targets conflict with assessment_targets", http.StatusBadRequest)
+			return
+		}
+		if !req.SaveOnly {
+			http.Error(w, "typed assessment execution is not available yet; review the plan at POST /api/scans/plan", http.StatusUnprocessableEntity)
+			return
+		}
+	}
 
 	// Schema v2 accepts "dast" only as a compatibility alias. Source inputs
 	// are deterministic Trivy artifacts; arbitrary AI build/provision mode is
@@ -2091,6 +2157,13 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		inst.mu.RLock()
+		typedAssessment := inst.Assessment != nil
+		inst.mu.RUnlock()
+		if typedAssessment {
+			http.Error(w, "typed assessment execution is not available yet; review the plan at POST /api/scans/plan", http.StatusUnprocessableEntity)
+			return
+		}
 
 		inst.mu.RLock()
 		targets := strings.Split(inst.Targets, ", ")
@@ -2151,6 +2224,13 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "cannot start: instance is " + currentStatus,
 			})
+			return
+		}
+		inst.mu.RLock()
+		typedAssessment := inst.Assessment != nil
+		inst.mu.RUnlock()
+		if typedAssessment {
+			http.Error(w, "typed assessment execution is not available yet; review the plan at POST /api/scans/plan", http.StatusUnprocessableEntity)
 			return
 		}
 

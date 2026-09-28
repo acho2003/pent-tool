@@ -39,6 +39,10 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
+		if req.Assessment != nil {
+			http.Error(w, "typed assessment scheduling is not available until plan execution is enabled", http.StatusUnprocessableEntity)
+			return
+		}
 		if err := normalizeDeterministicSchedule(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -104,6 +108,10 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if sch.Assessment != nil {
+			http.Error(w, "typed assessment scheduling is not available until plan execution is enabled", http.StatusUnprocessableEntity)
+			return
+		}
 
 		// Manually trigger the scan
 		req := ScanRequest{
@@ -150,6 +158,10 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		var req ScanSchedule
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Assessment != nil {
+			http.Error(w, "typed assessment scheduling is not available until plan execution is enabled", http.StatusUnprocessableEntity)
 			return
 		}
 		if err := normalizeDeterministicSchedule(&req); err != nil {

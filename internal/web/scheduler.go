@@ -322,6 +322,10 @@ func (s *Server) checkAndRunSchedules() {
 			if !sch.Enabled {
 				return
 			}
+			if sch.Assessment != nil {
+				log.Printf("[SCHEDULER] Skipping typed assessment %s because plan execution is not enabled", sch.Name)
+				return
+			}
 			if now.After(sch.NextRun) || now.Equal(sch.NextRun) {
 				log.Printf("[SCHEDULER] Triggering scheduled scan: %s (Targets: %v)", sch.Name, sch.Targets)
 
