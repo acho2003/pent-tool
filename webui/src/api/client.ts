@@ -311,6 +311,12 @@ export const api = {
 	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
 	planAssessment: (config: AssessmentConfig) =>
 		http<AssessmentPlan>("/api/scans/plan", { method: "POST", json: config }),
+	uploadAPIDefinition: async (file: File) =>
+		http<{ id: string; format: string; operation_count: number; size_bytes: number }>("/api/api-definitions", {
+			method: "POST",
+			body: await file.text(),
+			headers: { "Content-Type": "application/octet-stream" },
+		}),
 
   legacyImportStatus: () =>
     http<{ count: number; dismissed: boolean }>("/api/legacy-import/status"),

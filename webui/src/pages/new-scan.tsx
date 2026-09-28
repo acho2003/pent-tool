@@ -34,6 +34,10 @@ export default function NewScanPage() {
   const [assessmentPlan, setAssessmentPlan] = useState<AssessmentPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [apiDefinitionId, setAPIDefinitionId] = useState("");
+  const [apiDefinitionInfo, setAPIDefinitionInfo] = useState("");
+  const [apiTargetId, setAPITargetId] = useState("");
+  const [uploadingDefinition, setUploadingDefinition] = useState(false);
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
   const tools: ToolInfo[] = health.data?.scanners ?? [];
   const selectable = useMemo(() => tools.filter((t) => t.selectable), [tools]);
@@ -65,12 +69,36 @@ export default function NewScanPage() {
         assessment_targets: targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
         profile: "web-gentle",
         subdomain_discovery: subdomainDiscovery,
+        api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
       });
       setAssessmentPlan(plan);
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : "Could not create assessment plan");
     } finally {
       setPlanning(false);
+    }
+  }
+
+  async function uploadAPIDefinition(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setPlanError("API definition must be 5 MiB or smaller.");
+      return;
+    }
+    setPlanError(null);
+    setAssessmentPlan(null);
+    setUploadingDefinition(true);
+    try {
+      const result = await api.uploadAPIDefinition(file);
+      setAPIDefinitionId(result.id);
+      setAPIDefinitionInfo(`${result.operation_count} operations · ${result.format} · ${result.size_bytes} bytes`);
+      setAPITargetId("target-1");
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : "API definition upload failed");
+    } finally {
+      setUploadingDefinition(false);
     }
   }
 
@@ -147,12 +175,14 @@ export default function NewScanPage() {
       </div>
       <div className="space-y-2"><Label>Assessment types</Label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ASSESSMENT_TYPES.map((type) => <label key={type} className="flex items-center gap-2 rounded-md border p-2 text-xs"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} />{type.replaceAll("_", " ")}</label>)}</div></div>
       <label className="flex items-start gap-2 rounded-md border p-3 text-sm"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-0.5" /><span>Authorize subdomain discovery for domain targets<p className="mt-1 text-xs text-muted-foreground">Off by default. This adds Subfinder coverage to the plan when a domain target is supplied.</p></span></label>
+      <div className="space-y-3 rounded-md border p-3"><div className="space-y-1"><Label htmlFor="api-definition">OpenAPI / Swagger definition</Label><Input id="api-definition" type="file" accept=".json,.yaml,.yml,application/json" onChange={(e) => void uploadAPIDefinition(e)} disabled={uploadingDefinition} /><p className="text-xs text-muted-foreground">Definitions are size-limited, external references are rejected, and spec server URLs do not change target scope.</p></div>{apiDefinitionId && <><p className="break-all font-mono text-xs text-muted-foreground">Uploaded {apiDefinitionInfo} · {apiDefinitionId}</p><div className="space-y-2"><Label>Map this definition to a target</Label><Select value={apiTargetId || "target-1"} onValueChange={(value) => { setAPITargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">The selected target must be an explicit HTTP(S) URL.</p></div></>}</div>
       <Button type="button" variant="outline" onClick={() => void previewAssessmentPlan()} disabled={planning}>{planning ? "Planning…" : "Preview plan"}</Button>
       {planError && <p className="text-sm text-destructive">{planError}</p>}
       {assessmentPlan && <div className="space-y-4 border-t pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">Coverage preview · registry {assessmentPlan.registry_version}</p><p className="font-mono text-xs text-muted-foreground">{assessmentPlan.fingerprint.slice(0, 24)}…</p></div>
         <div className="grid gap-2 sm:grid-cols-2">{assessmentPlan.coverage.map((item) => <div key={item.type} className="rounded-md border p-3"><p className="text-xs font-medium">{item.type.replaceAll("_", " ")} · {item.state}</p><p className="mt-1 text-xs text-muted-foreground">{item.reason}</p></div>)}</div>
         <div><p className="mb-2 text-sm font-medium">Planned jobs ({assessmentPlan.jobs.length})</p>{assessmentPlan.jobs.length ? <ul className="space-y-1 text-xs">{assessmentPlan.jobs.map((job) => <li key={job.id} className="font-mono">{job.scanner} · {job.assessment_type} · {job.state} · {job.target}</li>)}</ul> : <p className="text-xs text-muted-foreground">No runnable jobs are available for these inputs.</p>}</div>
+        {assessmentPlan.api_endpoints?.length ? <div><p className="mb-2 text-sm font-medium">Imported API operations ({assessmentPlan.api_endpoints.length})</p><ul className="space-y-1 text-xs">{assessmentPlan.api_endpoints.map((endpoint, i) => <li key={`${endpoint.target_id}-${endpoint.method}-${endpoint.path}-${i}`} className="font-mono">{endpoint.method} {endpoint.path} · {endpoint.origin}</li>)}</ul></div> : null}
         <details><summary className="cursor-pointer text-xs font-medium">Scanner decisions ({assessmentPlan.decisions.length})</summary><ul className="mt-2 space-y-2">{assessmentPlan.decisions.map((decision, i) => <li key={`${decision.scanner}-${decision.target_id ?? "all"}-${i}`} className="border-l-2 pl-3 text-xs"><span className="font-medium">{decision.scanner} · {decision.state}</span><p className="text-muted-foreground">{decision.reason}</p></li>)}</ul></details>
       </div>}
     </CardContent></Card>
