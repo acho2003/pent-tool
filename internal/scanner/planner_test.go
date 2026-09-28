@@ -3,6 +3,7 @@ package scanner
 import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -79,7 +80,7 @@ func TestPlanFingerprintStableAcrossCallsAndUnsupportedTypesExplainCoverage(t *t
 	if a.Fingerprint == "" || a.Fingerprint != b.Fingerprint {
 		t.Fatalf("unstable fingerprint %q %q", a.Fingerprint, b.Fingerprint)
 	}
-	if len(a.Coverage) != 1 || a.Coverage[0].State != "not_applicable" {
+	if len(a.Coverage) != 1 || a.Coverage[0].State != "unavailable" || !strings.Contains(a.Coverage[0].Reason, "Kubernetes") {
 		t.Fatalf("unexpected coverage: %+v", a.Coverage)
 	}
 }
@@ -146,5 +147,27 @@ func TestDomainSubdomainDiscoveryRequiresSeparateExplicitPermission(t *testing.T
 	}
 	if !found {
 		t.Fatalf("authorized subdomain discovery job missing: %+v", withPermission.Decisions)
+	}
+}
+
+func TestUnsupportedCloudAndKubernetesTypesStayVisibleAsUnavailable(t *testing.T) {
+	cfg := assessment.AssessmentConfig{
+		Mode:  assessment.ModeWhiteBox,
+		Types: []assessment.Type{assessment.TypeCloud, assessment.TypeKubernetes},
+		Targets: []assessment.Target{
+			{ID: "cloud", Kind: assessment.KindCloudAccount, Value: "account-123"},
+			{ID: "cluster", Kind: assessment.KindKubernetesCluster, Value: "prod-cluster"},
+		},
+	}
+	plan := PlanAssessment(PlanInput{Config: cfg})
+	for i, typ := range cfg.Types {
+		if plan.Coverage[i].Type != typ || plan.Coverage[i].State != "unavailable" {
+			t.Fatalf("coverage for %s = %+v", typ, plan.Coverage)
+		}
+	}
+	if !slices.ContainsFunc(plan.Decisions, func(d PlanDecision) bool {
+		return d.Scanner == "adapter" && d.TargetID == "cloud" && d.State == PlanUnavailable && strings.Contains(d.Reason, "no cloud scanner")
+	}) {
+		t.Fatalf("cloud adapter gap was not explained: %+v", plan.Decisions)
 	}
 }

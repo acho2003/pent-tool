@@ -159,6 +159,23 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: def.ID, State: PlanNotApplicable, ReasonCode: "target_or_type_missing", Reason: "No supplied target and requested assessment type match this scanner."})
 		}
 	}
+	for _, target := range cfg.Targets {
+		for _, typ := range cfg.Types {
+			if !targetSupportsType(target, typ) {
+				continue
+			}
+			matched := slices.ContainsFunc(plan.Decisions, func(d PlanDecision) bool {
+				return d.TargetID == target.ID && slices.Contains(d.Types, typ)
+			})
+			if !matched {
+				plan.Decisions = append(plan.Decisions, PlanDecision{
+					Scanner: "adapter", TargetID: target.ID, Types: []assessment.Type{typ},
+					State: PlanUnavailable, ReasonCode: "adapter.unavailable",
+					Reason: unsupportedTypeReason(typ),
+				})
+			}
+		}
+	}
 	for _, typ := range cfg.Types {
 		coverage := TypeCoverage{Type: typ, State: "not_applicable", Reason: "No scanner in this build supports the requested type and supplied resources."}
 		for _, d := range plan.Decisions {
@@ -235,15 +252,30 @@ func targetSupportsType(target assessment.Target, typ assessment.Type) bool {
 	case assessment.KindIP, assessment.KindCIDR:
 		return typ == assessment.TypeNetwork || typ == assessment.TypeHost
 	case assessment.KindHost:
-		return typ == assessment.TypeNetwork || typ == assessment.TypeHost || typ == assessment.TypeWebApplication || typ == assessment.TypeAPI
+		return typ == assessment.TypeNetwork || typ == assessment.TypeHost || typ == assessment.TypeWebApplication || typ == assessment.TypeAPI || typ == assessment.TypeCompliance
 	case assessment.KindRepository, assessment.KindLocalSourcePath:
 		return typ == assessment.TypeSourceCode || typ == assessment.TypeDependencies || typ == assessment.TypeIaC
 	case assessment.KindDockerImage:
 		return typ == assessment.TypeContainer || typ == assessment.TypeDependencies
 	case assessment.KindSBOM:
 		return typ == assessment.TypeDependencies
+	case assessment.KindCloudAccount:
+		return typ == assessment.TypeCloud
+	case assessment.KindKubernetesCluster:
+		return typ == assessment.TypeKubernetes
 	default:
 		return false
+	}
+}
+
+func unsupportedTypeReason(typ assessment.Type) string {
+	switch typ {
+	case assessment.TypeCloud:
+		return "Cloud assessment is represented in the plan, but this build has no cloud scanner adapter."
+	case assessment.TypeKubernetes:
+		return "Kubernetes assessment is represented in the plan, but this build has no Kubernetes scanner adapter."
+	default:
+		return fmt.Sprintf("No scanner adapter in this build supports assessment type %s for the supplied resource.", typ)
 	}
 }
 
