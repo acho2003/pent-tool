@@ -747,6 +747,7 @@ func (s *Server) rebuildInstancesFromDisk() {
 			VulnCount:      len(entry.rec.Vulns),
 			TotalTokens:    entry.rec.TotalTokens,
 			ScanMode:       entry.rec.ScanMode,
+			Engine:         entry.rec.Engine,
 			Instruction:    entry.rec.Instruction,
 			SeverityFilter: entry.rec.SeverityFilter,
 			Scanners:       entry.rec.Scanners,

@@ -1170,6 +1170,7 @@ function ConfigTab({
 }) {
   const items: Array<{ k: string; v: ReactNode }> = [
     { k: "Scan mode", v: scan.scan_mode || "—" },
+    { k: "Engine", v: scan.engine === "autonomous" ? "Autonomous (AI)" : "Deterministic" },
     {
       k: "Recon access",
       v: scan.recon_mode === "passive" ? "passive only" : "active allowed",

@@ -268,9 +268,13 @@ func logRecover(label string) {
 
 // ScanRequest is the JSON body for starting a scan.
 type ScanRequest struct {
-	Targets          []string `json:"targets"`
-	Instruction      string   `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
-	ScanMode         string   `json:"scan_mode"` // "single" or "wildcard"
+	Targets     []string `json:"targets"`
+	Instruction string   `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
+	ScanMode    string   `json:"scan_mode"` // "single" or "wildcard"
+	// Engine selects the scan executor: "deterministic" (the fixed native-tool
+	// pipeline, no AI) or "autonomous" (the LLM-driven agent). Empty/unknown
+	// normalizes to deterministic. See engine.go.
+	Engine           string   `json:"engine,omitempty"`
 	Profile          string   `json:"profile,omitempty"`
 	WebScope         string   `json:"web_scope,omitempty"`
 	APIDefinitionIDs []string `json:"api_definition_ids,omitempty"`
@@ -426,6 +430,7 @@ type ScanRecord struct {
 	Status                   string           `json:"status"`                               // saved, running, finished, stopped
 	StopReason               string           `json:"stop_reason,omitempty"`                // why scan stopped (error, user, watchdog, etc.)
 	ScanMode                 string           `json:"scan_mode,omitempty"`                  // single, wildcard, dast
+	Engine                   string           `json:"engine,omitempty"`                     // deterministic or autonomous (see engine.go)
 	Instruction              string           `json:"instruction,omitempty"`                // custom scan instructions
 	SeverityFilter           []string         `json:"severity_filter,omitempty"`            // severity filter for scan
 	Scanners                 []string         `json:"scanners,omitempty"`                   // selected scanners (empty = whole pipeline)
@@ -466,6 +471,8 @@ type QueueState struct {
 	CurrentIdx            int              `json:"current_idx"`
 	Instruction           string           `json:"instruction"`
 	ScanMode              string           `json:"scan_mode"`
+	Engine                string           `json:"engine,omitempty"`
+	Profile               string           `json:"profile,omitempty"`
 	StartedAt             string           `json:"started_at"`
 	Active                bool             `json:"active"`
 	Name                  string           `json:"name,omitempty"`
@@ -506,6 +513,7 @@ type ScanInstance struct {
 	VulnCount      int      `json:"vuln_count"`
 	TotalTokens    int      `json:"total_tokens"`
 	ScanMode       string   `json:"scan_mode"`
+	Engine         string   `json:"engine,omitempty"`          // deterministic or autonomous (see engine.go)
 	Instruction    string   `json:"instruction,omitempty"`     // custom scan instructions for restart
 	SeverityFilter []string `json:"severity_filter,omitempty"` // severity filter for restart
 	Scanners       []string `json:"scanners,omitempty"`        // selected scanners for restart (empty = all)
@@ -1495,6 +1503,16 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "scan_mode must be single or wildcard", http.StatusBadRequest)
 		return
 	}
+	// Engine selects the executor: deterministic ("just scan", no AI) or
+	// autonomous (LLM-driven agent). Unknown/empty normalizes to deterministic.
+	// Autonomous needs an AI provider — reject it up front with a clear message
+	// rather than letting the agent abort mid-scan on an install with no
+	// credentials configured.
+	req.Engine = normalizeEngine(req.Engine)
+	if req.Engine == engineAutonomous && !s.autonomousProviderReady(r.Context(), req) {
+		http.Error(w, "autonomous (AI) mode requires a configured AI provider (set XALGORIX_API_KEY, an API base, an LLM provider/model, or an auth profile) — or choose deterministic scan", http.StatusBadRequest)
+		return
+	}
 	if req.Profile == "" {
 		req.Profile = scanner.ProfileGentle
 	}
@@ -1589,6 +1607,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			Status:         "saved",
 			StartedAt:      now,
 			ScanMode:       req.ScanMode,
+			Engine:         req.Engine,
 			Instruction:    req.Instruction,
 			SeverityFilter: req.SeverityFilter,
 			Scanners:       req.Scanners,
@@ -1627,6 +1646,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 				Status:                   "saved",
 				StartedAt:                now,
 				ScanMode:                 req.ScanMode,
+				Engine:                   req.Engine,
 				Instruction:              req.Instruction,
 				SeverityFilter:           req.SeverityFilter,
 				Scanners:                 append([]string(nil), req.Scanners...),
@@ -2569,6 +2589,7 @@ type scanSession struct {
 	resetState         bool
 	instanceID         string               // parent instance ID for multi-instance tracking
 	scanMode           string               // single, wildcard, dast — persisted so dashboard shows correct mode
+	engine             string               // deterministic or autonomous — selects executor (see engine.go)
 	profile            string               // web-gentle or web-thorough
 	sctx               *scanctx.ScanContext // per-session isolated state
 	companyName        string               // report branding: company name

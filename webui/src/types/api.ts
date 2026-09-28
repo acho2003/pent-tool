@@ -115,6 +115,7 @@ export interface ScanInstance {
   vuln_count: number;
   total_tokens: number;
   scan_mode: string;
+  engine?: string;
   instruction?: string;
   severity_filter?: string[];
   scanners?: string[];
@@ -152,6 +153,7 @@ export interface ScanRecord {
   status: string;
   stop_reason?: string;
   scan_mode?: string;
+  engine?: string;
   instruction?: string;
   severity_filter?: string[];
   scanners?: string[];
@@ -187,6 +189,7 @@ export interface ScanListItem {
   started_at: string;
   status: string;
   scan_mode?: string;
+  engine?: string;
   vuln_count: number;
   total_tokens: number;
   sub_scan_total?: number;
@@ -273,6 +276,9 @@ export interface AuthStatus {
 export interface ScanRequest {
   targets: string[];
   scan_mode?: string;
+  // Scan executor: "deterministic" (fixed native-tool pipeline, no AI) or
+  // "autonomous" (LLM-driven agent). Omitted/unknown = deterministic.
+  engine?: string;
   name?: string;
   save_only?: boolean;
   company_name?: string;
@@ -410,6 +416,7 @@ export interface QueueStatus {
   remaining?: number;
   instruction?: string;
   scan_mode?: string;
+  engine?: string;
   recon_mode?: "active" | "passive";
   scan_intensity?: "active" | "passive";
   paused?: boolean;
@@ -538,6 +545,7 @@ export interface ScanSchedule {
   enabled: boolean;
   targets: string[];
   scan_mode: string;
+  engine?: string;
   company_name?: string;
   logo_path?: string;
   artifact?: ScannerArtifact;

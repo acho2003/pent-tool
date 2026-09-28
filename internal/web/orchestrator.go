@@ -81,6 +81,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 		Status:              "pending",
 		StartedAt:           time.Now().Format(time.RFC3339Nano),
 		ScanMode:            req.ScanMode,
+		Engine:              normalizeEngine(req.Engine),
 		Instruction:         req.Instruction,
 		SeverityFilter:      req.SeverityFilter,
 		Scanners:            append([]string(nil), req.Scanners...),
@@ -609,6 +610,8 @@ func (s *Server) runSingleTarget(ctx context.Context, scanCfg *config.Config, re
 		resetState:         !resumed,
 		instanceID:         req.InstanceID,
 		scanMode:           "single",
+		engine:             normalizeEngine(req.Engine),
+		profile:            req.Profile,
 		companyName:        req.CompanyName,
 		logoPath:           req.LogoPath,
 		phases:             req.Phases,
@@ -685,6 +688,8 @@ func (s *Server) runDASTTarget(ctx context.Context, scanCfg *config.Config, req 
 		resetState:         !resumed,
 		instanceID:         req.InstanceID,
 		scanMode:           "dast",
+		engine:             normalizeEngine(req.Engine),
+		profile:            req.Profile,
 		companyName:        req.CompanyName,
 		logoPath:           req.LogoPath,
 		phases:             req.Phases,
@@ -715,7 +720,10 @@ func (s *Server) runDASTTarget(ctx context.Context, scanCfg *config.Config, req 
 
 // runWildcardTarget handles wildcard mode: Phase 1 subdomain discovery, then Phase 2 per-subdomain scanning.
 func (s *Server) runWildcardTarget(ctx context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
-	if deterministicScannerPipelineEnabled() {
+	// Deterministic ("just scan") wildcard uses tool-based discovery + the
+	// native pipeline per host. Only the autonomous engine runs the LLM-driven
+	// discovery + per-subdomain agent sessions below.
+	if normalizeEngine(req.Engine) != engineAutonomous {
 		s.runDeterministicWildcard(ctx, scanCfg, req, target, idx, total)
 		return
 	}
@@ -804,6 +812,7 @@ func (s *Server) runWildcardTarget(ctx context.Context, scanCfg *config.Config, 
 			resetState:         true,
 			instanceID:         req.InstanceID,
 			scanMode:           "wildcard",
+			engine:             normalizeEngine(req.Engine),
 			skipNotesCleanup:   true, // preserve notes for subdomain collection
 			companyName:        req.CompanyName,
 			logoPath:           req.LogoPath,
@@ -1053,6 +1062,7 @@ func (s *Server) runWildcardTarget(ctx context.Context, scanCfg *config.Config, 
 				resetState:           false, // accumulate vulns across subdomains
 				instanceID:           req.InstanceID,
 				scanMode:             "wildcard",
+				engine:               normalizeEngine(req.Engine),
 				parentReportingCtxID: parentReportingCtxID, // merge vulns into parent on cleanup
 				companyName:          req.CompanyName,
 				logoPath:             req.LogoPath,
@@ -1179,11 +1189,6 @@ func (s *Server) runWildcardTarget(ctx context.Context, scanCfg *config.Config, 
 	}
 	s.instancesMu.RUnlock()
 }
-
-// Kept as a function (rather than a feature flag) while legacy record helpers
-// remain compiled for backward-compatible reads. New wildcard execution is
-// unconditionally deterministic.
-func deterministicScannerPipelineEnabled() bool { return true }
 
 func commandRateForPolicy(policy scanctx.RequestRatePolicy) int {
 	if !policy.Enabled() {

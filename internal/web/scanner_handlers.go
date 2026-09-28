@@ -50,8 +50,9 @@ func (s *Server) handleScannerStatus(w http.ResponseWriter, r *http.Request) {
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "vuls": s.cfg.VulsPath,
 		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 	}
-	entries := make([]map[string]any, 0, len(scanner.Catalog()))
-	for _, tool := range scanner.Catalog() {
+	catalog := scanner.Catalog()
+	entries := make([]map[string]any, 0, len(catalog))
+	for _, tool := range catalog {
 		e := map[string]any{"name": tool.Name, "phase": tool.Phase, "selectable": tool.Selectable, "summary": tool.Summary}
 		switch tool.Name {
 		case "zap":

@@ -20,6 +20,7 @@ export default function NewScanPage() {
   const [targetsText, setTargetsText] = useState("");
   const [name, setName] = useState("");
   const [mode, setMode] = useState("single");
+  const [engine, setEngine] = useState("deterministic");
   const [artifactKind, setArtifactKind] = useState("none");
   const [artifactRef, setArtifactRef] = useState("");
   const [vulsHost, setVulsHost] = useState("");
@@ -80,6 +81,7 @@ export default function NewScanPage() {
         targets,
         name: name.trim() || undefined,
         scan_mode: mode,
+        engine,
         artifact: artifactKind !== "none" && artifactRef.trim() ? { kind: artifactKind, ref: artifactRef.trim() } : undefined,
         vuls_ssh_host: vulsHost.trim() || undefined,
         target_auth: targetAuth.trim() || undefined,
@@ -100,13 +102,16 @@ export default function NewScanPage() {
   return <div className="mx-auto max-w-3xl space-y-5">
     <div>
       <Button variant="ghost" size="sm" onClick={() => nav(-1)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-      <h1 className="mt-2 text-2xl font-semibold">Start deterministic scan</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Recon, then per-host web and server scanners, then source-code analysis. Report AI runs only after scanning is complete.</p>
+      <h1 className="mt-2 text-2xl font-semibold">{engine === "autonomous" ? "Start autonomous AI scan" : "Start deterministic scan"}</h1>
+      <p className="mt-1 text-sm text-muted-foreground">{engine === "autonomous"
+        ? "An AI agent decides its own approach and drives the full tool catalog. Requires a configured AI provider."
+        : "Recon, then per-host web and server scanners, then source-code analysis. Report AI runs only after scanning is complete."}</p>
     </div>
     <form onSubmit={onSubmit} className="space-y-5">
       <Card><CardHeader><CardTitle>Target and mode</CardTitle></CardHeader><CardContent className="space-y-4">
         <div className="space-y-2"><Label htmlFor="name">Scan name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Quarterly external scan" /></div>
         <div className="space-y-2"><Label htmlFor="targets">Hosts or URLs</Label><Textarea id="targets" value={targetsText} onChange={(e) => setTargetsText(e.target.value)} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One per line. Recon discovers live hosts; each host is scanned on its web and/or server track.</p></div>
+        <div className="space-y-2"><Label>Scan engine</Label><Select value={engine} onValueChange={setEngine}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="deterministic">Just scan (deterministic)</SelectItem><SelectItem value="autonomous">Full autonomous (AI)</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">{engine === "autonomous" ? "AI agent drives the scan. Needs an AI provider configured (API key, base URL, or LLM profile)." : "Fixed native-tool pipeline. No AI provider required."}</p></div>
         <div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single target</SelectItem><SelectItem value="wildcard">Wildcard discovery</SelectItem></SelectContent></Select></div>
         <div className="space-y-2"><Label>Report severity filter</Label><div className="flex flex-wrap gap-3">{SEVERITIES.map((sev) => (<label key={sev} className="flex items-center gap-1.5 text-sm capitalize"><input type="checkbox" checked={severities.includes(sev)} onChange={() => toggleSeverity(sev)} className="h-3.5 w-3.5 rounded border-border" />{sev}</label>))}</div><p className="text-xs text-muted-foreground">Leave all unchecked to report every severity.</p></div>
       </CardContent></Card>

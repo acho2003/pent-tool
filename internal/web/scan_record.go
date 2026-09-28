@@ -42,6 +42,7 @@ func (s *Server) freshScanRecordForSession(sess *scanSession, startedAt string) 
 		Target:                   sess.target,
 		ParentTarget:             sess.parentTarget,
 		ScanMode:                 sess.scanMode,
+		Engine:                   normalizeEngine(sess.engine),
 		Instruction:              sess.userInstruction,
 		SeverityFilter:           append([]string(nil), sess.severityFilter...),
 		Scanners:                 append([]string(nil), sess.scanners...),

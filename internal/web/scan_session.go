@@ -36,9 +36,16 @@ func shouldFailInstanceOnAbort(scanMode, parentTarget string, discoveryMode bool
 	return true
 }
 
-// executeScanSession runs a single scan in complete isolation.
-// It NEVER panics upward — all panics are caught and logged.
+// executeScanSession runs a single scan in complete isolation, dispatching to
+// the executor selected by the session's engine. Autonomous scans run the
+// LLM-driven agent; everything else (the default) runs the deterministic
+// native-tool pipeline. It NEVER panics upward — each executor catches and
+// logs its own panics.
 func (s *Server) executeScanSession(sess *scanSession) {
+	if normalizeEngine(sess.engine) == engineAutonomous {
+		s.executeAgentScanSession(sess)
+		return
+	}
 	s.executeDeterministicScanSession(sess)
 }
 
