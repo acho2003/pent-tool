@@ -29,6 +29,14 @@ func (s *Server) credentialVault() (*credentials.Vault, error) {
 	return credentials.New(path.Join(s.dataDir, "_credentials"), key)
 }
 
+func (s *Server) openCredentialVault() (*credentials.Vault, error) {
+	key, err := credentials.LoadKeyFile(os.Getenv("XALGORIX_CREDENTIAL_KEY_FILE"))
+	if err != nil {
+		return nil, err
+	}
+	return credentials.Open(path.Join(s.dataDir, "_credentials"), key)
+}
+
 func (s *Server) handleCredentials(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	vault, err := s.credentialVault()

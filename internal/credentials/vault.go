@@ -49,7 +49,7 @@ type Vault struct {
 }
 
 func New(root string, key []byte) (*Vault, error) {
-	aead, err := newAEAD(key)
+	vault, err := Open(root, key)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +58,16 @@ func New(root string, key []byte) (*Vault, error) {
 	}
 	if err := os.Chmod(root, 0700); err != nil {
 		return nil, fmt.Errorf("secure credential vault: %w", err)
+	}
+	return vault, nil
+}
+
+// Open constructs a vault reader without creating or changing its directory.
+// It is used by read-only plan previews, which must not mutate storage.
+func Open(root string, key []byte) (*Vault, error) {
+	aead, err := newAEAD(key)
+	if err != nil {
+		return nil, err
 	}
 	return &Vault{root: root, aead: aead}, nil
 }

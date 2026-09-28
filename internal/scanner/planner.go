@@ -55,6 +55,9 @@ type PlanInput struct {
 	// Availability is an execution capability snapshot, keyed by registry ID.
 	// Missing entries use the build's registry default.
 	Availability map[string]bool `json:"-"`
+	// CredentialAvailability is keyed by targetID + NUL + credentialID. A
+	// declared ID alone is not evidence that a secret exists or is target-bound.
+	CredentialAvailability map[string]bool `json:"-"`
 }
 
 type AssessmentPlan struct {
@@ -75,6 +78,25 @@ type AssessmentPlan struct {
 func PlanAssessment(input PlanInput) AssessmentPlan {
 	cfg := assessment.Normalize(input.Config)
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: "1"}
+	for i := range plan.Capabilities {
+		evidence := &plan.Capabilities[i]
+		if evidence.Capability != assessment.CapAuthWeb {
+			continue
+		}
+		credentialID := evidence.ReferenceID
+		if credentialID == "" {
+			evidence.State = assessment.StateUnavailable
+			evidence.Reason = "authenticated access is not backed by a credential reference"
+			continue
+		}
+		if input.CredentialAvailability[credentialAvailabilityKey(evidence.TargetID, credentialID)] {
+			evidence.State = assessment.StateAvailable
+			evidence.Reason = "encrypted credential exists and is bound to this target; verification is still pending"
+		} else {
+			evidence.State = assessment.StateUnavailable
+			evidence.Reason = "credential is missing, unreadable, or not bound to this target"
+		}
+	}
 	problems := assessment.Validate(cfg)
 	for _, p := range problems {
 		if p.Blocking {
@@ -84,7 +106,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 	}
 	if len(plan.Errors) > 0 {
-		plan.Fingerprint = planFingerprint(cfg, plan.Decisions, plan.Jobs, plan.RegistryVersion)
+		plan.Fingerprint = planFingerprint(cfg, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion)
 		return plan
 	}
 	defs := ScannerRegistry()
@@ -102,7 +124,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 	}
 	if len(plan.Errors) > 0 {
-		plan.Fingerprint = planFingerprint(cfg, plan.Decisions, plan.Jobs, plan.RegistryVersion)
+		plan.Fingerprint = planFingerprint(cfg, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion)
 		return plan
 	}
 
@@ -202,8 +224,12 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		plan.Coverage = append(plan.Coverage, coverage)
 	}
 	sort.SliceStable(plan.Jobs, func(i, j int) bool { return plan.Jobs[i].ID < plan.Jobs[j].ID })
-	plan.Fingerprint = planFingerprint(cfg, plan.Decisions, plan.Jobs, plan.RegistryVersion)
+	plan.Fingerprint = planFingerprint(cfg, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion)
 	return plan
+}
+
+func credentialAvailabilityKey(targetID, credentialID string) string {
+	return targetID + "\x00" + credentialID
 }
 
 func eligibility(def ScannerDefinition, target assessment.Target, evidence []assessment.CapabilityEvidence, availability map[string]bool) (PlanState, string, string) {
@@ -289,13 +315,14 @@ func hasCapability(all []assessment.CapabilityEvidence, c assessment.Capability,
 	}
 	return false
 }
-func planFingerprint(cfg assessment.AssessmentConfig, decisions []PlanDecision, jobs []PlanJob, registryVersion string) string {
+func planFingerprint(cfg assessment.AssessmentConfig, capabilities []assessment.CapabilityEvidence, decisions []PlanDecision, jobs []PlanJob, registryVersion string) string {
 	data, _ := json.Marshal(struct {
-		Config          assessment.AssessmentConfig `json:"config"`
-		Decisions       []PlanDecision              `json:"decisions"`
-		Jobs            []PlanJob                   `json:"jobs"`
-		RegistryVersion string                      `json:"registry_version"`
-	}{cfg, decisions, jobs, registryVersion})
+		Config          assessment.AssessmentConfig     `json:"config"`
+		Capabilities    []assessment.CapabilityEvidence `json:"capabilities"`
+		Decisions       []PlanDecision                  `json:"decisions"`
+		Jobs            []PlanJob                       `json:"jobs"`
+		RegistryVersion string                          `json:"registry_version"`
+	}{cfg, capabilities, decisions, jobs, registryVersion})
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }

@@ -183,11 +183,12 @@ type AccessBinding struct {
 // CapabilityEvidence records why a capability is (or is not) available for a
 // specific target/resource, with provenance and a human-readable reason.
 type CapabilityEvidence struct {
-	Capability Capability    `json:"capability"`
-	TargetID   string        `json:"target_id"`
-	State      EvidenceState `json:"state"`
-	Provenance string        `json:"provenance"`
-	Reason     string        `json:"reason"`
+	Capability  Capability    `json:"capability"`
+	TargetID    string        `json:"target_id"`
+	ReferenceID string        `json:"reference_id,omitempty"`
+	State       EvidenceState `json:"state"`
+	Provenance  string        `json:"provenance"`
+	Reason      string        `json:"reason"`
 }
 
 // APIDefinitionBinding associates one immutable uploaded schema with a single

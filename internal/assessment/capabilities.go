@@ -81,7 +81,9 @@ func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 				} else {
 					reason = "authenticated access requested without a resolvable credential"
 				}
-				out = append(out, ev(CapAuthWeb, id, st, prov, reason))
+				evidence := ev(CapAuthWeb, id, st, prov, reason)
+				evidence.ReferenceID = strings.TrimSpace(ab.CredentialID)
+				out = append(out, evidence)
 			case AccessRepositoryCreds:
 				out = append(out, ev(CapGit, id, StateAvailable, "credential_ref", "repository credentials supplied"))
 			case AccessSSH:

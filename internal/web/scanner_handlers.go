@@ -47,7 +47,20 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid assessment configuration", http.StatusBadRequest)
 		return
 	}
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.scannerAvailability()})
+	credentialAvailability := map[string]bool{}
+	if vault, err := s.openCredentialVault(); err == nil {
+		for _, binding := range cfg.Access {
+			if strings.TrimSpace(binding.CredentialID) == "" {
+				continue
+			}
+			for _, targetID := range binding.TargetIDs {
+				key := targetID + "\x00" + binding.CredentialID
+				_, lookupErr := vault.Get(binding.CredentialID, targetID)
+				credentialAvailability[key] = lookupErr == nil
+			}
+		}
+	}
+	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.scannerAvailability(), CredentialAvailability: credentialAvailability})
 	if len(plan.Errors) == 0 {
 		normalized := plan.Config
 		bindings := append([]assessment.APIDefinitionBinding(nil), normalized.APIDefinitions...)

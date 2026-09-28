@@ -150,6 +150,38 @@ func TestDomainSubdomainDiscoveryRequiresSeparateExplicitPermission(t *testing.T
 	}
 }
 
+func TestPlannerRequiresResolvableTargetBoundCredentialAndNeverClaimsVerifiedAuth(t *testing.T) {
+	cfg := assessment.AssessmentConfig{
+		Mode:    assessment.ModeGrayBox,
+		Types:   []assessment.Type{assessment.TypeWebApplication},
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}, {ID: "other", Kind: assessment.KindURL, Value: "https://other.example.test/"}},
+		Access:  []assessment.AccessBinding{{TargetIDs: []string{"app"}, Kind: assessment.AccessApplicationHeaders, CredentialID: "cred-1"}},
+	}
+	missing := PlanAssessment(PlanInput{Config: cfg})
+	if !slices.ContainsFunc(missing.Capabilities, func(e assessment.CapabilityEvidence) bool {
+		return e.TargetID == "app" && e.Capability == assessment.CapAuthWeb && e.State == assessment.StateUnavailable
+	}) {
+		t.Fatalf("unresolved credential was treated as available: %+v", missing.Capabilities)
+	}
+	available := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: map[string]bool{"app\x00cred-1": true}})
+	if !slices.ContainsFunc(available.Capabilities, func(e assessment.CapabilityEvidence) bool {
+		return e.TargetID == "app" && e.Capability == assessment.CapAuthWeb && e.State == assessment.StateAvailable
+	}) {
+		t.Fatalf("resolved target-bound credential not reflected: %+v", available.Capabilities)
+	}
+	if missing.Fingerprint == available.Fingerprint {
+		t.Fatal("credential availability changes must change the plan fingerprint")
+	}
+	for _, decision := range available.Decisions {
+		if decision.TargetID == "app" && decision.Scanner == "zap" && decision.ExecutionMode != "unauthenticated" {
+			t.Fatalf("available credential was incorrectly labeled verified: %+v", decision)
+		}
+		if decision.TargetID == "other" && decision.ExecutionMode == "authenticated" {
+			t.Fatalf("credential crossed target binding: %+v", decision)
+		}
+	}
+}
+
 func TestUnsupportedCloudAndKubernetesTypesStayVisibleAsUnavailable(t *testing.T) {
 	cfg := assessment.AssessmentConfig{
 		Mode:  assessment.ModeWhiteBox,
