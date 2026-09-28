@@ -171,3 +171,24 @@ func TestUnsupportedCloudAndKubernetesTypesStayVisibleAsUnavailable(t *testing.T
 		t.Fatalf("cloud adapter gap was not explained: %+v", plan.Decisions)
 	}
 }
+
+func TestPlanFingerprintBindsAvailabilityDecisionsAndConditionalJobState(t *testing.T) {
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "domain", Kind: assessment.KindDomain, Value: "example.test"}}, SubdomainDiscovery: true}
+	available := PlanAssessment(PlanInput{Config: cfg, Availability: map[string]bool{"subfinder": true}})
+	unavailable := PlanAssessment(PlanInput{Config: cfg, Availability: map[string]bool{"subfinder": false}})
+	if available.Fingerprint == unavailable.Fingerprint {
+		t.Fatal("runtime availability changes must change the plan fingerprint")
+	}
+	foundConditional := false
+	for _, job := range available.Jobs {
+		if job.Scanner == "subfinder" {
+			foundConditional = true
+			if job.State != PlanConditional {
+				t.Fatalf("subdomain preparation job state = %s", job.State)
+			}
+		}
+	}
+	if !foundConditional {
+		t.Fatalf("missing conditional subfinder job: %+v", available.Jobs)
+	}
+}

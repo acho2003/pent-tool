@@ -34,6 +34,7 @@ type PlanDecision struct {
 
 type PlanJob struct {
 	ID             string          `json:"id"`
+	State          PlanState       `json:"state"`
 	Scanner        string          `json:"scanner"`
 	TargetID       string          `json:"target_id"`
 	Target         string          `json:"target"`
@@ -82,7 +83,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 	}
 	if len(plan.Errors) > 0 {
-		plan.Fingerprint = planFingerprint(cfg, plan.Jobs)
+		plan.Fingerprint = planFingerprint(cfg, plan.Decisions, plan.Jobs, plan.RegistryVersion)
 		return plan
 	}
 	defs := ScannerRegistry()
@@ -100,7 +101,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 	}
 	if len(plan.Errors) > 0 {
-		plan.Fingerprint = planFingerprint(cfg, plan.Jobs)
+		plan.Fingerprint = planFingerprint(cfg, plan.Decisions, plan.Jobs, plan.RegistryVersion)
 		return plan
 	}
 
@@ -128,7 +129,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					continue
 				}
 				state, code, reason := eligibility(def, target, plan.Capabilities, input.Availability)
-				if def.ID == "subfinder" && target.Kind == assessment.KindDomain {
+				if def.ID == "subfinder" && target.Kind == assessment.KindDomain && state != PlanUnavailable {
 					if cfg.SubdomainDiscovery {
 						state, code, reason = PlanConditional, "discovery.subdomain_opt_in", "Subdomain discovery was explicitly authorized and will be attempted during preparation."
 					} else {
@@ -151,7 +152,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 				}
 				plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: def.ID, TargetID: target.ID, Types: []assessment.Type{typ}, State: state, ReasonCode: code, Reason: reason, ExecutionMode: execMode})
 				if state == PlanSelected || state == PlanConditional {
-					plan.Jobs = append(plan.Jobs, PlanJob{ID: fmt.Sprintf("%s:%s:%s", def.ID, target.ID, typ), Scanner: def.ID, TargetID: target.ID, Target: target.Value, AssessmentType: typ, Variant: def.ID, ExecutionMode: execMode})
+					plan.Jobs = append(plan.Jobs, PlanJob{ID: fmt.Sprintf("%s:%s:%s", def.ID, target.ID, typ), State: state, Scanner: def.ID, TargetID: target.ID, Target: target.Value, AssessmentType: typ, Variant: def.ID, ExecutionMode: execMode})
 				}
 			}
 		}
@@ -200,7 +201,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		plan.Coverage = append(plan.Coverage, coverage)
 	}
 	sort.SliceStable(plan.Jobs, func(i, j int) bool { return plan.Jobs[i].ID < plan.Jobs[j].ID })
-	plan.Fingerprint = planFingerprint(cfg, plan.Jobs)
+	plan.Fingerprint = planFingerprint(cfg, plan.Decisions, plan.Jobs, plan.RegistryVersion)
 	return plan
 }
 
@@ -287,11 +288,13 @@ func hasCapability(all []assessment.CapabilityEvidence, c assessment.Capability,
 	}
 	return false
 }
-func planFingerprint(cfg assessment.AssessmentConfig, jobs []PlanJob) string {
+func planFingerprint(cfg assessment.AssessmentConfig, decisions []PlanDecision, jobs []PlanJob, registryVersion string) string {
 	data, _ := json.Marshal(struct {
-		Config assessment.AssessmentConfig `json:"config"`
-		Jobs   []PlanJob                   `json:"jobs"`
-	}{cfg, jobs})
+		Config          assessment.AssessmentConfig `json:"config"`
+		Decisions       []PlanDecision              `json:"decisions"`
+		Jobs            []PlanJob                   `json:"jobs"`
+		RegistryVersion string                      `json:"registry_version"`
+	}{cfg, decisions, jobs, registryVersion})
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }

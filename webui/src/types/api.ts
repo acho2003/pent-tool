@@ -87,7 +87,7 @@ export interface AssessmentConfig {
 export interface AssessmentPlan {
   config: AssessmentConfig;
   decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
-  jobs: Array<{ id: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; variant: string; execution_mode?: string }>;
+  jobs: Array<{ id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; variant: string; execution_mode?: string }>;
   coverage: Array<{ type: AssessmentType; state: string; reason: string }>;
   warnings?: Array<{ code: string; message: string; blocking: boolean }>;
   errors?: Array<{ code: string; message: string; blocking: boolean }>;
