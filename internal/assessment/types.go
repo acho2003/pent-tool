@@ -190,17 +190,25 @@ type CapabilityEvidence struct {
 	Reason     string        `json:"reason"`
 }
 
+// APIDefinitionBinding associates one immutable uploaded schema with a single
+// target. A definition's server URLs never establish or expand scan scope.
+type APIDefinitionBinding struct {
+	TargetID     string `json:"target_id"`
+	DefinitionID string `json:"definition_id"`
+}
+
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
-	Mode               Mode             `json:"assessment_mode"`
-	Types              []Type           `json:"assessment_types"`
-	Targets            []Target         `json:"assessment_targets"`
-	Access             []AccessBinding  `json:"access,omitempty"`
-	Profile            string           `json:"profile,omitempty"`
-	ScannerSelection   ScannerSelection `json:"scanner_selection,omitempty"`
-	APIDefinitionIDs   []string         `json:"api_definition_ids,omitempty"`
-	SubdomainDiscovery bool             `json:"subdomain_discovery,omitempty"`
+	Mode               Mode                   `json:"assessment_mode"`
+	Types              []Type                 `json:"assessment_types"`
+	Targets            []Target               `json:"assessment_targets"`
+	Access             []AccessBinding        `json:"access,omitempty"`
+	Profile            string                 `json:"profile,omitempty"`
+	ScannerSelection   ScannerSelection       `json:"scanner_selection,omitempty"`
+	APIDefinitionIDs   []string               `json:"api_definition_ids,omitempty"`
+	APIDefinitions     []APIDefinitionBinding `json:"api_definitions,omitempty"`
+	SubdomainDiscovery bool                   `json:"subdomain_discovery,omitempty"`
 }
 
 // ScannerSelection chooses auto planning or an explicit custom variant list.

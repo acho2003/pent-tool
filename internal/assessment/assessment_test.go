@@ -94,6 +94,32 @@ func TestValidate_RejectsUnknownEnumsAndUnboundAccess(t *testing.T) {
 	}
 }
 
+func TestValidate_APIdefinitionsRequireExplicitTargetAssociation(t *testing.T) {
+	base := AssessmentConfig{Mode: ModeGrayBox, Types: []Type{TypeAPI}, Targets: []Target{{ID: "one", Kind: KindURL, Value: "https://one.example"}, {ID: "two", Kind: KindURL, Value: "https://two.example"}}}
+	base.APIDefinitionIDs = []string{"sha256-id"}
+	if !hasCode(Validate(Normalize(base)), "api_definition.target_required") {
+		t.Fatal("unbound API definition accepted for multiple targets")
+	}
+	base.APIDefinitionIDs = nil
+	base.APIDefinitions = []APIDefinitionBinding{{TargetID: "missing", DefinitionID: "sha256-id"}}
+	if !hasCode(Validate(Normalize(base)), "api_definition.target_unknown") {
+		t.Fatal("API definition bound to unknown target was accepted")
+	}
+}
+
+func TestValidate_PreservesValidURLPathAndRejectsOutOfScopeURLForms(t *testing.T) {
+	valid := Normalize(AssessmentConfig{Mode: ModeBlackBox, Types: []Type{TypeWebApplication}, Targets: []Target{{ID: "app", Kind: KindURL, Value: "https://example.test:8443/Portal/Case?view=full"}}})
+	if problem := FirstBlocking(Validate(valid)); problem != nil {
+		t.Fatalf("valid application URL rejected: %+v", problem)
+	}
+	for _, value := range []string{"example.test", "https://user:pass@example.test", "https://example.test/#fragment", "https://example.test:99999/"} {
+		cfg := Normalize(AssessmentConfig{Mode: ModeBlackBox, Types: []Type{TypeWebApplication}, Targets: []Target{{ID: "app", Kind: KindURL, Value: value}}})
+		if !hasCode(Validate(cfg), "target.value.invalid") {
+			t.Errorf("invalid URL target %q was accepted", value)
+		}
+	}
+}
+
 func TestDeriveCapabilities_PerTargetNoCrossUnion(t *testing.T) {
 	cfg := Normalize(AssessmentConfig{
 		Mode:  ModeGrayBox,
@@ -102,8 +128,8 @@ func TestDeriveCapabilities_PerTargetNoCrossUnion(t *testing.T) {
 			{ID: "app", Kind: KindURL, Value: "https://app.example.test/Portal/"},
 			{ID: "other", Kind: KindURL, Value: "https://other.example.test"},
 		},
-		APIDefinitionIDs: []string{"def1"},
-		Access:           []AccessBinding{{TargetIDs: []string{"app"}, Kind: AccessApplicationHeaders, CredentialID: "c1"}},
+		APIDefinitions: []APIDefinitionBinding{{TargetID: "app", DefinitionID: "def1"}},
+		Access:         []AccessBinding{{TargetIDs: []string{"app"}, Kind: AccessApplicationHeaders, CredentialID: "c1"}},
 	})
 	ev := DeriveCapabilities(cfg)
 

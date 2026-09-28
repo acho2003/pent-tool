@@ -48,6 +48,36 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.scannerAvailability()})
+	if len(plan.Errors) == 0 {
+		normalized := plan.Config
+		bindings := append([]assessment.APIDefinitionBinding(nil), normalized.APIDefinitions...)
+		if len(bindings) == 0 && len(normalized.APIDefinitionIDs) > 0 && len(normalized.Targets) == 1 {
+			for _, id := range normalized.APIDefinitionIDs {
+				bindings = append(bindings, assessment.APIDefinitionBinding{TargetID: normalized.Targets[0].ID, DefinitionID: id})
+			}
+		}
+		targetByID := make(map[string]assessment.Target, len(normalized.Targets))
+		for _, target := range normalized.Targets {
+			targetByID[target.ID] = target
+		}
+		for _, binding := range bindings {
+			target := targetByID[binding.TargetID]
+			definition, err := loadAPIDefinition(s.dataDir, binding.DefinitionID)
+			if err == nil {
+				var endpoints []scanner.APIEndpoint
+				endpoints, err = scanner.ParseOpenAPI(definition, target.Value)
+				if err == nil {
+					for i := range endpoints {
+						endpoints[i].TargetID = binding.TargetID
+					}
+					plan.APIEndpoints = append(plan.APIEndpoints, endpoints...)
+				}
+			}
+			if err != nil {
+				plan.Errors = append(plan.Errors, assessment.Problem{Code: "api_definition.unavailable", Message: "API definition " + binding.DefinitionID + " is unavailable or invalid for its mapped target: " + err.Error(), Blocking: true})
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	status := http.StatusOK
 	if len(plan.Errors) > 0 {

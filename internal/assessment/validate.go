@@ -2,6 +2,9 @@ package assessment
 
 import (
 	"fmt"
+	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -53,6 +56,26 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		nb := ab
 		nb.Kind = AccessKind(strings.ToUpper(strings.TrimSpace(string(ab.Kind))))
 		out.Access[i] = nb
+	}
+	seenDefinitions := map[string]bool{}
+	out.APIDefinitionIDs = nil
+	for _, id := range cfg.APIDefinitionIDs {
+		id = strings.TrimSpace(id)
+		if !seenDefinitions[id] {
+			seenDefinitions[id] = true
+			out.APIDefinitionIDs = append(out.APIDefinitionIDs, id)
+		}
+	}
+	seenBindings := map[string]bool{}
+	out.APIDefinitions = nil
+	for _, binding := range cfg.APIDefinitions {
+		binding.TargetID = strings.TrimSpace(binding.TargetID)
+		binding.DefinitionID = strings.TrimSpace(binding.DefinitionID)
+		key := binding.TargetID + "\x00" + binding.DefinitionID
+		if !seenBindings[key] {
+			seenBindings[key] = true
+			out.APIDefinitions = append(out.APIDefinitions, binding)
+		}
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(out.ScannerSelection.Mode))
@@ -118,6 +141,8 @@ func Validate(cfg AssessmentConfig) []Problem {
 		}
 		if strings.TrimSpace(tgt.Value) == "" {
 			probs = append(probs, blocking("target.value.empty", fmt.Sprintf("target %q has an empty value", tgt.ID)))
+		} else if err := validateTargetValue(tgt); err != nil {
+			probs = append(probs, blocking("target.value.invalid", fmt.Sprintf("target %q: %v", tgt.ID, err)))
 		}
 		if ids[tgt.ID] {
 			probs = append(probs, blocking("target.id.duplicate", fmt.Sprintf("duplicate target id %q", tgt.ID)))
@@ -140,9 +165,70 @@ func Validate(cfg AssessmentConfig) []Problem {
 			}
 		}
 	}
+	if len(cfg.APIDefinitionIDs) > 0 && len(cfg.APIDefinitions) > 0 {
+		probs = append(probs, blocking("api_definition.ambiguous", "use api_definitions target bindings or api_definition_ids, not both"))
+	}
+	if len(cfg.APIDefinitionIDs) > 0 && len(cfg.Targets) != 1 {
+		probs = append(probs, blocking("api_definition.target_required", "unbound api_definition_ids require exactly one assessment target; use api_definitions for multi-target assessments"))
+	}
+	for _, id := range cfg.APIDefinitionIDs {
+		if strings.TrimSpace(id) == "" {
+			probs = append(probs, blocking("api_definition.id_empty", "api_definition_ids cannot contain an empty ID"))
+		}
+	}
+	for _, binding := range cfg.APIDefinitions {
+		if !ids[binding.TargetID] {
+			probs = append(probs, blocking("api_definition.target_unknown", fmt.Sprintf("API definition references unknown target id %q", binding.TargetID)))
+		}
+		if binding.DefinitionID == "" {
+			probs = append(probs, blocking("api_definition.id_empty", "API definition binding requires a definition_id"))
+		}
+		for _, target := range cfg.Targets {
+			if target.ID == binding.TargetID && target.Kind != KindURL {
+				probs = append(probs, blocking("api_definition.target_must_be_url", fmt.Sprintf("API definition target %q must be an explicit URL with scheme, host, port, and path", target.ID)))
+			}
+		}
+	}
+	if len(cfg.APIDefinitionIDs) > 0 && len(cfg.Targets) == 1 && cfg.Targets[0].Kind != KindURL {
+		probs = append(probs, blocking("api_definition.target_must_be_url", "unbound API definition requires one explicit URL target"))
+	}
 
 	probs = append(probs, validateModePolicy(cfg)...)
 	return probs
+}
+
+func validateTargetValue(target Target) error {
+	value := strings.TrimSpace(target.Value)
+	switch target.Kind {
+	case KindURL:
+		u, err := url.Parse(value)
+		if err != nil || !u.IsAbs() || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+			return fmt.Errorf("URL targets must be absolute HTTP(S) URLs without embedded credentials or fragments")
+		}
+		if port := u.Port(); port != "" {
+			n, err := strconv.Atoi(port)
+			if err != nil || n < 1 || n > 65535 {
+				return fmt.Errorf("URL target has an invalid port")
+			}
+		}
+	case KindIP:
+		if _, err := netip.ParseAddr(value); err != nil {
+			return fmt.Errorf("IP targets must contain one IPv4 or IPv6 address")
+		}
+	case KindCIDR:
+		if _, err := netip.ParsePrefix(value); err != nil {
+			return fmt.Errorf("CIDR targets must contain a valid network prefix")
+		}
+	case KindDomain:
+		if strings.ContainsAny(value, "/:? #") || value == "" {
+			return fmt.Errorf("domain targets must be hostnames without a scheme, port, path, query, or fragment")
+		}
+	case KindHost:
+		if strings.ContainsAny(value, "/?#") {
+			return fmt.Errorf("host targets must not include a URL path, query, or fragment")
+		}
+	}
+	return nil
 }
 
 func validateModePolicy(cfg AssessmentConfig) []Problem {

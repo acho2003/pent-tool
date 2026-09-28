@@ -16,6 +16,7 @@ type APIEndpoint struct {
 	Method   string `json:"method"`
 	Path     string `json:"path"`
 	Origin   string `json:"origin,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
 	Source   string `json:"source"`
 	Resolved bool   `json:"resolved"`
 }

@@ -48,7 +48,7 @@ func TestPlanAssessmentBlackBoxNetworkDoesNotSelectCodeOrUnsupportedTools(t *tes
 }
 
 func TestPlanAssessmentGrayBoxBindsAuthAndSchemaToOneTarget(t *testing.T) {
-	cfg := assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/Portal/"}, {ID: "other", Kind: assessment.KindURL, Value: "https://other.example.test"}}, APIDefinitionIDs: []string{"spec1"}, Access: []assessment.AccessBinding{{TargetIDs: []string{"app"}, Kind: assessment.AccessBearerToken, CredentialID: "cred1"}}}
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/Portal/"}, {ID: "other", Kind: assessment.KindURL, Value: "https://other.example.test"}}, APIDefinitions: []assessment.APIDefinitionBinding{{TargetID: "app", DefinitionID: "spec1"}}, Access: []assessment.AccessBinding{{TargetIDs: []string{"app"}, Kind: assessment.AccessBearerToken, CredentialID: "cred1"}}}
 	plan := PlanAssessment(PlanInput{Config: cfg})
 	for _, d := range plan.Decisions {
 		if d.Scanner == "zap" && d.TargetID == "app" && d.State == PlanSelected && d.ExecutionMode == "authenticated" {

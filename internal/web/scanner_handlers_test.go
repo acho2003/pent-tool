@@ -94,6 +94,40 @@ func TestAssessmentPlanRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestAssessmentPlanBindsUploadedAPIEndpointsToExplicitTargetOrigin(t *testing.T) {
+	s := newTestServer(t, nil)
+	spec := `{"openapi":"3.0.0","servers":[{"url":"https://other.example.test"}],"paths":{"/users":{"get":{}},"/items":{"post":{}}}}`
+	upload := httptest.NewRecorder()
+	s.handleAPIDefinitions(upload, httptest.NewRequest(http.MethodPost, "/api/api-definitions", strings.NewReader(spec)))
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status=%d body=%s", upload.Code, upload.Body.String())
+	}
+	var metadata apiDefinitionMetadata
+	if err := json.Unmarshal(upload.Body.Bytes(), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	request := `{"assessment_mode":"BLACK_BOX","assessment_types":["API"],"assessment_targets":[{"id":"api","type":"URL","value":"https://inside.example.test:8443/v1"}],"api_definitions":[{"target_id":"api","definition_id":"` + metadata.ID + `"}]}`
+	planned := httptest.NewRecorder()
+	s.handleAssessmentPlan(planned, httptest.NewRequest(http.MethodPost, "/api/scans/plan", strings.NewReader(request)))
+	if planned.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", planned.Code, planned.Body.String())
+	}
+	var plan struct {
+		APIEndpoints []scanner.APIEndpoint `json:"api_endpoints"`
+	}
+	if err := json.Unmarshal(planned.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.APIEndpoints) != 2 {
+		t.Fatalf("API inventory=%+v", plan.APIEndpoints)
+	}
+	for _, endpoint := range plan.APIEndpoints {
+		if endpoint.TargetID != "api" || endpoint.Origin != "https://inside.example.test:8443/v1" || strings.Contains(endpoint.Origin, "other.example.test") {
+			t.Fatalf("spec server expanded target mapping: %+v", endpoint)
+		}
+	}
+}
+
 func TestTypedAssessmentScanDoesNotFallThroughToLegacyExecution(t *testing.T) {
 	s := newTestServer(t, nil)
 	body := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/Portal/"}]}`

@@ -63,6 +63,7 @@ type AssessmentPlan struct {
 	Decisions       []PlanDecision                  `json:"decisions"`
 	Jobs            []PlanJob                       `json:"jobs"`
 	Coverage        []TypeCoverage                  `json:"coverage"`
+	APIEndpoints    []APIEndpoint                   `json:"api_endpoints,omitempty"`
 	Warnings        []assessment.Problem            `json:"warnings,omitempty"`
 	Errors          []assessment.Problem            `json:"errors,omitempty"`
 	Fingerprint     string                          `json:"fingerprint"`

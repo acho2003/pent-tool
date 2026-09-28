@@ -13,8 +13,6 @@ import "strings"
 func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 	var out []CapabilityEvidence
 	wantAPI := containsType(cfg.Types, TypeAPI)
-	hasSchema := len(cfg.APIDefinitionIDs) > 0
-
 	for _, tgt := range cfg.Targets {
 		switch tgt.Kind {
 		case KindDomain:
@@ -54,6 +52,15 @@ func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 		}
 
 		// A validated schema adds API schema capability for an API assessment (§5.3).
+		hasSchema := false
+		for _, binding := range cfg.APIDefinitions {
+			if binding.TargetID == tgt.ID && binding.DefinitionID != "" {
+				hasSchema = true
+			}
+		}
+		if len(cfg.Targets) == 1 && len(cfg.APIDefinitionIDs) > 0 {
+			hasSchema = true
+		}
 		if wantAPI && hasSchema && (tgt.Kind == KindURL || tgt.Kind == KindDomain) {
 			out = append(out, ev(CapSchema, tgt.ID, StateDeclared, "api_definition", "uploaded API schema declared for this target"))
 		}
