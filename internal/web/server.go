@@ -304,19 +304,9 @@ type ScanRequest struct {
 	// OpenAPI/Swagger spec, HAR capture, or Postman collection (file or dir).
 	// The engine parses them into a seeded attack surface (real endpoints +
 	// params) and harvests any captured auth. Empty = crawl-only discovery.
-	ScanContext string `json:"-"`
-	// ProviderProfile is the optional "<provider>:<profileId>" key
-	// (e.g. "openai:default") that selects an Auth_Profile from
-	// Profile_Store for this scan. When set on a request from an
-	// Authenticated_Operator, resolveScanCredentials maps it to a
-	// (baseURL, auth_method, credentials) tuple at scan start. When
-	// empty, the existing legacy / catalog-default resolver path is
-	// used. Ad-hoc Model/APIKey/APIBase fields still take precedence
-	// per Requirement 11.4.
-	// Validates: Requirements 11.1, 11.2, 11.5.
-	ProviderProfile string           `json:"-"`
-	Artifact        scanner.Artifact `json:"artifact,omitempty"`
-	VulsSSHHost     string           `json:"vuls_ssh_host,omitempty"`
+	ScanContext string           `json:"-"`
+	Artifact    scanner.Artifact `json:"artifact,omitempty"`
+	VulsSSHHost string           `json:"vuls_ssh_host,omitempty"`
 	// Internal fields — `json:"-"` makes them un-settable from the wire.
 	// Critical: a client must not be able to set InstanceID to spoof
 	// broadcasts to another scan, or set IsResume to bypass the resume
@@ -690,7 +680,7 @@ func NewServer(cfg *config.Config, port int) *Server {
 		instances:            make(map[string]*ScanInstance),
 		queueResumeLaunching: make(map[string]bool),
 		schedules:            make(map[string]*ScanSchedule),
-		shutdownChan: make(chan struct{}),
+		shutdownChan:         make(chan struct{}),
 		// Buffered to length 1 so a non-blocking send from a terminating
 		// scan never blocks; the buffered slot guarantees a wake signal
 		// is delivered to whichever waiter is currently parked in the
@@ -2520,85 +2510,11 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func maskAgentMailKey(apiKey string) string {
-	if len(apiKey) > 8 {
-		return "****" + apiKey[len(apiKey)-8:]
-	}
-	if apiKey != "" {
-		return "****"
-	}
-	return ""
-}
-
-func isMaskedAgentMailKey(apiKey string) bool {
-	apiKey = strings.TrimSpace(apiKey)
-	return strings.HasPrefix(apiKey, "****") || strings.Contains(apiKey, "••••")
-}
-
-// handleAgentMailSettings handles GET and POST for AgentMail settings.
-func (s *Server) handleAgentMailSettings(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	switch r.Method {
-	case "GET":
-		// Return current AgentMail settings (without exposing the full API key)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"pod":       s.cfg.AgentMailPod,
-			"apiKey":    maskAgentMailKey(s.cfg.AgentMailAPIKey),
-			"hasApiKey": s.cfg.AgentMailAPIKey != "",
-		})
-
-	case "POST":
-		// Update AgentMail settings
-		var req struct {
-			Pod    string `json:"pod"`
-			APIKey string `json:"apiKey"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
-			return
-		}
-
-		preserveKey := strings.TrimSpace(req.APIKey) == "" || isMaskedAgentMailKey(req.APIKey)
-		effectiveAPIKey := req.APIKey
-		if preserveKey {
-			effectiveAPIKey = s.cfg.AgentMailAPIKey
-		}
-
-		updates := map[string]string{"AGENTMAIL_POD": req.Pod}
-		if !preserveKey {
-			updates["AGENTMAIL_API_KEY"] = effectiveAPIKey
-		}
-		if _, err := s.applyEnvironmentUpdates(updates); err != nil {
-			log.Printf("Failed to save AgentMail settings: %v", err)
-			http.Error(w, "failed to save AgentMail settings", http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("AgentMail settings updated: pod=%s", req.Pod)
-
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"pod":       req.Pod,
-			"apiKey":    maskAgentMailKey(effectiveAPIKey),
-			"hasApiKey": effectiveAPIKey != "",
-		})
-
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
 // handleVersion returns the current Xalgorix version
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version": Version,
-		"ai": map[string]any{
-			"configured": s.cfg.APIKey != "" && s.cfg.LLM != "",
-			"provider":   llmProviderLabel(s.cfg.LLM, s.cfg.APIBase),
-			"model":      s.cfg.LLM,
-			"gateway":    llmGatewayName(s.cfg.LLM, s.cfg.APIBase),
-		},
 	})
 }
 
@@ -2936,39 +2852,6 @@ func logMemStats(label string) {
 		m.NumGC,
 		runtime.NumGoroutine(),
 	)
-}
-
-func llmProviderLabel(model, apiBase string) string {
-	provider := llmProviderKey(model, apiBase)
-	switch provider {
-	case "vercel":
-		return "Vercel AI Gateway"
-	case "minimax":
-		return "MiniMax"
-	case "openai":
-		return "OpenAI"
-	case "anthropic":
-		return "Anthropic"
-	case "google", "gemini":
-		return "Google Gemini"
-	case "deepseek":
-		return "DeepSeek"
-	case "groq":
-		return "Groq"
-	case "ollama":
-		return "Ollama"
-	case "":
-		return "Not configured"
-	default:
-		return strings.ToUpper(provider[:1]) + provider[1:]
-	}
-}
-
-func llmGatewayName(model, apiBase string) string {
-	if llmProviderKey(model, apiBase) == "vercel" {
-		return "vercel"
-	}
-	return ""
 }
 
 func llmProviderKey(model, apiBase string) string {

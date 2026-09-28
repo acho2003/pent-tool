@@ -43,15 +43,6 @@ var envSettingKeyRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 func allEnvSettingDefinitions() []envSettingDefinition {
 	return []envSettingDefinition{
-		{Key: "XALGORIX_LLM", Label: "Report AI model", Category: "Report AI", Description: "Provider-native model ID used only after scanner attempts finish.", Placeholder: "gpt-5.1", InputType: "text"},
-		{Key: "XALGORIX_LLM_PROVIDER", Label: "Report AI provider", Category: "Report AI", Description: "Explicit provider ID used to route report-generation calls.", Placeholder: "openai", InputType: "text"},
-		{Key: "XALGORIX_API_KEY", Label: "Report AI API key", Category: "Report AI", Description: "Provider API key for report generation. Scans run without this value.", Placeholder: "sk-...", InputType: "secret", Sensitive: true},
-		{Key: "XALGORIX_API_BASE", Label: "Report AI base URL", Category: "Report AI", Description: "Optional custom provider endpoint for report generation.", Placeholder: "https://api.openai.com/v1", InputType: "url"},
-		{Key: "XALGORIX_LLM_PROFILE", Label: "Active Report AI profile", Category: "Report AI", Description: "Active credential pointer (\"<provider>:<profileId>\") for report generation.", Placeholder: "openai:default", InputType: "text"},
-		{Key: "XALGORIX_OLLAMA_COMPATIBLE", Label: "Ollama-compatible endpoint", Category: "Report AI", Description: "Force Ollama semantics for a custom report endpoint that does not use port 11434.", DefaultValue: "false", InputType: "boolean"},
-		{Key: "XALGORIX_LLM_MAX_RETRIES", Label: "Report AI max retries", Category: "Report AI", Description: "Retry count for transient report-provider failures.", DefaultValue: "5", InputType: "number"},
-		{Key: "XALGORIX_MAX_OUTPUT_TOKENS", Label: "Report AI output tokens", Category: "Report AI", Description: "Per-call completion cap for report generation. Clamped to a 1024 floor.", DefaultValue: "8192", InputType: "number"},
-
 		{Key: "XALGORIX_NUCLEI_PATH", Label: "Nuclei path", Category: "Scanners", Description: "Nuclei executable path.", DefaultValue: "nuclei", InputType: "path", RequiresRestart: true},
 		{Key: "XALGORIX_TRIVY_PATH", Label: "Trivy path", Category: "Scanners", Description: "Trivy executable path.", DefaultValue: "trivy", InputType: "path", RequiresRestart: true},
 		{Key: "XALGORIX_VULS_PATH", Label: "Vuls path", Category: "Scanners", Description: "Vuls executable path.", DefaultValue: "vuls", InputType: "path", RequiresRestart: true},
@@ -133,19 +124,7 @@ func envDefinitionByKey() map[string]envSettingDefinition {
 }
 
 func hiddenLegacyEnvSettingDefinitions() []envSettingDefinition {
-	return []envSettingDefinition{
-		{Key: "XALGORIX_REASONING_EFFORT", Label: "Reasoning effort", Category: "Legacy", DefaultValue: "high", InputType: "select", Options: []string{"none", "low", "medium", "high", "xhigh"}},
-		{Key: "XALGORIX_LLM_CONTEXT_WINDOW", Label: "LLM context window", Category: "Legacy", DefaultValue: "128000", InputType: "number"},
-		{Key: "XALGORIX_CONTEXT_COMPACT_RATIO", Label: "Context compaction ratio", Category: "Legacy", DefaultValue: "0.75", InputType: "number"},
-		{Key: "XALGORIX_CONTEXT_COMPACT_TOKENS", Label: "Context compaction tokens", Category: "Legacy", DefaultValue: "-1", InputType: "number"},
-		{Key: "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", Label: "Memory compressor timeout", Category: "Legacy", DefaultValue: "30", InputType: "number"},
-		{Key: "XALGORIX_MAX_ITERATIONS", Label: "Max iterations", Category: "Legacy", DefaultValue: "0", InputType: "number"},
-		{Key: "XALGORIX_MIN_ITERATIONS", Label: "Min iterations", Category: "Legacy", DefaultValue: "50", InputType: "number"},
-		{Key: "XALGORIX_MAX_FINISH_REJECTIONS", Label: "Max finish rejections", Category: "Legacy", DefaultValue: "15", InputType: "number"},
-		{Key: "GEMINI_API_KEY", Label: "Gemini API key", Category: "Legacy", InputType: "secret", Sensitive: true},
-		{Key: "AGENTMAIL_POD", Label: "AgentMail pod", Category: "Legacy", InputType: "text"},
-		{Key: "AGENTMAIL_API_KEY", Label: "AgentMail API key", Category: "Legacy", InputType: "secret", Sensitive: true},
-	}
+	return []envSettingDefinition{}
 }
 
 func (s *Server) handleEnvironmentSettings(w http.ResponseWriter, r *http.Request) {
@@ -259,44 +238,10 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 	rateChanged := false
 	for key, value := range values {
 		switch key {
-		case "XALGORIX_LLM":
-			s.cfg.LLM = value
-		case "XALGORIX_LLM_PROVIDER":
-			s.cfg.LLMProvider = value
-		case "XALGORIX_API_BASE":
-			s.cfg.APIBase = value
-		case "XALGORIX_API_KEY":
-			s.cfg.APIKey = value
-		case "XALGORIX_LLM_PROFILE":
-			s.cfg.LLMProfile = value
-		case "XALGORIX_REASONING_EFFORT":
-			s.cfg.ReasoningEffort = valueOrDefault(value, "high")
-		case "XALGORIX_OLLAMA_COMPATIBLE":
-			s.cfg.OllamaCompatible = parseBoolSetting(value, false)
-		case "XALGORIX_LLM_MAX_RETRIES":
-			s.cfg.LLMMaxRetries = parseIntSetting(value, 5)
-		case "XALGORIX_MAX_OUTPUT_TOKENS":
-			s.cfg.MaxOutputTokens = parseIntSetting(value, 8192)
-		case "XALGORIX_CONTEXT_COMPACT_TOKENS":
-			s.cfg.ContextCompactTokens = parseIntSetting(value, -1)
-		case "XALGORIX_LLM_CONTEXT_WINDOW":
-			s.cfg.LLMContextWindow = parseIntSetting(value, 128000)
-		case "XALGORIX_CONTEXT_COMPACT_RATIO":
-			s.cfg.ContextCompactRatio = parseFloatSetting(value, 0.75)
-		case "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT":
-			s.cfg.MemCompTimeout = parseIntSetting(value, 30)
-		case "XALGORIX_MAX_ITERATIONS":
-			s.cfg.MaxIterations = parseIntSetting(value, 0)
-		case "XALGORIX_MIN_ITERATIONS":
-			s.cfg.MinIterations = parseIntSetting(value, 50)
-		case "XALGORIX_MAX_FINISH_REJECTIONS":
-			s.cfg.MaxFinishRejections = parseIntSetting(value, 15)
 		case "XALGORIX_WORKSPACE":
 			if value != "" {
 				s.cfg.Workspace = value
 			}
-		case "XALGORIX_DISABLE_BROWSER":
-			s.cfg.DisableBrowser = parseBoolSetting(value, false)
 		case "XALGORIX_RATE_LIMIT_REQUESTS":
 			s.cfg.RateLimitRequests = parseIntSetting(value, 60)
 			rateChanged = true
@@ -319,12 +264,6 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 			s.cfg.Telemetry = parseBoolSetting(value, true)
 		case "XALGORIX_OTEL_ENDPOINT":
 			s.cfg.OTelEndpoint = value
-		case "GEMINI_API_KEY":
-			s.cfg.GeminiAPIKey = value
-		case "AGENTMAIL_API_KEY":
-			s.cfg.AgentMailAPIKey = value
-		case "AGENTMAIL_POD":
-			s.cfg.AgentMailPod = value
 		case "XALGORIX_DISCORD_WEBHOOK":
 			s.cfg.DiscordWebhook = value
 			s.discordWebhook = value
@@ -348,10 +287,6 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 			s.cfg.PasswordHash = value
 		case "XALGORIX_BIND":
 			s.cfg.BindAddr = valueOrDefault(value, "127.0.0.1")
-		case "XALGORIX_ALLOW_AUTO_INSTALL":
-			s.cfg.AllowAutoInstall = parseBoolSetting(value, os.Getuid() == 0)
-		case "XALGORIX_AUTO_INSTALL_SUDO":
-			s.cfg.AllowAutoInstallSudo = parseBoolSetting(value, false)
 		case "XALGORIX_USE_PROXY":
 			s.cfg.UseProxy = parseBoolSetting(value, false)
 		case "XALGORIX_PROXY_FILE":
@@ -360,8 +295,6 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 			s.cfg.ProxyRotation = valueOrDefault(value, "roundrobin")
 		case "XALGORIX_PROXY_URL":
 			s.cfg.ProxyURL = value
-		case "XALGORIX_BROWSER_PATH":
-			s.cfg.BrowserPath = value
 		}
 	}
 	if rateChanged {
@@ -379,40 +312,8 @@ func (s *Server) applyEnvironmentToRuntimeConfig(values map[string]string) {
 
 func (s *Server) envSettingValue(key string) string {
 	switch key {
-	case "XALGORIX_LLM":
-		return s.cfg.LLM
-	case "XALGORIX_API_BASE":
-		return s.cfg.APIBase
-	case "XALGORIX_API_KEY":
-		return s.cfg.APIKey
-	case "XALGORIX_LLM_PROFILE":
-		return s.cfg.LLMProfile
-	case "XALGORIX_REASONING_EFFORT":
-		return valueOrDefault(s.cfg.ReasoningEffort, "high")
-	case "XALGORIX_OLLAMA_COMPATIBLE":
-		return strconv.FormatBool(s.cfg.OllamaCompatible)
-	case "XALGORIX_LLM_MAX_RETRIES":
-		return strconv.Itoa(s.cfg.LLMMaxRetries)
-	case "XALGORIX_MAX_OUTPUT_TOKENS":
-		return strconv.Itoa(s.cfg.MaxOutputTokens)
-	case "XALGORIX_CONTEXT_COMPACT_TOKENS":
-		return strconv.Itoa(s.cfg.ContextCompactTokens)
-	case "XALGORIX_LLM_CONTEXT_WINDOW":
-		return strconv.Itoa(s.cfg.LLMContextWindow)
-	case "XALGORIX_CONTEXT_COMPACT_RATIO":
-		return strconv.FormatFloat(s.cfg.ContextCompactRatio, 'g', -1, 64)
-	case "XALGORIX_MEMORY_COMPRESSOR_TIMEOUT":
-		return strconv.Itoa(s.cfg.MemCompTimeout)
-	case "XALGORIX_MAX_ITERATIONS":
-		return strconv.Itoa(s.cfg.MaxIterations)
-	case "XALGORIX_MIN_ITERATIONS":
-		return strconv.Itoa(s.cfg.MinIterations)
-	case "XALGORIX_MAX_FINISH_REJECTIONS":
-		return strconv.Itoa(s.cfg.MaxFinishRejections)
 	case "XALGORIX_WORKSPACE":
 		return s.cfg.Workspace
-	case "XALGORIX_DISABLE_BROWSER":
-		return strconv.FormatBool(s.cfg.DisableBrowser)
 	case "XALGORIX_RATE_LIMIT_REQUESTS":
 		return strconv.Itoa(s.cfg.RateLimitRequests)
 	case "XALGORIX_RATE_LIMIT_WINDOW":
@@ -433,12 +334,6 @@ func (s *Server) envSettingValue(key string) string {
 		return strconv.FormatBool(s.cfg.Telemetry)
 	case "XALGORIX_OTEL_ENDPOINT":
 		return s.cfg.OTelEndpoint
-	case "GEMINI_API_KEY":
-		return s.cfg.GeminiAPIKey
-	case "AGENTMAIL_API_KEY":
-		return s.cfg.AgentMailAPIKey
-	case "AGENTMAIL_POD":
-		return s.cfg.AgentMailPod
 	case "XALGORIX_DISCORD_WEBHOOK":
 		return s.cfg.DiscordWebhook
 	case "XALGORIX_DISCORD_MIN_SEVERITY":
@@ -457,10 +352,6 @@ func (s *Server) envSettingValue(key string) string {
 		return s.cfg.PasswordHash
 	case "XALGORIX_BIND":
 		return valueOrDefault(s.cfg.BindAddr, "127.0.0.1")
-	case "XALGORIX_ALLOW_AUTO_INSTALL":
-		return strconv.FormatBool(s.cfg.AllowAutoInstall)
-	case "XALGORIX_AUTO_INSTALL_SUDO":
-		return strconv.FormatBool(s.cfg.AllowAutoInstallSudo)
 	case "XALGORIX_USE_PROXY":
 		return strconv.FormatBool(s.cfg.UseProxy)
 	case "XALGORIX_PROXY_FILE":
@@ -469,8 +360,6 @@ func (s *Server) envSettingValue(key string) string {
 		return valueOrDefault(s.cfg.ProxyRotation, "roundrobin")
 	case "XALGORIX_PROXY_URL":
 		return s.cfg.ProxyURL
-	case "XALGORIX_BROWSER_PATH":
-		return s.cfg.BrowserPath
 	default:
 		return os.Getenv(key)
 	}

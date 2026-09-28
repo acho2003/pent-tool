@@ -2,14 +2,9 @@ package web
 
 import (
 	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
@@ -67,7 +62,6 @@ func TestGenerateCLIReport(t *testing.T) {
 
 func TestScannerReportFallsBackWithoutAI(t *testing.T) {
 	s := newTestServer(t, nil)
-	s.cfg.LLM = ""
 	dir := t.TempDir()
 	artifact := filepath.Join(dir, "nuclei.jsonl")
 	if err := os.WriteFile(artifact, []byte(`{"template-id":"test","matched-at":"https://example.test","host":"example.test","info":{"name":"Scanner issue","severity":"high"}}`+"\n"), 0o600); err != nil {
@@ -111,139 +105,6 @@ func TestScannerReportFallsBackWithoutAI(t *testing.T) {
 	}
 }
 
-func TestScannerReportFallsBackOnProviderFailure(t *testing.T) {
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "offline", http.StatusServiceUnavailable)
-	}))
-	defer provider.Close()
-	s := newTestServer(t, nil)
-	s.cfg.LLM = "report-model"
-	s.cfg.APIBase = provider.URL
-	s.cfg.APIKey = "test-key"
-	s.cfg.LLMMaxRetries = 1
-	dir := t.TempDir()
-	artifact := filepath.Join(dir, "nuclei.jsonl")
-	if err := os.WriteFile(artifact, []byte(`{"template-id":"test","matched-at":"https://example.test","info":{"name":"Issue","severity":"medium"}}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// Variable-length run set: a recon run plus two host-scoped scan runs,
-	// not one run per scanner.OrderedNames entry.
-	runs := []scanner.Run{
-		{Scanner: "subfinder", Scope: "recon:example.test", Status: "completed"},
-		{Scanner: "nuclei", Scope: "host:a.example.test", Status: "completed", ArtifactPath: artifact},
-		{Scanner: "zap", Scope: "host:b.example.test", Status: "not_applicable"},
-	}
-	for i := range runs {
-		runs[i].Checksum = scanner.CalculateChecksum(runs[i])
-	}
-	rec := &ScanRecord{SchemaVersion: 2, ID: "provider-fallback", Target: "example.test", Status: "finished", ScannerRuns: runs, Events: []WSEvent{}, Vulns: []VulnSummary{}}
-	if got := s.generateScannerReport(rec, dir, ""); got == "" || rec.ReportMode != "deterministic_fallback" {
-		t.Fatalf("report=%q mode=%q", got, rec.ReportMode)
-	}
-}
-
-// TestScannerReportAIKeepsMergedTraceAndSeverityFloor is the AI success path
-// for a cross-scanner merged finding. The provider must only see primary
-// source_ids (a secondary one in sources[] would be echoed back and rejected by
-// the allow-map, forcing a fallback), the finding must keep its scope and both
-// sources, and the AI may not lower the scanner-reported severity.
-func TestScannerReportAIKeepsMergedTraceAndSeverityFloor(t *testing.T) {
-	const primaryID = "nuclei:CVE-2021-41773:https://a.example.test/cgi-bin/"
-	const secondaryID = "openvas:r1"
-	var (
-		mu     sync.Mutex
-		bodies []string
-	)
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		bodies = append(bodies, string(b))
-		mu.Unlock()
-		content, _ := json.Marshal(map[string]any{"findings": []map[string]any{{
-			"source_id":          primaryID,
-			"scanner":            "nuclei",
-			"title":              "Apache HTTP Server path traversal",
-			"severity":           "low", // below the merged scanner severity
-			"explanation":        "Scanners reported CVE-2021-41773 on this host.",
-			"evidence_reference": "ignored; restored from the source",
-			"impact":             "File disclosure outside the document root.",
-			"remediation":        "Upgrade Apache HTTP Server to 2.4.51 or later.",
-		}}})
-		resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": string(content)}}}})
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(resp)
-	}))
-	defer provider.Close()
-	s := newTestServer(t, nil)
-	s.cfg.LLM = "report-model"
-	s.cfg.APIBase = provider.URL
-	s.cfg.APIKey = "test-key"
-	s.cfg.LLMMaxRetries = 1
-	dir := t.TempDir()
-	write := func(name, body string) string {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	nucleiA := write("nuclei-a.jsonl", `{"template-id":"CVE-2021-41773","matched-at":"https://a.example.test/cgi-bin/","host":"a.example.test","info":{"name":"Apache Path Traversal","severity":"critical","classification":{"cve-id":["cve-2021-41773"],"cvss-score":9.8}}}`+"\n")
-	openvasA := write("openvas-a.xml", `<get_reports_response><report><results><result id="r1"><name>Apache Path Traversal</name><host>a.example.test</host><port>443/tcp</port><severity>7.5</severity><nvt oid="1.3.6"><cve>CVE-2021-41773</cve></nvt></result></results></report></get_reports_response>`)
-	runs := []scanner.Run{
-		{Scanner: "nuclei", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: nucleiA},
-		{Scanner: "openvas", Scope: "host:a.example.test", Target: "a.example.test", Status: "completed", ArtifactPath: openvasA},
-	}
-	for i := range runs {
-		runs[i].Checksum = scanner.CalculateChecksum(runs[i])
-	}
-	rec := &ScanRecord{SchemaVersion: scanner.SchemaVersion, ID: "ai-report", Target: "a.example.test", Status: "finished", ScannerRuns: runs, Events: []WSEvent{}, Vulns: []VulnSummary{}}
-	if path := s.generateScannerReport(rec, dir, ""); path == "" {
-		t.Fatal("report generation failed")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "report.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest reportManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	if manifest.Mode != "ai" {
-		t.Fatalf("mode = %q, want ai", manifest.Mode)
-	}
-	if len(manifest.Findings) != 1 {
-		t.Fatalf("findings = %#v, want the one merged finding", manifest.Findings)
-	}
-	f := manifest.Findings[0]
-	if f.SourceID != primaryID || f.Scope != "host:a.example.test" || len(f.Sources) != 2 {
-		t.Fatalf("merged finding lost its trace: %#v", f)
-	}
-	if f.Severity != "critical" {
-		t.Fatalf("severity = %q, want the source severity critical (AI may not downgrade)", f.Severity)
-	}
-	// The projection sent to the model must not mutate the caller's findings.
-	parsed, _ := scanner.ParseRuns(runs)
-	if _, err := s.aiReportFindings(parsed); err != nil {
-		t.Fatal(err)
-	}
-	if len(parsed) != 1 || len(parsed[0].Sources) != 2 {
-		t.Fatalf("aiReportFindings mutated its input: %#v", parsed)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(bodies) == 0 {
-		t.Fatal("provider received no request")
-	}
-	for _, b := range bodies {
-		if !strings.Contains(b, primaryID) {
-			t.Fatalf("provider request lacks the primary source_id: %s", b)
-		}
-		if strings.Contains(b, secondaryID) {
-			t.Fatalf("provider request exposes secondary source_id %q: %s", secondaryID, b)
-		}
-	}
-}
-
 func TestFallbackFindingTraceIsPreserved(t *testing.T) {
 	in := []scanner.Finding{{SourceID: "trivy:CVE-1:app", Scanner: "trivy", Title: "Package issue", Severity: "high", Evidence: "1.0", EvidenceRef: "results.json#trivy:CVE-1:app"}}
 	out := fallbackReportFindings(in)
@@ -254,7 +115,6 @@ func TestFallbackFindingTraceIsPreserved(t *testing.T) {
 
 func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	s := newTestServer(t, nil)
-	s.cfg.LLM = ""
 	dir := t.TempDir()
 	write := func(name, body string) string {
 		p := filepath.Join(dir, name)
@@ -365,143 +225,6 @@ func TestScannerReportRejectsChangedArtifact(t *testing.T) {
 	}
 }
 
-// aiProvider answers every chat request with the given findings envelope.
-func aiProvider(t *testing.T, findings []map[string]any) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		content, _ := json.Marshal(map[string]any{"findings": findings})
-		resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": string(content)}}}})
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(resp)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func aiServer(t *testing.T, provider *httptest.Server) *Server {
-	t.Helper()
-	s := newTestServer(t, nil)
-	s.cfg.LLM = "report-model"
-	s.cfg.APIBase = provider.URL
-	s.cfg.APIKey = "test-key"
-	s.cfg.LLMMaxRetries = 1
-	return s
-}
-
-// Two host scopes on one IP both report the same nmap SourceID; the AI must
-// keep each finding on its own host.
-func TestAIReportKeepsSameSourceIDOnItsOwnScope(t *testing.T) {
-	aiOut := func(scope string) map[string]any {
-		return map[string]any{"source_id": "nmap:10.0.0.5:443", "scope": scope, "scanner": "nmap", "title": "Open port 443", "severity": "info", "explanation": "Port 443 is open.", "evidence_reference": "x", "impact": "Exposed service.", "remediation": "Restrict if unneeded."}
-	}
-	s := aiServer(t, aiProvider(t, []map[string]any{aiOut("host:a.test"), aiOut("host:b.test")}))
-	in := []scanner.Finding{
-		{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Title: "https", Severity: "info", Scope: "host:a.test", Target: "a.test", EvidenceRef: "a.xml#nmap:10.0.0.5:443"},
-		{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Title: "https", Severity: "info", Scope: "host:b.test", Target: "b.test", EvidenceRef: "b.xml#nmap:10.0.0.5:443"},
-	}
-	out, err := s.aiReportFindings(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 2 || out[0].Scope == out[1].Scope {
-		t.Fatalf("each finding must keep its own scope, got %#v", out)
-	}
-	for _, f := range out {
-		want := map[string]string{"host:a.test": "a.xml#nmap:10.0.0.5:443", "host:b.test": "b.xml#nmap:10.0.0.5:443"}[f.Scope]
-		if f.EvidenceRef != want {
-			t.Fatalf("scope %s got evidence %q, want %q", f.Scope, f.EvidenceRef, want)
-		}
-	}
-}
-
-// An AI item that omits scope is accepted when its source_id is unique in the
-// chunk, and rejected (forcing the deterministic fallback) when it is ambiguous.
-func TestAIReportScopelessMatch(t *testing.T) {
-	item := map[string]any{"source_id": "nmap:10.0.0.5:443", "scanner": "nmap", "title": "Open port 443", "severity": "info", "explanation": "Port 443 is open.", "evidence_reference": "x", "impact": "Exposed service.", "remediation": "Restrict if unneeded."}
-	unique := []scanner.Finding{{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Severity: "info", Scope: "host:a.test", EvidenceRef: "a.xml#nmap:10.0.0.5:443"}}
-	s := aiServer(t, aiProvider(t, []map[string]any{item}))
-	out, err := s.aiReportFindings(unique)
-	if err != nil || len(out) != 1 || out[0].Scope != "host:a.test" {
-		t.Fatalf("unique scopeless match: out=%#v err=%v", out, err)
-	}
-	ambiguous := append(unique, scanner.Finding{SourceID: "nmap:10.0.0.5:443", Scanner: "nmap", Severity: "info", Scope: "host:b.test", EvidenceRef: "b.xml#nmap:10.0.0.5:443"})
-	if _, err := s.aiReportFindings(ambiguous); err == nil {
-		t.Fatal("an ambiguous scopeless AI item must be rejected")
-	}
-}
-
-func TestAIReportUnratedSeverityIsNotAFloor(t *testing.T) {
-	s := aiServer(t, aiProvider(t, []map[string]any{{"source_id": "osv:x:GO-1", "scanner": "osv", "title": "t", "severity": "low", "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}}))
-	out, err := s.aiReportFindings([]scanner.Finding{{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"}})
-	if err != nil || len(out) != 1 || out[0].Severity != "low" {
-		t.Fatalf("AI may rate an unrated finding freely: out=%#v err=%v", out, err)
-	}
-}
-
-// osvLockfilePair is one package on source:main reported from two lockfiles:
-// the osv SourceID carries no path, so the two inputs share (scope, source_id)
-// and differ only by Target.
-func osvLockfilePair() []scanner.Finding {
-	return []scanner.Finding{
-		{SourceID: "osv:lib:GHSA-1", Scanner: "osv", Title: "lib advisory", Severity: "critical", Scope: "source:main", Target: "web/package-lock.json", EvidenceRef: "osv.json#osv:lib:GHSA-1@web"},
-		{SourceID: "osv:lib:GHSA-1", Scanner: "osv", Title: "lib advisory", Severity: "low", Scope: "source:main", Target: "api/package-lock.json", EvidenceRef: "osv.json#osv:lib:GHSA-1@api"},
-	}
-}
-
-func osvAIItem(target string) map[string]any {
-	item := map[string]any{"source_id": "osv:lib:GHSA-1", "scope": "source:main", "scanner": "osv", "title": "lib advisory", "severity": "low", "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}
-	if target != "" {
-		item["target"] = target
-	}
-	return item
-}
-
-// Inputs sharing (scope, source_id) are disambiguated by the AI item's exact
-// target; each keeps its own location, evidence, and severity floor.
-func TestAIReportDisambiguatesSharedSourceIDByTarget(t *testing.T) {
-	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem("web/package-lock.json"), osvAIItem("api/package-lock.json")}))
-	out, err := s.aiReportFindings(osvLockfilePair())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 2 {
-		t.Fatalf("want 2 findings, got %#v", out)
-	}
-	byTarget := map[string]reportFinding{}
-	for _, f := range out {
-		byTarget[f.Target] = f
-	}
-	web, api := byTarget["web/package-lock.json"], byTarget["api/package-lock.json"]
-	if web.Severity != "critical" || web.EvidenceRef != "osv.json#osv:lib:GHSA-1@web" {
-		t.Fatalf("web finding lost its floor or evidence: %#v", web)
-	}
-	if api.Severity != "low" || api.EvidenceRef != "osv.json#osv:lib:GHSA-1@api" {
-		t.Fatalf("api finding = %#v", api)
-	}
-}
-
-// Without a target, an AI item matching several inputs is ambiguous and must
-// reject the AI response.
-func TestAIReportRejectsAmbiguousSharedSourceIDWithoutTarget(t *testing.T) {
-	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem(""), osvAIItem("")}))
-	if out, err := s.aiReportFindings(osvLockfilePair()); err == nil {
-		t.Fatalf("ambiguous AI items must be rejected, got %#v", out)
-	}
-}
-
-// AI output that ties on source_id and scope is ordered by target, whatever
-// order the model returned it in.
-func TestAIReportOrdersTiesByTarget(t *testing.T) {
-	s := aiServer(t, aiProvider(t, []map[string]any{osvAIItem("web/package-lock.json"), osvAIItem("api/package-lock.json")}))
-	out, err := s.aiReportFindings(osvLockfilePair())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 2 || out[0].Target != "api/package-lock.json" || out[1].Target != "web/package-lock.json" {
-		t.Fatalf("want api then web, got %#v", out)
-	}
-}
-
 // An unrated scanner severity stays flagged in the deterministic report.
 func TestFallbackFindingKeepsSeverityUnrated(t *testing.T) {
 	in := []scanner.Finding{
@@ -511,59 +234,5 @@ func TestFallbackFindingKeepsSeverityUnrated(t *testing.T) {
 	out := fallbackReportFindings(in)
 	if len(out) != 2 || !out[0].SeverityUnrated || out[1].SeverityUnrated {
 		t.Fatalf("unrated flag not carried: %#v", out)
-	}
-}
-
-// An AI report keeps the unrated flag only while the AI keeps the placeholder
-// severity; once the AI rates the finding it is no longer unrated.
-func TestAIReportSeverityUnratedOnlyWhilePlaceholderKept(t *testing.T) {
-	item := func(id, sev string) map[string]any {
-		return map[string]any{"source_id": id, "scope": "source:main", "scanner": "osv", "title": "t", "severity": sev, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"}
-	}
-	s := aiServer(t, aiProvider(t, []map[string]any{item("osv:x:GO-1", "medium"), item("osv:x:GO-2", "low"), item("osv:x:GO-3", "low")}))
-	out, err := s.aiReportFindings([]scanner.Finding{
-		{SourceID: "osv:x:GO-1", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-1"},
-		{SourceID: "osv:x:GO-2", Scanner: "osv", Severity: "medium", SeverityUnrated: true, Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-2"},
-		{SourceID: "osv:x:GO-3", Scanner: "osv", Severity: "low", Scope: "source:main", EvidenceRef: "osv.json#osv:x:GO-3"},
-	})
-	if err != nil || len(out) != 3 {
-		t.Fatalf("out=%#v err=%v", out, err)
-	}
-	if !out[0].SeverityUnrated || out[1].SeverityUnrated || out[2].SeverityUnrated {
-		t.Fatalf("want only the kept placeholder unrated, got %#v", out)
-	}
-}
-
-// The AI may explain and classify a finding, but the scanner's identifying
-// fields are authoritative: it cannot move a finding to another file or host,
-// or overwrite a scanner-reported CVE/CWE/CVSS. It may only fill classification
-// fields the scanner left blank.
-func TestAIReportKeepsScannerIdentifyingFields(t *testing.T) {
-	s := aiServer(t, aiProvider(t, []map[string]any{
-		{"source_id": "trivy:CVE-2023-1111:go.mod", "scope": "source:main", "scanner": "trivy", "title": "t", "severity": "high", "target": "somewhere/else.lock", "endpoint": "https://attacker.example", "cve": "CVE-2099-9999", "cwe": "CWE-1", "cvss": 1.0, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"},
-		{"source_id": "zap:10038", "scope": "host:a.test", "scanner": "zap", "title": "t", "severity": "medium", "target": "b.test", "endpoint": "https://b.test/", "cve": "CVE-2021-44228", "cwe": "CWE-693", "cvss": 5.3, "explanation": "e", "evidence_reference": "x", "impact": "i", "remediation": "r"},
-	}))
-	in := []scanner.Finding{
-		{SourceID: "trivy:CVE-2023-1111:go.mod", Scanner: "trivy", Severity: "high", Scope: "source:main", Target: "go.mod", Endpoint: "go.mod", CVE: "CVE-2023-1111", CWE: "CWE-400", CVSS: 7.5, EvidenceRef: "trivy.json#trivy:CVE-2023-1111:go.mod"},
-		{SourceID: "zap:10038", Scanner: "zap", Severity: "medium", Scope: "host:a.test", Target: "a.test", Endpoint: "https://a.test/", EvidenceRef: "zap.json#zap:10038"},
-	}
-	out, err := s.aiReportFindings(in)
-	if err != nil || len(out) != 2 {
-		t.Fatalf("out=%#v err=%v", out, err)
-	}
-	byID := map[string]reportFinding{}
-	for _, f := range out {
-		byID[f.SourceID] = f
-	}
-	tr := byID["trivy:CVE-2023-1111:go.mod"]
-	if tr.Target != "go.mod" || tr.Endpoint != "go.mod" || tr.CVE != "CVE-2023-1111" || tr.CWE != "CWE-400" || tr.CVSS != 7.5 {
-		t.Fatalf("AI overwrote scanner fields: %#v", tr)
-	}
-	zp := byID["zap:10038"]
-	if zp.Target != "a.test" || zp.Endpoint != "https://a.test/" {
-		t.Fatalf("AI moved the finding: target=%q endpoint=%q", zp.Target, zp.Endpoint)
-	}
-	if zp.CVE != "CVE-2021-44228" || zp.CWE != "CWE-693" || zp.CVSS != 5.3 {
-		t.Fatalf("AI may fill classification the scanner left blank: %#v", zp)
 	}
 }

@@ -125,13 +125,8 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 		"XALGORIX_LLM=google/gemini-3.1-pro-preview",
 		"XALGORIX_API_BASE=https://generativelanguage.googleapis.com/v1",
 		"XALGORIX_API_KEY=gemini-key",
-		"XALGORIX_REASONING_EFFORT=medium",
-		"XALGORIX_OLLAMA_COMPATIBLE=true",
 		"XALGORIX_LLM_MAX_RETRIES=2",
-		"XALGORIX_MEMORY_COMPRESSOR_TIMEOUT=45",
 		"XALGORIX_WORKSPACE=/tmp/xalgorix-workspace",
-		"XALGORIX_DISABLE_BROWSER=true",
-		"XALGORIX_MAX_ITERATIONS=12",
 		"XALGORIX_RATE_LIMIT_REQUESTS=7",
 		"XALGORIX_RATE_LIMIT_WINDOW=11",
 		"XALGORIX_RATE_RPS=2.5",
@@ -141,7 +136,6 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 		"CAIDO_API_TOKEN=caido-token",
 		"XALGORIX_TELEMETRY=false",
 		"XALGORIX_OTEL_ENDPOINT=http://otel.test",
-		"GEMINI_API_KEY=search-key",
 		"AGENTMAIL_API_KEY=agentmail-key",
 		"AGENTMAIL_POD=am_test_pod",
 		"XALGORIX_DISCORD_WEBHOOK=https://discord.example/webhook",
@@ -151,20 +145,13 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 		"XALGORIX_TELEGRAM_MIN_SEVERITY=critical",
 		"XALGORIX_USERNAME=admin",
 		"XALGORIX_PASSWORD=password",
-		"XALGORIX_BROWSER_PATH=/opt/chrome",
 	}, "\n")
 	if err := os.WriteFile(envFile, []byte(content), 0o600); err != nil {
 		t.Fatalf("write env file: %v", err)
 	}
 
 	cfg := load()
-	if cfg.LLM != "google/gemini-3.1-pro-preview" || cfg.APIBase != "https://generativelanguage.googleapis.com/v1" || cfg.APIKey != "gemini-key" {
-		t.Fatalf("LLM config not loaded: %#v", cfg)
-	}
-	if cfg.ReasoningEffort != "medium" || !cfg.OllamaCompatible || cfg.LLMMaxRetries != 2 || cfg.MemCompTimeout != 45 {
-		t.Fatalf("retry/memory settings not loaded: %#v", cfg)
-	}
-	if cfg.Workspace != "/tmp/xalgorix-workspace" || !cfg.DisableBrowser || cfg.MaxIterations != 12 {
+	if cfg.Workspace != "/tmp/xalgorix-workspace" {
 		t.Fatalf("runtime settings not loaded: %#v", cfg)
 	}
 	if cfg.RateLimitRequests != 7 || cfg.RateLimitWindow != 11 {
@@ -179,19 +166,16 @@ func TestLoad_ReadsDashboardProviderProxyAndAgentMailSettings(t *testing.T) {
 	if cfg.Telemetry || cfg.OTelEndpoint != "http://otel.test" {
 		t.Fatalf("telemetry settings not loaded: %#v", cfg)
 	}
-	if cfg.GeminiAPIKey != "search-key" || cfg.AgentMailAPIKey != "agentmail-key" || cfg.AgentMailPod != "am_test_pod" {
-		t.Fatalf("integration settings not loaded: %#v", cfg)
-	}
 	if cfg.DiscordWebhook != "https://discord.example/webhook" || cfg.DiscordMinSeverity != "high" {
 		t.Fatalf("discord settings not loaded: %#v", cfg)
 	}
 	if cfg.TelegramBotToken != "123456:ABC-DEF" || cfg.TelegramChatID != "-1001234567890" || cfg.TelegramMinSeverity != "critical" {
 		t.Fatalf("telegram settings not loaded: %#v", cfg)
 	}
-	if cfg.Username != "admin" || cfg.Password != "password" || cfg.BrowserPath != "/opt/chrome" {
-		t.Fatalf("dashboard/browser settings not loaded: %#v", cfg)
+	if cfg.Username != "admin" || cfg.Password != "password" {
+		t.Fatalf("dashboard settings not loaded: %#v", cfg)
 	}
-	if cfg.HomeDir != filepath.Join(home, ".xalgorix") || cfg.SkillsDir != filepath.Join(home, ".xalgorix", "skills") {
+	if cfg.HomeDir != filepath.Join(home, ".xalgorix") {
 		t.Fatalf("home paths not derived from HOME: %#v", cfg)
 	}
 }
@@ -297,17 +281,5 @@ func TestConfig_WorkspacePath(t *testing.T) {
 	}
 	if got := drift.WorkspacePath("subdir/file.txt"); got != "/home/user/.xalgorix/data/subdir/file.txt" {
 		t.Errorf("expected resolution against WorkspaceRoot, got: %s", got)
-	}
-}
-
-func TestConfig_ResolveModel(t *testing.T) {
-	cfg := &Config{LLM: "openai/gpt-5.4"}
-	if api := cfg.ResolveModel(); api != "openai/gpt-5.4" {
-		t.Errorf("expected 'openai/gpt-5.4', got %q", api)
-	}
-
-	cfg.LLM = ""
-	if api := cfg.ResolveModel(); api != "" {
-		t.Errorf("expected empty for empty LLM, got %q", api)
 	}
 }

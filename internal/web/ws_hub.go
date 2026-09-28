@@ -149,24 +149,7 @@ func (c *wsClient) readPump() {
 		}
 		normalizeScanRequestActivity(&in.ScanRequest)
 
-		// Only authenticated (or loopback-when-auth-off) clients may override
-		// LLM provider settings — otherwise an attacker could repoint the
-		// agent's brain to an endpoint that returns crafted tool calls.
 		scanCfg := *c.server.cfg // shallow copy
-		if c.authenticated {
-			if in.Model != "" {
-				scanCfg.LLM = in.Model
-			}
-			if in.APIKey != "" {
-				scanCfg.APIKey = in.APIKey
-			}
-			if in.APIBase != "" {
-				scanCfg.APIBase = in.APIBase
-			}
-		} else if in.Model != "" || in.APIKey != "" || in.APIBase != "" {
-			log.Printf("[ws] dropping LLM-provider overrides from unauthenticated client %s", c.conn.RemoteAddr())
-		}
-
 		go c.server.runMultiScan(in.ScanRequest, &scanCfg)
 	}
 }

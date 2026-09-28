@@ -16,27 +16,9 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanheaders"
 )
 
-// Config holds all Xalgorix configuration.
+// Config holds all Xalgorix configuration. The scanner pipeline is fully
+// deterministic; there is no LLM/AI configuration.
 type Config struct {
-	// LLM settings
-	LLM              string   // XALGORIX_LLM — provider-native model ID (for example, "gpt-5.4" or "zai-org/glm-4.5")
-	LLMProvider      string   // XALGORIX_LLM_PROVIDER — explicit provider ID; keeps provider routing separate from the model name
-	APIBase          string   // XALGORIX_API_BASE — API endpoint
-	APIKey           string   // XALGORIX_API_KEY — API key
-	LLMProfile       string   // XALGORIX_LLM_PROFILE — active credential pointer "<provider>:<profileId>" (v4.4.22+)
-	ReasoningEffort  string   // XALGORIX_REASONING_EFFORT — "none", "low", "medium", "high", or "xhigh"
-	OllamaCompatible bool     // XALGORIX_OLLAMA_COMPATIBLE — force Ollama request semantics for a custom endpoint
-	Temperature      *float64 // XALGORIX_TEMPERATURE — LLM temperature (0.0-2.0), default 0.2; pointer to distinguish unset from 0.0
-	LLMMaxRetries    int      // XALGORIX_LLM_MAX_RETRIES
-	MemCompTimeout   int      // XALGORIX_MEMORY_COMPRESSOR_TIMEOUT
-	// MaxOutputTokens caps the model's completion length per call (the
-	// OpenAI-compatible `max_tokens` / Anthropic `max_tokens`). Reasoning
-	// models (e.g. MiniMax-M3) spend part of this budget on hidden thinking
-	// BEFORE emitting a tool call, so a small provider default truncates large
-	// calls like report_vulnerability mid-stream. Set an explicit, generous
-	// budget so the full call fits. XALGORIX_MAX_OUTPUT_TOKENS, default 8192.
-	MaxOutputTokens int
-
 	NucleiPath            string
 	TrivyPath             string
 	VulsPath              string
@@ -70,54 +52,12 @@ type Config struct {
 	GitleaksTimeoutSec    int
 	OsvTimeoutSec         int
 
-	// ContextCompactTokens is an OPTIONAL absolute override for the compaction
-	// trigger. When > 0, the agent auto-compacts older turns into a structured
-	// digest (+ saved notes) once the running message history is estimated to
-	// exceed this many tokens. When 0, auto-compaction is DISABLED. When < 0
-	// (the default "auto" mode), the trigger is derived from the model's
-	// context window instead — LLMContextWindow × ContextCompactRatio — so
-	// compaction only fires when the window is genuinely filling up rather than
-	// at an arbitrary fixed budget. XALGORIX_CONTEXT_COMPACT_TOKENS, default -1
-	// (auto / window-relative).
-	ContextCompactTokens int
-
-	// LLMContextWindow is the total context window (in tokens) of the
-	// configured model, used as the basis for window-relative auto-compaction.
-	// XALGORIX_LLM_CONTEXT_WINDOW, default 128000. Set this to your model's real
-	// window (e.g. 1000000 for a 1M-token model) so compaction waits until the
-	// window is actually filling up instead of compacting far too early.
-	LLMContextWindow int
-
-	// ContextCompactRatio is the fraction of LLMContextWindow at which
-	// window-relative auto-compaction triggers (only used when
-	// ContextCompactTokens is in auto mode). XALGORIX_CONTEXT_COMPACT_RATIO,
-	// default 0.75 — i.e. compact once the running context reaches ~75% of the
-	// window. Clamped to a sane 0.5–0.9 range. Compacting earlier than this
-	// tends to discard useful working context and hurt output quality.
-	ContextCompactRatio float64
-
 	// Runtime settings
 	RuntimeBackend string // XALGORIX_RUNTIME_BACKEND — always "native"
 	Workspace      string // XALGORIX_WORKSPACE — workspace root dir
 	DataDir        string // Active per-installation data root. Defaults to ~/.xalgorix/data/. Override via XALGORIX_DATA_DIR.
 	WorkspaceRoot  string // Resolution root used by Filesystem_Tools when no Scan_Context.ScanDir is in effect. Equals DataDir.
 	legacyCWD      string // Captured os.Getwd() at config load time. Used only by the migration warning.
-	DisableBrowser bool   // XALGORIX_DISABLE_BROWSER
-	MaxIterations  int    // XALGORIX_MAX_ITERATIONS — 0 = unlimited
-	MinIterations  int    // XALGORIX_MIN_ITERATIONS — minimum testing floor (default 50)
-
-	// NoToolAbortAt is how many CONSECUTIVE no-tool-call responses force-stop a
-	// scan (the "reasoning loop" abort). XALGORIX_NO_TOOL_ABORT_AT, default 0
-	// (never give up): the agent keeps nudging + periodically compacting
-	// context so the model can fix its own malformed output and resume, bounded
-	// only by the other budgets (iterations/duration/tokens). Set to e.g. 15 to
-	// restore the hard abort after 15 consecutive no-tool responses.
-	NoToolAbortAt int
-
-	// MaxFinishRejections is how many times the agent's finish call will be
-	// rejected by the gatekeeper before allowing a deadlock bypass.
-	// XALGORIX_MAX_FINISH_REJECTIONS, default 15.
-	MaxFinishRejections int
 
 	// TargetAuth carries operator-supplied authenticated-session credentials
 	// for the target(s), so the agent can test post-authentication attack
@@ -128,32 +68,6 @@ type Config struct {
 	// surfaced to the agent for use with curl/other tools.
 	TargetAuth string
 
-	// TargetAuthSecondary is a SECOND account's credentials (same format as
-	// TargetAuth). It is NOT auto-applied — it is surfaced to the agent so it
-	// can prove horizontal access-control flaws (IDOR/BOLA): reach an object
-	// created by account A using account B's session. XALGORIX_TARGET_AUTH_B.
-	TargetAuthSecondary string
-
-	// Out-of-band (OAST) callback infrastructure for confirming blind
-	// vulnerabilities (blind SSRF/RCE/XSS/XXE). OOBPublicURL is the address
-	// targets can reach (e.g. https://oob.xalgorix.com), OOBPort is the local
-	// listener port. OOB is enabled only when OOBPublicURL is set.
-	// XALGORIX_OOB_PUBLIC_URL / XALGORIX_OOB_PORT.
-	OOBPublicURL string
-	OOBPort      int
-
-	// Interactsh (ProjectDiscovery OAST) is the zero-config OOB backend used
-	// automatically when no self-hosted OOBPublicURL is set. It captures
-	// DNS/HTTP/SMTP callbacks via public servers (oast.pro, oast.live, …) so
-	// blind-vuln confirmation works without the operator exposing a listener.
-	// InteractshServer overrides the server list (comma-separated) and
-	// InteractshToken authenticates a self-hosted interactsh server. Set
-	// OOBDisable=true to turn OOB off entirely.
-	// XALGORIX_INTERACTSH_SERVER / XALGORIX_INTERACTSH_TOKEN / XALGORIX_OOB_DISABLE.
-	InteractshServer string
-	InteractshToken  string
-	OOBDisable       bool
-
 	// SourceRepo enables whitebox / source-assisted assessment: the agent
 	// reads the target's source code and reasons code → dangerous sink →
 	// exploit against the live target. Accepts a Git URL (shallow-cloned into
@@ -161,13 +75,6 @@ type Config struct {
 	// code_search tool and a whitebox methodology are activated.
 	// XALGORIX_SOURCE_REPO.
 	SourceRepo string
-
-	// ScanContext points at operator-supplied context artifacts — an OpenAPI /
-	// Swagger spec, a HAR capture, or a Postman collection (a single file or a
-	// directory of them). The engine parses them into a seeded attack surface
-	// (real endpoints + params + example bodies) and harvests any auth material,
-	// turning a blind black-box scan into an informed one. XALGORIX_SCAN_CONTEXT.
-	ScanContext string
 
 	// ScanHeaders are operator-supplied custom HTTP headers ("Name: value")
 	// injected into all TARGET-facing scan traffic to identify an authorized
@@ -180,13 +87,10 @@ type Config struct {
 	// XALGORIX_SCAN_HEADERS_FILE (one per line); repeatable -H on the CLI.
 	ScanHeaders []string
 
-	// Per-scan resource budgets with graceful early-stopping (MAPTA §2.7/§3.3).
-	// A scan halts cleanly (keeping findings already reported) once any cap is
-	// hit. 0 = unlimited (default), so behavior is unchanged unless configured.
-	// XALGORIX_MAX_TOOL_CALLS / XALGORIX_MAX_DURATION (seconds) / XALGORIX_MAX_TOKENS.
-	MaxToolCalls   int
+	// Per-scan wall-clock budget with graceful early-stopping (MAPTA §2.7/§3.3).
+	// A scan halts cleanly (keeping findings already reported) once the cap is
+	// hit. 0 = unlimited (default). XALGORIX_MAX_DURATION (seconds).
 	MaxDurationSec int
-	MaxTokens      int
 
 	// ScanRetentionDays controls automatic pruning of old scan output
 	// directories under DataDir. XALGORIX_SCAN_RETENTION_DAYS — when > 0, a
@@ -209,13 +113,6 @@ type Config struct {
 	// Telemetry
 	Telemetry    bool   // XALGORIX_TELEMETRY
 	OTelEndpoint string // XALGORIX_OTEL_ENDPOINT
-
-	// Web Search API
-	GeminiAPIKey string // GEMINI_API_KEY - for web search using Gemini
-
-	// AgentMail - temp email for sign-up verification
-	AgentMailAPIKey string // AGENTMAIL_API_KEY - AgentMail API key
-	AgentMailPod    string // AGENTMAIL_POD - AgentMail pod (e.g., "am_us_pod_47")
 
 	// Discord notifications
 	DiscordWebhook     string // XALGORIX_DISCORD_WEBHOOK - notification webhook URL
@@ -248,12 +145,6 @@ type Config struct {
 	// the operator's own machine.
 	AllowLocalTargets bool
 
-	// Auto-install gating — the LLM-driven terminal tool can call apt/cargo/npm
-	// for missing binaries. Letting that happen under sudo on a multi-user box
-	// is a privilege-escalation surface, so it's now opt-in.
-	AllowAutoInstall     bool // XALGORIX_ALLOW_AUTO_INSTALL - permit package auto-install (default false unless root)
-	AllowAutoInstallSudo bool // XALGORIX_AUTO_INSTALL_SUDO  - permit sudo-prefixed installs (default false)
-
 	// Proxy settings
 	UseProxy      bool   // XALGORIX_USE_PROXY — enable proxy support
 	ProxyFile     string // XALGORIX_PROXY_FILE — path to proxies.txt
@@ -261,9 +152,7 @@ type Config struct {
 	ProxyURL      string // XALGORIX_PROXY_URL — single proxy URL (overrides file)
 
 	// Paths
-	HomeDir     string // ~/.xalgorix
-	SkillsDir   string // embedded or local skills directory
-	BrowserPath string // XALGORIX_BROWSER_PATH — override auto-download with custom Chrome path
+	HomeDir string // ~/.xalgorix
 
 	// Filesystem read deny-list. Reads outside the Allow_List are
 	// permitted by default so tools can use system wordlists, payload
@@ -341,21 +230,7 @@ func load() *Config {
 	workspace := dataDir
 
 	cfg := &Config{
-		// LLM
-		LLM:                   envOr("XALGORIX_LLM", ""),
-		LLMProvider:           envOr("XALGORIX_LLM_PROVIDER", ""),
-		APIBase:               envOr("XALGORIX_API_BASE", ""),
-		APIKey:                envOr("XALGORIX_API_KEY", ""),
-		LLMProfile:            envOr("XALGORIX_LLM_PROFILE", ""),
-		ReasoningEffort:       envOr("XALGORIX_REASONING_EFFORT", "high"),
-		OllamaCompatible:      envOrBool("XALGORIX_OLLAMA_COMPATIBLE", false),
-		Temperature:           envOrFloatPtr("XALGORIX_TEMPERATURE", 0.2),
-		LLMMaxRetries:         envOrInt("XALGORIX_LLM_MAX_RETRIES", 5),
-		MaxOutputTokens:       envOrInt("XALGORIX_MAX_OUTPUT_TOKENS", 8192),
-		ContextCompactTokens:  envOrInt("XALGORIX_CONTEXT_COMPACT_TOKENS", -1),
-		LLMContextWindow:      envOrInt("XALGORIX_LLM_CONTEXT_WINDOW", 128000),
-		ContextCompactRatio:   envOrFloat("XALGORIX_CONTEXT_COMPACT_RATIO", 0.75),
-		MemCompTimeout:        envOrInt("XALGORIX_MEMORY_COMPRESSOR_TIMEOUT", 30),
+		// Report AI (report generation only)
 		NucleiPath:            envOr("XALGORIX_NUCLEI_PATH", "nuclei"),
 		TrivyPath:             envOr("XALGORIX_TRIVY_PATH", "trivy"),
 		VulsPath:              envOr("XALGORIX_VULS_PATH", "vuls"),
@@ -390,29 +265,15 @@ func load() *Config {
 		OsvTimeoutSec:         envOrInt("XALGORIX_OSV_TIMEOUT_SECONDS", 900),
 
 		// Runtime
-		RuntimeBackend:      "native", // Always native in Go version
-		Workspace:           workspace,
-		DataDir:             dataDir,
-		WorkspaceRoot:       dataDir,
-		legacyCWD:           cwd,
-		DisableBrowser:      envOrBool("XALGORIX_DISABLE_BROWSER", false),
-		MaxIterations:       envOrInt("XALGORIX_MAX_ITERATIONS", 0),
-		MinIterations:       envOrInt("XALGORIX_MIN_ITERATIONS", 50),
-		NoToolAbortAt:       envOrInt("XALGORIX_NO_TOOL_ABORT_AT", 30),
-		MaxFinishRejections: envOrInt("XALGORIX_MAX_FINISH_REJECTIONS", 15),
-		TargetAuth:          envOr("XALGORIX_TARGET_AUTH", ""),
-		TargetAuthSecondary: envOr("XALGORIX_TARGET_AUTH_B", ""),
-		OOBPublicURL:        envOr("XALGORIX_OOB_PUBLIC_URL", ""),
-		OOBPort:             envOrInt("XALGORIX_OOB_PORT", 0),
-		InteractshServer:    envOr("XALGORIX_INTERACTSH_SERVER", ""),
-		InteractshToken:     envOr("XALGORIX_INTERACTSH_TOKEN", ""),
-		OOBDisable:          envOrBool("XALGORIX_OOB_DISABLE", false),
-		SourceRepo:          envOr("XALGORIX_SOURCE_REPO", ""),
-		ScanContext:         envOr("XALGORIX_SCAN_CONTEXT", ""),
-		ScanHeaders:         loadScanHeaders(),
-		MaxToolCalls:        envOrInt("XALGORIX_MAX_TOOL_CALLS", 0),
-		MaxDurationSec:      envOrInt("XALGORIX_MAX_DURATION", 0),
-		MaxTokens:           envOrInt("XALGORIX_MAX_TOKENS", 0),
+		RuntimeBackend: "native", // Always native in Go version
+		Workspace:      workspace,
+		DataDir:        dataDir,
+		WorkspaceRoot:  dataDir,
+		legacyCWD:      cwd,
+		TargetAuth:     envOr("XALGORIX_TARGET_AUTH", ""),
+		SourceRepo:     envOr("XALGORIX_SOURCE_REPO", ""),
+		ScanHeaders:    loadScanHeaders(),
+		MaxDurationSec: envOrInt("XALGORIX_MAX_DURATION", 0),
 
 		// Scan retention: 0 disables automatic pruning (keep forever).
 		ScanRetentionDays: envOrInt("XALGORIX_SCAN_RETENTION_DAYS", 0),
@@ -432,10 +293,7 @@ func load() *Config {
 		Telemetry:    envOrBool("XALGORIX_TELEMETRY", true),
 		OTelEndpoint: envOr("XALGORIX_OTEL_ENDPOINT", ""),
 
-		// Web Search API
-		GeminiAPIKey:    envOr("GEMINI_API_KEY", ""),
-		AgentMailAPIKey: envOr("AGENTMAIL_API_KEY", ""),
-		AgentMailPod:    envOr("AGENTMAIL_POD", ""),
+		// AgentMail
 
 		// Discord notifications
 		DiscordWebhook:     envOr("XALGORIX_DISCORD_WEBHOOK", ""),
@@ -458,11 +316,6 @@ func load() *Config {
 		// dashboard's own listener stays protected regardless).
 		AllowLocalTargets: envOrBool("XALGORIX_ALLOW_LOCAL_TARGETS", false),
 
-		// Auto-install gates — default off for non-root; root sessions keep the
-		// historical behavior so existing systemd deployments keep working.
-		AllowAutoInstall:     envOrBool("XALGORIX_ALLOW_AUTO_INSTALL", os.Getuid() == 0),
-		AllowAutoInstallSudo: envOrBool("XALGORIX_AUTO_INSTALL_SUDO", false),
-
 		// Proxy
 		UseProxy:      envOrBool("XALGORIX_USE_PROXY", false),
 		ProxyFile:     envOr("XALGORIX_PROXY_FILE", ""),
@@ -470,9 +323,7 @@ func load() *Config {
 		ProxyURL:      envOr("XALGORIX_PROXY_URL", ""),
 
 		// Paths
-		HomeDir:     xalgorixHome,
-		SkillsDir:   filepath.Join(xalgorixHome, "skills"),
-		BrowserPath: envOr("XALGORIX_BROWSER_PATH", ""),
+		HomeDir: xalgorixHome,
 
 		// Filesystem read deny-list. Defaults applied in resolveReadDenyList
 		// (sensitive home and system paths); user list extends them.
@@ -485,13 +336,7 @@ func load() *Config {
 	// by exporting the var, and the dashboard logs an explicit "Loaded
 	// config" message at boot anyway.
 	if envOrBool("XALGORIX_DEBUG_CONFIG", false) {
-		maskedKey := ""
-		if len(cfg.APIKey) > 8 {
-			maskedKey = cfg.APIKey[:4] + "****" + cfg.APIKey[len(cfg.APIKey)-4:]
-		} else if cfg.APIKey != "" {
-			maskedKey = "****"
-		}
-		fmt.Printf("[config] Loaded: LLM=%q APIBase=%q APIKey=%s UseProxy=%v\n", cfg.LLM, cfg.APIBase, maskedKey, cfg.UseProxy)
+		fmt.Printf("[config] Loaded: DataDir=%q UseProxy=%v\n", cfg.DataDir, cfg.UseProxy)
 	}
 
 	// R6.7: announce the resolved Data_Dir / Workspace_Root once at startup
@@ -506,15 +351,6 @@ func load() *Config {
 	maybeEmitMigrationWarning(cwd, cfg.DataDir, suppressMigrationWarning)
 
 	return cfg
-}
-
-// ResolveModel resolves a model name.
-func (c *Config) ResolveModel() string {
-	model := c.LLM
-	if model == "" {
-		return ""
-	}
-	return model
 }
 
 // WorkspacePath resolves a path relative to the workspace root.
@@ -544,7 +380,9 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// CheckEnvFile checks if .xalgorix.env exists and has valid content.
+// CheckEnvFile verifies the optional ~/.xalgorix.env file is readable when
+// present. The scanner pipeline is fully deterministic and requires no AI/LLM
+// configuration, so a missing env file is not an error.
 func CheckEnvFile() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -552,46 +390,12 @@ func CheckEnvFile() error {
 	}
 
 	envPath := filepath.Join(home, ".xalgorix.env")
-
-	if _, err := os.Stat(envPath); os.IsNotExist(err) {
-		return fmt.Errorf("configuration file not found: %s\n\nPlease create it with:\n  XALGORIX_LLM=minimax/MiniMax-M3\n  XALGORIX_API_KEY=your_api_key\n\nOr run: xalgorix --setup", envPath)
-	}
-
-	llm := ""
-	apiKey := ""
-
-	f, err := os.Open(envPath)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	if _, err := os.Stat(envPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
 		}
-		line = strings.TrimPrefix(line, "export ")
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		switch key {
-		case "XALGORIX_LLM":
-			llm = value
-		case "XALGORIX_API_KEY":
-			apiKey = value
-		}
+		return fmt.Errorf("cannot access config file %s: %w", envPath, err)
 	}
-
-	if llm == "" || apiKey == "" {
-		return fmt.Errorf("configuration file is invalid or missing required variables\n\nPlease add to %s:\n  XALGORIX_LLM=minimax/MiniMax-M3\n  XALGORIX_API_KEY=your_api_key", envPath)
-	}
-
 	return nil
 }
 

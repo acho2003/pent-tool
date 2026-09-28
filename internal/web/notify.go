@@ -70,7 +70,7 @@ func (s *Server) sendDiscordWithFile(color int, title, description, filePath str
 				"color":       color,
 				"timestamp":   time.Now().Format(time.RFC3339),
 				"footer": map[string]string{
-					"text": "Xalgorix — Autonomous AI Pentesting Engine",
+					"text": "Xalgorix — Deterministic Security Scanner",
 				},
 			},
 		},
@@ -131,7 +131,7 @@ func (s *Server) sendSimpleEmbed(color int, title, description string) {
 				"color":       color,
 				"timestamp":   time.Now().Format(time.RFC3339),
 				"footer": map[string]string{
-					"text": "Xalgorix — Autonomous AI Pentesting Engine",
+					"text": "Xalgorix — Deterministic Security Scanner",
 				},
 			},
 		},
