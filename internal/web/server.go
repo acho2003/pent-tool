@@ -830,6 +830,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/legacy-import/status", s.handleLegacyImportStatus)
 	mux.HandleFunc("/api/scans", s.handleListScans)
+	mux.HandleFunc("/api/scans/plan", s.handleAssessmentPlan)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && isScanScopesPath(r.URL.Path) {
 			s.handleScanScopes(w, r)
@@ -868,6 +869,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/report/", s.handleDownloadReport)
 	mux.HandleFunc("/api/reports/", s.handleReportAction)
 	mux.HandleFunc("/api/scanners/status", s.handleScannerStatus)
+	mux.HandleFunc("/api/scanners/registry", s.handleScannerRegistry)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
 	mux.HandleFunc("/api/settings/environment", s.handleEnvironmentSettings)
 	mux.HandleFunc("/api/queue/status", s.handleQueueStatus)

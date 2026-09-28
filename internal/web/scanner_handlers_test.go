@@ -53,6 +53,74 @@ func TestScannerStatusListsCatalog(t *testing.T) {
 	}
 }
 
+func TestAssessmentPlanPreviewReturnsReasonsAndDoesNotStartScan(t *testing.T) {
+	s := newTestServer(t, nil)
+	body := `{"assessment_mode":"BLACK_BOX","assessment_types":["NETWORK"],"assessment_targets":[{"id":"host","type":"IP","value":"192.0.2.10"}]}`
+	rr := httptest.NewRecorder()
+	s.handleAssessmentPlan(rr, httptest.NewRequest(http.MethodPost, "/api/scans/plan", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var plan struct {
+		Fingerprint string `json:"fingerprint"`
+		Decisions   []struct {
+			Scanner string `json:"scanner"`
+			State   string `json:"state"`
+			Reason  string `json:"reason"`
+		} `json:"decisions"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Fingerprint == "" || len(plan.Decisions) == 0 {
+		t.Fatalf("incomplete plan: %+v", plan)
+	}
+	for _, d := range plan.Decisions {
+		if d.Reason == "" {
+			t.Errorf("decision has no reason: %+v", d)
+		}
+	}
+	if len(s.instances) != 0 {
+		t.Fatal("plan preview created a scan instance")
+	}
+}
+
+func TestAssessmentPlanRejectsInvalidConfiguration(t *testing.T) {
+	s := newTestServer(t, nil)
+	rr := httptest.NewRecorder()
+	s.handleAssessmentPlan(rr, httptest.NewRequest(http.MethodPost, "/api/scans/plan", strings.NewReader(`{"assessment_mode":"BLACK_BOX"}`)))
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestScannerRegistryIncludesUnavailableAdapters(t *testing.T) {
+	s := newTestServer(t, nil)
+	rr := httptest.NewRecorder()
+	s.handleScannerRegistry(rr, httptest.NewRequest(http.MethodGet, "/api/scanners/registry", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d", rr.Code)
+	}
+	var body struct {
+		Scanners []struct {
+			ID        string `json:"id"`
+			Available bool   `json:"available"`
+		} `json:"scanners"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, d := range body.Scanners {
+		seen[d.ID] = true
+	}
+	for _, id := range []string{"masscan", "nikto", "sqlmap", "lynis"} {
+		if !seen[id] {
+			t.Errorf("registry omitted %s", id)
+		}
+	}
+}
+
 // saveScannerScan writes a schema-v2 scan record under s.dataDir so
 // findScanByID finds it, returning its scan dir.
 func saveScannerScan(t *testing.T, s *Server, id string, runs func(dir string) []scanner.Run) string {

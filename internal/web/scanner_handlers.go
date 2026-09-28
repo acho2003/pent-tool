@@ -13,8 +13,65 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
+
+func (s *Server) scannerAvailability() map[string]bool {
+	available := map[string]bool{}
+	paths := map[string]string{
+		"subfinder": s.cfg.SubfinderPath, "httpx": s.cfg.HttpxPath, "nmap": s.cfg.NmapPath,
+		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "vuls": s.cfg.VulsPath,
+		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
+	}
+	for id, path := range paths {
+		_, err := exec.LookPath(path)
+		available[id] = err == nil
+	}
+	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != ""
+	available["openvas"] = (strings.TrimSpace(s.cfg.GVMHost) != "" || strings.TrimSpace(s.cfg.GVMSocket) != "") && s.cfg.GVMUsername != "" && s.cfg.GVMPassword != ""
+	for _, id := range []string{"masscan", "nikto", "sqlmap", "lynis"} {
+		available[id] = false
+	}
+	return available
+}
+
+func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var cfg assessment.AssessmentConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, "invalid assessment configuration", http.StatusBadRequest)
+		return
+	}
+	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.scannerAvailability()})
+	w.Header().Set("Content-Type", "application/json")
+	status := http.StatusOK
+	if len(plan.Errors) > 0 {
+		status = http.StatusUnprocessableEntity
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(plan)
+}
+
+func (s *Server) handleScannerRegistry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	available := s.scannerAvailability()
+	definitions := scanner.ScannerRegistry()
+	for i := range definitions {
+		if ok, exists := available[definitions[i].ID]; exists {
+			definitions[i].Available = ok
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"registry_version": "1", "scanners": definitions})
+}
 
 func (s *Server) handleScannerStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
