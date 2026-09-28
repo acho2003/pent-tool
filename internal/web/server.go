@@ -1271,6 +1271,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Assessment != nil {
+		normalizedAssessment := assessment.Normalize(*req.Assessment)
+		req.Assessment = &normalizedAssessment
 		for _, problem := range assessment.Validate(*req.Assessment) {
 			if problem.Blocking {
 				http.Error(w, problem.Message, http.StatusBadRequest)
