@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/safe"
@@ -22,6 +25,27 @@ import (
 // Each target is scanned in a fully isolated scanSession.
 func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceIDs ...string) {
 	normalizeScanRequestActivity(&req)
+	if req.Assessment != nil {
+		plan := s.buildAssessmentPlan(*req.Assessment)
+		for _, target := range req.Assessment.Targets {
+			switch target.Kind {
+			case assessment.KindDomain, assessment.KindURL, assessment.KindIP, assessment.KindCIDR, assessment.KindHost:
+				if s.isBlockedTargetForScan(target.Value, req.allowLoopbackPorts) {
+					plan.Errors = append(plan.Errors, assessment.Problem{Code: "target.scope_blocked", Message: "assessment target is local, internal, or the Xalgorix listener and is outside scan policy", Blocking: true})
+				}
+			}
+		}
+		if req.PlanFingerprint != "" && req.PlanFingerprint != plan.Fingerprint {
+			plan.Errors = append(plan.Errors, assessment.Problem{Code: "plan.stale", Message: "assessment plan changed before execution; preview it again", Blocking: true})
+		}
+		if len(plan.Errors) == 0 && req.assessmentPlan != nil && req.assessmentPlan.Fingerprint != plan.Fingerprint {
+			plan.Errors = append(plan.Errors, assessment.Problem{Code: "plan.stale", Message: "assessment preview no longer matches current scanner capabilities", Blocking: true})
+		}
+		req.assessmentPlan = &plan
+		if req.PlanFingerprint == "" {
+			req.PlanFingerprint = plan.Fingerprint
+		}
+	}
 
 	// Defensively flatten req.Targets in case the frontend or API sent them as a comma-separated mega string
 	var cleanTargets []string
@@ -43,11 +67,18 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// filter. For all other scans allowLoopbackPorts is empty and this is
 	// identical to isBlockedTarget.
 	var safeTargets []string
-	for _, t := range cleanTargets {
-		if s.isBlockedTargetForScan(t, req.allowLoopbackPorts) {
-			log.Printf("[BLOCKLIST] Skipping blocked target: %s (local/internal IP or self-listener)", t)
-		} else {
-			safeTargets = append(safeTargets, t)
+	if req.Assessment != nil {
+		// Typed plans include non-network resources (source trees, images and
+		// SBOM files) that must not be interpreted as host targets. Their scanner
+		// jobs are constrained by the validated target kind and server plan.
+		safeTargets = append(safeTargets, req.Targets...)
+	} else {
+		for _, t := range cleanTargets {
+			if s.isBlockedTargetForScan(t, req.allowLoopbackPorts) {
+				log.Printf("[BLOCKLIST] Skipping blocked target: %s (local/internal IP or self-listener)", t)
+			} else {
+				safeTargets = append(safeTargets, t)
+			}
 		}
 	}
 	if len(safeTargets) < len(cleanTargets) {
@@ -66,6 +97,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Register instance as pending initially
 	instance := &ScanInstance{
 		Assessment:          req.Assessment,
+		PlanFingerprint:     req.PlanFingerprint,
 		Profile:             req.Profile,
 		ID:                  instanceID,
 		Name:                req.Name,
@@ -377,59 +409,83 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	}
 
 	interruptedQueue := false
-	for i, target := range req.Targets {
-		// Per-instance stop/pause: Stop All, single-stop, pause, and delete
-		// all flip instance.Status, which we observe here. The global stopReq
-		// is intentionally not consulted (see the admission-loop note above).
+	if req.Assessment != nil {
 		instance.mu.RLock()
-		instStatus := instance.Status
+		stopped := instance.Status == "stopped" || instance.Status == "paused"
 		instance.mu.RUnlock()
-		if instStatus == "stopped" || instStatus == "paused" {
-			interruptedQueue = true
-			if instStatus == "paused" {
-				s.broadcastToInstance(instanceID, WSEvent{Type: "paused", Content: "Scan queue paused"})
-			} else {
-				s.broadcastToInstance(instanceID, WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
+		if !stopped {
+			ctx, cancel := context.WithCancel(context.Background())
+			s.mu.Lock()
+			s.cancelScan = cancel
+			s.mu.Unlock()
+			instance.mu.Lock()
+			instance.cancel = cancel
+			instance.mu.Unlock()
+			label := "assessment-" + instanceID
+			if len(req.Targets) > 0 {
+				label = req.Targets[0]
 			}
-			break
+			scanDir, resumed := s.scanDirForAssessment(req, instanceID)
+			s.saveQueueState(0, req, queueProgress{ActiveTarget: label, ActiveScanDir: scanDir, ActiveScanID: filepath.Base(scanDir)})
+			sess := &scanSession{id: filepath.Base(scanDir), target: strings.Join(req.Targets, ", "), scanDir: scanDir, cfg: scanCfg, server: s, name: req.Name, genReport: true, resetState: !resumed, instanceID: instanceID, scanMode: "assessment", profile: req.Profile, assessment: req.Assessment, assessmentPlan: req.assessmentPlan, planFingerprint: req.PlanFingerprint, ctx: ctx, companyName: req.CompanyName, logoPath: req.LogoPath}
+			s.executeScanSession(sess)
+			cancel()
 		}
+	} else {
+		for i, target := range req.Targets {
+			// Per-instance stop/pause: Stop All, single-stop, pause, and delete
+			// all flip instance.Status, which we observe here. The global stopReq
+			// is intentionally not consulted (see the admission-loop note above).
+			instance.mu.RLock()
+			instStatus := instance.Status
+			instance.mu.RUnlock()
+			if instStatus == "stopped" || instStatus == "paused" {
+				interruptedQueue = true
+				if instStatus == "paused" {
+					s.broadcastToInstance(instanceID, WSEvent{Type: "paused", Content: "Scan queue paused"})
+				} else {
+					s.broadcastToInstance(instanceID, WSEvent{Type: "stopped", Content: "Scan queue stopped by user"})
+				}
+				break
+			}
 
-		// Update queue state after each target
-		s.saveQueueState(i, req)
+			// Update queue state after each target
+			s.saveQueueState(i, req)
 
-		// No per-target timeout — let scans run indefinitely; user uses stop button
-		ctx, cancel := context.WithCancel(context.Background())
-		s.mu.Lock()
-		s.cancelScan = cancel
-		s.mu.Unlock()
+			// No per-target timeout — let scans run indefinitely; user uses stop button
+			ctx, cancel := context.WithCancel(context.Background())
+			s.mu.Lock()
+			s.cancelScan = cancel
+			s.mu.Unlock()
 
-		// Store cancel on the instance so per-instance stop can cancel the scan context
-		instance.mu.Lock()
-		instance.cancel = cancel
-		instance.mu.Unlock()
+			// Store cancel on the instance so per-instance stop can cancel the scan context
+			instance.mu.Lock()
+			instance.cancel = cancel
+			instance.mu.Unlock()
 
-		switch req.ScanMode {
-		case "wildcard":
-			// Each target gets full wildcard treatment: tool-based subdomain
-			// discovery, then the native pipeline per discovered host.
-			s.runWildcardTarget(ctx, scanCfg, req, target, i, totalTargets)
-		default:
-			s.runSingleTarget(ctx, scanCfg, req, target, i, totalTargets)
+			switch req.ScanMode {
+			case "wildcard":
+				// Each target gets full wildcard treatment: tool-based subdomain
+				// discovery, then the native pipeline per discovered host.
+				s.runWildcardTarget(ctx, scanCfg, req, target, i, totalTargets)
+			default:
+				s.runSingleTarget(ctx, scanCfg, req, target, i, totalTargets)
+			}
+
+			instance.mu.RLock()
+			instStatusAfterTarget := instance.Status
+			instance.mu.RUnlock()
+			// stopRequested=false: the global flag is not consulted for per-scan
+			// queue advancement (see admission-loop note). instStatusAfterTarget
+			// already reflects any per-instance stop/pause.
+			if shouldAdvanceQueueAfterTarget(false, instStatusAfterTarget) {
+				s.saveQueueState(i+1, req)
+			} else {
+				interruptedQueue = true
+			}
+
+			cancel() // always cancel context after target is done
 		}
-
-		instance.mu.RLock()
-		instStatusAfterTarget := instance.Status
-		instance.mu.RUnlock()
-		// stopRequested=false: the global flag is not consulted for per-scan
-		// queue advancement (see admission-loop note). instStatusAfterTarget
-		// already reflects any per-instance stop/pause.
-		if shouldAdvanceQueueAfterTarget(false, instStatusAfterTarget) {
-			s.saveQueueState(i+1, req)
-		} else {
-			interruptedQueue = true
-		}
-
-		cancel() // always cancel context after target is done
 	}
 
 	if interruptedQueue {
@@ -461,6 +517,21 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	}
 
 	log.Printf("[INFO] runMultiScan main body complete")
+}
+
+func (s *Server) scanDirForAssessment(req ScanRequest, instanceID string) (string, bool) {
+	if req.IsResume && req.ResumeScanDir != "" {
+		return s.resumeScanDirOrNew(req.ResumeScanDir, "assessment")
+	}
+	// Use a server-generated instance ID hash as the artifact directory. Target
+	// URLs and local paths may contain separators or traversal segments and must
+	// never influence the filesystem hierarchy.
+	sum := sha256.Sum256([]byte(instanceID))
+	dir := filepath.Join(s.dataDir, "_assessments", hex.EncodeToString(sum[:16]))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		log.Printf("[ERROR] failed to create assessment artifact directory: %v", err)
+	}
+	return dir, false
 }
 
 // ────────────────────────────────────────────────────────
@@ -592,6 +663,8 @@ func (s *Server) runSingleTarget(ctx context.Context, scanCfg *config.Config, re
 		artifact:        req.Artifact,
 		vulsSSHHost:     req.VulsSSHHost,
 		assessment:      req.Assessment,
+		assessmentPlan:  req.assessmentPlan,
+		planFingerprint: req.PlanFingerprint,
 		profile:         req.Profile,
 	}
 	s.executeScanSession(sess)

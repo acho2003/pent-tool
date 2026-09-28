@@ -87,6 +87,19 @@ func TestRunAssessmentJobsUsesExactApplicationURLAndChecksumResume(t *testing.T)
 	}
 }
 
+func TestTypedPlannerAdapterAvailabilityExcludesLegacyReconStubs(t *testing.T) {
+	for _, id := range []string{"subfinder", "httpx", "nmap"} {
+		if HasAssessmentRunner(id) {
+			t.Fatalf("%s unexpectedly has a direct typed assessment adapter", id)
+		}
+	}
+	for _, id := range []string{"nuclei", "zap", "testssl", "trivy", "semgrep", "gitleaks", "osv"} {
+		if !HasAssessmentRunner(id) {
+			t.Fatalf("%s should have a typed assessment adapter", id)
+		}
+	}
+}
+
 func TestRunAssessmentJobsDoesNotRunConditionalJobsBeforePreparation(t *testing.T) {
 	runner := &assessmentJobRunner{}
 	pipeline := &Pipeline{Runners: []Runner{runner}}

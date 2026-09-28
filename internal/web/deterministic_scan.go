@@ -68,7 +68,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 	}
 
 	pipeline := scanner.NewPipeline(scannerConfig(sess.cfg))
-	runs := pipeline.Run(ctx, scanner.Request{Target: sess.target, Scanners: sess.scanners, ScanDir: sess.scanDir, Artifact: sess.artifact, VulsSSHHost: sess.vulsSSHHost, TargetAuth: sess.targetAuth, Profile: sess.profile, ApplicationURL: sess.target}, sess.record.ScannerRuns, func(evt scanner.Event) {
+	emit := func(evt scanner.Event) {
 		ws := WSEvent{Type: evt.Type, Scanner: evt.Scanner, Stream: evt.Stream, Sequence: evt.Sequence, Output: evt.Output, Content: evt.Output, Target: sess.target, AgentID: sess.id, Timestamp: time.Now().Format(time.RFC3339Nano)}
 		if evt.Type != "scanner_output" {
 			ws.Content = firstNonBlank(evt.Run.Reason, fmt.Sprintf("%s: %s", evt.Scanner, evt.Run.Status))
@@ -93,11 +93,31 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 		} else {
 			s.broadcast(ws)
 		}
-	})
+	}
+	var runs []scanner.Run
+	if sess.assessmentPlan != nil {
+		if len(sess.assessmentPlan.Errors) > 0 {
+			runs = make([]scanner.Run, 0, len(sess.assessmentPlan.Jobs))
+			for _, job := range sess.assessmentPlan.Jobs {
+				run := scanner.Run{Scanner: job.Scanner, Variant: job.Variant, Scope: "assessment:" + job.TargetID, Target: job.Target, Status: "failed", Reason: "assessment plan became stale or invalid before execution", PlanFingerprint: sess.planFingerprint, AssessmentTypes: job.AssessmentTypes, StartedAt: time.Now().Format(time.RFC3339Nano), FinishedAt: time.Now().Format(time.RFC3339Nano)}
+				runs = append(runs, run)
+				emit(scanner.Event{Type: "scanner_failed", Scanner: run.Scanner, Run: run, Output: run.Reason})
+			}
+			sess.record.Status = "failed"
+			sess.record.StopReason = "assessment plan became stale or invalid before execution"
+		} else {
+			runs = pipeline.RunAssessmentJobs(ctx, *sess.assessmentPlan, sess.scanDir, sess.record.ScannerRuns, emit)
+		}
+	} else {
+		runs = pipeline.Run(ctx, scanner.Request{Target: sess.target, Scanners: sess.scanners, ScanDir: sess.scanDir, Artifact: sess.artifact, VulsSSHHost: sess.vulsSSHHost, TargetAuth: sess.targetAuth, Profile: sess.profile, ApplicationURL: sess.target}, sess.record.ScannerRuns, emit)
+	}
 	sess.record.ScannerRuns = runs
 	sess.record.ToolCalls = countTerminalRuns(runs)
 	now := time.Now().Format(time.RFC3339Nano)
-	if ctx.Err() != nil {
+	if sess.record.Status == "failed" {
+		// Preserve a failed preflight outcome. A stale/invalid assessment plan
+		// must never be relabeled as a successful empty scan.
+	} else if ctx.Err() != nil {
 		sess.record.Status = "stopped"
 		sess.record.StopReason = ctx.Err().Error()
 	} else {
@@ -116,6 +136,10 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 			inst.TotalTokens = 0
 			inst.VulnCount = 0
 			inst.Vulns = nil
+			if sess.record.Status == "failed" {
+				inst.Status = "failed"
+				inst.StopReason = sess.record.StopReason
+			}
 			inst.mu.Unlock()
 		}
 	}

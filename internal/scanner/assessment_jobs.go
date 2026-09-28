@@ -15,6 +15,19 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
+// HasAssessmentRunner reports whether a scanner ID has a direct job adapter.
+// Legacy recon stubs are intentionally excluded: typed plans must not claim
+// that an installed binary can run as an assessment job unless the pipeline
+// has a scoped adapter for it.
+func HasAssessmentRunner(id string) bool {
+	for _, runner := range NewPipeline(Config{}).Runners {
+		if runner.Name() == id {
+			return true
+		}
+	}
+	return false
+}
+
 // RunAssessmentJobs executes selected jobs from a server-generated assessment
 // plan without invoking legacy recon. The caller must regenerate and validate
 // the plan at the trust boundary before calling this method. Conditional jobs

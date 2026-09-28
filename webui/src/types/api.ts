@@ -85,6 +85,7 @@ export interface AssessmentConfig {
   subdomain_discovery?: boolean;
   api_definitions?: Array<{ target_id: string; definition_id: string }>;
   access?: Array<{ target_ids: string[]; kind: string; credential_id: string; verify_url?: string }>;
+  scanner_selection?: { mode?: "auto" | "custom"; variants?: string[] };
 }
 export interface CredentialMetadata { id: string; name: string; kind: string; target_ids: string[]; created_at: string; }
 export interface AssessmentPlan {
@@ -277,6 +278,9 @@ export interface AuthStatus {
 }
 
 export interface ScanRequest {
+  assessment?: AssessmentConfig;
+  plan_fingerprint?: string;
+  profile?: string;
   targets: string[];
   scan_mode?: string;
   name?: string;

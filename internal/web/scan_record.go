@@ -35,6 +35,8 @@ func (s *Server) freshScanRecordForSession(sess *scanSession, startedAt string) 
 	return &ScanRecord{
 		SchemaVersion:            3,
 		Assessment:               sess.assessment,
+		AssessmentPlan:           sess.assessmentPlan,
+		PlanFingerprint:          sess.planFingerprint,
 		Profile:                  sess.profile,
 		ID:                       sess.id,
 		InstanceID:               sess.instanceID,
@@ -73,6 +75,8 @@ func (s *Server) refreshResumedScanRecord(rec *ScanRecord, sess *scanSession, fa
 	}
 	if sess.assessment != nil {
 		rec.Assessment = sess.assessment
+		rec.AssessmentPlan = sess.assessmentPlan
+		rec.PlanFingerprint = sess.planFingerprint
 		rec.SchemaVersion = 3
 	}
 	if sess.name != "" || rec.Name == "" {

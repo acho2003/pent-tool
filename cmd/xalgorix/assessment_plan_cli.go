@@ -75,6 +75,15 @@ func runAssessmentPlanCLI(args cliArgs) error {
 		_, err := exec.LookPath(binary)
 		availability[id] = err == nil
 	}
+	for _, def := range scanner.ScannerRegistry() {
+		if !scanner.HasAssessmentRunner(def.ID) {
+			availability[def.ID] = false
+		} else if _, exists := availability[def.ID]; !exists {
+			// Service-backed adapters require explicit service configuration;
+			// a registry default is not evidence that one is reachable.
+			availability[def.ID] = false
+		}
+	}
 	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: availability})
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")

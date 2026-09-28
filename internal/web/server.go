@@ -265,17 +265,19 @@ type ScanRequest struct {
 	// Assessment is the typed mode/type/target/access configuration. It is
 	// optional so legacy scan clients retain their existing request contract.
 	Assessment       *assessment.AssessmentConfig `json:"assessment,omitempty"`
-	Targets          []string                     `json:"targets"`
-	Instruction      string                       `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
-	ScanMode         string                       `json:"scan_mode"` // "single" or "wildcard"
-	Profile          string                       `json:"profile,omitempty"`
-	WebScope         string                       `json:"web_scope,omitempty"`
-	APIDefinitionIDs []string                     `json:"api_definition_ids,omitempty"`
-	Model            string                       `json:"-"`
-	APIKey           string                       `json:"-"`
-	APIBase          string                       `json:"-"`
-	DiscordWebhook   string                       `json:"discord_webhook"` // Discord webhook URL
-	SeverityFilter   []string                     `json:"severity_filter"` // e.g. ["critical", "high"]
+	PlanFingerprint  string                       `json:"plan_fingerprint,omitempty"`
+	assessmentPlan   *scanner.AssessmentPlan
+	Targets          []string `json:"targets"`
+	Instruction      string   `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
+	ScanMode         string   `json:"scan_mode"` // "single" or "wildcard"
+	Profile          string   `json:"profile,omitempty"`
+	WebScope         string   `json:"web_scope,omitempty"`
+	APIDefinitionIDs []string `json:"api_definition_ids,omitempty"`
+	Model            string   `json:"-"`
+	APIKey           string   `json:"-"`
+	APIBase          string   `json:"-"`
+	DiscordWebhook   string   `json:"discord_webhook"` // Discord webhook URL
+	SeverityFilter   []string `json:"severity_filter"` // e.g. ["critical", "high"]
 	// Scanners selects which of scanner.OrderedNames run. Empty = all scanners.
 	// Deselected scanners still produce an explicit "skipped" run.
 	Scanners      []string `json:"scanners"`
@@ -438,6 +440,8 @@ type SubScanSummary struct {
 type ScanRecord struct {
 	SchemaVersion            int                          `json:"schema_version,omitempty"`
 	Assessment               *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	AssessmentPlan           *scanner.AssessmentPlan      `json:"assessment_plan,omitempty"`
+	PlanFingerprint          string                       `json:"plan_fingerprint,omitempty"`
 	Profile                  string                       `json:"profile,omitempty"`
 	ID                       string                       `json:"id"`
 	InstanceID               string                       `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
@@ -485,6 +489,7 @@ type ScanRecord struct {
 // QueueState persists scan queue state for recovery after restart
 type QueueState struct {
 	Assessment            *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	PlanFingerprint       string                       `json:"plan_fingerprint,omitempty"`
 	Profile               string                       `json:"profile,omitempty"`
 	InstanceID            string                       `json:"instance_id,omitempty"`
 	Targets               []string                     `json:"targets"`
@@ -518,30 +523,31 @@ type QueueState struct {
 
 // ScanInstance represents a running or completed scan instance.
 type ScanInstance struct {
-	Assessment     *assessment.AssessmentConfig `json:"assessment,omitempty"`
-	Profile        string                       `json:"profile,omitempty"`
-	ID             string                       `json:"id"`
-	Name           string                       `json:"name,omitempty"` // user-defined scan name
-	Targets        string                       `json:"targets"`
-	ParentTarget   string                       `json:"parent_target,omitempty"` // parent domain for subdomain scans
-	Status         string                       `json:"status"`                  // saved, running, paused, finished, stopped
-	StartedAt      string                       `json:"started_at"`
-	FinishedAt     string                       `json:"finished_at,omitempty"`
-	StopReason     string                       `json:"stop_reason,omitempty"` // why stopped (user, error, watchdog)
-	Iterations     int                          `json:"iterations"`
-	ToolCalls      int                          `json:"tool_calls"`
-	VulnCount      int                          `json:"vuln_count"`
-	TotalTokens    int                          `json:"total_tokens"`
-	ScanMode       string                       `json:"scan_mode"`
-	Instruction    string                       `json:"instruction,omitempty"`     // custom scan instructions for restart
-	SeverityFilter []string                     `json:"severity_filter,omitempty"` // severity filter for restart
-	Scanners       []string                     `json:"scanners,omitempty"`        // selected scanners for restart (empty = all)
-	Phases         []int                        `json:"phases,omitempty"`          // selected methodology phases (empty = all)
-	ReconMode      string                       `json:"recon_mode,omitempty"`      // active or passive reconnaissance
-	ScanIntensity  string                       `json:"scan_intensity,omitempty"`  // active or passive testing/scanning
-	CompanyName    string                       `json:"company_name,omitempty"`    // report branding: company name
-	LogoPath       string                       `json:"logo_path,omitempty"`       // report branding: logo path
-	DiscordWebhook string                       `json:"-"`                         // discord webhook (not exposed to API)
+	Assessment      *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	PlanFingerprint string                       `json:"plan_fingerprint,omitempty"`
+	Profile         string                       `json:"profile,omitempty"`
+	ID              string                       `json:"id"`
+	Name            string                       `json:"name,omitempty"` // user-defined scan name
+	Targets         string                       `json:"targets"`
+	ParentTarget    string                       `json:"parent_target,omitempty"` // parent domain for subdomain scans
+	Status          string                       `json:"status"`                  // saved, running, paused, finished, stopped
+	StartedAt       string                       `json:"started_at"`
+	FinishedAt      string                       `json:"finished_at,omitempty"`
+	StopReason      string                       `json:"stop_reason,omitempty"` // why stopped (user, error, watchdog)
+	Iterations      int                          `json:"iterations"`
+	ToolCalls       int                          `json:"tool_calls"`
+	VulnCount       int                          `json:"vuln_count"`
+	TotalTokens     int                          `json:"total_tokens"`
+	ScanMode        string                       `json:"scan_mode"`
+	Instruction     string                       `json:"instruction,omitempty"`     // custom scan instructions for restart
+	SeverityFilter  []string                     `json:"severity_filter,omitempty"` // severity filter for restart
+	Scanners        []string                     `json:"scanners,omitempty"`        // selected scanners for restart (empty = all)
+	Phases          []int                        `json:"phases,omitempty"`          // selected methodology phases (empty = all)
+	ReconMode       string                       `json:"recon_mode,omitempty"`      // active or passive reconnaissance
+	ScanIntensity   string                       `json:"scan_intensity,omitempty"`  // active or passive testing/scanning
+	CompanyName     string                       `json:"company_name,omitempty"`    // report branding: company name
+	LogoPath        string                       `json:"logo_path,omitempty"`       // report branding: logo path
+	DiscordWebhook  string                       `json:"-"`                         // discord webhook (not exposed to API)
 	// Per-scan auth/whitebox/context, restored when a saved scan is started.
 	// Kept in-memory only (json:"-", like DiscordWebhook) so third-party
 	// credentials and token-bearing source URLs are never written to the
@@ -1302,10 +1308,6 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "targets conflict with assessment_targets", http.StatusBadRequest)
 			return
 		}
-		if !req.SaveOnly {
-			http.Error(w, "typed assessment execution is not available yet; review the plan at POST /api/scans/plan", http.StatusUnprocessableEntity)
-			return
-		}
 	}
 
 	// Schema v2 accepts "dast" only as a compatibility alias. Source inputs
@@ -1327,6 +1329,39 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	if _, ok := scanner.ResolveWebProfile(req.Profile); !ok {
 		http.Error(w, "profile must be web-gentle or web-thorough", http.StatusBadRequest)
 		return
+	}
+	if req.Assessment != nil {
+		req.Assessment.Profile = req.Profile
+		plan := s.buildAssessmentPlan(*req.Assessment)
+		if len(plan.Errors) > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(plan)
+			return
+		}
+		if !req.SaveOnly && strings.TrimSpace(req.PlanFingerprint) == "" {
+			http.Error(w, "plan_fingerprint from a current assessment preview is required to start", http.StatusBadRequest)
+			return
+		}
+		if req.PlanFingerprint != "" && req.PlanFingerprint != plan.Fingerprint {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "assessment plan changed; review the refreshed plan", "plan": plan})
+			return
+		}
+		selected := false
+		for _, job := range plan.Jobs {
+			if job.State == scanner.PlanSelected {
+				selected = true
+				break
+			}
+		}
+		if !req.SaveOnly && !selected {
+			http.Error(w, "assessment has no runnable selected jobs; resolve the plan gaps before starting", http.StatusUnprocessableEntity)
+			return
+		}
+		req.PlanFingerprint = plan.Fingerprint
+		req.assessmentPlan = &plan
 	}
 	selectedScanners, err := scanner.NormalizeScanners(req.Scanners)
 	if err != nil {
@@ -1376,7 +1411,20 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	// address the scope guard allowlists for this scan only.
 	if !req.SaveOnly && req.Artifact.Ref == "" {
 		allBlocked := true
-		for _, t := range req.Targets {
+		networkTargets := req.Targets
+		if req.Assessment != nil {
+			networkTargets = nil
+			for _, target := range req.Assessment.Targets {
+				switch target.Kind {
+				case assessment.KindDomain, assessment.KindURL, assessment.KindIP, assessment.KindCIDR, assessment.KindHost:
+					networkTargets = append(networkTargets, target.Value)
+				}
+			}
+		}
+		if len(networkTargets) == 0 {
+			allBlocked = false // source/image/schema-only resources are not network targets
+		}
+		for _, t := range networkTargets {
 			if strings.TrimSpace(t) == "" {
 				continue
 			}
@@ -1409,24 +1457,25 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		instanceID := randomSlug()
 		now := time.Now().Format(time.RFC3339Nano)
 		inst := &ScanInstance{
-			Assessment:     req.Assessment,
-			Profile:        req.Profile,
-			ID:             instanceID,
-			Name:           req.Name,
-			Targets:        strings.Join(req.Targets, ", "),
-			Status:         "saved",
-			StartedAt:      now,
-			ScanMode:       req.ScanMode,
-			Instruction:    req.Instruction,
-			SeverityFilter: req.SeverityFilter,
-			Scanners:       req.Scanners,
-			Phases:         req.Phases,
-			ReconMode:      req.ReconMode,
-			ScanIntensity:  req.ScanIntensity,
-			CurrentPhase:   firstSelectedPhase(req.Phases),
-			CompanyName:    req.CompanyName,
-			LogoPath:       req.LogoPath,
-			DiscordWebhook: req.DiscordWebhook,
+			Assessment:      req.Assessment,
+			PlanFingerprint: req.PlanFingerprint,
+			Profile:         req.Profile,
+			ID:              instanceID,
+			Name:            req.Name,
+			Targets:         strings.Join(req.Targets, ", "),
+			Status:          "saved",
+			StartedAt:       now,
+			ScanMode:        req.ScanMode,
+			Instruction:     req.Instruction,
+			SeverityFilter:  req.SeverityFilter,
+			Scanners:        req.Scanners,
+			Phases:          req.Phases,
+			ReconMode:       req.ReconMode,
+			ScanIntensity:   req.ScanIntensity,
+			CurrentPhase:    firstSelectedPhase(req.Phases),
+			CompanyName:     req.CompanyName,
+			LogoPath:        req.LogoPath,
+			DiscordWebhook:  req.DiscordWebhook,
 			// Retained in-memory so "Save for later" → start keeps the
 			// operator's authenticated-scanning + whitebox + context config.
 			TargetAuth:          req.TargetAuth,
@@ -1450,6 +1499,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			rec := &ScanRecord{
 				SchemaVersion:            3,
 				Assessment:               req.Assessment,
+				AssessmentPlan:           req.assessmentPlan,
+				PlanFingerprint:          req.PlanFingerprint,
 				Profile:                  req.Profile,
 				ID:                       instanceID,
 				Name:                     req.Name,
@@ -1924,28 +1975,29 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	for _, inst := range s.instances {
 		inst.mu.RLock()
 		instances = append(instances, &ScanInstance{
-			Assessment:     inst.Assessment,
-			Profile:        inst.Profile,
-			ID:             inst.ID,
-			Name:           inst.Name,
-			Targets:        inst.Targets,
-			Status:         inst.Status,
-			StartedAt:      inst.StartedAt,
-			FinishedAt:     inst.FinishedAt,
-			Iterations:     inst.Iterations,
-			ToolCalls:      inst.ToolCalls,
-			VulnCount:      inst.VulnCount,
-			TotalTokens:    inst.TotalTokens,
-			ScanMode:       inst.ScanMode,
-			Instruction:    inst.Instruction,
-			SeverityFilter: append([]string(nil), inst.SeverityFilter...),
-			Scanners:       append([]string(nil), inst.Scanners...),
-			Phases:         inst.Phases,
-			ReconMode:      inst.ReconMode,
-			ScanIntensity:  inst.ScanIntensity,
-			CompanyName:    inst.CompanyName,
-			LogoPath:       inst.LogoPath,
-			CurrentPhase:   inst.CurrentPhase,
+			Assessment:      inst.Assessment,
+			PlanFingerprint: inst.PlanFingerprint,
+			Profile:         inst.Profile,
+			ID:              inst.ID,
+			Name:            inst.Name,
+			Targets:         inst.Targets,
+			Status:          inst.Status,
+			StartedAt:       inst.StartedAt,
+			FinishedAt:      inst.FinishedAt,
+			Iterations:      inst.Iterations,
+			ToolCalls:       inst.ToolCalls,
+			VulnCount:       inst.VulnCount,
+			TotalTokens:     inst.TotalTokens,
+			ScanMode:        inst.ScanMode,
+			Instruction:     inst.Instruction,
+			SeverityFilter:  append([]string(nil), inst.SeverityFilter...),
+			Scanners:        append([]string(nil), inst.Scanners...),
+			Phases:          inst.Phases,
+			ReconMode:       inst.ReconMode,
+			ScanIntensity:   inst.ScanIntensity,
+			CompanyName:     inst.CompanyName,
+			LogoPath:        inst.LogoPath,
+			CurrentPhase:    inst.CurrentPhase,
 		})
 		inst.mu.RUnlock()
 	}
@@ -2175,15 +2227,21 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		}
 		inst.mu.RLock()
 		typedAssessment := inst.Assessment != nil
+		assessmentConfig := inst.Assessment
+		acceptedFingerprint := inst.PlanFingerprint
 		inst.mu.RUnlock()
 		if typedAssessment {
-			http.Error(w, "typed assessment execution is not available yet; review the plan at POST /api/scans/plan", http.StatusUnprocessableEntity)
-			return
+			plan := s.buildAssessmentPlan(*assessmentConfig)
+			if acceptedFingerprint == "" || acceptedFingerprint != plan.Fingerprint {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "saved assessment plan changed; review the refreshed plan", "plan": plan})
+				return
+			}
 		}
 
 		inst.mu.RLock()
 		targets := strings.Split(inst.Targets, ", ")
-		assessmentConfig := inst.Assessment
 		profile := inst.Profile
 		instruction := inst.Instruction
 		scanMode := inst.ScanMode
@@ -2205,6 +2263,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		// Build a new ScanRequest from stored config
 		req := ScanRequest{
 			Assessment:          assessmentConfig,
+			PlanFingerprint:     acceptedFingerprint,
 			Profile:             profile,
 			Targets:             targets,
 			Instruction:         instruction,
@@ -2246,16 +2305,24 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		}
 		inst.mu.RLock()
 		typedAssessment := inst.Assessment != nil
+		assessmentConfig := inst.Assessment
+		acceptedFingerprint := inst.PlanFingerprint
 		inst.mu.RUnlock()
 		if typedAssessment {
-			http.Error(w, "typed assessment execution is not available yet; review the plan at POST /api/scans/plan", http.StatusUnprocessableEntity)
-			return
+			plan := s.buildAssessmentPlan(*assessmentConfig)
+			if acceptedFingerprint == "" || acceptedFingerprint != plan.Fingerprint {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "saved assessment plan changed; review the refreshed plan", "plan": plan})
+				return
+			}
 		}
 
 		inst.mu.RLock()
 		targets := strings.Split(inst.Targets, ", ")
 		req := ScanRequest{
 			Assessment:          inst.Assessment,
+			PlanFingerprint:     inst.PlanFingerprint,
 			Profile:             inst.Profile,
 			Targets:             targets,
 			Instruction:         inst.Instruction,
@@ -2396,6 +2463,8 @@ type scanSession struct {
 	scanMode           string // single, wildcard — persisted so dashboard shows correct mode
 	profile            string // web-gentle or web-thorough
 	assessment         *assessment.AssessmentConfig
+	assessmentPlan     *scanner.AssessmentPlan
+	planFingerprint    string
 	sctx               *scanctx.ScanContext // per-session isolated state
 	companyName        string               // report branding: company name
 	logoPath           string               // report branding: logo path

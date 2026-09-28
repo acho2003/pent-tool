@@ -127,12 +127,21 @@ Core v2 endpoints:
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `POST` | `/api/scan` | Start a deterministic scan |
+| `POST` | `/api/scans/plan` | Validate and preview a typed assessment without contacting targets |
+| `POST` | `/api/scan` | Start a legacy scan or a typed assessment with its current `plan_fingerprint` |
+| `GET` | `/api/scanners/registry` | Typed scanner variants and runtime availability |
 | `GET` | `/api/scanners/status` | Scanner health/configuration |
 | `GET` | `/api/scans/:id/output/:scanner/:stream` | Read paged/tail raw output |
 | `GET` | `/api/scans/:id/:scanner/artifact` | Download a native artifact |
 | `GET` | `/api/report/:id` | Download the generated PDF |
 | `POST` | `/api/reports/:id/regenerate` | Regenerate from immutable artifacts |
+
+Typed assessment starts must include the `fingerprint` returned by the latest
+`/api/scans/plan` response as `plan_fingerprint`. If runtime capabilities or
+configuration changed since preview, the server returns `409` with a refreshed
+plan. Scanner jobs without a direct typed adapter are shown as unavailable and
+are not queued. The current typed executor does not yet verify or apply stored
+target credentials; such jobs remain unauthenticated.
 
 Example request:
 

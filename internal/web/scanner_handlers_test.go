@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
@@ -82,6 +83,24 @@ func TestAssessmentPlanPreviewReturnsReasonsAndDoesNotStartScan(t *testing.T) {
 	}
 	if len(s.instances) != 0 {
 		t.Fatal("plan preview created a scan instance")
+	}
+}
+
+func TestTypedPlanMarksLegacyReconStubsUnavailable(t *testing.T) {
+	s := newTestServer(t, nil)
+	plan := s.buildAssessmentPlan(assessment.AssessmentConfig{
+		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork},
+		Targets: []assessment.Target{{ID: "host", Kind: assessment.KindIP, Value: "192.0.2.10"}},
+	})
+	for _, id := range []string{"httpx", "nmap"} {
+		if !slices.ContainsFunc(plan.Decisions, func(d scanner.PlanDecision) bool {
+			return d.Scanner == id && d.State == scanner.PlanUnavailable && strings.Contains(d.Reason, "unavailable")
+		}) {
+			t.Fatalf("typed plan must explain missing direct %s adapter: %+v", id, plan.Decisions)
+		}
+		if slices.ContainsFunc(plan.Jobs, func(job scanner.PlanJob) bool { return job.Scanner == id }) {
+			t.Fatalf("typed plan emitted non-executable %s job", id)
+		}
 	}
 }
 
@@ -223,16 +242,85 @@ func TestAssessmentPlanUsesBoundCredentialWithoutReturningSecretOrClaimingVerifi
 	}
 }
 
-func TestTypedAssessmentScanDoesNotFallThroughToLegacyExecution(t *testing.T) {
+func TestTypedAssessmentStartRequiresCurrentPlanFingerprint(t *testing.T) {
 	s := newTestServer(t, nil)
 	body := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/Portal/"}]}`
 	rr := httptest.NewRecorder()
 	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(body)))
-	if rr.Code != http.StatusUnprocessableEntity {
+	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	if len(s.instances) != 0 {
-		t.Fatal("unsupported typed assessment execution created a legacy scan")
+		t.Fatal("typed assessment without a reviewed plan created a scan")
+	}
+	stale := strings.TrimSuffix(body, "}") + `,"plan_fingerprint":"sha256:stale"}`
+	rr = httptest.NewRecorder()
+	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(stale)))
+	if rr.Code != http.StatusConflict || !strings.Contains(rr.Body.String(), `"plan"`) {
+		t.Fatalf("stale plan response status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(s.instances) != 0 {
+		t.Fatal("stale assessment plan created a scan")
+	}
+}
+
+func TestTypedAssessmentSavePersistsPlanSnapshotAndFingerprint(t *testing.T) {
+	s := newTestServer(t, nil)
+	body := `{"assessment":{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/Portal/"}]},"targets":["https://app.example.test/Portal/"],"save_only":true}`
+	rr := httptest.NewRecorder()
+	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var result map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	inst := s.instances[result["instance_id"]]
+	if inst == nil || inst.Assessment == nil || inst.PlanFingerprint == "" {
+		t.Fatalf("saved typed assessment did not preserve its accepted identity: %+v", inst)
+	}
+	entries := s.findAllScans()
+	if len(entries) != 1 || entries[0].rec.PlanFingerprint != inst.PlanFingerprint || entries[0].rec.AssessmentPlan == nil {
+		t.Fatalf("saved record lost plan snapshot: %+v", entries)
+	}
+}
+
+func TestTypedAssessmentStartRejectsPlanWithoutRunnableAdapters(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.cfg.NucleiPath = "xalgorix-test-missing-nuclei"
+	s.cfg.TestsslPath = "xalgorix-test-missing-testssl"
+	s.cfg.ZAPURL = ""
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/Portal/"}}, Profile: "web-gentle"}
+	plan := s.buildAssessmentPlan(cfg)
+	request, err := json.Marshal(map[string]any{
+		"assessment": cfg, "targets": []string{"https://app.example.test/Portal/"}, "profile": "web-gentle", "plan_fingerprint": plan.Fingerprint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(string(request))))
+	if rr.Code != http.StatusUnprocessableEntity || len(s.instances) != 0 {
+		t.Fatalf("unsupported plan should not queue: status=%d instances=%d body=%s", rr.Code, len(s.instances), rr.Body.String())
+	}
+}
+
+func TestTypedSourceOnlyStartDoesNotApplyNetworkSelfScanBlock(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.cfg.SemgrepPath = "xalgorix-test-missing-semgrep"
+	s.cfg.GitleaksPath = "xalgorix-test-missing-gitleaks"
+	source := t.TempDir()
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox, Types: []assessment.Type{assessment.TypeSourceCode}, Targets: []assessment.Target{{ID: "source", Kind: assessment.KindLocalSourcePath, Value: source}}, Profile: "web-gentle"}
+	plan := s.buildAssessmentPlan(cfg)
+	request, err := json.Marshal(map[string]any{"assessment": cfg, "targets": []string{source}, "plan_fingerprint": plan.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(string(request))))
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("source-only target should reach capability planning; status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

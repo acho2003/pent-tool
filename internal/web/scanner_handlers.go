@@ -49,6 +49,17 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid assessment configuration", http.StatusBadRequest)
 		return
 	}
+	plan := s.buildAssessmentPlan(cfg)
+	w.Header().Set("Content-Type", "application/json")
+	status := http.StatusOK
+	if len(plan.Errors) > 0 {
+		status = http.StatusUnprocessableEntity
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(plan)
+}
+
+func (s *Server) buildAssessmentPlan(cfg assessment.AssessmentConfig) scanner.AssessmentPlan {
 	credentialAvailability := map[string]bool{}
 	if vault, err := s.openCredentialVault(); err == nil {
 		for _, binding := range cfg.Access {
@@ -62,7 +73,7 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.scannerAvailability(), CredentialAvailability: credentialAvailability})
+	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), CredentialAvailability: credentialAvailability})
 	if len(plan.Errors) == 0 {
 		normalized := plan.Config
 		bindings := append([]assessment.APIDefinitionBinding(nil), normalized.APIDefinitions...)
@@ -93,13 +104,17 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	status := http.StatusOK
-	if len(plan.Errors) > 0 {
-		status = http.StatusUnprocessableEntity
+	return plan
+}
+
+func (s *Server) assessmentScannerAvailability() map[string]bool {
+	available := s.scannerAvailability()
+	for _, def := range scanner.ScannerRegistry() {
+		if !scanner.HasAssessmentRunner(def.ID) {
+			available[def.ID] = false
+		}
 	}
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(plan)
+	return available
 }
 
 func (s *Server) handleScannerRegistry(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +122,7 @@ func (s *Server) handleScannerRegistry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
-	available := s.scannerAvailability()
+	available := s.assessmentScannerAvailability()
 	definitions := scanner.ScannerRegistry()
 	for i := range definitions {
 		if ok, exists := available[definitions[i].ID]; exists {

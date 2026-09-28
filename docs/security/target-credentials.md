@@ -22,8 +22,11 @@ vault until the rotated records have been verified. The web API does not expose
 key rotation.
 
 Credential IDs are associated with assessment target IDs. A lookup for a target
-outside that binding fails. The vault is storage only: scanner execution must
-still verify credentials and attach them only to the matching target before
-running authenticated checks. Typed assessment execution remains unavailable
-until that execution path is enabled; use the plan preview endpoint to inspect
-scanner decisions.
+outside that binding fails. The vault remains storage-only for scanner execution:
+typed assessments can run available scanner jobs, but they do not yet verify or
+attach stored credentials. A plan may report that an encrypted credential is
+available for a target; that means the record exists and its target binding
+matches. It does not mean login was verified, the request will be authenticated,
+or the scan covered post-login pages. The current runner therefore reports
+scanner jobs as unauthenticated until the verified-auth execution path is
+implemented.
