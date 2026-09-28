@@ -3,7 +3,7 @@
 # The runtime is based on Kali Linux and pulls in Kali's pentest metapackages,
 # so hundreds of offensive-security tools are preinstalled. On top of that every
 # Nuclei, Trivy, and Vuls are baked into the image. Scanner execution never
-# installs software at runtime and never constructs commands with an LLM.
+# installs software at runtime.
 #
 # It runs as ROOT on purpose: the engine only enables package auto-install for
 # uid 0 (internal/config: AllowAutoInstall defaults to os.Getuid()==0), and
@@ -17,8 +17,6 @@
 # Build:  docker build -t xalgorix .
 # Run:    docker run --rm -p 9137:9137 \
 #           --privileged \
-#           -e XALGORIX_LLM=minimax/MiniMax-M3 \
-#           -e XALGORIX_API_KEY=your_provider_api_key \
 #           -v xalgorix-data:/data \
 #           ghcr.io/xalgord/xalgorix:latest
 #
@@ -175,7 +173,7 @@ RUN getcap -r / 2>/dev/null | awk '{print $1}' | while read -r f; do \
       setcap -r "$f" 2>/dev/null || true; \
     done || true
 
-# Go toolchain at runtime so the agent can `go install` anything not baked in.
+# Go toolchain at runtime so the runtime can `go install` anything not baked in.
 COPY --from=gobuild /usr/local/go /usr/local/go
 # Prebuilt latest Go security tools → on PATH via /root/go/bin.
 COPY --from=gobuild /go/bin/ /root/go/bin/

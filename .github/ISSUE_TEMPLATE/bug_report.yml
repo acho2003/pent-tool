@@ -24,10 +24,9 @@ body:
       label: Steps to reproduce
       description: Exact steps so we can reproduce it.
       placeholder: |
-        1. Configure XALGORIX_LLM=...
-        2. Start with `xalgorix --web`
-        3. Launch a scan against ...
-        4. See error
+        1. Start with `xalgorix --web`
+        2. Launch a scan against ...
+        3. See error
     validations:
       required: true
   - type: textarea
@@ -59,8 +58,8 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS / arch, and LLM provider if relevant.
-      placeholder: Ubuntu 24.04 amd64, MiniMax-M3
+      description: OS / arch.
+      placeholder: Ubuntu 24.04 amd64
   - type: checkboxes
     id: checks
     attributes:

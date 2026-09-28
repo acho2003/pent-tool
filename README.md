@@ -1,6 +1,6 @@
 # Xalgorix
 
-Xalgorix is a self-hosted deterministic security-scanner pipeline. It runs established scanners in a fixed order and uses AI only after scanning to generate a source-traceable report.
+Xalgorix is a self-hosted deterministic security-scanner pipeline. It runs established scanners in a fixed order and assembles a source-traceable report from their native output.
 
 ## Execution model
 
@@ -13,13 +13,13 @@ Each scan runs fixed phases:
 
 Scanners run on a bounded worker pool (`XALGORIX_MAX_WORKERS`, default 3). The heavy tools, ZAP and OpenVAS, never run at the same time.
 
-Every applicable tool records exactly one terminal status per scope. Every scope×tool the classifier deemed inapplicable is recorded `not_applicable` or `skipped`, so the report still accounts for all of them. Recon, target classification, tool selection, and command construction are deterministic; AI runs only after all scanning completes.
+Every applicable tool records exactly one terminal status per scope. Every scope×tool the classifier deemed inapplicable is recorded `not_applicable` or `skipped`, so the report still accounts for all of them. Recon, target classification, tool selection, and command construction are deterministic.
 
 A scanner failure is recorded and other scanners continue. Cancelling a scan stops the active scanners and marks the remaining attempts cancelled. Completed attempts and their checksums are reused during restart recovery, keyed by (scope, scanner).
 
-AI does not validate targets, discover subdomains, select tools, construct commands, change scan depth, verify findings, calculate status, or generate live output. During execution the dashboard displays native scanner stdout and stderr only.
+During execution the dashboard displays native scanner stdout and stderr only.
 
-After all attempts reach terminal states, Xalgorix parses each tool's native output (Nuclei JSONL, ZAP JSON, testssl JSON, Greenbone XML, Vuls JSON, Nmap XML, Trivy, Semgrep, Gitleaks, and OSV-Scanner JSON) into a private canonical input. When different scanners report the same CVE on the same scope, the report shows one finding that lists every source and keeps each source's evidence reference. Report AI may explain, classify, and recommend remediation for those records. Output records with unknown source IDs are rejected. If Report AI is absent or fails, Xalgorix immediately creates a deterministic fallback report.
+After all attempts reach terminal states, Xalgorix parses each tool's native output (Nuclei JSONL, ZAP JSON, testssl JSON, Greenbone XML, Vuls JSON, Nmap XML, Trivy, Semgrep, Gitleaks, and OSV-Scanner JSON) into a private canonical input. When different scanners report the same CVE on the same scope, the report shows one finding that lists every source and keeps each source's evidence reference. Output records with unknown source IDs are rejected. The report is assembled deterministically from these scanner records.
 
 The report groups findings by scope (each host, then the source code), shows each host's classifier tracks, and opens with a scan-coverage section: a recon summary (hosts discovered, open ports, detected services) and the terminal status of every tool on every scope.
 
@@ -49,8 +49,6 @@ On Apple Silicon this avoids the older `xalgord/xalgorix:latest` release image,
 which does not provide an arm64 manifest. The first Greenbone startup downloads
 and initializes persistent vulnerability feeds, so it can take a while before
 the scanner is ready.
-
-A Report AI key is optional. Scanning and fallback reports work without one. Configure a report provider under Settings → Report AI.
 
 CLI examples:
 
@@ -119,9 +117,6 @@ Key environment variables:
 | `XALGORIX_GVM_PASSWORD` | empty | GMP password |
 | `XALGORIX_SCANNER_MAX_OUTPUT_BYTES` | `104857600` | Per-scanner raw output limit |
 | `XALGORIX_<TOOL>_TIMEOUT_SECONDS` | per tool | Per-tool timeout, e.g. `XALGORIX_NMAP_TIMEOUT_SECONDS` (1800), `XALGORIX_SEMGREP_TIMEOUT_SECONDS` (1800), `XALGORIX_GITLEAKS_TIMEOUT_SECONDS` (900), `XALGORIX_OSV_TIMEOUT_SECONDS` (900) |
-| `XALGORIX_LLM` | empty | Optional Report AI model |
-| `XALGORIX_API_KEY` | empty | Optional Report AI key |
-| `XALGORIX_API_BASE` | empty | Optional Report AI endpoint |
 
 Nuclei, Trivy, Vuls, Subfinder, httpx, Nmap, testssl.sh, Semgrep, Gitleaks, and OSV-Scanner are expected in the Xalgorix runtime image. ZAP and Greenbone run as authenticated internal services with persistent state and feeds.
 
@@ -163,7 +158,7 @@ Schema-v2 records contain a `scanner_runs` collection with scanner name, scope (
 
 Resume keys on the (scope, scanner) pair. A record written before scopes existed has an empty scope and is treated as the single implicit host scope (`host:<target>`), so older records resume and report unchanged. Recon's discovered host set, with per-host evidence, is persisted at `scanner-output/recon-scopes.json`. The resolved source scope, with its provenance (clone URL or provided directory), is persisted at `scanner-output/source-scope.json`, so the report can name the source by origin.
 
-`report.json` (manifest schema 2) records source run checksums, prompt version, provider/model when used, generation mode, timestamp, parse errors, the per-scope coverage list and recon summary, and validated report findings (each with its scope and, for merged findings, every contributing source).
+`report.json` (manifest schema 2) records source run checksums, generation mode, timestamp, parse errors, the per-scope coverage list and recon summary, and validated report findings (each with its scope and, for merged findings, every contributing source).
 
 ## Safety
 

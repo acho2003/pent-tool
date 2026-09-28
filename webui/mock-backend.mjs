@@ -125,31 +125,7 @@ let state = {
   rateLimit: { requests: 60, window: 60 },
   agentMail: { pod: "ops-pod-1", apiKey: "", hasApiKey: true },
   schedules: [],
-  authProfiles: [],
   reqCounter: 0,
-};
-
-const providerCatalog = [
-  { id: "openai", displayName: "OpenAI", baseURL: "https://api.openai.com/v1", headerStyle: "openai", authMethods: ["api_key"], models: ["gpt-5", "gpt-5-mini"] },
-  { id: "google", displayName: "Google Gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta", headerStyle: "gemini", authMethods: ["api_key"], models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
-];
-
-const llmSettings = {
-  model: "",
-  apiBase: "",
-  apiKey: "",
-  hasApiKey: false,
-  reasoningEffort: "high",
-  ollamaCompatible: false,
-  llmMaxRetries: 3,
-  memoryCompressorTimeout: 120,
-  maxIterations: 40,
-  geminiApiKey: "",
-  hasGeminiApiKey: false,
-  envFile: "~/.xalgorix.env",
-  provider: "",
-  authMethod: "api_key",
-  profiles: [],
 };
 
 // Flatten every seeded instance vuln into the FlatFinding shape the
@@ -459,15 +435,6 @@ const server = http.createServer(async (req, res) => {
     return send(res, html, 200, { "content-type": "text/html; charset=utf-8" });
   }
 
-  // -------- Chat (palette → ask) -------------------------------------------
-  if (method === "POST" && url === "/api/chat") {
-    await readBody(req);
-    return send(res, {
-      reply:
-        "I am a mock assistant. The real backend would answer questions about the active scan here.",
-    });
-  }
-
   // -------- Findings list + on-disk summary --------------------------------
   if (method === "GET" && url === "/api/findings") {
     return send(res, allFindings());
@@ -488,18 +455,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, state.schedules);
   }
 
-  // -------- Provider catalog + stored auth profiles ------------------------
-  if (method === "GET" && url === "/api/providers") {
-    return send(res, providerCatalog);
-  }
-  if (method === "GET" && url === "/api/auth/profiles") {
-    return send(res, state.authProfiles);
-  }
-
-  // -------- LLM / environment / legacy-import settings ---------------------
-  if (method === "GET" && url === "/api/settings/llm") {
-    return send(res, llmSettings);
-  }
+  // -------- Environment / legacy-import settings ---------------------------
   if (method === "GET" && url === "/api/settings/environment") {
     return send(res, { envFile: "~/.xalgorix.env", variables: [], restartRequired: false });
   }

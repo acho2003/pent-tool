@@ -12,7 +12,6 @@ import (
 func (s *Server) scanRecordForSession(sess *scanSession) *ScanRecord {
 	startedAt := time.Now().Format(time.RFC3339)
 	rec := s.freshScanRecordForSession(sess, startedAt)
-	sess.recordTokenOffset = 0
 
 	if sess.resetState {
 		return rec
@@ -29,7 +28,6 @@ func (s *Server) scanRecordForSession(sess *scanSession) *ScanRecord {
 
 	rec = existing
 	s.refreshResumedScanRecord(rec, sess, startedAt)
-	sess.recordTokenOffset = rec.TotalTokens
 	return rec
 }
 
@@ -153,9 +151,7 @@ func (s *Server) effectiveVulnCount(inst *ScanInstance, sess *scanSession) int {
 	}
 	if sess != nil && inst.Status == "running" {
 		ctxID := ""
-		if sess.parentReportingCtxID != "" {
-			ctxID = sess.parentReportingCtxID
-		} else if sess.sctx != nil {
+		if sess.sctx != nil {
 			ctxID = sess.sctx.ID
 		}
 		if ctxID != "" {

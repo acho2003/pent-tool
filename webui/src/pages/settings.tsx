@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Search, RefreshCw, Trash2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Search } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -22,34 +22,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { ErrorState } from "@/components/states";
 import {
-  useAuthProfiles,
-  useDeleteAuthProfile,
-  useDiscoverProviderModels,
   useEnvironmentSettings,
-  useLLMSettings,
-  useProviders,
   useRateLimit,
-  useRefreshAuthProfile,
   useUpdateEnvironmentSettings,
-  useUpdateLLMSettings,
   useUpdateRateLimit,
   useAuthStatus,
 } from "@/api/queries";
 import { useAuth } from "@/store/auth";
 import type {
-  AuthProfile,
-  CatalogEntry,
   EnvironmentSettings,
   EnvironmentVariableSetting,
-  LLMSettingsRequest,
 } from "@/types/api";
-import OAuthModal from "./settings/oauth-modal";
 
 const settingsTabs = [
-  "llm",
   "engagement",
   "notifications",
   "environment",
@@ -58,76 +45,22 @@ const settingsTabs = [
 
 type SettingsTab = (typeof settingsTabs)[number];
 
-// LLMFormState mirrors the catalog-aware POST shape. We keep the
-// numeric / Gemini fields here too so the bottom row of inputs
-// (max retries, memory timeout, max iterations, Gemini search key)
-// continues to live on the same tab. Empty string sentinels make
-// the diff against the loaded settings state explicit.
-interface LLMFormState {
-  provider: string;
-  authMethod: "" | "api_key" | "oauth" | "none";
-  profileId: string;
-  apiKey: string;
-  apiBase: string;
-  apiBaseOverride: string;
-  model: string;
-  reasoningEffort: string;
-  ollamaCompatible: boolean;
-  llmMaxRetries: number;
-  memoryCompressorTimeout: number;
-  maxIterations: number;
-  geminiApiKey: string;
-  hasApiKey: boolean;
-  hasGeminiApiKey: boolean;
-  envFile: string;
-  activeProfileKey: string;
-}
-
-const emptyLLMForm: LLMFormState = {
-  provider: "",
-  authMethod: "",
-  profileId: "default",
-  apiKey: "",
-  apiBase: "",
-  apiBaseOverride: "",
-  model: "",
-  reasoningEffort: "high",
-  ollamaCompatible: false,
-  llmMaxRetries: 5,
-  memoryCompressorTimeout: 30,
-  maxIterations: 0,
-  geminiApiKey: "",
-  hasApiKey: false,
-  hasGeminiApiKey: false,
-  envFile: "",
-  activeProfileKey: "",
-};
-
 export default function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab") as SettingsTab | null;
   const activeTab = settingsTabs.includes(requestedTab as SettingsTab)
     ? (requestedTab as SettingsTab)
-    : "llm";
+    : "engagement";
 
   const rate = useRateLimit();
   const updateRate = useUpdateRateLimit();
-  const llm = useLLMSettings();
-  const updateLLM = useUpdateLLMSettings();
   const environment = useEnvironmentSettings();
   const updateEnvironment = useUpdateEnvironmentSettings();
   const auth = useAuthStatus();
   const logout = useAuth((s) => s.logout);
   const navigate = useNavigate();
 
-  const providers = useProviders();
-  const profiles = useAuthProfiles();
-  const refreshProfile = useRefreshAuthProfile();
-  const deleteProfile = useDeleteAuthProfile();
-
   const [rateForm, setRateForm] = useState({ requests: 10, window: 1 });
-  const [llmForm, setLLMForm] = useState<LLMFormState>(emptyLLMForm);
-  const [oauthOpen, setOAuthOpen] = useState(false);
   const [notificationForm, setNotificationForm] = useState({
     webhook: "",
     minSeverity: "",
@@ -140,7 +73,6 @@ export default function SettingsPage() {
   const [envFilter, setEnvFilter] = useState("");
   const [envRestartRequired, setEnvRestartRequired] = useState(false);
   const [savedRate, setSavedRate] = useState(false);
-  const [savedLLM, setSavedLLM] = useState(false);
   const [savedNotifications, setSavedNotifications] = useState(false);
   const [savedEnvironment, setSavedEnvironment] = useState(false);
 
@@ -152,35 +84,6 @@ export default function SettingsPage() {
       });
     }
   }, [rate.data]);
-
-
-  useEffect(() => {
-    if (!llm.data) return;
-    // Derive the form state from the settings response. We keep
-    // both the legacy fields (model/apiBase/apiKey) and the new
-    // catalog fields (provider/authMethod/activeProfileKey) so a
-    // user who picks a provider but doesn't change anything else
-    // still sees the saved values in the lower-row inputs.
-    setLLMForm({
-      provider: llm.data.provider ?? "",
-      authMethod: (llm.data.authMethod as LLMFormState["authMethod"]) ?? "",
-      profileId: "default",
-      apiKey: llm.data.apiKey ?? "",
-      apiBase: llm.data.apiBase ?? "",
-      apiBaseOverride: "",
-      model: bareModelForProvider(llm.data.model ?? "", llm.data.provider ?? ""),
-      reasoningEffort: llm.data.reasoningEffort || "high",
-      ollamaCompatible: llm.data.ollamaCompatible ?? false,
-      llmMaxRetries: llm.data.llmMaxRetries ?? 5,
-      memoryCompressorTimeout: llm.data.memoryCompressorTimeout ?? 30,
-      maxIterations: llm.data.maxIterations ?? 0,
-      geminiApiKey: llm.data.geminiApiKey ?? "",
-      hasApiKey: llm.data.hasApiKey ?? false,
-      hasGeminiApiKey: llm.data.hasGeminiApiKey ?? false,
-      envFile: llm.data.envFile ?? "",
-      activeProfileKey: llm.data.activeProfileKey ?? "",
-    });
-  }, [llm.data]);
 
   useEffect(() => {
     const webhook = envValue(environment.data, "XALGORIX_DISCORD_WEBHOOK");
@@ -204,103 +107,10 @@ export default function SettingsPage() {
     setEnvChanges({});
   }, [environment.data]);
 
-  // Sort providers alphabetically by displayName, with the
-  // "custom" sentinel pinned last because it represents free-form
-  // user-supplied endpoints rather than a discrete provider.
-  const sortedProviders = useMemo<CatalogEntry[]>(() => {
-    const list = providers.data ?? [];
-    return [...list].sort((a, b) => {
-      if (a.id === "custom") return 1;
-      if (b.id === "custom") return -1;
-      return a.displayName.localeCompare(b.displayName);
-    });
-  }, [providers.data]);
-
-  const selectedProvider = useMemo<CatalogEntry | undefined>(() => {
-    if (!llmForm.provider) return undefined;
-    return sortedProviders.find((p) => p.id === llmForm.provider);
-  }, [sortedProviders, llmForm.provider]);
-
-  const ollamaPortDetected = useMemo(
-    () => hasOllamaPort(llmForm.apiBase),
-    [llmForm.apiBase],
-  );
-  const ollamaMode =
-    llmForm.provider === "ollama" ||
-    ollamaPortDetected ||
-    llmForm.ollamaCompatible;
-
-  // Auth methods come straight from the catalog entry. Custom
-  // provider always supports api_key (it's just a free-form base
-  // URL + key); local-runtime providers (Ollama, LM Studio) only
-  // expose "none". The default selection is the first method in
-  // AuthMethods, falling back to api_key.
-  const availableAuthMethods = useMemo<string[]>(() => {
-    if (!selectedProvider) return [];
-    return selectedProvider.id === "custom"
-      ? ["api_key"]
-      : selectedProvider.authMethods ?? ["api_key"];
-  }, [selectedProvider]);
-
-  // Filter the profile list to the selected provider for the
-  // saved-credentials picker. The dashboard never sees plaintext
-  // credentials — only the masked envelope.
-  const providerProfiles = useMemo<AuthProfile[]>(() => {
-    if (!llmForm.provider) return [];
-    return (profiles.data ?? []).filter((p) => p.provider === llmForm.provider);
-  }, [profiles.data, llmForm.provider]);
-
-  // Every saved profile across ALL providers, enriched with the
-  // catalog display name and an active flag. This is the same list
-  // the schedule / scan "Provider profile" pickers draw from, so the
-  // Settings page can review and delete credentials that belong to a
-  // provider other than the one currently selected above.
-  const allProfiles = useMemo(() => {
-    const byID = new Map((providers.data ?? []).map((e) => [e.id, e]));
-    return (profiles.data ?? []).map((profile) => {
-      const key = profile.key ?? `${profile.provider}:${profile.profileId}`;
-      return {
-        profile,
-        key,
-        display: byID.get(profile.provider)?.displayName ?? profile.provider,
-        active: key === llmForm.activeProfileKey,
-      };
-    });
-  }, [profiles.data, providers.data, llmForm.activeProfileKey]);
-
   function changeTab(value: string) {
     const next = new URLSearchParams(searchParams);
     next.set("tab", value);
     setSearchParams(next, { replace: true });
-  }
-
-  function changeProvider(providerId: string) {
-    const entry = sortedProviders.find((p) => p.id === providerId);
-    const methods = entry?.authMethods ?? ["api_key"];
-    setLLMForm((current) => ({
-      ...current,
-      provider: providerId,
-      authMethod: (methods[0] as LLMFormState["authMethod"]) ?? "api_key",
-      // Never carry a model across providers. The selected provider is
-      // discovered automatically when possible; otherwise the operator
-      // enters the model explicitly.
-      model: "",
-      activeProfileKey: "",
-      apiKey: "",
-      hasApiKey: false,
-      apiBaseOverride: "",
-      ollamaCompatible: false,
-      // Ollama supports none/low/medium/high, while the Responses API also
-      // exposes xhigh. Keep the current value when valid and normalize only
-      // the provider-specific values during a switch.
-      reasoningEffort: normalizeReasoningEffort(
-        current.reasoningEffort,
-        providerId === "ollama",
-      ),
-      // apiBase resets to the catalog default; "custom" leaves the
-      // current free-text base intact.
-      apiBase: entry?.id === "custom" ? current.apiBase : entry?.baseURL ?? "",
-    }));
   }
 
   function updateEnvValue(variable: EnvironmentVariableSetting, value: string) {
@@ -316,66 +126,6 @@ export default function SettingsPage() {
     });
   }
 
-  async function saveLLMSettings() {
-    setSavedLLM(false);
-    const profileId = llmForm.profileId || "default";
-    const req: LLMSettingsRequest = {
-      provider: llmForm.provider,
-      authMethod: (llmForm.authMethod || "api_key") as
-        | "api_key"
-        | "oauth"
-        | "none",
-      profileId,
-      model: llmForm.model,
-      reasoningEffort: llmForm.reasoningEffort,
-      ollamaCompatible: llmForm.ollamaCompatible,
-      llmMaxRetries: llmForm.llmMaxRetries,
-      // memoryCompressorTimeout, maxIterations, and geminiApiKey are
-      // agent-era settings with no control in this (deterministic
-      // report-AI) UI. Sending their defaults made every save clobber
-      // whatever the operator configured via the Environment tab / env
-      // file — so we omit them here and let the backend preserve the
-      // stored values (its POST handler only writes fields that are
-      // present and non-zero).
-    };
-    if (llmForm.authMethod === "api_key") {
-      // Only send the apiKey when the user actually typed
-      // something — the masked **** value means "leave the
-      // saved key alone" (matches the legacy POST contract).
-      if (!isMaskedSettingValue(llmForm.apiKey)) {
-        req.apiKey = llmForm.apiKey;
-      }
-      if (llmForm.apiBaseOverride) {
-        req.apiBaseOverride = llmForm.apiBaseOverride;
-      }
-      if (selectedProvider?.id === "custom" && llmForm.apiBase) {
-        req.apiBase = llmForm.apiBase;
-      }
-    }
-    if (llmForm.authMethod === "oauth" && llmForm.provider) {
-      // OAuth providers (e.g. Codex ChatGPT subscription) finish their
-      // sign-in through the OAuth modal, which persists a profile keyed
-      // "<provider>:<profileId>". Saving the LLM tab must point the active
-      // credential pointer (XALGORIX_LLM_PROFILE) at that profile —
-      // otherwise the backend keeps the previous (legacy) provider and only
-      // the model changes. Prefer an explicitly-selected profile key.
-      req.activeProfileKey =
-        llmForm.activeProfileKey || `${llmForm.provider}:${profileId}`;
-    }
-    if (llmForm.authMethod === "none") {
-      req.activeProfileKey = "";
-    }
-    await updateLLM.mutateAsync(req);
-    setSavedLLM(true);
-    setTimeout(() => setSavedLLM(false), 2500);
-  }
-
-  async function setActiveProfile(profile: AuthProfile) {
-    await updateLLM.mutateAsync({
-      activeProfileKey: profile.key ?? `${profile.provider}:${profile.profileId}`,
-    });
-  }
-
   return (
     <div className="space-y-6">
       <header className="space-y-1">
@@ -383,461 +133,17 @@ export default function SettingsPage() {
           Settings
         </h1>
         <p className="text-sm text-muted-foreground">
-		  Report AI provider, report limits, environment variables, and account access.
+		  Engagement limits, notifications, environment variables, and account access.
         </p>
       </header>
 
       <Tabs value={activeTab} onValueChange={changeTab}>
         <TabsList className="flex h-auto flex-wrap">
-		  <TabsTrigger value="llm">Report AI</TabsTrigger>
           <TabsTrigger value="engagement">Engagement</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="environment">Environment</TabsTrigger>
           <TabsTrigger value="account">Account</TabsTrigger>
         </TabsList>
-
-        <TabsContent value="llm">
-          {llm.isLoading || providers.isLoading ? (
-            <Skeleton className="h-96" />
-          ) : llm.error ? (
-            <ErrorState
-			  title="Failed to load Report AI settings"
-              description={llm.error instanceof Error ? llm.error.message : "Unknown error"}
-              action={
-                <Button size="sm" variant="outline" onClick={() => llm.refetch()}>
-                  Retry
-                </Button>
-              }
-            />
-          ) : (
-            <Card>
-              <CardHeader>
-				<CardTitle>Report AI provider</CardTitle>
-                <CardDescription>
-				  Used only after all scanner attempts finish. Scans do not require this configuration.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="llm-provider">Provider</Label>
-                    <Select
-                      value={llmForm.provider || "__unset__"}
-                      onValueChange={(value) =>
-                        changeProvider(value === "__unset__" ? "" : value)
-                      }
-                    >
-                      <SelectTrigger id="llm-provider">
-                        <SelectValue placeholder="Select a provider" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__unset__">Not selected</SelectItem>
-                        {sortedProviders.map((provider) => (
-                          <SelectItem key={provider.id} value={provider.id}>
-                            {provider.displayName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {selectedProvider && availableAuthMethods.length > 1 && (
-                    <div className="space-y-2">
-                      <Label>Authentication method</Label>
-                      <div className="flex flex-wrap gap-2 rounded-md border border-border bg-muted/30 p-1">
-                        {availableAuthMethods.map((method) => (
-                          <Button
-                            key={method}
-                            type="button"
-                            size="sm"
-                            variant={
-                              llmForm.authMethod === method ? "default" : "ghost"
-                            }
-                            onClick={() =>
-                              setLLMForm({
-                                ...llmForm,
-                                authMethod: method as LLMFormState["authMethod"],
-                              })
-                            }
-                          >
-                            {prettyAuthMethod(method)}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {selectedProvider?.notes && (
-                  <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                    {selectedProvider.notes}
-                  </div>
-                )}
-
-                {selectedProvider && (
-                  <CatalogModelField
-                    provider={selectedProvider}
-                    value={llmForm.model}
-                    profileKey={
-                      llmForm.authMethod === "none"
-                        ? ""
-                        : llmForm.activeProfileKey.startsWith(
-                              `${selectedProvider.id}:`,
-                            )
-                          ? llmForm.activeProfileKey
-                          : (providerProfiles[0]?.key ??
-                            (providerProfiles[0]
-                              ? `${providerProfiles[0].provider}:${providerProfiles[0].profileId}`
-                              : ""))
-                    }
-                    autoDiscover={
-                      llmForm.authMethod === "none" ||
-                      providerProfiles.length > 0 ||
-                      llm.data?.provider === selectedProvider.id
-                    }
-                    onChange={(model) =>
-                      setLLMForm({ ...llmForm, model })
-                    }
-                  />
-                )}
-
-                {/* Auth-method-specific form */}
-                {selectedProvider && llmForm.authMethod === "api_key" && (
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="llm-api-key">API key</Label>
-                      <Input
-                        id="llm-api-key"
-                        value={llmForm.apiKey}
-                        onChange={(e) =>
-                          setLLMForm({ ...llmForm, apiKey: e.target.value })
-                        }
-                        placeholder={llmForm.hasApiKey ? "**** (saved)" : "sk-..."}
-                        className="font-mono"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Keep the masked value to preserve the saved key.
-                      </p>
-                    </div>
-                    {selectedProvider.id === "custom" ? (
-                      <>
-                        <div className="space-y-2">
-                          <Label htmlFor="llm-api-base">Base URL</Label>
-                          <Input
-                            id="llm-api-base"
-                            value={llmForm.apiBase}
-                            onChange={(e) => {
-                              const apiBase = e.target.value;
-                              const nextOllamaMode =
-                                hasOllamaPort(apiBase) ||
-                                llmForm.ollamaCompatible;
-                              setLLMForm({
-                                ...llmForm,
-                                apiBase,
-                                reasoningEffort: normalizeReasoningEffort(
-                                  llmForm.reasoningEffort,
-                                  nextOllamaMode,
-                                ),
-                              });
-                            }}
-                            placeholder="https://api.example.com/v1"
-                            className="font-mono"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="llm-header-style">Header style</Label>
-                          <Select
-                            value={llmForm.apiBase ? "openai" : "openai"}
-                            onValueChange={() => {}}
-                            disabled
-                          >
-                            <SelectTrigger id="llm-header-style">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="openai">openai</SelectItem>
-                              <SelectItem value="anthropic">anthropic</SelectItem>
-                              <SelectItem value="gemini">gemini</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <p className="text-xs text-muted-foreground">
-                            Custom providers default to OpenAI-shaped requests. Switch this from the Environment tab if your endpoint speaks Anthropic or Gemini.
-                          </p>
-                        </div>
-                        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-muted/30 p-3 lg:col-span-2">
-                          <div className="space-y-1">
-                            <Label htmlFor="llm-ollama-compatible">
-                              Ollama-compatible endpoint
-                            </Label>
-                            <p className="text-xs text-muted-foreground">
-                              {ollamaPortDetected
-                                ? "Detected automatically from port 11434."
-                                : "Enable Ollama reasoning controls when this custom endpoint uses a different port."}
-                            </p>
-                          </div>
-                          <Switch
-                            id="llm-ollama-compatible"
-                            checked={
-                              ollamaPortDetected || llmForm.ollamaCompatible
-                            }
-                            disabled={ollamaPortDetected}
-                            onCheckedChange={(checked) =>
-                              setLLMForm({
-                                ...llmForm,
-                                ollamaCompatible: checked,
-                                reasoningEffort: normalizeReasoningEffort(
-                                  llmForm.reasoningEffort,
-                                  checked || ollamaPortDetected,
-                                ),
-                              })
-                            }
-                          />
-                        </div>
-                      </>
-                    ) : (
-                      <div className="space-y-2 lg:col-span-2">
-                        <Label htmlFor="llm-api-base-override">
-                          API base override (optional)
-                        </Label>
-                        <Input
-                          id="llm-api-base-override"
-                          value={llmForm.apiBaseOverride}
-                          onChange={(e) =>
-                            setLLMForm({
-                              ...llmForm,
-                              apiBaseOverride: e.target.value,
-                            })
-                          }
-                          placeholder={selectedProvider.baseURL}
-                          className="font-mono"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Leave blank to use the provider default.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {selectedProvider && llmForm.authMethod === "oauth" && (
-                  <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4">
-                    <p className="text-sm">
-                      Sign in with {selectedProvider.displayName} to create a
-                      new OAuth profile. The dashboard polls until the new
-                      credential appears in the saved list below.
-                    </p>
-                    <Button
-                      type="button"
-                      onClick={() => setOAuthOpen(true)}
-                      disabled={!selectedProvider.flow}
-                    >
-                      Sign in with OAuth
-                    </Button>
-                    {!selectedProvider.flow && (
-                      <p className="text-xs text-muted-foreground">
-                        OAuth is not configured for this provider yet.
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {selectedProvider && llmForm.authMethod === "none" && (
-                  <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4">
-                    <p className="text-sm">
-                      {selectedProvider.displayName} runs locally — no
-                      credential required. Select or enter the model above.
-                    </p>
-                  </div>
-                )}
-
-                {/* Saved-credentials picker for the active provider. */}
-                {selectedProvider && providerProfiles.length > 0 && (
-                  <div className="space-y-2">
-                    <Label>Saved credentials</Label>
-                    <div className="divide-y divide-border rounded-md border border-border">
-                      {providerProfiles.map((profile) => {
-                        const key =
-                          profile.key ??
-                          `${profile.provider}:${profile.profileId}`;
-                        const active = key === llmForm.activeProfileKey;
-                        return (
-                          <div
-                            key={key}
-                            className="flex flex-wrap items-center gap-3 px-3 py-2"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 text-sm font-medium">
-                                {profile.profileId}
-                                <Badge variant="muted">{profile.type}</Badge>
-                                {active && (
-                                  <CheckCircle2 className="h-4 w-4 text-success" />
-                                )}
-                                {profile.requiresReauth && (
-                                  <Badge variant="warning">
-                                    <AlertTriangle className="mr-1 h-3 w-3" />
-                                    re-auth required
-                                  </Badge>
-                                )}
-                              </div>
-                              <div className="font-mono text-xs text-muted-foreground">
-                                {profile.type === "oauth"
-                                  ? maskedTokenLabel(profile)
-                                  : maskedAPIKeyLabel(profile)}
-                              </div>
-                              {profile.expiresAt && (
-                                <div className="text-xs text-muted-foreground">
-                                  expires {profile.expiresAt}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              {!active && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={updateLLM.isPending}
-                                  onClick={() => setActiveProfile(profile)}
-                                >
-                                  Set active
-                                </Button>
-                              )}
-                              {profile.type === "oauth" && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={refreshProfile.isPending}
-                                  onClick={() =>
-                                    refreshProfile.mutateAsync(key)
-                                  }
-                                >
-                                  <RefreshCw className="h-3.5 w-3.5" />
-                                </Button>
-                              )}
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                disabled={deleteProfile.isPending}
-                                onClick={() => deleteProfile.mutateAsync(key)}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* All saved provider profiles across every provider —
-                    the same set the schedule / scan "Provider profile"
-                    pickers offer. Lets the operator review and delete
-                    credentials for providers other than the one selected
-                    above (the picker there is scoped to that provider). */}
-                {allProfiles.length > 0 && (
-                  <div className="space-y-2">
-                    <Label>All provider profiles</Label>
-                    <p className="text-xs text-muted-foreground">
-                      Every stored credential across all providers. These
-                      are the profiles available in the schedule and scan
-                      "Provider profile" pickers.
-                    </p>
-                    <div className="divide-y divide-border rounded-md border border-border">
-                      {allProfiles.map(({ profile, key, display, active }) => (
-                        <div
-                          key={key}
-                          className="flex flex-wrap items-center gap-3 px-3 py-2"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 text-sm font-medium">
-                              {display} · {profile.profileId}
-                              <Badge variant="muted">{profile.type}</Badge>
-                              {active && (
-                                <CheckCircle2 className="h-4 w-4 text-success" />
-                              )}
-                              {profile.requiresReauth && (
-                                <Badge variant="warning">
-                                  <AlertTriangle className="mr-1 h-3 w-3" />
-                                  re-auth required
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="font-mono text-xs text-muted-foreground">
-                              {profile.type === "oauth"
-                                ? maskedTokenLabel(profile)
-                                : maskedAPIKeyLabel(profile)}
-                            </div>
-                            {profile.expiresAt && (
-                              <div className="text-xs text-muted-foreground">
-                                expires {profile.expiresAt}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={deleteProfile.isPending}
-                              onClick={() => deleteProfile.mutateAsync(key)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <Separator />
-
-				<div className="grid max-w-xs gap-3">
-                  <div className="space-y-2">
-					<Label htmlFor="llm-retries">Report generation retries</Label>
-                    <Input
-                      id="llm-retries"
-                      type="number"
-                      min={0}
-                      max={20}
-                      value={llmForm.llmMaxRetries}
-                      onChange={(e) =>
-                        setLLMForm({
-                          ...llmForm,
-                          llmMaxRetries: Number(e.target.value),
-                        })
-                      }
-                    />
-                  </div>
-				</div>
-
-                <Separator />
-                <div className="flex items-center justify-end gap-3">
-                  {savedLLM && <span className="text-xs text-success">Saved</span>}
-                  <Button
-                    onClick={saveLLMSettings}
-                    disabled={updateLLM.isPending || !llmForm.provider}
-                  >
-					{updateLLM.isPending ? "Saving..." : "Save Report AI settings"}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* OAuth modal — opens when the user clicks "Sign in with
-              OAuth". Polls /api/auth/profiles until a new entry for
-              this provider appears. */}
-          {selectedProvider && (
-            <OAuthModal
-              open={oauthOpen}
-              provider={selectedProvider.id}
-              displayName={selectedProvider.displayName}
-              existingKeys={(profiles.data ?? []).map(
-                (p) => p.key ?? `${p.provider}:${p.profileId}`,
-              )}
-              onClose={() => setOAuthOpen(false)}
-            />
-          )}
-        </TabsContent>
 
         <TabsContent value="engagement">
           {rate.isLoading ? (
@@ -857,7 +163,7 @@ export default function SettingsPage() {
               <CardHeader>
                 <CardTitle>Rate limits</CardTitle>
                 <CardDescription>
-                  Applied to outbound requests issued by the agent and persisted to the env file.
+                  Applied to outbound scanner requests and persisted to the env file.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -1228,175 +534,6 @@ export default function SettingsPage() {
   );
 }
 
-function CatalogModelField({
-  provider,
-  value,
-  profileKey,
-  autoDiscover,
-  onChange,
-}: {
-  provider: CatalogEntry;
-  value: string;
-  profileKey: string;
-  autoDiscover: boolean;
-  onChange: (value: string) => void;
-}) {
-  const discovery = useDiscoverProviderModels();
-  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
-  const [manualEntry, setManualEntry] = useState(false);
-  useEffect(() => {
-    setDiscoveredModels([]);
-    setManualEntry(false);
-    discovery.reset();
-    if (
-      autoDiscover &&
-      provider.id !== "custom" &&
-      provider.baseURL
-    ) {
-      discovery.mutate(
-        { provider: provider.id, profile: profileKey || undefined },
-        {
-          onSuccess: (result) => {
-            setDiscoveredModels(result.models);
-            if (result.models.length > 0 && !result.models.includes(value)) {
-              onChange(result.models[0]);
-            }
-          },
-        },
-      );
-    }
-    // The provider/profile pair is the discovery identity. Mutation methods
-    // are intentionally excluded so query state updates do not rescan.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider.id, profileKey, autoDiscover]);
-  const models = discoveredModels;
-  const options = models.map((model) => ({
-    label: model,
-    value: model,
-  }));
-  const selected = options.some((option) => option.value === value)
-    ? value
-    : options[0]?.value;
-
-  return (
-    <div className="space-y-2">
-      <Label htmlFor="llm-model">Model</Label>
-      {options.length > 0 && !manualEntry ? (
-        <Select
-          value={selected}
-          onValueChange={(next) => {
-            if (next === "__custom__") {
-              setManualEntry(true);
-              onChange("");
-            } else {
-              onChange(next);
-            }
-          }}
-        >
-          <SelectTrigger id="llm-model" className="font-mono">
-            <SelectValue placeholder="Select a model" />
-          </SelectTrigger>
-          <SelectContent>
-            {options.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-            <SelectItem value="__custom__">Custom model…</SelectItem>
-          </SelectContent>
-        </Select>
-      ) : null}
-      {(options.length === 0 || manualEntry) && (
-        <Input
-          id={options.length === 0 ? "llm-model" : undefined}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder="model-name"
-          aria-label={`Custom model for ${provider.displayName}`}
-          className="font-mono"
-        />
-      )}
-      {manualEntry && options.length > 0 && (
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            setManualEntry(false);
-            onChange(options[0].value);
-          }}
-        >
-          Choose a discovered model
-        </Button>
-      )}
-      <p className="text-xs text-muted-foreground">
-        Models are loaded from the provider when its API supports discovery.
-        Otherwise, enter the exact model ID manually.
-      </p>
-      {provider.id !== "custom" && provider.baseURL && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={discovery.isPending}
-            onClick={() => {
-              discovery.mutate(
-                { provider: provider.id, profile: profileKey || undefined },
-                {
-                  onSuccess: (result) => {
-                    setDiscoveredModels(result.models);
-                    setManualEntry(false);
-                    if (result.models.length > 0 && !result.models.includes(value)) {
-                      onChange(result.models[0]);
-                    }
-                  },
-                },
-              );
-            }}
-          >
-            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${discovery.isPending ? "animate-spin" : ""}`} />
-            {discovery.isPending ? "Scanning models…" : "Scan available models"}
-          </Button>
-          {discovery.isSuccess && (
-            <span className="text-xs text-success">
-              {discoveredModels.length} models loaded
-            </span>
-          )}
-        </div>
-      )}
-      {discovery.isError && (
-        <p className="text-xs text-destructive">
-          {discovery.error instanceof Error
-            ? discovery.error.message
-            : "Model discovery failed"}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function bareModelForProvider(model: string, provider: string): string {
-  const prefix = `${provider.toLowerCase()}/`;
-  return model.toLowerCase().startsWith(prefix)
-    ? model.slice(prefix.length)
-    : model;
-}
-
-function hasOllamaPort(value: string): boolean {
-  try {
-    return new URL(value).port === "11434";
-  } catch {
-    return false;
-  }
-}
-
-function normalizeReasoningEffort(value: string, ollamaMode: boolean): string {
-  if (ollamaMode && value === "xhigh") return "high";
-  if (!ollamaMode && value === "none") return "high";
-  return value;
-}
-
 function EnvironmentRow({
   variable,
   value,
@@ -1531,32 +668,4 @@ function groupBy<T, K extends string>(items: T[], getKey: (item: T) => K) {
     (acc[key] ||= []).push(item);
     return acc;
   }, {});
-}
-
-function isMaskedSettingValue(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("****") || trimmed.includes("••••");
-}
-
-function prettyAuthMethod(method: string): string {
-  switch (method) {
-    case "api_key":
-      return "API key";
-    case "oauth":
-      return "OAuth";
-    case "none":
-      return "No credentials";
-    default:
-      return method;
-  }
-}
-
-function maskedAPIKeyLabel(profile: AuthProfile): string {
-  if (profile.apiKey) return profile.apiKey;
-  return "(no key)";
-}
-
-function maskedTokenLabel(profile: AuthProfile): string {
-  if (profile.accessToken) return profile.accessToken;
-  return "(no token)";
 }

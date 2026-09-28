@@ -1,6 +1,6 @@
 # Xalgorix Tools
 
-Complete list of **70+ security tools** included in Xalgorix - the most powerful open-source AI autonomous pentesting agent.
+Complete list of the security tools included in Xalgorix - a deterministic, open-source security-scanner pipeline.
 
 ## 🔍 Recon & Subdomain Enumeration (15 tools)
 
@@ -122,31 +122,6 @@ Complete list of **70+ security tools** included in Xalgorix - the most powerful
 | 14 | **httpx** | HTTP toolkit | `go install github.com/projectdiscovery/httpx/cmd/httpx@latest` |
 | 15 | **notify** | Webhook notifications | `go install github.com/projectdiscovery/notify/cmd/notify@latest` |
 
-## 🤖 Agent Tools (Built-in)
-
-| Tool | Description |
-|------|-------------|
-| **terminal_execute** | Run shell commands with auto-install |
-| **browser** | Browser automation |
-| **playwright** | Browser control for testing |
-| **websearch** | Web search via Gemini/Brave/Google/Bing |
-| **notes** | Track findings and endpoints |
-| **reporting** | Generate PDF reports |
-| **thinking** | AI reasoning and planning |
-| **finish** | Complete and summarize scan |
-
-## Auto-Install Feature
-
-Xalgorix **automatically installs** any missing tools when needed! Just run a command and it'll handle the installation.
-
-### Supported Package Managers
-- **Go** - `go install`
-- **APT** - `apt install`
-- **PIP** - `pip install`
-- **Cargo** - `cargo install`
-- **Gem** - `gem install`
-- **NPM** - `npm install`
-
 ## Summary
 
 | Category | Count |
@@ -160,4 +135,4 @@ Xalgorix **automatically installs** any missing tools when needed! Just run a co
 | Utilities | 15 |
 | **TOTAL** | **85+** |
 
-Xalgorix supports **85+ security tools** for comprehensive penetration testing!
+Xalgorix bundles this catalog of security tools, which the deterministic scanner pipeline drives in a fixed order.

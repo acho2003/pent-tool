@@ -31,21 +31,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/agent"
-	"github.com/xalgord/xalgorix/v4/internal/auth"
 	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/llm"
-	"github.com/xalgord/xalgorix/v4/internal/providers"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/safe"
 	"github.com/xalgord/xalgorix/v4/internal/sandbox"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
-	"github.com/xalgord/xalgorix/v4/internal/tools/agentsgraph"
-	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
-	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
-	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 )
 
 // Version is set by main.go at startup — single source of truth.
@@ -343,11 +335,9 @@ type ScanRequest struct {
 	ResumeDiscoveryDone  bool     `json:"-"`
 	ResumeOriginalTarget int      `json:"-"`
 
-	// Code-scan internals, resolved server-side from CodeScan in handleScan.
-	// codeScanMode drives the agent's methodology; allowLoopbackPorts is the
-	// per-scan loopback allowlist the scope guard honors for provision scans.
-	codeScanMode       agent.CodeScanMode `json:"-"`
-	allowLoopbackPorts []int              `json:"-"`
+	// allowLoopbackPorts is the per-scan loopback allowlist the scope guard
+	// honors (resolved server-side).
+	allowLoopbackPorts []int `json:"-"`
 }
 
 // WSEvent is a WebSocket message sent to clients.
@@ -530,15 +520,11 @@ type ScanInstance struct {
 	ScannerRuns         []scanner.Run    `json:"scanner_runs,omitempty"`
 	Artifact            scanner.Artifact `json:"artifact,omitempty"`
 	VulsSSHHost         string           `json:"vuls_ssh_host,omitempty"`
-	agent               *agent.Agent
 	cancel              context.CancelFunc
 	scanDir             string
-	sctx                *scanctx.ScanContext // per-instance session state (vulns, notes, terminal, browser)
+	sctx                *scanctx.ScanContext // per-instance session state (vulns)
 	events              []WSEvent            // buffered events for replay
-	chatCfg             *config.Config       // provider settings for post-scan chat (not exposed)
-	chatMessages        []llm.Message        // lightweight post-scan chat history (not exposed)
 	mu                  sync.RWMutex
-	lastSessionTokens   int // tracks token count from current session for delta calculation
 }
 
 // maxConcurrentInstances removed — replaced by dynamic resource-aware
@@ -597,9 +583,6 @@ var dashboardRoutes = []string{
 	"/api/reports/",
 	"/api/scanners/status",
 	"/api/settings/rate-limit",
-	"/api/settings/llm",
-	"/api/settings/llm/keys",
-	"/api/settings/llm/test-route",
 	"/api/settings/environment",
 	"/api/queue/status",
 	"/api/queue/resume",
@@ -608,19 +591,10 @@ var dashboardRoutes = []string{
 	"/api/instances",
 	"/api/instances/",
 
-	// Dashboard auth (login/logout/status). Distinct from the new
-	// /api/auth/profiles namespace below.
+	// Dashboard auth (login/logout/status).
 	"/api/auth/login",
 	"/api/auth/logout",
 	"/api/auth/status",
-
-	// Provider catalog (read-only) + auth profile routes.
-	"/api/providers",
-	"/api/auth/profiles",
-	"/api/auth/profiles/api-key",
-	"/api/auth/profiles/oauth/start",
-	"/api/auth/profiles/oauth/complete",
-	"/api/auth/profiles/",
 }
 
 // Server is the web UI server.
@@ -629,8 +603,7 @@ type Server struct {
 	port            int
 	clients         map[*wsClient]bool
 	mu              sync.RWMutex
-	currentAgents   map[string]*agent.Agent // scanID → agent (replaces singleton currentAgent)
-	cancelScan      context.CancelFunc      // cancels the current scan session context
+	cancelScan      context.CancelFunc // cancels the current scan session context
 	running         atomic.Bool
 	stopReq         atomic.Bool
 	restartWhenIdle atomic.Bool  // SIGUSR1 sets this; a watcher restarts once scans drain
@@ -653,7 +626,6 @@ type Server struct {
 	instancesMu          sync.RWMutex
 	queueResumeMu        sync.Mutex
 	queueResumeLaunching map[string]bool
-	postScanChatFn       func(*config.Config, []llm.Message) (string, error)
 	schedulesMu          sync.RWMutex
 	schedules            map[string]*ScanSchedule
 	shutdownChan         chan struct{}
@@ -690,46 +662,6 @@ type Server struct {
 	legacyImportMu        sync.RWMutex
 	legacyImportCount     int
 	legacyImportDismissed bool
-
-	// catalog is the read-only LLM provider catalog backing the
-	// GET /api/providers handler and the per-scan endpoint
-	// resolver. v4.4.22 collapsed the runtime-editable JSON-backed
-	// catalog into a compiled-in providers.Builtin() set;
-	// providers.NewService() is unconditional and never fails. The
-	// field is kept (rather than being read from a singleton) so
-	// tests can swap a fixture catalog in without touching package
-	// state.
-	catalog *providers.Service
-
-	// profiles is the runtime-editable credential profile store
-	// backing /api/auth/profiles (Wave E task 5.2). Like catalog,
-	// it is initialized in NewServer and may be nil if startup
-	// failed. The catalog handlers in this task do not consult
-	// profiles directly, but the field is declared here so task 5.2
-	// can wire profile handlers without re-touching the Server
-	// shape. Validates: Requirement 4.1.
-	profiles *auth.Store
-
-	// oauthRegistry is the OAuth driver registry consulted by
-	// handleOAuthStart / handleOAuthComplete / handleProfileRefresh
-	// (Wave E task 5.2). It is wired in NewServer immediately
-	// after profiles via auth.RegisterDefaultDrivers so the four
-	// built-in flow handlers (pkce, device_code, setup_token,
-	// claude_cli_reuse) are available without further setup. A
-	// nil value mirrors the catalog/profiles fields: the OAuth
-	// handlers surface 503 so the rest of the dashboard keeps
-	// serving traffic. Validates: Requirements 6.x, 7.x, 8.x, 9.x.
-	oauthRegistry *auth.Registry
-
-	// llmKeyStore is the multi-provider API key store backing the
-	// /api/settings/llm/keys handlers. nil if construction failed at
-	// startup, in which case handleProviderKeys returns 503.
-	llmKeyStore *llm.KeyStore
-
-	// llmRouter resolves a model name to a provider endpoint using the
-	// catalog + llmKeyStore. Backs /api/settings/llm/test-route. nil
-	// when llmKeyStore is nil.
-	llmRouter *llm.Router
 }
 
 // NewServer creates a new web server.
@@ -748,7 +680,6 @@ func NewServer(cfg *config.Config, port int) *Server {
 		cfg:                  cfg,
 		port:                 port,
 		clients:              make(map[*wsClient]bool),
-		currentAgents:        make(map[string]*agent.Agent),
 		dataDir:              dataDir,
 		discordWebhook:       cfg.DiscordWebhook,
 		discordMinSeverity:   strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
@@ -758,47 +689,13 @@ func NewServer(cfg *config.Config, port int) *Server {
 		rateLimiter:          rl,
 		instances:            make(map[string]*ScanInstance),
 		queueResumeLaunching: make(map[string]bool),
-		// postScanChatFn is set BELOW, after srv has been
-		// allocated, so the closure can capture *srv and read
-		// srv.catalog / srv.profiles at call time. Those fields
-		// are populated later in NewServer when the catalog and
-		// profile stores load successfully; capturing the
-		// pointer keeps the closure valid even when those
-		// fields flip from nil to non-nil during construction.
-		schedules:    make(map[string]*ScanSchedule),
+		schedules:            make(map[string]*ScanSchedule),
 		shutdownChan: make(chan struct{}),
 		// Buffered to length 1 so a non-blocking send from a terminating
 		// scan never blocks; the buffered slot guarantees a wake signal
 		// is delivered to whichever waiter is currently parked in the
 		// admission select.
 		admissionWake: make(chan struct{}, 1),
-	}
-
-	// Wire postScanChatFn now that srv exists. The closure reads
-	// srv.catalog / srv.profiles at call time so the catalog
-	// branch engages once both stores load below — the values
-	// captured here are pointers, not snapshots, so a successful
-	// catalog load later in NewServer is observable on every
-	// subsequent invocation of postScanChatFn.
-	//
-	// Decision order matches llm.compositeResolver.Resolve
-	// exactly (catalog non-empty → catalogResolver; otherwise
-	// legacy when XALGORIX_LLM matches Legacy_Provider_Shape;
-	// otherwise *ConfigError surfaced to the caller). That is
-	// the contract Requirement 11.2 / Requirement 2.x require
-	// for /api/scan, and putting the same resolver behind every
-	// LLM call site keeps the chat-summary path consistent with
-	// the per-scan path. (Wave E task 5.4.)
-	srv.postScanChatFn = func(cfg *config.Config, messages []llm.Message) (string, error) {
-		opts := []llm.ResolverOption{}
-		if srv.catalog != nil && srv.profiles != nil {
-			opts = append(opts, llm.WithCatalog(srv.catalog, srv.profiles))
-		}
-		opts = append(opts, llm.WithLegacy(cfg))
-		resolver := llm.NewCompositeResolver(opts...)
-		client := llm.NewClient(cfg, llm.WithResolver(resolver))
-		client.SetContext(context.Background())
-		return client.Chat(messages)
 	}
 
 	// Import legacy data dir (pre-migration ~/xalgorix-data/) into the
@@ -812,50 +709,6 @@ func NewServer(cfg *config.Config, port int) *Server {
 	}
 	srv.legacyImportCount = imported
 	srv.legacyImportDismissed = false
-
-	// Provider catalog + auth profile store.
-	//
-	// As of v4.4.22 the catalog is compiled-in (providers.Builtin)
-	// rather than file-backed. providers.NewService is constructed
-	// unconditionally and never fails. The auth profile store is
-	// still file-backed under ~/.xalgorix/data/auth-profiles.json;
-	// a failure there is non-fatal — the dashboard still serves
-	// traffic, and the profile handlers surface the missing
-	// dependency as HTTP 503 so the operator can repair the file
-	// without losing access to the rest of the UI.
-	//
-	// auth.NewStore defers file creation until the first write, so
-	// the constructor is safe to invoke unconditionally on every
-	// start.
-	srv.catalog = providers.NewService()
-	profilePath := filepath.Join(dataDir, "auth-profiles.json")
-	if store, err := auth.NewStore(profilePath, srv.catalog); err != nil {
-		log.Printf("[auth] failed to load profile store at %s: %v (profile handlers will return 503)", profilePath, err)
-	} else {
-		srv.profiles = store
-		// Wire the OAuth driver registry now that both
-		// catalog + profile store are live. Driver
-		// constructors in internal/auth are unexported,
-		// so RegisterDefaultDrivers is the single
-		// exported seam through which production code
-		// stands up the canonical four-driver registry.
-		// nil clock → registry uses realClock for the
-		// device-code poller.
-		srv.oauthRegistry = auth.NewRegistry(store, http.DefaultClient, nil)
-		auth.RegisterDefaultDrivers(srv.oauthRegistry, nil)
-	}
-
-	// Multi-provider key store + model router (LiteLLM-style). The key
-	// store is file-backed under <dataDir>/llm_keys.json; a load failure
-	// is non-fatal — the provider-key handlers surface 503 and the rest
-	// of the dashboard keeps serving. The router shares the compiled-in
-	// catalog and is only built when the key store is live.
-	if ks, err := llm.NewKeyStore(dataDir); err != nil {
-		log.Printf("[llm] failed to load key store: %v (provider-key handlers will return 503)", err)
-	} else {
-		srv.llmKeyStore = ks
-		srv.llmRouter = llm.NewRouter(srv.catalog, ks)
-	}
 
 	// Rebuild instances map from disk so dashboard shows historical scans on startup
 	srv.rebuildInstancesFromDisk()
@@ -1026,9 +879,6 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/reports/", s.handleReportAction)
 	mux.HandleFunc("/api/scanners/status", s.handleScannerStatus)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
-	mux.HandleFunc("/api/settings/llm", s.handleLLMSettings)
-	mux.HandleFunc("/api/settings/llm/keys", s.handleProviderKeys)
-	mux.HandleFunc("/api/settings/llm/test-route", s.handleTestRoute)
 	mux.HandleFunc("/api/settings/environment", s.handleEnvironmentSettings)
 	mux.HandleFunc("/api/queue/status", s.handleQueueStatus)
 	mux.HandleFunc("/api/queue/resume", s.handleQueueResume)
@@ -1041,95 +891,6 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	mux.HandleFunc("/api/auth/status", s.handleAuthStatus)
-
-	// ── Provider catalog + auth profile routes (Wave E task 5.4) ──
-	//
-	// All these routes mount on the same mux as the rest of /api/*,
-	// so they inherit:
-	//   • authMw  — Authenticated_Operator gate (R12.4) plus the
-	//               global isCSRFSafe check that wraps every
-	//               state-changing /api/* request (R12.5).
-	//   • rlMw    — the per-IP token-bucket rate limiter applied to
-	//               every API route.
-	//
-	// We deliberately do NOT register `/oauth/callback` here — the
-	// PKCE driver allocates its own ephemeral 127.0.0.1 listener
-	// per flow start (R13.1, R13.3). Putting the callback on the
-	// dashboard mux would expose it to CSRF and to any long-lived
-	// network exposure the operator chooses; the per-flow listener
-	// avoids both. The dashboardRoutes slice below is consulted in
-	// tests to assert this invariant continues to hold.
-	//
-	// Multi-method routes are dispatched by HTTP method via small
-	// adapters; each downstream handler still validates its own
-	// method so an unexpected verb returns 405 even when called
-	// through these adapters from a future entry point.
-	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleListProviders(w, r)
-	})
-	mux.HandleFunc("/api/providers/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/models") {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleDiscoverProviderModels(w, r)
-	})
-	mux.HandleFunc("/api/auth/profiles", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleListProfiles(w, r)
-	})
-	mux.HandleFunc("/api/auth/profiles/api-key", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleCreateAPIKeyProfile(w, r)
-	})
-	mux.HandleFunc("/api/auth/profiles/oauth/start", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleOAuthStart(w, r)
-	})
-	mux.HandleFunc("/api/auth/profiles/oauth/complete", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleOAuthComplete(w, r)
-	})
-	// /api/auth/profiles/{key}/refresh (POST) and
-	// /api/auth/profiles/{key} (DELETE) share the same trailing-slash
-	// dispatcher because http.ServeMux funnels every sub-path of
-	// "/api/auth/profiles/" through one handler. We branch on the
-	// "/refresh" suffix first; everything else is treated as the
-	// {key}-only DELETE path. Both /api/auth/profiles/api-key and
-	// /api/auth/profiles/oauth/{start,complete} are registered as
-	// exact-match patterns above so their longer-prefix dispatch
-	// wins over this trailing-slash handler.
-	mux.HandleFunc("/api/auth/profiles/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/refresh") {
-			if r.Method != http.MethodPost {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			s.handleProfileRefresh(w, r)
-			return
-		}
-		if r.Method != http.MethodDelete {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleDeleteProfile(w, r)
-	})
 
 	// Wrap with auth middleware (outermost) then rate limiting
 	authMw := authMiddleware(s.cfg)
@@ -1237,11 +998,6 @@ func (s *Server) Start() error {
 		if s.cancelScan != nil {
 			s.cancelScan()
 		}
-		for _, agnt := range s.currentAgents {
-			if agnt != nil {
-				agnt.Stop()
-			}
-		}
 		s.mu.Unlock()
 
 		// Stop all instances
@@ -1252,15 +1008,10 @@ func (s *Server) Start() error {
 				inst.Status = "stopped"
 				inst.StopReason = "signal_" + sig.String()
 				inst.FinishedAt = time.Now().Format(time.RFC3339)
-				if inst.agent != nil {
-					inst.agent.Stop()
-				}
 			}
 			inst.mu.Unlock()
 		}
 		s.instancesMu.RUnlock()
-
-		terminal.KillAllProcesses()
 
 		// Send Discord notification. Use sig.String() explicitly so we get
 		// "terminated"/"interrupt" rather than a numeric fallback for any
@@ -1395,9 +1146,6 @@ func (s *Server) restartNow(httpServer *http.Server) {
 	if s.telegramConfigured() {
 		s.sendTelegram(0x4dabf7, "🔄 Xalgorix Restarting", "Scanner is idle. Restarting now; interrupted work (if any) auto-resumes.")
 	}
-
-	// Belt-and-suspenders: reap any stray tool processes before we go.
-	terminal.KillAllProcesses()
 
 	// Release the listening socket so the restarted process can rebind.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1673,22 +1421,12 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.stopReq.Store(true)
 
-	// Cancel the current scan session context (interrupts LLM calls, tool execution)
+	// Cancel the current scan session context (interrupts tool execution)
 	s.mu.Lock()
 	cancel := s.cancelScan
-	// Stop all tracked agents (safe for multi-instance)
-	var agents []*agent.Agent
-	for _, a := range s.currentAgents {
-		agents = append(agents, a)
-	}
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
-	}
-	for _, agnt := range agents {
-		if agnt != nil {
-			agnt.Stop()
-		}
 	}
 
 	// Stop ALL running instances (use write lock since we're modifying instance state)
@@ -1702,16 +1440,10 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 			if inst.cancel != nil {
 				inst.cancel()
 			}
-			if inst.agent != nil {
-				inst.agent.Stop()
-			}
 		}
 		inst.mu.Unlock()
 	}
 	s.instancesMu.Unlock()
-
-	// Kill all spawned processes as a safety net
-	terminal.KillAllProcesses()
 
 	// A global user stop is terminal for every queue — clear all persisted
 	// resume files so the dashboard queue counter clears and nothing is
@@ -2324,9 +2056,6 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			if inst.cancel != nil {
 				inst.cancel()
 			}
-			if inst.agent != nil {
-				inst.agent.Stop()
-			}
 		}
 		inst.mu.Unlock()
 
@@ -2480,9 +2209,6 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		if inst.cancel != nil {
 			inst.cancel()
 		}
-		if inst.agent != nil {
-			inst.agent.Stop()
-		}
 		inst.mu.Unlock()
 
 		s.broadcastToInstance(instanceID, WSEvent{Type: "paused", Content: "Scan paused by user"})
@@ -2553,22 +2279,17 @@ type scanSession struct {
 	parentTarget       string // parent domain for subdomain scans (wildcard mode)
 	scanDir            string
 	cfg                *config.Config
-	agent              *agent.Agent
-	events             chan agent.Event
 	record             *ScanRecord
-	recordTokenOffset  int
 	server             *Server
-	instruction        string
 	name               string
 	userInstruction    string
 	severityFilter     []string
 	scanners           []string // selected scanners (empty = whole pipeline)
 	discordWebhook     string
-	discoveryMode      bool
 	genReport          bool
 	resetState         bool
 	instanceID         string               // parent instance ID for multi-instance tracking
-	scanMode           string               // single, wildcard, dast — persisted so dashboard shows correct mode
+	scanMode           string               // single, wildcard — persisted so dashboard shows correct mode
 	profile            string               // web-gentle or web-thorough
 	sctx               *scanctx.ScanContext // per-session isolated state
 	companyName        string               // report branding: company name
@@ -2577,168 +2298,44 @@ type scanSession struct {
 	reconMode          string               // active or passive reconnaissance
 	scanIntensity      string               // active or passive testing/scanning
 	targetAuth         string               // per-scan authenticated-scanning material (see ScanRequest.TargetAuth)
-	targetAuthB        string               // per-scan second account for IDOR/BOLA (see ScanRequest.TargetAuthSecondary)
-	sourceRepo         string               // per-scan whitebox source repo/path (see ScanRequest.SourceRepo)
-	scanContext        string               // per-scan attack-surface context path (see ScanRequest.ScanContext)
-	codeScanMode       agent.CodeScanMode   // code-first scan mode (see ScanRequest.CodeScan)
-	allowLoopbackPorts []int                // per-scan loopback allowlist for provision scans (scope-guard exemption)
+	allowLoopbackPorts []int                // per-scan loopback allowlist (scope-guard exemption)
 	ctx                context.Context
 	artifact           scanner.Artifact
 	vulsSSHHost        string
-
-	// llmClient, when non-nil, is a pre-built llm.Client carrying
-	// a per-scan endpoint resolver derived from the originating
-	// ScanRequest.ProviderProfile (B1). executeScanSession threads
-	// it into agent.NewAgent via agent.WithLLMClient so the scan's
-	// outbound traffic actually uses the operator's chosen
-	// credentials. nil falls back to the agent's default
-	// llm.NewClient(cfg) construction, preserving the prior
-	// behavior for tests and CLI paths that have not opted in.
-	llmClient *llm.Client
-
-	// Wildcard lifecycle flags
-	skipNotesCleanup     bool   // when true, don't delete notes store on cleanup (discovery phase)
-	parentReportingCtxID string // stable context ID for accumulating vulns across wildcard subdomain scans
-
-	// abortReason is set (via processEvent) when the agent emits a "finished"
-	// event flagged as an abnormal LLM-side abort — refused to call tools,
-	// empty responses, repeated errors, provider rate-limit exhaustion. When
-	// set, the session finalizes the record as "failed" (not "finished") so a
-	// force-stopped scan is never reported as a clean completion.
-	abortReason string
 }
 
-// cleanup tears down all per-session resources. Every sub-operation
-// has its own panic guard so cleanup NEVER panics upward.
+// cleanup tears down per-session resources. Every sub-operation has its own
+// panic guard so cleanup NEVER panics upward. The deterministic pipeline does
+// not allocate a per-session ScanContext, so cleanup is a no-op in the common
+// case; the guarded teardown remains for any path that does set one.
 func (sess *scanSession) cleanup() {
-	// Deactivate and close the per-session ScanContext (if set).
-	// Close() calls Terminal.KillAll() and Browser.Close() internally,
-	// so no redundant calls are needed below.
-	if sess.sctx != nil {
-		func() {
-			defer logRecover("cleanup.scanctx.close")
-			scanctx.Deactivate(sess.sctx.ID)
-			sess.sctx.Close()
-		}()
-	}
-
-	// Clean up tool-level context stores to prevent unbounded memory growth.
-	// Each tool package maintains a map[contextID]→store that must be cleared.
-	if sess.sctx != nil {
-		// Panic-safe persistence (Property 4 / spec
-		// findings-consistency-and-pagination Wave C 4.2): persist
-		// any in-memory vulns reported via report_vulnerability into
-		// the on-disk scan record, and merge this child session's
-		// vulns into the parent reporting context, BEFORE we delete
-		// the in-memory reporting store via CleanupContext below.
-		//
-		// Each merge runs in its own safe.Recover boundary so a
-		// panic in one branch does not skip the other. Both merges
-		// are idempotent (mergeReportedVulnerabilitiesIntoRecord
-		// dedups via appendVulnSummaryUnique keyed on
-		// title|target|endpoint|method|CVE; MergeVulnsToContext
-		// skips ID duplicates and semantic duplicates), so even when
-		// the success path has already saved a partial record this
-		// deferred call is a no-op for vulns it has already
-		// persisted.
-		func() {
-			defer safe.Recover("cleanup.scanrecord.merge", sess.sctx.ID)
-			if sess.record == nil {
-				return
-			}
-			before := len(sess.record.Vulns)
-			mergeReportedVulnerabilitiesIntoRecord(sess.record, reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
-			if added := len(sess.record.Vulns) - before; added > 0 {
-				log.Printf("[cleanup] Persisted %d in-memory vulns into scan.json for session %s", added, sess.sctx.ID)
-			}
-			sess.server.saveScanRecordTo(sess.record, sess.scanDir)
-		}()
-
-		// Wildcard vuln accumulation: merge this session's vulns into
-		// the parent reporting context BEFORE we delete this session's
-		// reporting store.
-		if sess.parentReportingCtxID != "" {
-			func() {
-				defer safe.Recover("cleanup.reporting.merge", sess.sctx.ID)
-				merged := reporting.MergeVulnsToContext(sess.sctx.ID, sess.parentReportingCtxID)
-				if merged > 0 {
-					log.Printf("[wildcard] Merged %d vulns from session %s into parent context %s", merged, sess.sctx.ID, sess.parentReportingCtxID)
-				}
-			}()
-		}
-
-		func() {
-			defer logRecover("cleanup.reporting.cleanup")
-			reporting.CleanupContext(sess.sctx.ID)
-		}()
-		if !sess.skipNotesCleanup {
-			func() {
-				defer logRecover("cleanup.notes.cleanup")
-				notes.CleanupContext(sess.sctx.ID)
-			}()
-		} else {
-			log.Printf("[wildcard] Skipping notes cleanup for discovery session %s (notes preserved for subdomain collection)", sess.sctx.ID)
-		}
-		func() {
-			defer logRecover("cleanup.terminal.cleanup")
-			terminal.CleanupContext(sess.sctx.ID)
-		}()
-		func() {
-			defer logRecover("cleanup.browser.cleanup")
-			browser.CleanupContext(sess.sctx.ID)
-		}()
-	}
-
-	// Fallback process kill if sctx was never initialized
 	if sess.sctx == nil {
-		func() {
-			defer logRecover("cleanup.terminal.killAll")
-			terminal.KillAllProcesses()
-		}()
+		return
 	}
-
-	// Stop agent if still running
-	if sess.agent != nil {
-		func() {
-			defer logRecover("cleanup.agent.stop")
-			sess.agent.Stop()
-		}()
-	}
-
-	// Clear sub-agent state to prevent memory/goroutine leaks across scans.
-	// Only safe when this is the sole running scan — global reset would corrupt
-	// concurrent sessions.
-	sess.server.instancesMu.RLock()
-	runningCount := 0
-	for _, inst := range sess.server.instances {
-		inst.mu.RLock()
-		if inst.Status == "running" {
-			runningCount++
-		}
-		inst.mu.RUnlock()
-	}
-	sess.server.instancesMu.RUnlock()
-	if runningCount <= 1 {
-		func() {
-			defer logRecover("cleanup.agentsgraph.reset")
-			agentsgraph.Reset()
-		}()
-	}
-
-	// Clear terminal working directory to prevent stale workdir leaking to next session
 	func() {
-		defer logRecover("cleanup.terminal.setWorkDir")
-		if sess.sctx != nil && sess.sctx.Terminal != nil {
-			sess.sctx.Terminal.SetWorkDir("")
-		} else {
-			terminal.SetWorkDir("") // fallback if sctx not initialized
-		}
+		defer logRecover("cleanup.scanctx.close")
+		scanctx.Deactivate(sess.sctx.ID)
+		sess.sctx.Close()
 	}()
-
-	// Clear server references under lock
-	sess.server.mu.Lock()
-	delete(sess.server.currentAgents, sess.id)
-	sess.server.mu.Unlock()
+	// Persist any in-memory vulns into the on-disk record before dropping the
+	// reporting store. Idempotent: mergeReportedVulnerabilitiesIntoRecord dedups
+	// by title|target|endpoint|method|CVE.
+	func() {
+		defer safe.Recover("cleanup.scanrecord.merge", sess.sctx.ID)
+		if sess.record == nil {
+			return
+		}
+		before := len(sess.record.Vulns)
+		mergeReportedVulnerabilitiesIntoRecord(sess.record, reporting.GetVulnerabilitiesForContext(sess.sctx.ID))
+		if added := len(sess.record.Vulns) - before; added > 0 {
+			log.Printf("[cleanup] Persisted %d in-memory vulns into scan.json for session %s", added, sess.sctx.ID)
+		}
+		sess.server.saveScanRecordTo(sess.record, sess.scanDir)
+	}()
+	func() {
+		defer logRecover("cleanup.reporting.cleanup")
+		reporting.CleanupContext(sess.sctx.ID)
+	}()
 }
 
 // randomSlug generates a short random hex string for scan IDs.
@@ -3192,9 +2789,6 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 				}
 				if inst.cancel != nil {
 					inst.cancel()
-				}
-				if inst.agent != nil {
-					inst.agent.Stop()
 				}
 				inst.mu.Unlock()
 			}

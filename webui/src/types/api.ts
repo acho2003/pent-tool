@@ -110,17 +110,11 @@ export interface ScanInstance {
   started_at: string;
   finished_at?: string;
   stop_reason?: string;
-  iterations: number;
-  tool_calls: number;
   vuln_count: number;
-  total_tokens: number;
   scan_mode: string;
-  instruction?: string;
   severity_filter?: string[];
   scanners?: string[];
   phases?: number[];
-  recon_mode?: "active" | "passive";
-  scan_intensity?: "active" | "passive";
   company_name?: string;
   logo_path?: string;
   vulns?: VulnSummary[];
@@ -152,19 +146,13 @@ export interface ScanRecord {
   status: string;
   stop_reason?: string;
   scan_mode?: string;
-  instruction?: string;
   severity_filter?: string[];
   scanners?: string[];
   discord_webhook?: string;
   discord_webhook_configured?: boolean;
   telegram_configured?: boolean;
-  recon_mode?: "active" | "passive";
-  scan_intensity?: "active" | "passive";
   events: WSEvent[];
   vulns: VulnSummary[];
-  total_tokens: number;
-  iterations: number;
-  tool_calls: number;
   company_name?: string;
   logo_path?: string;
   phases?: number[];
@@ -177,8 +165,6 @@ export interface ScanRecord {
   scanner_runs?: ScannerRun[];
   artifact?: ScannerArtifact;
   vuls_ssh_host?: string;
-  report_mode?: "ai" | "deterministic_fallback" | string;
-  report_generated_at?: string;
 }
 
 export interface ScanListItem {
@@ -257,12 +243,6 @@ export interface StatusResponse {
 
 export interface VersionInfo {
   version: string;
-  ai?: {
-    configured: boolean;
-    provider: string;
-    model?: string;
-    gateway?: string;
-  };
 }
 
 export interface AuthStatus {
@@ -290,116 +270,6 @@ export interface ScanRequest {
   scanners?: string[];
 }
 
-// ---------------------------------------------------------------------------
-// Provider catalog + auth profile contract types
-//
-// Mirror the JSON shapes returned by the catalog and profile HTTP
-// surface added in this feature. The on-the-wire field names are
-// pinned by the design — keep these types in sync with
-// internal/providers/types.go (CatalogEntry ↔ providers.Entry) and
-// internal/auth/profile.go (AuthProfile ↔ auth.Profile, masked at
-// the HTTP boundary by internal/web/masks.go).
-// ---------------------------------------------------------------------------
-
-// CatalogEntry mirrors providers.Entry. The compiled-in LLM
-// provider catalog returned by GET /api/providers in v4.4.22+.
-export interface CatalogEntry {
-  id: string;
-  displayName: string;
-  baseURL: string;
-  models?: string[];
-  headerStyle: "openai" | "openai_responses" | "anthropic" | "gemini";
-  // v4.4.22 surfaces AuthMethods so the dashboard can render the
-  // matching sub-form (api_key / oauth / none) without duplicating
-  // the catalog's policy. Older servers omit this field entirely.
-  authMethods?: Array<"api_key" | "oauth" | "none">;
-  flow?: "" | "pkce" | "device_code" | "setup_token" | "claude_cli_reuse" | "codex_cli_reuse";
-  clientID?: string;
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
-  deviceAuthorizationEndpoint?: string;
-  revocationEndpoint?: string;
-  scopes?: string[];
-  audience?: string;
-  // Free-form per-provider caveat surfaced as a hint in the LLM
-  // tab (beta status, env-var overrides, etc.).
-  notes?: string;
-}
-
-// AuthProfileType discriminates between the two stored credential
-// shapes returned by GET /api/auth/profiles.
-export type AuthProfileType = "api_key" | "oauth";
-
-// AuthProfile mirrors auth.Profile. Credential strings (apiKey,
-// accessToken, refreshToken) are MASKED on the wire — the server
-// returns "****" for empty/short values and "****<last8>" for longer
-// ones (see internal/web/masks.go, Requirements 5.1, 5.2). The
-// expiresAt and updatedAt fields are RFC3339 / ISO 8601 timestamps.
-export interface AuthProfile {
-  // Canonical "<provider>:<profileId>" key the rest of the system
-  // uses to reference this profile. Older servers (pre-v4.4.22)
-  // may omit it; consumers that need a key should fall back to
-  // ${provider}:${profileId}.
-  key?: string;
-  provider: string;
-  profileId: string;
-  type: AuthProfileType;
-  // API_Key fields. Masked credential string when type === "api_key".
-  apiKey?: string;
-  // hasApiKey / hasAccessToken are convenience booleans returned by
-  // the LLM settings handler (handlers_profiles.go returns the
-  // masked credential directly; the LLM tab surface adds these to
-  // make truthiness checks straightforward).
-  hasApiKey?: boolean;
-  apiBaseOverride?: string;
-  // OAuth fields. Masked credential strings when type === "oauth".
-  accessToken?: string;
-  hasAccessToken?: boolean;
-  refreshToken?: string;
-  expiresAt?: string;
-  scopes?: string[];
-  tokenType?: string;
-  requiresReauth?: boolean;
-  updatedAt?: string;
-}
-
-// OAuthStartMode discriminates the three shapes returned by
-// POST /api/auth/profiles/oauth/start. "loopback" includes authURL
-// for an ephemeral 127.0.0.1 callback; "device" includes userCode
-// and verificationURI for the device-code flow; "paste" returns
-// authURL plus a flowId the dashboard feeds back to
-// POST /api/auth/profiles/oauth/complete.
-export type OAuthStartMode = "loopback" | "device" | "paste";
-
-// OAuthStartSubmode disambiguates the three "paste" variants the
-// dashboard renders differently. "paste_code" is the PKCE OOB
-// fallback (textarea for the authorization code); "setup_token"
-// is the setup_token driver (textarea for the one-time
-// vendor-issued token). The empty / unspecified case is the
-// claude_cli_reuse confirm-and-import UI (no input field — the
-// credential file is already on disk and Complete reads it
-// directly). Mirrors the Submode field on auth.StartResult (H9).
-export type OAuthStartSubmode = "" | "paste_code" | "setup_token";
-
-// OAuthStartResponse mirrors the auth.StartResult JSON envelope.
-// Optional fields are populated per mode:
-//   loopback: authURL, expiresAt
-//   device:   userCode, verificationURI, expiresAt
-//   paste:    authURL, expiresAt, submode
-export interface OAuthStartResponse {
-  flowId: string;
-  mode: OAuthStartMode;
-  // submode is only populated for mode === "paste"; older servers
-  // omit it entirely. The dashboard treats undefined the same as
-  // "" (claude_cli_reuse confirm-and-import) to stay backward-
-  // compatible.
-  submode?: OAuthStartSubmode;
-  authURL?: string;
-  userCode?: string;
-  verificationURI?: string;
-  expiresAt?: string;
-}
-
 export interface QueueStatus {
   available: boolean;
   queue_count?: number;
@@ -408,10 +278,7 @@ export interface QueueStatus {
   targets?: string[];
   current_idx?: number;
   remaining?: number;
-  instruction?: string;
   scan_mode?: string;
-  recon_mode?: "active" | "passive";
-  scan_intensity?: "active" | "passive";
   paused?: boolean;
   active_target?: string;
   active_scan_id?: string;
@@ -425,68 +292,6 @@ export interface QueueStatus {
 export interface RateLimitSettings {
   requests: number;
   window: number;
-}
-
-export interface LLMSettings {
-  model: string;
-  apiBase: string;
-  apiKey: string;
-  hasApiKey: boolean;
-  reasoningEffort: string;
-  ollamaCompatible: boolean;
-  llmMaxRetries: number;
-  memoryCompressorTimeout: number;
-  maxIterations: number;
-  geminiApiKey: string;
-  hasGeminiApiKey: boolean;
-  envFile: string;
-  // v4.4.22: catalog-aware fields driving the new LLM Settings tab.
-  // Provider mirrors the active provider id. AuthMethod tracks
-  // which branch the resolver currently dispatches through.
-  // Profiles is the masked list of saved profiles for the active
-  // provider only.
-  provider?: string;
-  authMethod?: "" | "api_key" | "oauth" | "none";
-  activeProfileKey?: string;
-  profiles?: LLMProfileSummary[];
-}
-
-// LLMProfileSummary is the masked, dashboard-friendly view of one
-// auth.Profile filtered to the active provider in the LLM tab.
-export interface LLMProfileSummary {
-  key: string;
-  provider: string;
-  profileId: string;
-  type: AuthProfileType;
-  hasAccessToken: boolean;
-  hasApiKey: boolean;
-  apiBaseOverride?: string;
-  expiresAt?: string;
-  requiresReauth?: boolean;
-}
-
-// LLMSettingsRequest is the POST body shape accepted by
-// PUT /api/settings/llm. The v4.4.22 fields (provider/authMethod/
-// profileId/activeProfileKey/apiBaseOverride) drive the catalog-
-// aware path; if any of those is supplied the handler dispatches
-// through applyCatalogLLMSettings. Otherwise the legacy fields
-// (model/apiBase/apiKey/...) take the v4.4.21 free-text path.
-export interface LLMSettingsRequest {
-  model?: string;
-  apiBase?: string;
-  apiKey?: string;
-  reasoningEffort?: string;
-  ollamaCompatible?: boolean;
-  llmMaxRetries?: number;
-  memoryCompressorTimeout?: number;
-  maxIterations?: number;
-  geminiApiKey?: string;
-  // v4.4.22 catalog-aware fields.
-  provider?: string;
-  authMethod?: "api_key" | "oauth" | "none";
-  profileId?: string;
-  apiBaseOverride?: string;
-  activeProfileKey?: string;
 }
 
 export interface EnvironmentVariableSetting {

@@ -101,7 +101,7 @@ export default function NewScanPage() {
     <div>
       <Button variant="ghost" size="sm" onClick={() => nav(-1)}><ChevronLeft className="h-4 w-4" /> Back</Button>
       <h1 className="mt-2 text-2xl font-semibold">Start deterministic scan</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Recon, then per-host web and server scanners, then source-code analysis. Report AI runs only after scanning is complete.</p>
+      <p className="mt-1 text-sm text-muted-foreground">Recon, then per-host web and server scanners, then source-code analysis. A fully deterministic pipeline.</p>
     </div>
     <form onSubmit={onSubmit} className="space-y-5">
       <Card><CardHeader><CardTitle>Target and mode</CardTitle></CardHeader><CardContent className="space-y-4">

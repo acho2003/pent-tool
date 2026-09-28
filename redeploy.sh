@@ -12,7 +12,7 @@
 # random admin password — locking you out with your previously-saved password.
 #
 # This script:
-#   1. Captures the running container's XALGORIX_*/GEMINI_*/AGENTMAIL_*/CAIDO_*
+#   1. Captures the running container's XALGORIX_*/CAIDO_*
 #      environment first, and re-applies it, so auth + integrations survive.
 #   2. Reuses the same data volume, ports and restart policy.
 #   3. Tags the outgoing image and keeps the old container for one cycle, so a
@@ -104,7 +104,7 @@ trap cleanup EXIT
 if [ -z "$ENV_FILE" ] && docker container inspect "$CONTAINER" >/dev/null 2>&1; then
   CAPTURED_ENV="$(mktemp)"
   docker container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" \
-    | grep -E '^(XALGORIX_|GEMINI_|AGENTMAIL_|CAIDO_)' > "$CAPTURED_ENV" || true
+    | grep -E '^(XALGORIX_|CAIDO_)' > "$CAPTURED_ENV" || true
   if [ -s "$CAPTURED_ENV" ]; then
     ENV_FILE="$CAPTURED_ENV"
     info "Captured $(wc -l < "$ENV_FILE") env var(s) from the running '$CONTAINER' container."

@@ -10,9 +10,9 @@
 - [ ] Scope, rate, headers, authentication, timeouts, redaction, and output limits are deterministic.
 - [ ] Native parser fixtures cover all five formats, malformed data, empty data, duplicates, and partial files.
 - [ ] Raw output is streamed and persisted outside scan.json.
-- [ ] No LLM request occurs before all scanner attempts are terminal.
+- [ ] Report assembly runs only after all scanner attempts are terminal.
 - [ ] Report source IDs and checksums are validated.
-- [ ] Provider failure creates a deterministic fallback PDF.
+- [ ] The report and PDF are generated deterministically from scanner records.
 - [ ] Report regeneration reuses immutable artifacts.
 - [ ] Legacy records and existing reports remain readable.
 - [ ] CLI, schedules, API, UI, race tests, and container health checks pass.

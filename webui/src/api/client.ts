@@ -1,13 +1,8 @@
 import type {
-  AuthProfile,
   AuthStatus,
-  CatalogEntry,
   EnvironmentSettings,
   InstancesResponse,
-  LLMSettings,
-  LLMSettingsRequest,
   ListParams,
-  OAuthStartResponse,
   Paginated,
   QueueStatus,
   RateLimitSettings,
@@ -298,13 +293,6 @@ export const api = {
       json: req,
     }),
 
-  llmSettings: () => http<LLMSettings>("/api/settings/llm"),
-  updateLLMSettings: (req: LLMSettingsRequest) =>
-    http<LLMSettings>("/api/settings/llm", {
-      method: "POST",
-      json: req,
-    }),
-
   environmentSettings: () =>
     http<EnvironmentSettings>("/api/settings/environment"),
   updateEnvironmentSettings: (values: Record<string, string>) =>
@@ -314,8 +302,6 @@ export const api = {
     }),
 
   reportUrl: (scanId: string) => `/api/report/${scanId}`,
-	regenerateReport: (scanId: string) =>
-		http<{ status: string; mode: string; url: string }>(`/api/reports/${scanId}/regenerate`, { method: "POST" }),
 	scannerOutput: (scanId: string, scanner: string, stream: "stdout" | "stderr", scope?: string) =>
 		http<string>(`/api/scans/${scanId}/output/${scanner}/${stream}${scopeQuery(scope)}`),
 	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
@@ -348,53 +334,4 @@ export const api = {
       method: "POST",
     }),
 
-  // ---------------------------------------------------------------
-  // Provider catalog (read-only) + auth profiles (v4.4.22).
-  //
-  // The catalog is now compiled into the binary, so /api/providers
-  // is GET-only. Profile CRUD lives under /api/auth/profiles/*.
-  // Credential fields on profile responses arrive masked from the
-  // server (internal/web/masks.go) — the dashboard never touches
-  // plaintext credentials in the browser.
-  // ---------------------------------------------------------------
-
-  listProviders: () => http<CatalogEntry[]>("/api/providers"),
-  discoverProviderModels: (provider: string, profile?: string) =>
-    http<{ models: string[]; source: "remote" }>(
-      `/api/providers/${encodeURIComponent(provider)}/models${
-        profile ? `?profile=${encodeURIComponent(profile)}` : ""
-      }`,
-    ),
-
-  listAuthProfiles: () => http<AuthProfile[]>("/api/auth/profiles"),
-  oauthStart: (req: { provider: string; profileId?: string; preferPaste?: boolean }) =>
-    http<OAuthStartResponse>("/api/auth/profiles/oauth/start", {
-      method: "POST",
-      json: req,
-    }),
-  oauthComplete: (req: {
-    provider: string;
-    flowId: string;
-    code?: string;
-    state?: string;
-    setupToken?: string;
-  }) =>
-    http<AuthProfile>("/api/auth/profiles/oauth/complete", {
-      method: "POST",
-      json: req,
-    }),
-  refreshAuthProfile: (key: string) =>
-    http<AuthProfile>(
-      `/api/auth/profiles/${encodeURIComponent(key)}/refresh`,
-      { method: "POST" },
-    ),
-  // Returns Promise<void>: the backend produces 204 No Content
-  // on success and the wire response carries no body. Typing the
-  // mutation as void (rather than the http<T>() generic default)
-  // lets useDeleteAuthProfile's onSuccess callback skip data
-  // handling entirely.
-  deleteAuthProfile: (key: string): Promise<void> =>
-    http<void>(`/api/auth/profiles/${encodeURIComponent(key)}`, {
-      method: "DELETE",
-    }),
 };

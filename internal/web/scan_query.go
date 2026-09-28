@@ -765,8 +765,6 @@ func (s *Server) rebuildInstancesFromDisk() {
 		}
 		inst.ReconMode = normalizeActivityMode(inst.ReconMode)
 		inst.ScanIntensity = normalizeActivityMode(inst.ScanIntensity)
-		chatCfg := *s.cfg
-		inst.chatCfg = &chatCfg
 		s.instances[entry.rec.ID] = inst
 	}
 	// Statuses may have been rewritten on disk above (running → stopped), so

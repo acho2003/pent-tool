@@ -93,7 +93,7 @@ export default function LoginPage() {
 			  Deterministic multi-scanner security assessments.
             </h1>
             <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-			  Recon, per-host web and server scanners, and source-code analysis in a deterministic pipeline, with optional report-only AI — managed from a single
+			  Recon, per-host web and server scanners, and source-code analysis in a fully deterministic pipeline — managed from a single
               console.
             </p>
           </div>

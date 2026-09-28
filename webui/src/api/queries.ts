@@ -19,15 +19,9 @@ export const qk = {
   queue: ["queue"] as const,
   rateLimit: ["settings", "rate-limit"] as const,
   agentMail: ["settings", "agentmail"] as const,
-  llmSettings: ["settings", "llm"] as const,
   environmentSettings: ["settings", "environment"] as const,
   schedules: ["schedules"] as const,
   legacyImport: ["legacy-import", "status"] as const,
-  // v4.4.22: shared cache keys for the compiled-in catalog and the
-  // credential profile list. Mutations on the profile surface
-  // invalidate both keys when relevant.
-  authProfiles: ["auth", "profiles"] as const,
-  providers: ["providers"] as const,
   // Shared between /findings and /overview so the totals widget
   // reads a single cache entry across both pages.
   findingsSummary: ["findings", "summary"] as const,
@@ -142,13 +136,6 @@ export function useRateLimit() {
   });
 }
 
-export function useLLMSettings() {
-  return useQuery({
-    queryKey: qk.llmSettings,
-    queryFn: api.llmSettings,
-  });
-}
-
 export function useEnvironmentSettings() {
   return useQuery({
     queryKey: qk.environmentSettings,
@@ -240,26 +227,12 @@ export function useUpdateRateLimit() {
   });
 }
 
-export function useUpdateLLMSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.updateLLMSettings,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.llmSettings });
-      qc.invalidateQueries({ queryKey: qk.environmentSettings });
-      qc.invalidateQueries({ queryKey: qk.authProfiles });
-      qc.invalidateQueries({ queryKey: qk.version });
-    },
-  });
-}
-
 export function useUpdateEnvironmentSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.updateEnvironmentSettings,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.environmentSettings });
-      qc.invalidateQueries({ queryKey: qk.llmSettings });
       qc.invalidateQueries({ queryKey: qk.agentMail });
       qc.invalidateQueries({ queryKey: qk.rateLimit });
       qc.invalidateQueries({ queryKey: qk.version });
@@ -342,83 +315,3 @@ export function useDismissLegacyImport() {
   });
 }
 
-// Auth profile picker source. Drives the credentials list on the LLM
-// Settings tab and the provider/model selector on /new-scan and
-// /schedules. The staleTime keeps switching between pages snappy;
-// mutations elsewhere invalidate qk.authProfiles so this stays fresh
-// without a polling interval.
-export function useAuthProfiles() {
-  return useQuery({
-    queryKey: qk.authProfiles,
-    queryFn: api.listAuthProfiles,
-    staleTime: 30_000,
-  });
-}
-
-// Provider catalog — compiled into the binary in v4.4.22, so the
-// list is effectively immutable across a session. Cached forever
-// since the only way to change it is a server upgrade.
-export function useProviders() {
-  return useQuery({
-    queryKey: qk.providers,
-    queryFn: api.listProviders,
-    staleTime: Infinity,
-  });
-}
-
-export function useDiscoverProviderModels() {
-  return useMutation({
-    mutationFn: ({ provider, profile }: { provider: string; profile?: string }) =>
-      api.discoverProviderModels(provider, profile),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Auth profile mutation hooks. The catalog is read-only in v4.4.22, so
-// there is no provider-create / -update / -delete and no openclaw or
-// legacy-migrate mutation. Profile CRUD is the only state-changing
-// surface left.
-// ---------------------------------------------------------------------------
-
-export function useOAuthStart() {
-  // No cache invalidation: the start handshake is an out-of-band
-  // flow that finalizes via /complete or via the loopback callback,
-  // which is what produces the new profile. Components poll
-  // useAuthProfiles and watch for the new entry.
-  return useMutation({
-    mutationFn: api.oauthStart,
-  });
-}
-
-export function useOAuthComplete() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.oauthComplete,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.authProfiles });
-      qc.invalidateQueries({ queryKey: qk.llmSettings });
-    },
-  });
-}
-
-export function useRefreshAuthProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (key: string) => api.refreshAuthProfile(key),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.authProfiles });
-      qc.invalidateQueries({ queryKey: qk.llmSettings });
-    },
-  });
-}
-
-export function useDeleteAuthProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (key: string) => api.deleteAuthProfile(key),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.authProfiles });
-      qc.invalidateQueries({ queryKey: qk.llmSettings });
-    },
-  });
-}
