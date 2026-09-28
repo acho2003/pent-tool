@@ -15,14 +15,16 @@ import (
 	// resolve even on minimal container images that ship without tzdata.
 	_ "time/tzdata"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/safe"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
 type ScanSchedule struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Interval string `json:"interval"` // "hourly", "daily", "weekly", "monthly"
+	Assessment *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	ID         string                       `json:"id"`
+	Name       string                       `json:"name"`
+	Interval   string                       `json:"interval"` // "hourly", "daily", "weekly", "monthly"
 	// RunAt anchors the schedule to a wall-clock time of day, "HH:MM" in 24h
 	// form. Empty keeps the legacy behavior of firing one interval after the
 	// schedule was created or last ran. For "hourly" only the minutes apply.
@@ -324,6 +326,7 @@ func (s *Server) checkAndRunSchedules() {
 				log.Printf("[SCHEDULER] Triggering scheduled scan: %s (Targets: %v)", sch.Name, sch.Targets)
 
 				req := ScanRequest{
+					Assessment:     sch.Assessment,
 					Targets:        sch.Targets,
 					Instruction:    sch.Instruction,
 					ScanMode:       sch.ScanMode,

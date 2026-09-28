@@ -107,6 +107,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 
 		// Manually trigger the scan
 		req := ScanRequest{
+			Assessment:     sch.Assessment,
 			Targets:        sch.Targets,
 			Instruction:    sch.Instruction,
 			ScanMode:       sch.ScanMode,

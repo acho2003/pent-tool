@@ -15,6 +15,7 @@ import (
 func (s *Server) saveQueueState(idx int, req ScanRequest, progress ...queueProgress) {
 	normalizeScanRequestActivity(&req)
 	state := QueueState{
+		Assessment:     req.Assessment,
 		InstanceID:     req.InstanceID,
 		Targets:        req.Targets,
 		CurrentIdx:     idx,
@@ -213,6 +214,7 @@ func scanRequestFromQueueState(state *QueueState, sourcePath string) ScanRequest
 	}
 	currentIdx := clampInt(state.CurrentIdx, 0, len(state.Targets))
 	return ScanRequest{
+		Assessment:           state.Assessment,
 		Targets:              append([]string(nil), state.Targets[currentIdx:]...),
 		Instruction:          state.Instruction,
 		ScanMode:             state.ScanMode,

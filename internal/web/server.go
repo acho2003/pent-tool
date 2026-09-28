@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/safe"
@@ -260,17 +261,20 @@ func logRecover(label string) {
 
 // ScanRequest is the JSON body for starting a scan.
 type ScanRequest struct {
-	Targets          []string `json:"targets"`
-	Instruction      string   `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
-	ScanMode         string   `json:"scan_mode"` // "single" or "wildcard"
-	Profile          string   `json:"profile,omitempty"`
-	WebScope         string   `json:"web_scope,omitempty"`
-	APIDefinitionIDs []string `json:"api_definition_ids,omitempty"`
-	Model            string   `json:"-"`
-	APIKey           string   `json:"-"`
-	APIBase          string   `json:"-"`
-	DiscordWebhook   string   `json:"discord_webhook"` // Discord webhook URL
-	SeverityFilter   []string `json:"severity_filter"` // e.g. ["critical", "high"]
+	// Assessment is the typed mode/type/target/access configuration. It is
+	// optional so legacy scan clients retain their existing request contract.
+	Assessment       *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	Targets          []string                     `json:"targets"`
+	Instruction      string                       `json:"-"`         // legacy in-memory/resume field; not accepted by schema-v2 API
+	ScanMode         string                       `json:"scan_mode"` // "single" or "wildcard"
+	Profile          string                       `json:"profile,omitempty"`
+	WebScope         string                       `json:"web_scope,omitempty"`
+	APIDefinitionIDs []string                     `json:"api_definition_ids,omitempty"`
+	Model            string                       `json:"-"`
+	APIKey           string                       `json:"-"`
+	APIBase          string                       `json:"-"`
+	DiscordWebhook   string                       `json:"discord_webhook"` // Discord webhook URL
+	SeverityFilter   []string                     `json:"severity_filter"` // e.g. ["critical", "high"]
 	// Scanners selects which of scanner.OrderedNames run. Empty = all scanners.
 	// Deselected scanners still produce an explicit "skipped" run.
 	Scanners      []string `json:"scanners"`
@@ -395,44 +399,45 @@ type SubScanSummary struct {
 
 // ScanRecord is a persisted scan result.
 type ScanRecord struct {
-	SchemaVersion            int              `json:"schema_version,omitempty"`
-	ID                       string           `json:"id"`
-	InstanceID               string           `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
-	Name                     string           `json:"name,omitempty"`        // user-defined scan name
-	Target                   string           `json:"target"`
-	ParentTarget             string           `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
-	StartedAt                string           `json:"started_at"`
-	FinishedAt               string           `json:"finished_at,omitempty"`
-	Status                   string           `json:"status"`                               // saved, running, finished, stopped
-	StopReason               string           `json:"stop_reason,omitempty"`                // why scan stopped (error, user, watchdog, etc.)
-	ScanMode                 string           `json:"scan_mode,omitempty"`                  // single, wildcard, dast
-	Instruction              string           `json:"instruction,omitempty"`                // custom scan instructions
-	SeverityFilter           []string         `json:"severity_filter,omitempty"`            // severity filter for scan
-	Scanners                 []string         `json:"scanners,omitempty"`                   // selected scanners (empty = whole pipeline)
-	DiscordWebhook           string           `json:"discord_webhook,omitempty"`            // discord notification webhook
-	DiscordWebhookConfigured bool             `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
-	TelegramConfigured       bool             `json:"telegram_configured,omitempty"`        // true when global Telegram notifications are configured (token never exposed)
-	ReconMode                string           `json:"recon_mode,omitempty"`                 // active or passive reconnaissance
-	ScanIntensity            string           `json:"scan_intensity,omitempty"`             // active or passive testing/scanning
-	Events                   []WSEvent        `json:"events"`
-	Vulns                    []VulnSummary    `json:"vulns"`
-	TotalTokens              int              `json:"total_tokens"`
-	Iterations               int              `json:"iterations"`
-	ToolCalls                int              `json:"tool_calls"`
-	CompanyName              string           `json:"company_name,omitempty"` // report branding: company name
-	LogoPath                 string           `json:"logo_path,omitempty"`    // report branding: logo path
-	Phases                   []int            `json:"phases,omitempty"`       // selected methodology phases
-	CurrentPhase             int              `json:"current_phase,omitempty"`
-	SubScans                 []SubScanSummary `json:"sub_scans,omitempty"`
-	SubScanTotal             int              `json:"sub_scan_total,omitempty"`
-	SubScanCompleted         int              `json:"sub_scan_completed,omitempty"`
-	SubScanRunning           int              `json:"sub_scan_running,omitempty"`
-	SubScanRemaining         int              `json:"sub_scan_remaining,omitempty"`
-	ScannerRuns              []scanner.Run    `json:"scanner_runs,omitempty"`
-	Artifact                 scanner.Artifact `json:"artifact,omitempty"`
-	VulsSSHHost              string           `json:"vuls_ssh_host,omitempty"`
-	ReportMode               string           `json:"report_mode,omitempty"`
-	ReportGeneratedAt        string           `json:"report_generated_at,omitempty"`
+	SchemaVersion            int                          `json:"schema_version,omitempty"`
+	Assessment               *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	ID                       string                       `json:"id"`
+	InstanceID               string                       `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
+	Name                     string                       `json:"name,omitempty"`        // user-defined scan name
+	Target                   string                       `json:"target"`
+	ParentTarget             string                       `json:"parent_target,omitempty"` // parent domain for subdomain scans (wildcard mode)
+	StartedAt                string                       `json:"started_at"`
+	FinishedAt               string                       `json:"finished_at,omitempty"`
+	Status                   string                       `json:"status"`                               // saved, running, finished, stopped
+	StopReason               string                       `json:"stop_reason,omitempty"`                // why scan stopped (error, user, watchdog, etc.)
+	ScanMode                 string                       `json:"scan_mode,omitempty"`                  // single, wildcard, dast
+	Instruction              string                       `json:"instruction,omitempty"`                // custom scan instructions
+	SeverityFilter           []string                     `json:"severity_filter,omitempty"`            // severity filter for scan
+	Scanners                 []string                     `json:"scanners,omitempty"`                   // selected scanners (empty = whole pipeline)
+	DiscordWebhook           string                       `json:"discord_webhook,omitempty"`            // discord notification webhook
+	DiscordWebhookConfigured bool                         `json:"discord_webhook_configured,omitempty"` // true when a per-scan or global webhook is configured
+	TelegramConfigured       bool                         `json:"telegram_configured,omitempty"`        // true when global Telegram notifications are configured (token never exposed)
+	ReconMode                string                       `json:"recon_mode,omitempty"`                 // active or passive reconnaissance
+	ScanIntensity            string                       `json:"scan_intensity,omitempty"`             // active or passive testing/scanning
+	Events                   []WSEvent                    `json:"events"`
+	Vulns                    []VulnSummary                `json:"vulns"`
+	TotalTokens              int                          `json:"total_tokens"`
+	Iterations               int                          `json:"iterations"`
+	ToolCalls                int                          `json:"tool_calls"`
+	CompanyName              string                       `json:"company_name,omitempty"` // report branding: company name
+	LogoPath                 string                       `json:"logo_path,omitempty"`    // report branding: logo path
+	Phases                   []int                        `json:"phases,omitempty"`       // selected methodology phases
+	CurrentPhase             int                          `json:"current_phase,omitempty"`
+	SubScans                 []SubScanSummary             `json:"sub_scans,omitempty"`
+	SubScanTotal             int                          `json:"sub_scan_total,omitempty"`
+	SubScanCompleted         int                          `json:"sub_scan_completed,omitempty"`
+	SubScanRunning           int                          `json:"sub_scan_running,omitempty"`
+	SubScanRemaining         int                          `json:"sub_scan_remaining,omitempty"`
+	ScannerRuns              []scanner.Run                `json:"scanner_runs,omitempty"`
+	Artifact                 scanner.Artifact             `json:"artifact,omitempty"`
+	VulsSSHHost              string                       `json:"vuls_ssh_host,omitempty"`
+	ReportMode               string                       `json:"report_mode,omitempty"`
+	ReportGeneratedAt        string                       `json:"report_generated_at,omitempty"`
 	// ReportScopes feeds the scanner report's coverage section and scope grouping.
 	// It is derived at report time from ScannerRuns + recon-scopes.json and is
 	// never persisted.
@@ -441,60 +446,62 @@ type ScanRecord struct {
 
 // QueueState persists scan queue state for recovery after restart
 type QueueState struct {
-	InstanceID            string           `json:"instance_id,omitempty"`
-	Targets               []string         `json:"targets"`
-	CurrentIdx            int              `json:"current_idx"`
-	Instruction           string           `json:"instruction"`
-	ScanMode              string           `json:"scan_mode"`
-	StartedAt             string           `json:"started_at"`
-	Active                bool             `json:"active"`
-	Name                  string           `json:"name,omitempty"`
-	SeverityFilter        []string         `json:"severity_filter,omitempty"`
-	Scanners              []string         `json:"scanners,omitempty"`
-	Phases                []int            `json:"phases,omitempty"`
-	ReconMode             string           `json:"recon_mode,omitempty"`
-	ScanIntensity         string           `json:"scan_intensity,omitempty"`
-	CompanyName           string           `json:"company_name,omitempty"`
-	LogoPath              string           `json:"logo_path,omitempty"`
-	DiscordWebhook        string           `json:"discord_webhook,omitempty"`
-	Paused                bool             `json:"paused,omitempty"`
-	ActiveTarget          string           `json:"active_target,omitempty"`
-	ActiveScanDir         string           `json:"active_scan_dir,omitempty"`
-	ActiveScanID          string           `json:"active_scan_id,omitempty"`
-	WildcardActiveTarget  string           `json:"wildcard_active_target,omitempty"`
-	WildcardActiveScanDir string           `json:"wildcard_active_scan_dir,omitempty"`
-	WildcardActiveScanID  string           `json:"wildcard_active_scan_id,omitempty"`
-	WildcardDiscoveryDone bool             `json:"wildcard_discovery_done,omitempty"`
-	WildcardSubdomains    []string         `json:"wildcard_subdomains,omitempty"`
-	WildcardSubIndex      int              `json:"wildcard_sub_index,omitempty"`
-	Artifact              scanner.Artifact `json:"artifact,omitempty"`
-	VulsSSHHost           string           `json:"vuls_ssh_host,omitempty"`
+	Assessment            *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	InstanceID            string                       `json:"instance_id,omitempty"`
+	Targets               []string                     `json:"targets"`
+	CurrentIdx            int                          `json:"current_idx"`
+	Instruction           string                       `json:"instruction"`
+	ScanMode              string                       `json:"scan_mode"`
+	StartedAt             string                       `json:"started_at"`
+	Active                bool                         `json:"active"`
+	Name                  string                       `json:"name,omitempty"`
+	SeverityFilter        []string                     `json:"severity_filter,omitempty"`
+	Scanners              []string                     `json:"scanners,omitempty"`
+	Phases                []int                        `json:"phases,omitempty"`
+	ReconMode             string                       `json:"recon_mode,omitempty"`
+	ScanIntensity         string                       `json:"scan_intensity,omitempty"`
+	CompanyName           string                       `json:"company_name,omitempty"`
+	LogoPath              string                       `json:"logo_path,omitempty"`
+	DiscordWebhook        string                       `json:"discord_webhook,omitempty"`
+	Paused                bool                         `json:"paused,omitempty"`
+	ActiveTarget          string                       `json:"active_target,omitempty"`
+	ActiveScanDir         string                       `json:"active_scan_dir,omitempty"`
+	ActiveScanID          string                       `json:"active_scan_id,omitempty"`
+	WildcardActiveTarget  string                       `json:"wildcard_active_target,omitempty"`
+	WildcardActiveScanDir string                       `json:"wildcard_active_scan_dir,omitempty"`
+	WildcardActiveScanID  string                       `json:"wildcard_active_scan_id,omitempty"`
+	WildcardDiscoveryDone bool                         `json:"wildcard_discovery_done,omitempty"`
+	WildcardSubdomains    []string                     `json:"wildcard_subdomains,omitempty"`
+	WildcardSubIndex      int                          `json:"wildcard_sub_index,omitempty"`
+	Artifact              scanner.Artifact             `json:"artifact,omitempty"`
+	VulsSSHHost           string                       `json:"vuls_ssh_host,omitempty"`
 }
 
 // ScanInstance represents a running or completed scan instance.
 type ScanInstance struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name,omitempty"` // user-defined scan name
-	Targets        string   `json:"targets"`
-	ParentTarget   string   `json:"parent_target,omitempty"` // parent domain for subdomain scans
-	Status         string   `json:"status"`                  // saved, running, paused, finished, stopped
-	StartedAt      string   `json:"started_at"`
-	FinishedAt     string   `json:"finished_at,omitempty"`
-	StopReason     string   `json:"stop_reason,omitempty"` // why stopped (user, error, watchdog)
-	Iterations     int      `json:"iterations"`
-	ToolCalls      int      `json:"tool_calls"`
-	VulnCount      int      `json:"vuln_count"`
-	TotalTokens    int      `json:"total_tokens"`
-	ScanMode       string   `json:"scan_mode"`
-	Instruction    string   `json:"instruction,omitempty"`     // custom scan instructions for restart
-	SeverityFilter []string `json:"severity_filter,omitempty"` // severity filter for restart
-	Scanners       []string `json:"scanners,omitempty"`        // selected scanners for restart (empty = all)
-	Phases         []int    `json:"phases,omitempty"`          // selected methodology phases (empty = all)
-	ReconMode      string   `json:"recon_mode,omitempty"`      // active or passive reconnaissance
-	ScanIntensity  string   `json:"scan_intensity,omitempty"`  // active or passive testing/scanning
-	CompanyName    string   `json:"company_name,omitempty"`    // report branding: company name
-	LogoPath       string   `json:"logo_path,omitempty"`       // report branding: logo path
-	DiscordWebhook string   `json:"-"`                         // discord webhook (not exposed to API)
+	Assessment     *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	ID             string                       `json:"id"`
+	Name           string                       `json:"name,omitempty"` // user-defined scan name
+	Targets        string                       `json:"targets"`
+	ParentTarget   string                       `json:"parent_target,omitempty"` // parent domain for subdomain scans
+	Status         string                       `json:"status"`                  // saved, running, paused, finished, stopped
+	StartedAt      string                       `json:"started_at"`
+	FinishedAt     string                       `json:"finished_at,omitempty"`
+	StopReason     string                       `json:"stop_reason,omitempty"` // why stopped (user, error, watchdog)
+	Iterations     int                          `json:"iterations"`
+	ToolCalls      int                          `json:"tool_calls"`
+	VulnCount      int                          `json:"vuln_count"`
+	TotalTokens    int                          `json:"total_tokens"`
+	ScanMode       string                       `json:"scan_mode"`
+	Instruction    string                       `json:"instruction,omitempty"`     // custom scan instructions for restart
+	SeverityFilter []string                     `json:"severity_filter,omitempty"` // severity filter for restart
+	Scanners       []string                     `json:"scanners,omitempty"`        // selected scanners for restart (empty = all)
+	Phases         []int                        `json:"phases,omitempty"`          // selected methodology phases (empty = all)
+	ReconMode      string                       `json:"recon_mode,omitempty"`      // active or passive reconnaissance
+	ScanIntensity  string                       `json:"scan_intensity,omitempty"`  // active or passive testing/scanning
+	CompanyName    string                       `json:"company_name,omitempty"`    // report branding: company name
+	LogoPath       string                       `json:"logo_path,omitempty"`       // report branding: logo path
+	DiscordWebhook string                       `json:"-"`                         // discord webhook (not exposed to API)
 	// Per-scan auth/whitebox/context, restored when a saved scan is started.
 	// Kept in-memory only (json:"-", like DiscordWebhook) so third-party
 	// credentials and token-bearing source URLs are never written to the
@@ -1323,6 +1330,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		instanceID := randomSlug()
 		now := time.Now().Format(time.RFC3339Nano)
 		inst := &ScanInstance{
+			Assessment:     req.Assessment,
 			ID:             instanceID,
 			Name:           req.Name,
 			Targets:        strings.Join(req.Targets, ", "),
@@ -1360,7 +1368,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[ERROR] failed to create saved-target dir %s: %v", savedDir, err)
 		} else {
 			rec := &ScanRecord{
-				SchemaVersion:            scanner.SchemaVersion,
+				SchemaVersion:            3,
+				Assessment:               req.Assessment,
 				ID:                       instanceID,
 				Name:                     req.Name,
 				Target:                   targetStr,
@@ -1834,6 +1843,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	for _, inst := range s.instances {
 		inst.mu.RLock()
 		instances = append(instances, &ScanInstance{
+			Assessment:     inst.Assessment,
 			ID:             inst.ID,
 			Name:           inst.Name,
 			Targets:        inst.Targets,
@@ -2084,6 +2094,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 		inst.mu.RLock()
 		targets := strings.Split(inst.Targets, ", ")
+		assessmentConfig := inst.Assessment
 		instruction := inst.Instruction
 		scanMode := inst.ScanMode
 		severityFilter := inst.SeverityFilter
@@ -2103,6 +2114,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 		// Build a new ScanRequest from stored config
 		req := ScanRequest{
+			Assessment:          assessmentConfig,
 			Targets:             targets,
 			Instruction:         instruction,
 			ScanMode:            scanMode,
@@ -2145,6 +2157,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		inst.mu.RLock()
 		targets := strings.Split(inst.Targets, ", ")
 		req := ScanRequest{
+			Assessment:          inst.Assessment,
 			Targets:             targets,
 			Instruction:         inst.Instruction,
 			ScanMode:            inst.ScanMode,
@@ -2280,9 +2293,10 @@ type scanSession struct {
 	discordWebhook     string
 	genReport          bool
 	resetState         bool
-	instanceID         string               // parent instance ID for multi-instance tracking
-	scanMode           string               // single, wildcard — persisted so dashboard shows correct mode
-	profile            string               // web-gentle or web-thorough
+	instanceID         string // parent instance ID for multi-instance tracking
+	scanMode           string // single, wildcard — persisted so dashboard shows correct mode
+	profile            string // web-gentle or web-thorough
+	assessment         *assessment.AssessmentConfig
 	sctx               *scanctx.ScanContext // per-session isolated state
 	companyName        string               // report branding: company name
 	logoPath           string               // report branding: logo path

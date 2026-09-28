@@ -328,6 +328,7 @@ func (s *Server) scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 	selectedScanners := append([]string(nil), inst.Scanners...)
 
 	return &ScanRecord{
+		Assessment:               inst.Assessment,
 		ID:                       inst.ID,
 		InstanceID:               inst.ID,
 		Name:                     inst.Name,
@@ -734,6 +735,7 @@ func (s *Server) rebuildInstancesFromDisk() {
 			continue
 		}
 		inst := &ScanInstance{
+			Assessment:     entry.rec.Assessment,
 			ID:             entry.rec.ID,
 			Name:           entry.rec.Name,
 			Targets:        entry.rec.Target,
