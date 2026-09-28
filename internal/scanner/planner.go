@@ -33,15 +33,16 @@ type PlanDecision struct {
 }
 
 type PlanJob struct {
-	ID             string          `json:"id"`
-	State          PlanState       `json:"state"`
-	Scanner        string          `json:"scanner"`
-	TargetID       string          `json:"target_id"`
-	Target         string          `json:"target"`
-	AssessmentType assessment.Type `json:"assessment_type"`
-	Variant        string          `json:"variant"`
-	Dependencies   []string        `json:"dependencies,omitempty"`
-	ExecutionMode  string          `json:"execution_mode,omitempty"`
+	ID              string            `json:"id"`
+	State           PlanState         `json:"state"`
+	Scanner         string            `json:"scanner"`
+	TargetID        string            `json:"target_id"`
+	Target          string            `json:"target"`
+	AssessmentType  assessment.Type   `json:"assessment_type"`
+	AssessmentTypes []assessment.Type `json:"assessment_types,omitempty"`
+	Variant         string            `json:"variant"`
+	Dependencies    []string          `json:"dependencies,omitempty"`
+	ExecutionMode   string            `json:"execution_mode,omitempty"`
 }
 
 type TypeCoverage struct {
@@ -175,7 +176,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 				}
 				plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: def.ID, TargetID: target.ID, Types: []assessment.Type{typ}, State: state, ReasonCode: code, Reason: reason, ExecutionMode: execMode})
 				if state == PlanSelected || state == PlanConditional {
-					plan.Jobs = append(plan.Jobs, PlanJob{ID: fmt.Sprintf("%s:%s:%s", def.ID, target.ID, typ), State: state, Scanner: def.ID, TargetID: target.ID, Target: target.Value, AssessmentType: typ, Variant: def.ID, ExecutionMode: execMode})
+					appendPlanJob(&plan.Jobs, PlanJob{ID: fmt.Sprintf("%s:%s:%s", def.ID, target.ID, def.ID), State: state, Scanner: def.ID, TargetID: target.ID, Target: target.Value, AssessmentType: typ, AssessmentTypes: []assessment.Type{typ}, Variant: def.ID, ExecutionMode: execMode})
 				}
 			}
 		}
@@ -226,6 +227,23 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	sort.SliceStable(plan.Jobs, func(i, j int) bool { return plan.Jobs[i].ID < plan.Jobs[j].ID })
 	plan.Fingerprint = planFingerprint(cfg, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion)
 	return plan
+}
+
+func appendPlanJob(jobs *[]PlanJob, job PlanJob) {
+	for i := range *jobs {
+		existing := &(*jobs)[i]
+		if existing.Scanner != job.Scanner || existing.TargetID != job.TargetID || existing.Variant != job.Variant {
+			continue
+		}
+		if !slices.Contains(existing.AssessmentTypes, job.AssessmentType) {
+			existing.AssessmentTypes = append(existing.AssessmentTypes, job.AssessmentType)
+		}
+		if existing.State == PlanConditional && job.State == PlanSelected {
+			existing.State = PlanSelected
+		}
+		return
+	}
+	*jobs = append(*jobs, job)
 }
 
 func credentialAvailabilityKey(targetID string, accessKind assessment.AccessKind, credentialID string) string {

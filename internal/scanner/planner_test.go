@@ -188,6 +188,24 @@ func TestPlannerRequiresResolvableTargetBoundCredentialAndNeverClaimsVerifiedAut
 	}
 }
 
+func TestPlannerDeduplicatesScannerJobsAcrossRequestedCoverageTypes(t *testing.T) {
+	cfg := assessment.AssessmentConfig{
+		Mode:    assessment.ModeBlackBox,
+		Types:   []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI},
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+	}
+	plan := PlanAssessment(PlanInput{Config: cfg, Availability: map[string]bool{"zap": true, "nuclei": true, "testssl": true}})
+	var zapJobs []PlanJob
+	for _, job := range plan.Jobs {
+		if job.Scanner == "zap" {
+			zapJobs = append(zapJobs, job)
+		}
+	}
+	if len(zapJobs) != 1 || !slices.Equal(zapJobs[0].AssessmentTypes, []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}) {
+		t.Fatalf("expected one ZAP job covering both requested types, got %+v", zapJobs)
+	}
+}
+
 func TestUnsupportedCloudAndKubernetesTypesStayVisibleAsUnavailable(t *testing.T) {
 	cfg := assessment.AssessmentConfig{
 		Mode:  assessment.ModeWhiteBox,

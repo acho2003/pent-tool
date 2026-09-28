@@ -147,7 +147,7 @@ func upsertScannerRun(runs *[]scanner.Run, run scanner.Run) {
 		// names across scopes (per-host nuclei/zap/... and per-host recon nmap), so
 		// keying on Scanner alone would let one host's run overwrite another's in
 		// the crash-persisted record used for resume.
-		if (*runs)[i].Scanner == run.Scanner && (*runs)[i].Scope == run.Scope {
+		if (*runs)[i].Scanner == run.Scanner && (*runs)[i].Scope == run.Scope && (*runs)[i].Variant == run.Variant {
 			(*runs)[i] = run
 			return
 		}

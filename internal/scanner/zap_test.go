@@ -15,13 +15,14 @@ import (
 // spider → passive → active scan → report sequence is exercised without a ZAP
 // daemon or a shared filesystem.
 type fakeZAP struct {
-	mu          sync.Mutex
-	paths       []string
-	rules       map[string]bool
-	report      string
-	alertScope  string
-	accessFails bool // accessUrl returns 500
-	ascanNoTree bool // ascan/action/scan returns url_not_found
+	mu                sync.Mutex
+	paths             []string
+	rules             map[string]bool
+	report            string
+	alertScope        string
+	spiderMaxChildren string
+	accessFails       bool // accessUrl returns 500
+	ascanNoTree       bool // ascan/action/scan returns url_not_found
 }
 
 func (f *fakeZAP) record(path string) {
@@ -60,6 +61,9 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(f.rules, r.URL.Query().Get("description"))
 		f.mu.Unlock()
 	case "/JSON/spider/action/scan/":
+		f.mu.Lock()
+		f.spiderMaxChildren = r.URL.Query().Get("maxChildren")
+		f.mu.Unlock()
 		body = map[string]string{"scan": "7"}
 	case "/JSON/spider/view/status/":
 		body = map[string]string{"status": "100"}
@@ -99,7 +103,7 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 125, MaxOutputBytes: 1 << 20}
 	req := Request{Target: "http://example.test", ScanDir: dir, TargetAuth: "Authorization: Bearer sekret-token"}
 	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
 
@@ -116,7 +120,11 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 	}
 	fake.mu.Lock()
 	leftover := len(fake.rules)
+	maxChildren := fake.spiderMaxChildren
 	fake.mu.Unlock()
+	if maxChildren != "125" {
+		t.Errorf("ZAP spider maxChildren = %q, want 125", maxChildren)
+	}
 	if leftover != 0 {
 		t.Errorf("replacer rules left in the daemon: %d", leftover)
 	}

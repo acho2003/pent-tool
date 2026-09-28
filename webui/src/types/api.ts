@@ -91,7 +91,7 @@ export interface AssessmentPlan {
   config: AssessmentConfig;
   capabilities: Array<{ capability: string; target_id: string; reference_id?: string; access_kind?: string; state: string; provenance: string; reason: string }>;
   decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
-  jobs: Array<{ id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; variant: string; execution_mode?: string }>;
+  jobs: Array<{ id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; assessment_types?: AssessmentType[]; variant: string; execution_mode?: string }>;
   coverage: Array<{ type: AssessmentType; state: string; reason: string }>;
   api_endpoints?: Array<{ method: string; path: string; origin?: string; target_id?: string; source: string; resolved: boolean }>;
   warnings?: Array<{ code: string; message: string; blocking: boolean }>;

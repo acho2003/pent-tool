@@ -61,7 +61,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if emit != nil {
 		emit(Event{Type: "scanner_started", Scanner: "zap", Run: run})
 	}
-	cctx, cancel := context.WithTimeout(ctx, cfg.ZAPTimeout)
+	zapTimeout := cfg.ZAPTimeout
+	if cfg.WebBudget > 0 && cfg.WebBudget < zapTimeout {
+		zapTimeout = cfg.WebBudget
+	}
+	cctx, cancel := context.WithTimeout(ctx, zapTimeout)
 	defer cancel()
 	client := &http.Client{}
 	// Every exchange with ZAP is a plain HTTP API call: the daemon is reached
@@ -153,7 +157,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// Fixed pipeline: spider the target, drain the passive scanner, then active
 	// scan what was discovered. The stages and their parameters are constant —
 	// nothing about them is model-generated.
-	spider, err := call("/JSON/spider/action/scan/", url.Values{"url": {target}, "recurse": {"true"}})
+	maxChildren := cfg.WebMaxEndpoints
+	if maxChildren <= 0 {
+		maxChildren = DefaultWebProfile(ProfileGentle).MaxEndpoints
+	}
+	spider, err := call("/JSON/spider/action/scan/", url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}})
 	if err != nil {
 		return finishServiceFailure(run, fmt.Errorf("start ZAP spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}

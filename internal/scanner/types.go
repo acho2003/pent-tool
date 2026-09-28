@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 const SchemaVersion = 2
@@ -72,19 +74,23 @@ type Request struct {
 }
 
 type Run struct {
-	Scanner      string `json:"scanner"`
-	Scope        string `json:"scope,omitempty"`
-	Target       string `json:"target"`
-	Status       string `json:"status"`
-	StartedAt    string `json:"started_at,omitempty"`
-	FinishedAt   string `json:"finished_at,omitempty"`
-	ExitCode     int    `json:"exit_code,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-	StdoutPath   string `json:"stdout_path,omitempty"`
-	StderrPath   string `json:"stderr_path,omitempty"`
-	ArtifactPath string `json:"artifact_path,omitempty"`
-	Checksum     string `json:"checksum,omitempty"`
-	Truncated    bool   `json:"truncated,omitempty"`
+	Scanner         string            `json:"scanner"`
+	Variant         string            `json:"variant,omitempty"`
+	AssessmentTypes []assessment.Type `json:"assessment_types,omitempty"`
+	PlanFingerprint string            `json:"plan_fingerprint,omitempty"`
+	AttemptID       string            `json:"attempt_id,omitempty"`
+	Scope           string            `json:"scope,omitempty"`
+	Target          string            `json:"target"`
+	Status          string            `json:"status"`
+	StartedAt       string            `json:"started_at,omitempty"`
+	FinishedAt      string            `json:"finished_at,omitempty"`
+	ExitCode        int               `json:"exit_code,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
+	StdoutPath      string            `json:"stdout_path,omitempty"`
+	StderrPath      string            `json:"stderr_path,omitempty"`
+	ArtifactPath    string            `json:"artifact_path,omitempty"`
+	Checksum        string            `json:"checksum,omitempty"`
+	Truncated       bool              `json:"truncated,omitempty"`
 }
 
 func (r Run) Terminal() bool {
