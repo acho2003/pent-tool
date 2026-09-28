@@ -128,6 +128,68 @@ func TestAssessmentPlanBindsUploadedAPIEndpointsToExplicitTargetOrigin(t *testin
 	}
 }
 
+func TestAssessmentPlanUsesBoundCredentialWithoutReturningSecretOrClaimingVerifiedAuth(t *testing.T) {
+	s := newTestServer(t, nil)
+	keyPath := filepath.Join(t.TempDir(), "credential.key")
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	const secret = "Bearer TOP-SECRET-credential-value"
+	created := httptest.NewRecorder()
+	s.handleCredentials(created, httptest.NewRequest(http.MethodPost, "/api/credentials", strings.NewReader(`{"name":"app headers","kind":"APPLICATION_HEADERS","target_ids":["app"],"values":{"Authorization":"`+secret+`"}}`)))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("credential status=%d body=%s", created.Code, created.Body.String())
+	}
+	var metadata struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &metadata); err != nil || metadata.ID == "" {
+		t.Fatalf("credential metadata=%+v err=%v", metadata, err)
+	}
+	body := `{"assessment_mode":"GRAY_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/"},{"id":"other","type":"URL","value":"https://other.example.test/"}],"access":[{"target_ids":["app"],"kind":"APPLICATION_HEADERS","credential_id":"` + metadata.ID + `"}]}`
+	planned := httptest.NewRecorder()
+	s.handleAssessmentPlan(planned, httptest.NewRequest(http.MethodPost, "/api/scans/plan", strings.NewReader(body)))
+	if planned.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", planned.Code, planned.Body.String())
+	}
+	if strings.Contains(planned.Body.String(), secret) {
+		t.Fatal("plan response leaked credential material")
+	}
+	var plan struct {
+		Capabilities []struct {
+			TargetID   string `json:"target_id"`
+			Capability string `json:"capability"`
+			State      string `json:"state"`
+		} `json:"capabilities"`
+		Decisions []struct {
+			Scanner       string `json:"scanner"`
+			TargetID      string `json:"target_id"`
+			ExecutionMode string `json:"execution_mode"`
+		} `json:"decisions"`
+	}
+	if err := json.Unmarshal(planned.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(plan.Capabilities, func(e struct {
+		TargetID   string `json:"target_id"`
+		Capability string `json:"capability"`
+		State      string `json:"state"`
+	}) bool {
+		return e.TargetID == "app" && e.Capability == "authenticated_web" && e.State == "available"
+	}) {
+		t.Fatalf("bound credential was not available in plan: %+v", plan.Capabilities)
+	}
+	for _, d := range plan.Decisions {
+		if d.Scanner == "zap" && d.TargetID == "app" && d.ExecutionMode != "unauthenticated" {
+			t.Fatalf("unverified credentials must not be labeled authenticated: %+v", d)
+		}
+		if d.Scanner == "zap" && d.TargetID == "other" && d.ExecutionMode == "authenticated" {
+			t.Fatalf("credential crossed target boundary: %+v", d)
+		}
+	}
+}
+
 func TestTypedAssessmentScanDoesNotFallThroughToLegacyExecution(t *testing.T) {
 	s := newTestServer(t, nil)
 	body := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/Portal/"}]}`
