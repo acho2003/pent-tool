@@ -65,6 +65,17 @@ func main() {
 	}()
 
 	args := parseArgs()
+	if args.plan {
+		if err := runAssessmentPlanCLI(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Assessment plan error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if args.assessmentMode != "" || len(args.assessmentTypes) > 0 || args.assessmentConfig != "" {
+		fmt.Fprintln(os.Stderr, "Typed assessment execution is not available yet; use --plan to preview the scanner plan.")
+		os.Exit(1)
+	}
 
 	// Handle start command
 	if args.start {
@@ -288,28 +299,34 @@ func main() {
 }
 
 type cliArgs struct {
-	targets      []string
-	headers      []string
-	source       string // --source: Trivy repository/filesystem input
-	artifactKind string
-	vulsSSHHost  string
-	scanners     []string
-	bind         string
-	version      bool
-	update       bool
-	webUI        bool
-	port         int
-	start        bool
-	stop         bool
-	restart      bool
-	restartIdle  bool
-	uninstall    bool
+	targets          []string
+	headers          []string
+	source           string // --source: Trivy repository/filesystem input
+	artifactKind     string
+	vulsSSHHost      string
+	scanners         []string
+	assessmentMode   string
+	assessmentTypes  []string
+	assessmentConfig string
+	plan             bool
+	bind             string
+	version          bool
+	update           bool
+	webUI            bool
+	port             int
+	start            bool
+	stop             bool
+	restart          bool
+	restartIdle      bool
+	uninstall        bool
 }
 
 func parseArgs() cliArgs {
-	var args cliArgs
+	return parseCLIArgs(os.Args[1:])
+}
 
-	osArgs := os.Args[1:]
+func parseCLIArgs(osArgs []string) cliArgs {
+	var args cliArgs
 	for i := 0; i < len(osArgs); i++ {
 		switch osArgs[i] {
 		case "--target", "-t":
@@ -342,6 +359,23 @@ func parseArgs() cliArgs {
 				i++
 				args.scanners = append(args.scanners, strings.Split(osArgs[i], ",")...)
 			}
+		case "--assessment-mode":
+			if i+1 < len(osArgs) {
+				i++
+				args.assessmentMode = osArgs[i]
+			}
+		case "--assessment-type":
+			if i+1 < len(osArgs) {
+				i++
+				args.assessmentTypes = append(args.assessmentTypes, strings.Split(osArgs[i], ",")...)
+			}
+		case "--assessment-config":
+			if i+1 < len(osArgs) {
+				i++
+				args.assessmentConfig = osArgs[i]
+			}
+		case "--plan":
+			args.plan = true
 		case "--port", "-p":
 			if i+1 < len(osArgs) {
 				i++
@@ -389,6 +423,12 @@ func parseArgs() cliArgs {
 				args.vulsSSHHost = strings.TrimPrefix(osArgs[i], "--vuls-ssh-host=")
 			} else if strings.HasPrefix(osArgs[i], "--scanners=") {
 				args.scanners = append(args.scanners, strings.Split(strings.TrimPrefix(osArgs[i], "--scanners="), ",")...)
+			} else if strings.HasPrefix(osArgs[i], "--assessment-mode=") {
+				args.assessmentMode = strings.TrimPrefix(osArgs[i], "--assessment-mode=")
+			} else if strings.HasPrefix(osArgs[i], "--assessment-type=") {
+				args.assessmentTypes = append(args.assessmentTypes, strings.Split(strings.TrimPrefix(osArgs[i], "--assessment-type="), ",")...)
+			} else if strings.HasPrefix(osArgs[i], "--assessment-config=") {
+				args.assessmentConfig = strings.TrimPrefix(osArgs[i], "--assessment-config=")
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				_, _ = fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
 			} else if strings.HasPrefix(osArgs[i], "--bind=") {
@@ -430,6 +470,10 @@ func printUsage() {
 	fmt.Println("      --artifact-kind <kind> filesystem, repository, image, or sbom")
 	fmt.Println("      --vuls-ssh-host <alias> Operator-managed SSH config alias")
 	fmt.Println("      --scanners <list>     Comma-separated subset of " + strings.Join(scanner.OrderedNames, ",") + " (default: all)")
+	fmt.Println("      --assessment-config <file>  Typed assessment JSON used with --plan")
+	fmt.Println("      --assessment-mode <mode>    BLACK_BOX, GRAY_BOX, or WHITE_BOX")
+	fmt.Println("      --assessment-type <type>    Repeatable assessment coverage type")
+	fmt.Println("      --plan                      Print a deterministic plan without scanning")
 	fmt.Println("  -v, --version             Show version")
 	fmt.Println("  -up, --update             Update to latest version")
 	fmt.Println("  --start                  Start as background service")
