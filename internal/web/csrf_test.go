@@ -171,6 +171,11 @@ func TestNewRoutes_CSRFGate(t *testing.T) {
 	// dashboardRoutes slice in server.go so a future addition to
 	// either side surfaces here as a missed test cell.
 	routes := []mutatingRoute{
+		{http.MethodPost, "/api/scans/plan"},
+		{http.MethodPost, "/api/credentials"},
+		{http.MethodPut, "/api/credentials/credential-id"},
+		{http.MethodDelete, "/api/credentials/credential-id"},
+		{http.MethodPost, "/api/api-definitions"},
 		{http.MethodPost, "/api/auth/profiles/api-key"},
 		{http.MethodPost, "/api/auth/profiles/oauth/start"},
 		{http.MethodPost, "/api/auth/profiles/oauth/complete"},
