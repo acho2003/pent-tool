@@ -22,6 +22,7 @@ import (
 
 type ScanSchedule struct {
 	Assessment *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	Profile    string                       `json:"profile,omitempty"`
 	ID         string                       `json:"id"`
 	Name       string                       `json:"name"`
 	Interval   string                       `json:"interval"` // "hourly", "daily", "weekly", "monthly"
@@ -331,6 +332,7 @@ func (s *Server) checkAndRunSchedules() {
 
 				req := ScanRequest{
 					Assessment:     sch.Assessment,
+					Profile:        sch.Profile,
 					Targets:        sch.Targets,
 					Instruction:    sch.Instruction,
 					ScanMode:       sch.ScanMode,

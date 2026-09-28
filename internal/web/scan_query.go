@@ -329,6 +329,7 @@ func (s *Server) scanRecordFromInstance(inst *ScanInstance) *ScanRecord {
 
 	return &ScanRecord{
 		Assessment:               inst.Assessment,
+		Profile:                  inst.Profile,
 		ID:                       inst.ID,
 		InstanceID:               inst.ID,
 		Name:                     inst.Name,
@@ -736,6 +737,7 @@ func (s *Server) rebuildInstancesFromDisk() {
 		}
 		inst := &ScanInstance{
 			Assessment:     entry.rec.Assessment,
+			Profile:        entry.rec.Profile,
 			ID:             entry.rec.ID,
 			Name:           entry.rec.Name,
 			Targets:        entry.rec.Target,

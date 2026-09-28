@@ -107,6 +107,24 @@ func TestTypedAssessmentScanDoesNotFallThroughToLegacyExecution(t *testing.T) {
 	}
 }
 
+func TestSavedScanRetainsSelectedWebProfile(t *testing.T) {
+	s := newTestServer(t, nil)
+	body := `{"targets":["https://app.example.test/Portal/"],"scan_mode":"single","profile":"web-thorough","save_only":true}`
+	rr := httptest.NewRecorder()
+	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(body)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var response map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	inst := s.instances[response["instance_id"]]
+	if inst == nil || inst.Profile != "web-thorough" {
+		t.Fatalf("saved scan profile was lost: %+v", inst)
+	}
+}
+
 func TestScanRequestAcceptsFlatAssessmentAndRejectsAmbiguousDualForms(t *testing.T) {
 	var req ScanRequest
 	if err := json.Unmarshal([]byte(`{"assessment_mode":"GRAY_BOX","assessment_types":["API"],"assessment_targets":[{"id":"api","type":"URL","value":"https://api.example.test/v1"}],"profile":"web-gentle"}`), &req); err != nil {

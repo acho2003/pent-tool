@@ -66,6 +66,7 @@ func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceI
 	// Register instance as pending initially
 	instance := &ScanInstance{
 		Assessment:          req.Assessment,
+		Profile:             req.Profile,
 		ID:                  instanceID,
 		Name:                req.Name,
 		Targets:             strings.Join(req.Targets, ", "),
@@ -591,6 +592,7 @@ func (s *Server) runSingleTarget(ctx context.Context, scanCfg *config.Config, re
 		artifact:        req.Artifact,
 		vulsSSHHost:     req.VulsSSHHost,
 		assessment:      req.Assessment,
+		profile:         req.Profile,
 	}
 	s.executeScanSession(sess)
 	if s.instanceInterrupted(req.InstanceID) {

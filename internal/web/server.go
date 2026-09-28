@@ -438,6 +438,7 @@ type SubScanSummary struct {
 type ScanRecord struct {
 	SchemaVersion            int                          `json:"schema_version,omitempty"`
 	Assessment               *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	Profile                  string                       `json:"profile,omitempty"`
 	ID                       string                       `json:"id"`
 	InstanceID               string                       `json:"instance_id,omitempty"` // parent queue/instance id returned by /api/scan
 	Name                     string                       `json:"name,omitempty"`        // user-defined scan name
@@ -484,6 +485,7 @@ type ScanRecord struct {
 // QueueState persists scan queue state for recovery after restart
 type QueueState struct {
 	Assessment            *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	Profile               string                       `json:"profile,omitempty"`
 	InstanceID            string                       `json:"instance_id,omitempty"`
 	Targets               []string                     `json:"targets"`
 	CurrentIdx            int                          `json:"current_idx"`
@@ -517,6 +519,7 @@ type QueueState struct {
 // ScanInstance represents a running or completed scan instance.
 type ScanInstance struct {
 	Assessment     *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	Profile        string                       `json:"profile,omitempty"`
 	ID             string                       `json:"id"`
 	Name           string                       `json:"name,omitempty"` // user-defined scan name
 	Targets        string                       `json:"targets"`
@@ -1399,6 +1402,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().Format(time.RFC3339Nano)
 		inst := &ScanInstance{
 			Assessment:     req.Assessment,
+			Profile:        req.Profile,
 			ID:             instanceID,
 			Name:           req.Name,
 			Targets:        strings.Join(req.Targets, ", "),
@@ -1438,6 +1442,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			rec := &ScanRecord{
 				SchemaVersion:            3,
 				Assessment:               req.Assessment,
+				Profile:                  req.Profile,
 				ID:                       instanceID,
 				Name:                     req.Name,
 				Target:                   targetStr,
@@ -1912,6 +1917,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		inst.mu.RLock()
 		instances = append(instances, &ScanInstance{
 			Assessment:     inst.Assessment,
+			Profile:        inst.Profile,
 			ID:             inst.ID,
 			Name:           inst.Name,
 			Targets:        inst.Targets,
@@ -2170,6 +2176,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		inst.mu.RLock()
 		targets := strings.Split(inst.Targets, ", ")
 		assessmentConfig := inst.Assessment
+		profile := inst.Profile
 		instruction := inst.Instruction
 		scanMode := inst.ScanMode
 		severityFilter := inst.SeverityFilter
@@ -2190,6 +2197,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		// Build a new ScanRequest from stored config
 		req := ScanRequest{
 			Assessment:          assessmentConfig,
+			Profile:             profile,
 			Targets:             targets,
 			Instruction:         instruction,
 			ScanMode:            scanMode,
@@ -2240,6 +2248,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		targets := strings.Split(inst.Targets, ", ")
 		req := ScanRequest{
 			Assessment:          inst.Assessment,
+			Profile:             inst.Profile,
 			Targets:             targets,
 			Instruction:         inst.Instruction,
 			ScanMode:            inst.ScanMode,

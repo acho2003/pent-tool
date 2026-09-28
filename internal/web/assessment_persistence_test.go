@@ -23,7 +23,7 @@ func sampleAssessmentConfig() *assessment.AssessmentConfig {
 func TestAssessmentConfigSurvivesQueueRecovery(t *testing.T) {
 	s := &Server{dataDir: t.TempDir()}
 	want := sampleAssessmentConfig()
-	s.saveQueueState(0, ScanRequest{InstanceID: "assessment-1", Targets: []string{"https://example.test/CaseSensitive"}, Assessment: want})
+	s.saveQueueState(0, ScanRequest{InstanceID: "assessment-1", Targets: []string{"https://example.test/CaseSensitive"}, Assessment: want, Profile: "web-thorough"})
 
 	path := s.queueStatePathForInstance("assessment-1")
 	data, err := os.ReadFile(path)
@@ -38,18 +38,24 @@ func TestAssessmentConfigSurvivesQueueRecovery(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("recovered assessment = %#v, want %#v", got, want)
 	}
+	if profile := scanRequestFromQueueState(&persisted, path).Profile; profile != "web-thorough" {
+		t.Fatalf("recovered profile = %q", profile)
+	}
 }
 
 func TestAssessmentConfigSurvivesScheduleAndRecordPersistence(t *testing.T) {
 	dir := t.TempDir()
 	s := &Server{dataDir: dir, schedules: map[string]*ScanSchedule{}}
 	want := sampleAssessmentConfig()
-	if err := s.saveScheduleToDisk(&ScanSchedule{ID: "schedule-1", Name: "weekly", Assessment: want}); err != nil {
+	if err := s.saveScheduleToDisk(&ScanSchedule{ID: "schedule-1", Name: "weekly", Assessment: want, Profile: "web-thorough"}); err != nil {
 		t.Fatal(err)
 	}
 	s.loadSchedulesFromDisk()
 	if got := s.schedules["schedule-1"].Assessment; !reflect.DeepEqual(got, want) {
 		t.Fatalf("loaded schedule assessment = %#v, want %#v", got, want)
+	}
+	if got := s.schedules["schedule-1"].Profile; got != "web-thorough" {
+		t.Fatalf("loaded schedule profile = %q", got)
 	}
 
 	scanDir := filepath.Join(dir, "scan")

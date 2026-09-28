@@ -116,6 +116,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		// Manually trigger the scan
 		req := ScanRequest{
 			Assessment:     sch.Assessment,
+			Profile:        sch.Profile,
 			Targets:        sch.Targets,
 			Instruction:    sch.Instruction,
 			ScanMode:       sch.ScanMode,
@@ -187,6 +188,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		sch.Targets = req.Targets
 		sch.Instruction = req.Instruction
 		sch.ScanMode = req.ScanMode
+		sch.Profile = req.Profile
 		sch.SeverityFilter = req.SeverityFilter
 		sch.Scanners = append([]string(nil), req.Scanners...)
 		sch.Phases = req.Phases
