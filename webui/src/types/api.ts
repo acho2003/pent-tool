@@ -74,6 +74,26 @@ export interface ToolInfo {
   endpoint_configured?: boolean;
 }
 
+export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
+export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
+export interface AssessmentTarget { id: string; type: string; value: string; }
+export interface AssessmentConfig {
+  assessment_mode: AssessmentMode;
+  assessment_types: AssessmentType[];
+  assessment_targets: AssessmentTarget[];
+  profile?: string;
+}
+export interface AssessmentPlan {
+  config: AssessmentConfig;
+  decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
+  jobs: Array<{ id: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; variant: string; execution_mode?: string }>;
+  coverage: Array<{ type: AssessmentType; state: string; reason: string }>;
+  warnings?: Array<{ code: string; message: string; blocking: boolean }>;
+  errors?: Array<{ code: string; message: string; blocking: boolean }>;
+  fingerprint: string;
+  registry_version: string;
+}
+
 // One run within a scope, from GET /api/scans/{id}/scopes.
 export interface ScopeRun {
   scanner: string;

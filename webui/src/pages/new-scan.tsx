@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useStartScan } from "@/api/queries";
 import { api } from "@/api/client";
-import type { ToolInfo } from "@/types/api";
+import type { AssessmentMode, AssessmentPlan, AssessmentType, ToolInfo } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
+const ASSESSMENT_TYPES: AssessmentType[] = ["NETWORK", "WEB_APPLICATION", "API", "SOURCE_CODE", "DEPENDENCIES", "CONTAINER", "HOST", "CLOUD", "KUBERNETES", "INFRASTRUCTURE_AS_CODE", "COMPLIANCE"];
 
 export default function NewScanPage() {
   const nav = useNavigate();
@@ -27,6 +28,11 @@ export default function NewScanPage() {
   const [companyName, setCompanyName] = useState("");
   const [logoPath, setLogoPath] = useState("");
   const [severities, setSeverities] = useState<string[]>([]);
+  const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("BLACK_BOX");
+  const [assessmentTypes, setAssessmentTypes] = useState<AssessmentType[]>(["WEB_APPLICATION"]);
+  const [assessmentPlan, setAssessmentPlan] = useState<AssessmentPlan | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [planning, setPlanning] = useState(false);
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
   const tools: ToolInfo[] = health.data?.scanners ?? [];
   const selectable = useMemo(() => tools.filter((t) => t.selectable), [tools]);
@@ -37,6 +43,34 @@ export default function NewScanPage() {
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const targets = useMemo(() => targetsText.split(/[\n,]/).map((v) => v.trim()).filter(Boolean), [targetsText]);
+
+  function toggleAssessmentType(type: AssessmentType) {
+    setAssessmentTypes((prev) => prev.includes(type) ? prev.filter((item) => item !== type) : [...prev, type]);
+    setAssessmentPlan(null);
+  }
+
+  async function previewAssessmentPlan() {
+    setPlanError(null);
+    setAssessmentPlan(null);
+    if (!targets.length || !assessmentTypes.length) {
+      setPlanError("Add at least one URL or host and select an assessment type.");
+      return;
+    }
+    setPlanning(true);
+    try {
+      const plan = await api.planAssessment({
+        assessment_mode: assessmentMode,
+        assessment_types: assessmentTypes,
+        assessment_targets: targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
+        profile: "web-gentle",
+      });
+      setAssessmentPlan(plan);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : "Could not create assessment plan");
+    } finally {
+      setPlanning(false);
+    }
+  }
 
   function toggleSeverity(sev: string) {
     setSeverities((prev) => (prev.includes(sev) ? prev.filter((s) => s !== sev) : [...prev, sev]));
@@ -103,10 +137,26 @@ export default function NewScanPage() {
       <h1 className="mt-2 text-2xl font-semibold">Start deterministic scan</h1>
       <p className="mt-1 text-sm text-muted-foreground">Recon, then per-host web and server scanners, then source-code analysis. A fully deterministic pipeline.</p>
     </div>
+    <Card><CardHeader><CardTitle>Assessment plan preview</CardTitle></CardHeader><CardContent className="space-y-4">
+      <p className="text-sm text-muted-foreground">Review mode, requested coverage, scanner choices, and gaps. Preview does not contact targets or start a scan. Typed assessment execution is not enabled yet.</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2"><Label>Assessment mode</Label><Select value={assessmentMode} onValueChange={(value) => { setAssessmentMode(value as AssessmentMode); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="BLACK_BOX">Black Box</SelectItem><SelectItem value="GRAY_BOX">Gray Box</SelectItem><SelectItem value="WHITE_BOX">White Box</SelectItem></SelectContent></Select></div>
+        <div className="space-y-2"><Label>Profile</Label><Input value="web-gentle" disabled /><p className="text-xs text-muted-foreground">Production-safe default for web coverage.</p></div>
+      </div>
+      <div className="space-y-2"><Label>Assessment types</Label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ASSESSMENT_TYPES.map((type) => <label key={type} className="flex items-center gap-2 rounded-md border p-2 text-xs"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} />{type.replaceAll("_", " ")}</label>)}</div></div>
+      <Button type="button" variant="outline" onClick={() => void previewAssessmentPlan()} disabled={planning}>{planning ? "Planning…" : "Preview plan"}</Button>
+      {planError && <p className="text-sm text-destructive">{planError}</p>}
+      {assessmentPlan && <div className="space-y-4 border-t pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">Coverage preview · registry {assessmentPlan.registry_version}</p><p className="font-mono text-xs text-muted-foreground">{assessmentPlan.fingerprint.slice(0, 24)}…</p></div>
+        <div className="grid gap-2 sm:grid-cols-2">{assessmentPlan.coverage.map((item) => <div key={item.type} className="rounded-md border p-3"><p className="text-xs font-medium">{item.type.replaceAll("_", " ")} · {item.state}</p><p className="mt-1 text-xs text-muted-foreground">{item.reason}</p></div>)}</div>
+        <div><p className="mb-2 text-sm font-medium">Planned jobs ({assessmentPlan.jobs.length})</p>{assessmentPlan.jobs.length ? <ul className="space-y-1 text-xs">{assessmentPlan.jobs.map((job) => <li key={job.id} className="font-mono">{job.scanner} · {job.assessment_type} · {job.target}</li>)}</ul> : <p className="text-xs text-muted-foreground">No runnable jobs are available for these inputs.</p>}</div>
+        <details><summary className="cursor-pointer text-xs font-medium">Scanner decisions ({assessmentPlan.decisions.length})</summary><ul className="mt-2 space-y-2">{assessmentPlan.decisions.map((decision, i) => <li key={`${decision.scanner}-${decision.target_id ?? "all"}-${i}`} className="border-l-2 pl-3 text-xs"><span className="font-medium">{decision.scanner} · {decision.state}</span><p className="text-muted-foreground">{decision.reason}</p></li>)}</ul></details>
+      </div>}
+    </CardContent></Card>
     <form onSubmit={onSubmit} className="space-y-5">
       <Card><CardHeader><CardTitle>Target and mode</CardTitle></CardHeader><CardContent className="space-y-4">
         <div className="space-y-2"><Label htmlFor="name">Scan name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Quarterly external scan" /></div>
-        <div className="space-y-2"><Label htmlFor="targets">Hosts or URLs</Label><Textarea id="targets" value={targetsText} onChange={(e) => setTargetsText(e.target.value)} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One per line. Recon discovers live hosts; each host is scanned on its web and/or server track.</p></div>
+        <div className="space-y-2"><Label htmlFor="targets">Hosts or URLs</Label><Textarea id="targets" value={targetsText} onChange={(e) => { setTargetsText(e.target.value); setAssessmentPlan(null); }} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One per line. Recon discovers live hosts; each host is scanned on its web and/or server track.</p></div>
         <div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single target</SelectItem><SelectItem value="wildcard">Wildcard discovery</SelectItem></SelectContent></Select></div>
         <div className="space-y-2"><Label>Report severity filter</Label><div className="flex flex-wrap gap-3">{SEVERITIES.map((sev) => (<label key={sev} className="flex items-center gap-1.5 text-sm capitalize"><input type="checkbox" checked={severities.includes(sev)} onChange={() => toggleSeverity(sev)} className="h-3.5 w-3.5 rounded border-border" />{sev}</label>))}</div><p className="text-xs text-muted-foreground">Leave all unchecked to report every severity.</p></div>
       </CardContent></Card>
@@ -140,4 +190,11 @@ export default function NewScanPage() {
       <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => void submit(true)} disabled={start.isPending}><Save className="h-4 w-4" /> Save</Button><Button type="submit" disabled={start.isPending}><Play className="h-4 w-4" /> Start scan</Button></div>
     </form>
   </div>;
+}
+
+function inferTargetKind(value: string): string {
+  if (/^https?:\/\//i.test(value)) return "URL";
+  if (value.includes("/")) return "CIDR";
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) || (/^[0-9a-fA-F:]+$/.test(value) && value.includes(":"))) return "IP";
+  return "DOMAIN";
 }

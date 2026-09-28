@@ -1,4 +1,6 @@
 import type {
+	AssessmentConfig,
+	AssessmentPlan,
   AuthStatus,
   EnvironmentSettings,
   InstancesResponse,
@@ -307,6 +309,8 @@ export const api = {
 	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
 	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
 	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
+	planAssessment: (config: AssessmentConfig) =>
+		http<AssessmentPlan>("/api/scans/plan", { method: "POST", json: config }),
 
   legacyImportStatus: () =>
     http<{ count: number; dismissed: boolean }>("/api/legacy-import/status"),
