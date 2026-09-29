@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // This application is a deliberately small scanner fixture. The vulnerable
@@ -16,6 +17,17 @@ import (
 type labApp struct {
 	vulnerable bool
 	name       string
+}
+
+type labMetrics struct {
+	sync.Mutex
+	Requests int
+	Paths    map[string]int
+}
+
+type labMetricsSnapshot struct {
+	Requests int            `json:"request_count"`
+	Paths    map[string]int `json:"paths"`
 }
 
 func main() {
@@ -28,6 +40,32 @@ func main() {
 
 func (app labApp) routes() http.Handler {
 	mux := http.NewServeMux()
+	metrics := &labMetrics{Paths: make(map[string]int)}
+	mux.HandleFunc("GET /__lab/metrics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Lab-Control") != "local-only" {
+			http.NotFound(w, r)
+			return
+		}
+		metrics.Lock()
+		snapshot := labMetricsSnapshot{Requests: metrics.Requests, Paths: make(map[string]int, len(metrics.Paths))}
+		for path, count := range metrics.Paths {
+			snapshot.Paths[path] = count
+		}
+		metrics.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snapshot)
+	})
+	mux.HandleFunc("POST /__lab/reset", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Lab-Control") != "local-only" {
+			http.NotFound(w, r)
+			return
+		}
+		metrics.Lock()
+		metrics.Requests = 0
+		metrics.Paths = make(map[string]int)
+		metrics.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
 	mux.HandleFunc("GET /{$}", app.index)
 	mux.HandleFunc("GET /search", app.search)
@@ -43,7 +81,15 @@ func (app labApp) routes() http.Handler {
 	mux.HandleFunc("GET /openapi.json", app.openAPI)
 	mux.HandleFunc("GET /api/records", app.records)
 	mux.HandleFunc("GET /api/private", app.privateAPI)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/__lab/") {
+			metrics.Lock()
+			metrics.Requests++
+			metrics.Paths[r.URL.Path]++
+			metrics.Unlock()
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (app labApp) index(w http.ResponseWriter, _ *http.Request) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -68,5 +69,33 @@ func TestLabLoginAndAPIRequireCookie(t *testing.T) {
 	content, _ := io.ReadAll(response.Body)
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(content), "private") {
 		t.Fatalf("authenticated API status/body = %d/%s", response.StatusCode, content)
+	}
+}
+
+func TestLabMetricsTrackPathsAndCanReset(t *testing.T) {
+	handler := (labApp{vulnerable: true, name: "app-a"}).routes()
+	for _, path := range []string{"/", "/search?q=one", "/search?q=two"} {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	read := func() labMetricsSnapshot {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/__lab/metrics", nil)
+		request.Header.Set("X-Lab-Control", "local-only")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		var snapshot labMetricsSnapshot
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &snapshot) != nil {
+			t.Fatalf("metrics response = %d %s", response.Code, response.Body.String())
+		}
+		return snapshot
+	}
+	if got := read(); got.Requests != 3 || got.Paths["/search"] != 2 || got.Paths["/"] != 1 {
+		t.Fatalf("metrics = %+v", got)
+	}
+	reset := httptest.NewRequest(http.MethodPost, "/__lab/reset", nil)
+	reset.Header.Set("X-Lab-Control", "local-only")
+	handler.ServeHTTP(httptest.NewRecorder(), reset)
+	if got := read(); got.Requests != 0 || len(got.Paths) != 0 {
+		t.Fatalf("reset metrics = %+v", got)
 	}
 }
