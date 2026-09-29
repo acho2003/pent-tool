@@ -165,10 +165,12 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseNmap(run.ArtifactPath)
 	case "testssl":
 		return parseTestssl(run.ArtifactPath)
-	case "masscan", "subfinder", "httpx":
-		return nil, nil // recon evidence tools produce no findings
+	case "masscan", "subfinder", "httpx", "katana":
+		return nil, nil // recon/discovery evidence tools produce no findings
 	case "nikto":
 		return parseNikto(run.ArtifactPath)
+	case "dalfox":
+		return parseDalfox(run.ArtifactPath)
 	default:
 		return nil, fmt.Errorf("unsupported scanner %q", run.Scanner)
 	}

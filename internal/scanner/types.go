@@ -135,6 +135,7 @@ type Config struct {
 	MasscanPath       string
 	NiktoPath         string
 	KatanaPath        string
+	DalfoxPath        string
 	SSHPath           string
 	TestsslPath       string
 	SemgrepPath       string
@@ -180,6 +181,7 @@ type Config struct {
 	MasscanRate            int
 	NiktoTimeout           time.Duration
 	KatanaTimeout          time.Duration
+	DalfoxTimeout          time.Duration
 	LynisTimeout           time.Duration
 	TestsslTimeout         time.Duration
 	SemgrepTimeout         time.Duration

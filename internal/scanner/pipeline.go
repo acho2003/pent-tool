@@ -94,6 +94,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.KatanaPath == "" {
 		cfg.KatanaPath = "katana"
 	}
+	if cfg.DalfoxPath == "" {
+		cfg.DalfoxPath = "dalfox"
+	}
 	if cfg.SSHPath == "" {
 		cfg.SSHPath = "ssh"
 	}
@@ -111,6 +114,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.KatanaTimeout <= 0 {
 		cfg.KatanaTimeout = 10 * time.Minute
+	}
+	if cfg.DalfoxTimeout <= 0 {
+		cfg.DalfoxTimeout = 15 * time.Minute
 	}
 	if cfg.TestsslPath == "" {
 		cfg.TestsslPath = "testssl.sh"
