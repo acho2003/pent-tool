@@ -115,6 +115,7 @@ RUN set -eux; \
       github.com/haccer/subjack@latest \
       github.com/securego/gosec/v2/cmd/gosec@latest \
       github.com/zricethezav/gitleaks/v8@latest \
+      github.com/aquasecurity/kube-bench@latest \
     ; do go install -v "$pkg" || echo "WARN: optional utility $pkg unavailable"; done; \
     CGO_ENABLED=1 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest \
       || echo "WARN: optional naabu utility unavailable"
@@ -214,6 +215,15 @@ RUN for p in scrapling semgrep bandit git-dumper arjun uro; do \
 # and sqlmap provides `sqlmap` (used detection-only, opt-in, by the scanner).
 # Best-effort per tool so a flaky package never fails the image.
 RUN for p in wapiti3 sqlmap; do \
+      pipx install "$p" || pip3 install --break-system-packages "$p" \
+        || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
+    done
+
+# Cloud posture-audit scanners (Python): prowler (AWS audit) and scoutsuite
+# (provides the `scout` binary). Read-only; they need a supplied credential at
+# scan time (never baked into the image). kube-bench (CIS Kubernetes) is a Go
+# binary installed above; it needs cluster/node access provided by the operator.
+RUN for p in prowler scoutsuite; do \
       pipx install "$p" || pip3 install --break-system-packages "$p" \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
     done
