@@ -4,7 +4,21 @@
 
 Date: 2026-09-28. Code inspected at commit `80a24e8`.
 
-This is an implementation plan for the supplied 35-section requirements document. It extends the existing Xalgorix application. It does not claim that the features below already work. This change set is documentation only.
+This document is the implementation plan for the supplied 35-section requirements document. It extends the existing Xalgorix application. The status below records implementation work completed after the original code inspection; the remaining sections still describe requirements, not shipped behavior.
+
+### Implementation status (2026-09-29)
+
+This plan is **in progress** and is not a Nessus-equivalence claim. The following slices are implemented and committed on `feat/assessment-modes`:
+
+- Typed assessment modes, target/resource/access model, validation, per-target capability derivation, deterministic scanner planning, registry metadata, plan preview, schema-v3 persistence, and compatibility readers.
+- Target-bound encrypted credential references and verified HTTP header authentication for typed ZAP jobs. Form-login automation is still unsupported.
+- Typed plan execution with exact application URLs, isolated job artifacts, coverage/budget outcomes, checksum-aware resume, dedicated-ZAP requirement, and bounded OpenAPI GET/HEAD seeding. Full API request construction and all-operation coverage are still outstanding.
+- Optional, explicitly selected Masscan and Nikto jobs with bounded command policies and structured parsers. Masscan-to-Nmap service handoff, scanner/image version pinning, broad runtime smoke tests, and Nikto authenticated scope support remain outstanding.
+- Typed schedules with reviewed plan fingerprints, stale-plan rejection, and schedule-time revalidation.
+- A first typed-assessment creation/preview page, a scan-detail coverage view, and report/API preservation of finding fingerprint, confidence, and evidence-completeness fields.
+- Existing test helper race repair and successful full non-race Go tests, vet, frontend typecheck/build, and binary build on this macOS workspace.
+
+Still required before this plan can be considered complete: lab fixtures and measured quality gates; typed CLI execution; shared form coverage for dialogs and schedules; the remaining scanner variants (SQLMap, Lynis, credentialed OpenVAS, Trivy resource variants); full OpenAPI value preparation and operation selection; broader ZAP/auth isolation and Linux race/integration tests; location-safe correlation and evidence quality across all report/API/UI projections; coverage-aware PDF/scan comparison; audit and permission hooks; and reproducible standalone deployment documentation and smoke tests. The current branch has not scanned company production systems.
 
 The product will let an operator choose an assessment mode, assessment types, targets, and available resources, then review a backend-generated scanner plan. Existing scanners, saved scans, schedules, cancellation, artifacts, and deterministic reporting remain supported.
 
