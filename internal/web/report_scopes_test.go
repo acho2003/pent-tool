@@ -131,11 +131,11 @@ func TestOrderReportFindings(t *testing.T) {
 
 func TestReportFindingsToVulnsCarriesScopeAndSources(t *testing.T) {
 	in := []reportFinding{{
-		SourceID: "nuclei:x", Scanner: "nuclei", Title: "t", Severity: "critical", Scope: "host:a", Evidence: "ev", EvidenceRef: "n.jsonl#nuclei:x",
+		SourceID: "nuclei:x", Fingerprint: "v2:stable", Scanner: "nuclei", Title: "t", Severity: "critical", Scope: "host:a", Evidence: "ev", EvidenceRef: "n.jsonl#nuclei:x", Confidence: "HIGH", EvidenceCompleteness: "request_response",
 		Sources: []scanner.FindingSource{{Scanner: "nuclei", SourceID: "nuclei:x", EvidenceRef: "n.jsonl#nuclei:x"}, {Scanner: "openvas", SourceID: "openvas:r1", EvidenceRef: "ov.xml#openvas:r1"}},
 	}}
 	v := reportFindingsToVulns(in)[0]
-	if v.Scope != "host:a" || v.VerificationMethod != "nuclei, openvas" || !slices.Contains(v.Tags, "openvas") {
+	if v.Scope != "host:a" || v.Fingerprint != "v2:stable" || v.Confidence != "HIGH" || v.EvidenceCompleteness != "request_response" || v.VerificationMethod != "nuclei, openvas" || !slices.Contains(v.Tags, "openvas") {
 		t.Fatalf("vuln = %#v", v)
 	}
 	want := "ev\nEvidence reference (nuclei): n.jsonl#nuclei:x\nEvidence reference (openvas): ov.xml#openvas:r1"

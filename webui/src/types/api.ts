@@ -3,6 +3,7 @@
 
 export interface VulnSummary {
   id: string;
+  fingerprint?: string;
   title: string;
   severity: string;
   target?: string;
@@ -14,6 +15,8 @@ export interface VulnSummary {
   method?: string;
   cve?: string;
   cwe_id?: string;
+  confidence?: string;
+  evidence_completeness?: string;
   owasp?: string;
   technical_analysis?: string;
   poc_description?: string;
