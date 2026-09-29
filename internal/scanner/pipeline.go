@@ -526,20 +526,21 @@ func notApplicableClassifierRun(name, scope string, req Request, emit EmitFunc) 
 func resumeKey(scope, scanner string) string { return scope + "\x00" + scanner }
 
 func runAttempt(ctx context.Context, runner Runner, req Request, cfg Config, emit EmitFunc) (run Run) {
+	transcript := newTranscriptRecorder(req, cfg, emit)
+	streamEmit := transcript.emit
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			run = failedServiceRun(runner.Name(), req, fmt.Sprintf("scanner panic: %v", recovered), emit)
+			run = failedServiceRun(runner.Name(), req, fmt.Sprintf("scanner panic: %v", recovered), streamEmit)
 		}
 		if !run.Terminal() {
 			run.Scanner, run.Target, run.Status = runner.Name(), req.Target, "failed"
 			run.Reason, run.FinishedAt = "scanner returned without a terminal status", time.Now().Format(time.RFC3339Nano)
 			run = finalizeRun(run)
-			if emit != nil {
-				emit(Event{Type: "scanner_failed", Scanner: runner.Name(), Run: run, Output: run.Reason})
-			}
+			streamEmit(Event{Type: "scanner_failed", Scanner: runner.Name(), Run: run, Output: run.Reason})
 		}
+		run = transcript.finish(run)
 	}()
-	return runner.Run(ctx, req, cfg, emit)
+	return runner.Run(ctx, req, cfg, streamEmit)
 }
 
 type commandSpec struct {
@@ -746,7 +747,7 @@ func finalizeRun(run Run) Run {
 // a scanner run into one stable digest.
 func CalculateChecksum(run Run) string {
 	h := sha256.New()
-	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath} {
+	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath, run.TranscriptPath} {
 		if path == "" {
 			continue
 		}

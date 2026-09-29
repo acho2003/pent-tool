@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -456,6 +457,76 @@ func TestScannerOutputSelectsRunByScope(t *testing.T) {
 	}
 	if rr := get("/api/scans/scope-out/output/nuclei/stdout?scope=host:nope"); rr.Code != http.StatusNotFound {
 		t.Fatalf("unknown scope: %d", rr.Code)
+	}
+}
+
+func TestScannerCombinedOutputIsPagedAndLegacyMissing(t *testing.T) {
+	s := newTestServer(t, nil)
+	saveScannerScan(t, s, "combined-out", func(dir string) []scanner.Run {
+		return []scanner.Run{
+			{Scanner: "nuclei", Scope: "host:a.test", Target: "a.test", Status: "completed", TranscriptPath: writeFile(t, filepath.Join(dir, "a", "combined.log"), "one\ntwo\nthree\n")},
+			{Scanner: "nuclei", Scope: "host:b.test", Target: "b.test", Status: "completed", StdoutPath: writeFile(t, filepath.Join(dir, "b", "stdout.log"), "legacy")},
+		}
+	})
+	get := func(url string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, url, nil))
+		return rr
+	}
+	first := get("/api/scans/combined-out/output/nuclei/combined?scope=host:a.test&offset=0&limit=4")
+	if first.Code != 200 || first.Body.String() != "one\n" || first.Header().Get("X-Start-Offset") != "0" || first.Header().Get("X-Next-Offset") != "4" || first.Header().Get("X-Total-Size") != "14" {
+		t.Fatalf("first page: %d %q, headers=%v", first.Code, first.Body.String(), first.Header())
+	}
+	second := get("/api/scans/combined-out/output/nuclei/combined?scope=host:a.test&offset=4&limit=4")
+	if second.Code != 200 || second.Body.String() != "two\n" {
+		t.Fatalf("second page: %d %q", second.Code, second.Body.String())
+	}
+	if legacy := get("/api/scans/combined-out/output/nuclei/combined?scope=host:b.test"); legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy scan must use separate logs, got %d", legacy.Code)
+	}
+}
+
+func TestScannerCombinedOutputCapsPageSize(t *testing.T) {
+	s := newTestServer(t, nil)
+	content := strings.Repeat("x", 2<<20)
+	saveScannerScan(t, s, "large-combined", func(dir string) []scanner.Run {
+		return []scanner.Run{{Scanner: "nuclei", Target: "a.test", Status: "completed", TranscriptPath: writeFile(t, filepath.Join(dir, "combined.log"), content)}}
+	})
+	rr := httptest.NewRecorder()
+	s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, "/api/scans/large-combined/output/nuclei/combined?limit=999999999", nil))
+	if rr.Code != 200 || rr.Body.Len() != 1<<20 || rr.Header().Get("X-Total-Size") != "2097152" {
+		t.Fatalf("large page: status=%d bytes=%d headers=%v", rr.Code, rr.Body.Len(), rr.Header())
+	}
+}
+
+func TestScannerCombinedOutputCanFollowNewBytes(t *testing.T) {
+	s := newTestServer(t, nil)
+	var path string
+	saveScannerScan(t, s, "live-combined", func(dir string) []scanner.Run {
+		path = writeFile(t, filepath.Join(dir, "combined.log"), "started\n")
+		return []scanner.Run{{Scanner: "nuclei", Target: "a.test", Status: "running", TranscriptPath: path}}
+	})
+	get := func(offset int) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, "/api/scans/live-combined/output/nuclei/combined?offset="+strconv.Itoa(offset)+"&limit=65536", nil))
+		return rr
+	}
+	first := get(0)
+	if first.Code != 200 || first.Body.String() != "started\n" {
+		t.Fatalf("initial live page: %d %q", first.Code, first.Body.String())
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString("finding\n")
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := get(first.Body.Len())
+	if next.Code != 200 || next.Body.String() != "finding\n" || next.Header().Get("X-Total-Size") != "16" {
+		t.Fatalf("follow-up live page: %d %q headers=%v", next.Code, next.Body.String(), next.Header())
 	}
 }
 

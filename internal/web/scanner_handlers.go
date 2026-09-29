@@ -245,8 +245,10 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 		filePath = run.StdoutPath
 	} else if stream == "stderr" {
 		filePath = run.StderrPath
+	} else if stream == "combined" {
+		filePath = run.TranscriptPath
 	} else {
-		http.Error(w, "stream must be stdout or stderr", http.StatusBadRequest)
+		http.Error(w, "stream must be stdout, stderr, or combined", http.StatusBadRequest)
 		return
 	}
 	filePath, ok := safeScannerPath(scanDir, filePath)
@@ -295,7 +297,9 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 	_, _ = f.Seek(offset, io.SeekStart)
 	data, _ := io.ReadAll(io.LimitReader(f, limit))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Start-Offset", strconv.FormatInt(offset, 10))
 	w.Header().Set("X-Next-Offset", strconv.FormatInt(offset+int64(len(data)), 10))
+	w.Header().Set("X-Total-Size", strconv.FormatInt(info.Size(), 10))
 	_, _ = w.Write(data)
 }
 

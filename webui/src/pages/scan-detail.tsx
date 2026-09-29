@@ -69,6 +69,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { LiveFeed, type FeedFilter } from "@/components/live-feed";
+import { ScannerTerminal } from "@/components/scanner-terminal";
 import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination";
 import type { ScanRecord, ReportScope, ScopeRun, SubScanSummary, VulnSummary } from "@/types/api";
 
@@ -376,9 +377,6 @@ function scopeHeading(sc: ReportScope): string {
 }
 
 function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
-	const [stream, setStream] = useState<"stdout" | "stderr">("stdout");
-	const [output, setOutput] = useState("");
-	const [loading, setLoading] = useState(false);
 	const [picked, setPicked] = useState<RunKey | null>(null);
 	const [openState, setOpenState] = useState<Record<string, boolean>>({});
 	// Refetch the grouping whenever any run is added or changes status.
@@ -409,16 +407,6 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		}
 		return null;
 	}, [selected, recon, scopes]);
-	useEffect(() => {
-		if (!selected) { setOutput(""); return; }
-		let active = true;
-		setLoading(true);
-		api.scannerOutput(scan.id, selected.scanner, stream, selected.scope || undefined)
-			.then((text) => { if (active) setOutput(text); })
-			.catch((e) => { if (active) setOutput(e instanceof Error ? e.message : "Output unavailable"); })
-			.finally(() => { if (active) setLoading(false); });
-		return () => { active = false; };
-	}, [scan.id, selected?.scanner, selected?.scope, stream, runsSignature]);
 	// The default-open decision (few hosts, or a scope needing attention) is only
 	// meaningful the first time a scope is seen — otherwise an untoggled section
 	// would open and close on its own as runs change status underneath it. Snapshot
@@ -469,7 +457,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 				{open && grid(sc.runs, sc.id)}
 			</section>;
 		})}
-		{selected && <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle><span className="capitalize">{selected.scanner}</span>{located && <span className="font-normal text-muted-foreground"> @ {located.label}</span>}</CardTitle><CardDescription>Native scanner output.</CardDescription></div><div className="flex gap-2"><Button size="sm" variant={stream === "stdout" ? "default" : "outline"} onClick={() => setStream("stdout")}>stdout</Button><Button size="sm" variant={stream === "stderr" ? "default" : "outline"} onClick={() => setStream("stderr")}>stderr</Button>{located?.run.has_artifact && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected.scanner, selected.scope || undefined)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></div></CardHeader><CardContent><pre className="max-h-[32rem] min-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-4 text-xs text-neutral-200">{loading ? "Loading…" : output || "No output recorded."}</pre></CardContent></Card>}
+		{selected && <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle><span className="capitalize">{selected.scanner}</span>{located && <span className="font-normal text-muted-foreground"> @ {located.label}</span>}</CardTitle><CardDescription>Scanner terminal output.</CardDescription></div>{located?.run.has_artifact && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected.scanner, selected.scope || undefined)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></CardHeader><CardContent><ScannerTerminal key={`${selected.scope}|${selected.scanner}`} scanId={scan.id} scanner={selected.scanner} scope={selected.scope || undefined} status={located?.run.status || "pending"} reason={located?.run.reason} truncated={located?.run.truncated} /></CardContent></Card>}
 	</div>;
 }
 

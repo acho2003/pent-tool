@@ -93,6 +93,7 @@ type Run struct {
 	Reason             string              `json:"reason,omitempty"`
 	StdoutPath         string              `json:"stdout_path,omitempty"`
 	StderrPath         string              `json:"stderr_path,omitempty"`
+	TranscriptPath     string              `json:"transcript_path,omitempty"`
 	ArtifactPath       string              `json:"artifact_path,omitempty"`
 	Checksum           string              `json:"checksum,omitempty"`
 	Truncated          bool                `json:"truncated,omitempty"`

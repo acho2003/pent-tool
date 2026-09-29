@@ -309,6 +309,13 @@ export const api = {
   reportUrl: (scanId: string) => `/api/report/${scanId}`,
 	scannerOutput: (scanId: string, scanner: string, stream: "stdout" | "stderr", scope?: string) =>
 		http<string>(`/api/scans/${scanId}/output/${scanner}/${stream}${scopeQuery(scope)}`),
+	scannerOutputChunk: async (scanId: string, scanner: string, stream: "combined" | "stdout" | "stderr", scope: string | undefined, offset: number, limit = 65536) => {
+		const path = `/api/scans/${encodeURIComponent(scanId)}/output/${encodeURIComponent(scanner)}/${stream}${scopeQuery(scope)}`;
+		const response = await fetch(`${path}${path.includes("?") ? "&" : "?"}offset=${offset}&limit=${limit}`, { credentials: "same-origin" });
+		if (response.status === 401) dispatchAuthExpired();
+		if (!response.ok) throw new HttpError({ status: response.status, statusText: response.statusText, body: await response.text(), data: null });
+		return { text: await response.text(), start: Number(response.headers.get("X-Start-Offset") ?? offset), next: Number(response.headers.get("X-Next-Offset") ?? offset), total: Number(response.headers.get("X-Total-Size") ?? 0) };
+	},
 	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
 	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
 	assessmentCoverage: (scanId: string) => http<AssessmentCoverage>(`/api/scans/${scanId}/coverage`),
