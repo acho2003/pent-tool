@@ -77,6 +77,10 @@ type Request struct {
 	// this concrete endpoint list instead of only the single seed URL, so the
 	// crawl output actually drives coverage. Derived by recon, not input.
 	WebEndpoints []string `json:"-"`
+	// SQLMapApprovedURLs are the parameterized URLs an operator has EXPLICITLY
+	// approved for SQL-injection detection. SQLMap runs only against these — never
+	// against auto-discovered URLs — enforcing the opt-in, approved-request policy.
+	SQLMapApprovedURLs []string `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -137,6 +141,7 @@ type Config struct {
 	KatanaPath        string
 	DalfoxPath        string
 	WapitiPath        string
+	SqlmapPath        string
 	SSHPath           string
 	TestsslPath       string
 	SemgrepPath       string
@@ -184,6 +189,7 @@ type Config struct {
 	KatanaTimeout          time.Duration
 	DalfoxTimeout          time.Duration
 	WapitiTimeout          time.Duration
+	SqlmapTimeout          time.Duration
 	LynisTimeout           time.Duration
 	TestsslTimeout         time.Duration
 	SemgrepTimeout         time.Duration

@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" {
+	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "sqlmap" {
 		return true
 	}
 	for _, runner := range NewPipeline(Config{}).Runners {
@@ -76,6 +76,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["dalfox"] = dalfoxRunner{}
 	// Wapiti is opt-in bounded web fuzzing seeded with discovered endpoints.
 	byName["wapiti"] = wapitiRunner{}
+	// SQLMap is opt-in, detection-only, and runs only on approved URLs.
+	byName["sqlmap"] = sqlmapRunner{}
 	byName["lynis"] = lynisRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
