@@ -73,7 +73,8 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 	var findings []Finding
 	var errs []error
 	for _, run := range runs {
-		if run.Status != "completed" || run.ArtifactPath == "" {
+		partialNikto := run.Scanner == "nikto" && run.Status == "failed" && run.Reason == "scanner time budget reached; partial results may be available"
+		if (run.Status != "completed" && !partialNikto) || run.ArtifactPath == "" {
 			continue
 		}
 		parsed, err := ParseRun(run)

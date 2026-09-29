@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,13 +10,34 @@ import (
 	"time"
 )
 
+func TestNiktoBudgetRetainsPartialFindings(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-nikto")
+	script := "#!/bin/sh\n" +
+		"out=\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -output ]; then shift; out=$1; fi; shift; done\n" +
+		"printf '%s' '[{\"host\":\"example.test\",\"port\":\"80\",\"id\":\"123\",\"method\":\"GET\",\"uri\":\"/found\",\"message\":\"Issue\"}]' > \"$out.json\"\n" +
+		"echo '+ ERROR: Host maximum execution time of 540 seconds reached'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	spec := buildNikto(Request{Target: "http://example.test/", ScanDir: dir}, Config{NiktoPath: bin})
+	run := executeSpec(context.Background(), "nikto", Request{Target: "http://example.test/", ScanDir: dir}, Config{}, spec, nil)
+	if run.Status != "failed" || !strings.Contains(run.Reason, "partial results") {
+		t.Fatalf("budget result = %+v", run)
+	}
+	findings, errs := ParseRuns([]Run{run})
+	if len(errs) != 0 || len(findings) != 1 || findings[0].Endpoint != "http://example.test/found" {
+		t.Fatalf("partial Nikto findings = %+v, errors = %v", findings, errs)
+	}
+}
+
 func TestBuildNiktoIsBoundedAndIsolated(t *testing.T) {
 	dir := t.TempDir()
 	spec := buildNikto(Request{Target: "https://Example.test:8443/", ScanDir: dir}, Config{NiktoPath: "nikto", NiktoTimeout: 30 * time.Minute})
 	if spec.notApp != "" || spec.timeout != niktoMaxDuration {
 		t.Fatalf("unexpected spec: %+v", spec)
 	}
-	want := []string{"-config", filepath.Join(dir, "scanner-output", "nikto", "nikto.conf"), "-host", "https://Example.test:8443/", "-nointeractive", "-nocheck", "-maxtime", "600", "-timeout", "5", "-Pause", "1", "-Cgidirs", "none", "-Tuning", "123b", "-Format", "json", "-output", filepath.Join(dir, "scanner-output", "nikto", "results.json")}
+	want := []string{"-config", filepath.Join(dir, "scanner-output", "nikto", "nikto.conf"), "-host", "https://Example.test:8443/", "-nointeractive", "-nocheck", "-maxtime", "540s", "-timeout", "5", "-Pause", "1", "-Cgidirs", "none", "-Tuning", "123b", "-Format", "json", "-output", filepath.Join(dir, "scanner-output", "nikto", "results")}
 	if !reflect.DeepEqual(spec.args, want) {
 		t.Fatalf("Nikto args = %#v, want %#v", spec.args, want)
 	}
@@ -28,8 +50,11 @@ func TestBuildNiktoIsBoundedAndIsolated(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(spec.args[1])
-	if err != nil || !strings.Contains(string(data), "Xalgorix bounded") {
+	if err != nil || !strings.Contains(string(data), "CHECKMETHODS=GET") || !strings.Contains(string(data), "UPDATES=no") || strings.Contains(string(data), "RFIURL=") {
 		t.Fatalf("isolated config not written: data=%q err=%v", data, err)
+	}
+	if spec.artifact != filepath.Join(dir, "scanner-output", "nikto", "results.json") || spec.partialMarker == "" {
+		t.Fatalf("unexpected Nikto artifact or partial marker: %+v", spec)
 	}
 	info, err := os.Stat(spec.args[1])
 	if err != nil || info.Mode().Perm() != 0600 {

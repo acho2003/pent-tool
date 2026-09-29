@@ -559,6 +559,10 @@ type commandSpec struct {
 	okExit     map[int]bool
 	prepare    func() error
 	findOutput func() string
+	// partialMarker in stdout means the scanner stopped at its own budget and
+	// wrote a partial artifact. Preserve that artifact but report incomplete
+	// coverage rather than treating a zero exit code as a full scan.
+	partialMarker string
 	// classify, when set, may reinterpret a failed run (a non-zero exit that is
 	// not a timeout, cancellation, or okExit) by inspecting the exit code and
 	// captured output. Returning ok=true replaces the run's status and reason —
@@ -689,6 +693,9 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		if found := spec.findOutput(); found != "" {
 			run.ArtifactPath = found
 		}
+	}
+	if run.Status == "completed" && spec.partialMarker != "" && strings.Contains(readCapped(run.StdoutPath, 1<<20), spec.partialMarker) {
+		run.Status, run.Reason = "failed", "scanner time budget reached; partial results may be available"
 	}
 	if spec.artifact != "" && truncateArtifact(run.ArtifactPath, cfg.MaxOutputBytes) {
 		run.Truncated = true
