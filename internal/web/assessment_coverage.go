@@ -40,6 +40,7 @@ type assessmentOperationCoverage struct {
 	Origin   string `json:"origin,omitempty"`
 	Status   string `json:"status"`
 	Reason   string `json:"reason"`
+	Eligible bool   `json:"eligible"`
 }
 
 type assessmentCoverageResponse struct {
@@ -100,11 +101,45 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 		})
 	}
 	for _, endpoint := range plan.APIEndpoints {
-		coverage.Operations = append(coverage.Operations, assessmentOperationCoverage{
+		operation := assessmentOperationCoverage{
 			TargetID: endpoint.TargetID, Method: endpoint.Method, Path: endpoint.Path, Origin: endpoint.Origin,
-			Status: "inventoried_not_executed",
-			Reason: "API operations are recorded in the plan but are not yet submitted to a request-based scanner.",
-		})
+			Status: "inventoried_not_executed", Reason: "operation is inventoried but has not been submitted to ZAP", Eligible: endpoint.Eligible,
+		}
+		if !endpoint.Resolved || !endpoint.Eligible {
+			operation.Status = "skipped"
+			operation.Reason = endpoint.Reason
+			if operation.Reason == "" {
+				operation.Reason = "operation needs values or explicit approval"
+			}
+		} else {
+			var targetValue string
+			for _, target := range plan.Config.Targets {
+				if target.ID == endpoint.TargetID {
+					targetValue = target.Value
+					break
+				}
+			}
+			for _, run := range record.ScannerRuns {
+				if run.Scanner != "zap" || run.Target != targetValue || run.PlanFingerprint != plan.Fingerprint {
+					continue
+				}
+				found := false
+				for _, result := range run.APIEndpointResults {
+					if result.Method == endpoint.Method && result.Path == endpoint.Path {
+						operation.Status, operation.Reason, found = result.Status, result.Reason, true
+						break
+					}
+				}
+				if !found && run.Status != "running" {
+					operation.Status, operation.Reason = "not_attempted", run.Reason
+					if operation.Reason == "" {
+						operation.Reason = "ZAP finished without recording an operation attempt"
+					}
+				}
+				break
+			}
+		}
+		coverage.Operations = append(coverage.Operations, operation)
 	}
 	for _, decision := range plan.Decisions {
 		if decision.State != scanner.PlanNotApplicable && decision.State != scanner.PlanSelected {

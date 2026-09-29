@@ -37,7 +37,7 @@ func TestAssessmentCoverageDistinguishesCompletedAndUntestedOperations(t *testin
 			{ID: "zap:app:zap", State: scanner.PlanConditional, Scanner: "zap", TargetID: "app", Target: "https://app.example.test/Api", AssessmentType: assessment.TypeAPI, AssessmentTypes: []assessment.Type{assessment.TypeAPI}, Variant: "zap"},
 		},
 		Coverage:     []scanner.TypeCoverage{{Type: assessment.TypeAPI, State: "conditional", Reason: "part of API coverage remains conditional"}},
-		APIEndpoints: []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/users/{id}", Origin: "https://app.example.test", Source: "openapi", Resolved: true}},
+		APIEndpoints: []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/users", Origin: "https://app.example.test", Source: "openapi", Resolved: true, Eligible: true}},
 		Fingerprint:  "sha256:coverage-plan",
 	}
 	run := scanner.Run{Scanner: "nuclei", Variant: "nuclei", PlanFingerprint: plan.Fingerprint, Target: "https://app.example.test/Api", Status: "completed", ArtifactPath: artifactPath}
@@ -64,5 +64,24 @@ func TestAssessmentCoverageLabelsLegacyRecords(t *testing.T) {
 	coverage := buildAssessmentCoverage("old-scan", &ScanRecord{ID: "old-scan", Status: "finished"}, "")
 	if coverage.State != "legacy" || coverage.Reason == "" {
 		t.Fatalf("legacy coverage = %+v", coverage)
+	}
+}
+
+func TestAssessmentCoverageReflectsAPIOperationSeedOutcomes(t *testing.T) {
+	plan := &scanner.AssessmentPlan{
+		Config: assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/Portal"}}},
+		APIEndpoints: []scanner.APIEndpoint{
+			{TargetID: "app", Method: "GET", Path: "/health", Origin: "https://app.example.test", Resolved: true, Eligible: true},
+			{TargetID: "app", Method: "POST", Path: "/users", Origin: "https://app.example.test", Resolved: true, Reason: "state-changing operation requires explicit approval"},
+		},
+		Fingerprint: "sha256:operation-plan",
+	}
+	record := &ScanRecord{AssessmentPlan: plan, ScannerRuns: []scanner.Run{{
+		Scanner: "zap", PlanFingerprint: plan.Fingerprint, Target: "https://app.example.test/Portal", Status: "completed",
+		APIEndpointResults: []scanner.APIEndpointResult{{Method: "GET", Path: "/health", Status: "seeded"}},
+	}}}
+	coverage := buildAssessmentCoverage("scan", record, "")
+	if len(coverage.Operations) != 2 || coverage.Operations[0].Status != "seeded" || coverage.Operations[1].Status != "skipped" || coverage.Operations[1].Eligible {
+		t.Fatalf("operation coverage=%+v", coverage.Operations)
 	}
 }

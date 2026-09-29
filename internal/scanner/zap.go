@@ -284,19 +284,51 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.TypedAssessment {
 		followRedirects = "false"
 	}
+	maxChildren := cfg.WebMaxEndpoints
+	if maxChildren <= 0 {
+		maxChildren = DefaultWebProfile(ProfileGentle).MaxEndpoints
+	}
 	if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {followRedirects}}); err != nil {
 		logLine("ZAP could not pre-seed the target (continuing to spider): " + err.Error())
 	} else {
 		logLine("ZAP seeded target into scan tree: " + target)
 	}
+	if req.TypedAssessment && len(req.APIEndpoints) > 0 {
+		seeded := 0
+		for _, endpoint := range req.APIEndpoints {
+			result := APIEndpointResult{Method: endpoint.Method, Path: endpoint.Path}
+			if !endpoint.Eligible || !endpoint.Resolved {
+				result.Status, result.Reason = "skipped", endpoint.Reason
+				if result.Reason == "" {
+					result.Reason = "operation needs values or explicit approval"
+				}
+				run.APIEndpointResults = append(run.APIEndpointResults, result)
+				continue
+			}
+			if seeded >= maxChildren {
+				result.Status, result.Reason = "skipped", "web endpoint budget exhausted before this operation was seeded"
+				run.APIEndpointResults = append(run.APIEndpointResults, result)
+				continue
+			}
+			operationURL, urlErr := apiEndpointURL(target, endpoint)
+			if urlErr != nil {
+				result.Status, result.Reason = "skipped", urlErr.Error()
+				run.APIEndpointResults = append(run.APIEndpointResults, result)
+				continue
+			}
+			if _, seedErr := call("/JSON/core/action/accessUrl/", url.Values{"url": {operationURL}, "followRedirects": {"false"}}); seedErr != nil {
+				result.Status, result.Reason = "failed", "ZAP could not seed this operation into the scoped scan tree"
+			} else {
+				result.Status = "seeded"
+				seeded++
+			}
+			run.APIEndpointResults = append(run.APIEndpointResults, result)
+		}
+	}
 
 	// Fixed pipeline: spider the target, drain the passive scanner, then active
 	// scan what was discovered. The stages and their parameters are constant —
 	// nothing about them is model-generated.
-	maxChildren := cfg.WebMaxEndpoints
-	if maxChildren <= 0 {
-		maxChildren = DefaultWebProfile(ProfileGentle).MaxEndpoints
-	}
 	spiderParams := url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}}
 	if req.TypedAssessment {
 		spiderParams.Set("contextName", contextName)

@@ -79,7 +79,9 @@ type AssessmentPlan struct {
 // probes targets, pulls images, clones repositories, or resolves credentials.
 func PlanAssessment(input PlanInput) AssessmentPlan {
 	cfg := assessment.Normalize(input.Config)
-	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: "1"}
+	// RegistryVersion also pins scanner and preparation semantics which affect
+	// execution identity (including which imported API operations are seeded).
+	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: "2"}
 	for i := range plan.Capabilities {
 		evidence := &plan.Capabilities[i]
 		if evidence.Capability != assessment.CapAuthWeb {

@@ -10,9 +10,51 @@ func TestParseOpenAPIJSONAndRejectRemoteRefs(t *testing.T) {
 	if got[0].Method != "GET" || got[1].Method != "POST" || got[0].Path != "/users" {
 		t.Fatalf("operation order must be stable by path and method: %+v", got)
 	}
+	if !got[0].Eligible || got[1].Eligible || got[1].Reason == "" {
+		t.Fatalf("safe and mutating operations were not distinguished: %+v", got)
+	}
 	yaml := []byte("openapi: 3.1.0\npaths: {}\ncomponents:\n  schemas:\n    X:\n      $ref:  https://evil.test/x\n")
 	if _, err := ParseOpenAPI(yaml, "https://example.test"); err == nil {
 		t.Fatal("remote ref accepted")
+	}
+}
+
+func TestParseOpenAPIReportsUnresolvedParametersAndLocalReferenceErrors(t *testing.T) {
+	data := []byte(`{"openapi":"3.1.0","paths":{"/users/{id}":{"get":{}},"/search":{"get":{"parameters":[{"name":"q","in":"query","required":true}]}}}}`)
+	got, err := ParseOpenAPI(data, "https://example.test")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("parse=%+v err=%v", got, err)
+	}
+	for _, endpoint := range got {
+		if endpoint.Resolved || endpoint.Eligible || endpoint.Reason == "" {
+			t.Errorf("unresolved operation was eligible: %+v", endpoint)
+		}
+	}
+	broken := []byte(`{"openapi":"3.0.0","paths":{"/a":{"get":{}}},"components":{"schemas":{"A":{"$ref":"#/components/schemas/Missing"}}}}`)
+	if _, err := ParseOpenAPI(broken, "https://example.test"); err == nil {
+		t.Fatal("unresolvable local ref accepted")
+	}
+}
+
+func TestAPIEndpointURLPreservesApplicationPathAndRejectsScopeEscape(t *testing.T) {
+	target := "https://Example.test:8443/Portal/Case/"
+	endpoint := APIEndpoint{Method: "GET", Path: "/users", Origin: "https://example.test:8443", Resolved: true, Eligible: true}
+	got, err := apiEndpointURL(target, endpoint)
+	if err != nil || got != "https://example.test:8443/Portal/Case/users" {
+		t.Fatalf("URL=%q err=%v", got, err)
+	}
+	endpoint.Origin = "https://other.example.test"
+	if _, err := apiEndpointURL(target, endpoint); err == nil {
+		t.Fatal("foreign OpenAPI origin accepted")
+	}
+	endpoint.Origin = "https://example.test:8443"
+	endpoint.Path = "/../outside"
+	if _, err := apiEndpointURL(target, endpoint); err == nil {
+		t.Fatal("path traversal accepted")
+	}
+	endpoint.Path = "/%2e%2e/outside"
+	if _, err := apiEndpointURL(target, endpoint); err == nil {
+		t.Fatal("encoded path traversal accepted")
 	}
 }
 

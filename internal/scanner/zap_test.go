@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,7 @@ type fakeZAP struct {
 	ascanNoTree        bool // ascan/action/scan returns url_not_found
 	removeContextFails bool
 	domXSSEnabled      string
+	accessedURLs       []string
 }
 
 func (f *fakeZAP) record(path string) {
@@ -108,6 +110,7 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/JSON/core/action/accessUrl/":
 		f.mu.Lock()
 		f.followRedirects = r.URL.Query().Get("followRedirects")
+		f.accessedURLs = append(f.accessedURLs, r.URL.Query().Get("url"))
 		f.mu.Unlock()
 		if f.accessFails {
 			http.Error(w, `{"code":"internal_error","message":"Internal Error"}`, http.StatusInternalServerError)
@@ -153,6 +156,35 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func TestZAPSeedsOnlyEligibleOpenAPIOperationsWithinTargetScope(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true"}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	target := "https://Example.test:8443/Portal/Case/"
+	req := Request{Target: target, ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true, APIEndpoints: []APIEndpoint{
+		{Method: "GET", Path: "/users", Origin: "https://example.test:8443", Resolved: true, Eligible: true},
+		{Method: "POST", Path: "/orders", Origin: "https://example.test:8443", Resolved: true, Reason: "state-changing operation"},
+		{Method: "GET", Path: "/users/{id}", Origin: "https://example.test:8443", Resolved: false, Reason: "path parameter missing"},
+	}}
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 10, MaxOutputBytes: 1 << 20}
+	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	if run.Status != "completed" {
+		t.Fatalf("ZAP run=%+v", run)
+	}
+	if len(run.APIEndpointResults) != 3 || run.APIEndpointResults[0].Status != "seeded" || run.APIEndpointResults[1].Status != "skipped" || run.APIEndpointResults[2].Status != "skipped" {
+		t.Fatalf("unexpected operation outcomes: %+v", run.APIEndpointResults)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	want := "https://example.test:8443/Portal/Case/users"
+	if !slices.Contains(fake.accessedURLs, want) {
+		t.Errorf("eligible API route %q was not seeded: %v", want, fake.accessedURLs)
+	}
+	if slices.Contains(fake.accessedURLs, "https://example.test:8443/Portal/Case/orders") {
+		t.Error("mutating API operation was sent to ZAP")
+	}
 }
 
 func TestZAPReplacerSecretsAreSentInPostBody(t *testing.T) {

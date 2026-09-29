@@ -84,6 +84,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 		}
+		for _, endpoint := range plan.APIEndpoints {
+			if endpoint.TargetID == job.TargetID {
+				req.APIEndpoints = append(req.APIEndpoints, endpoint)
+			}
+		}
 		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && job.Scanner == "zap" {
 			req.TargetAuth = strings.Join(headers, "\n")
 		}

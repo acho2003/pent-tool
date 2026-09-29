@@ -60,13 +60,14 @@ type Request struct {
 	// the crash-persisted record built from them — carry their per-host scope
 	// instead of collapsing per-host same-named runs. Pipeline.Run sets it per
 	// scope; recon sets it per tool. Not serialized: it is derived, not input.
-	Scope           string   `json:"-"`
-	Artifact        Artifact `json:"artifact,omitempty"`
-	VulsSSHHost     string   `json:"vuls_ssh_host,omitempty"`
-	TargetAuth      string   `json:"-"`
-	Profile         string   `json:"-"`
-	ApplicationURL  string   `json:"-"`
-	TypedAssessment bool     `json:"-"`
+	Scope           string        `json:"-"`
+	Artifact        Artifact      `json:"artifact,omitempty"`
+	VulsSSHHost     string        `json:"vuls_ssh_host,omitempty"`
+	TargetAuth      string        `json:"-"`
+	Profile         string        `json:"-"`
+	ApplicationURL  string        `json:"-"`
+	TypedAssessment bool          `json:"-"`
+	APIEndpoints    []APIEndpoint `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -75,23 +76,24 @@ type Request struct {
 }
 
 type Run struct {
-	Scanner         string            `json:"scanner"`
-	Variant         string            `json:"variant,omitempty"`
-	AssessmentTypes []assessment.Type `json:"assessment_types,omitempty"`
-	PlanFingerprint string            `json:"plan_fingerprint,omitempty"`
-	AttemptID       string            `json:"attempt_id,omitempty"`
-	Scope           string            `json:"scope,omitempty"`
-	Target          string            `json:"target"`
-	Status          string            `json:"status"`
-	StartedAt       string            `json:"started_at,omitempty"`
-	FinishedAt      string            `json:"finished_at,omitempty"`
-	ExitCode        int               `json:"exit_code,omitempty"`
-	Reason          string            `json:"reason,omitempty"`
-	StdoutPath      string            `json:"stdout_path,omitempty"`
-	StderrPath      string            `json:"stderr_path,omitempty"`
-	ArtifactPath    string            `json:"artifact_path,omitempty"`
-	Checksum        string            `json:"checksum,omitempty"`
-	Truncated       bool              `json:"truncated,omitempty"`
+	Scanner            string              `json:"scanner"`
+	Variant            string              `json:"variant,omitempty"`
+	AssessmentTypes    []assessment.Type   `json:"assessment_types,omitempty"`
+	PlanFingerprint    string              `json:"plan_fingerprint,omitempty"`
+	AttemptID          string              `json:"attempt_id,omitempty"`
+	Scope              string              `json:"scope,omitempty"`
+	Target             string              `json:"target"`
+	Status             string              `json:"status"`
+	StartedAt          string              `json:"started_at,omitempty"`
+	FinishedAt         string              `json:"finished_at,omitempty"`
+	ExitCode           int                 `json:"exit_code,omitempty"`
+	Reason             string              `json:"reason,omitempty"`
+	StdoutPath         string              `json:"stdout_path,omitempty"`
+	StderrPath         string              `json:"stderr_path,omitempty"`
+	ArtifactPath       string              `json:"artifact_path,omitempty"`
+	Checksum           string              `json:"checksum,omitempty"`
+	Truncated          bool                `json:"truncated,omitempty"`
+	APIEndpointResults []APIEndpointResult `json:"api_endpoint_results,omitempty"`
 }
 
 func (r Run) Terminal() bool {
