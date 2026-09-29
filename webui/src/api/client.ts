@@ -1,4 +1,5 @@
 import type {
+	AssessmentCoverage,
 	AssessmentConfig,
 	AssessmentPlan,
 	CredentialMetadata,
@@ -309,6 +310,7 @@ export const api = {
 		http<string>(`/api/scans/${scanId}/output/${scanner}/${stream}${scopeQuery(scope)}`),
 	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
 	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
+	assessmentCoverage: (scanId: string) => http<AssessmentCoverage>(`/api/scans/${scanId}/coverage`),
 	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
 	planAssessment: (config: AssessmentConfig) =>
 		http<AssessmentPlan>("/api/scans/plan", { method: "POST", json: config }),

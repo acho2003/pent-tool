@@ -163,6 +163,10 @@ export interface SubScanSummary {
 
 export interface ScanRecord {
   schema_version?: number;
+  assessment?: AssessmentConfig;
+  assessment_plan?: AssessmentPlan;
+  plan_fingerprint?: string;
+  profile?: string;
   id: string;
   instance_id?: string;
   name?: string;
@@ -192,6 +196,22 @@ export interface ScanRecord {
   scanner_runs?: ScannerRun[];
   artifact?: ScannerArtifact;
   vuls_ssh_host?: string;
+}
+
+export interface AssessmentCoverage {
+  scan_id: string;
+  state: string;
+  profile?: string;
+  plan_fingerprint?: string;
+  assessment_mode?: AssessmentMode;
+  assessment_types?: AssessmentType[];
+  type_coverage?: Array<{ type: AssessmentType; state: string; reason: string }>;
+  jobs?: Array<{ id: string; scanner: string; variant: string; target_id: string; target: string; assessment_types?: AssessmentType[]; planned_state: string; status: string; reason?: string; has_artifact: boolean; artifact_state: string }>;
+  capabilities?: Array<{ capability: string; target_id?: string; state: string; reason: string }>;
+  api_operations?: Array<{ target_id: string; method: string; path: string; origin?: string; status: string; reason: string; eligible: boolean }>;
+  gaps?: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string }>;
+  counts: Record<string, number>;
+  reason?: string;
 }
 
 export interface ScanListItem {
