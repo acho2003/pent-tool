@@ -337,6 +337,33 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 	}
 }
 
+func TestZAPStructuredDispatchDoesNotRecrawlForms(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	req := Request{
+		Target: "https://example.test/", Scope: "app:test", ScanDir: t.TempDir(),
+		TypedAssessment: true, StructuredDispatch: true,
+		EndpointTargets: []string{"https://example.test/search?q=one", "https://example.test/api/users"},
+	}
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 10, MaxOutputBytes: 1 << 20}
+	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	if run.Status != "completed" {
+		t.Fatalf("run=%+v", run)
+	}
+	if fake.called("/JSON/spider/action/scan/") {
+		t.Fatal("structured dispatch must not spider and rediscover state-changing forms")
+	}
+	fake.mu.Lock()
+	accessed := append([]string(nil), fake.accessedURLs...)
+	fake.mu.Unlock()
+	for _, endpoint := range req.EndpointTargets {
+		if !slices.Contains(accessed, endpoint) {
+			t.Errorf("dispatcher-approved endpoint %q was not seeded: %v", endpoint, accessed)
+		}
+	}
+}
+
 func TestZAPFailsWhenPassiveScanningCannotBeConfirmed(t *testing.T) {
 	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, passiveUnavailable: true}
 	srv := httptest.NewServer(fake)

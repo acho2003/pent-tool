@@ -287,11 +287,13 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 	scopes = append(scopes, sourceScope)
 	results := make([]Run, len(scopes)*len(p.Runners))
 	var tasks []scanTask
+	surfaces := make(map[string]*AttackSurface)
 	slot := 0
 	for _, sc := range scopes {
 		scopeKey := sc.Key()
 		scopeReq := req
 		scopeReq.Scope = scopeKey
+		var surface *AttackSurface
 		if sc.Kind == ScopeSource {
 			// The source scope carries the resolved source path (or "" when no source
 			// resolved, in which case SAST tools record not_applicable). It has no
@@ -303,16 +305,40 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			// EffectiveTracks.
 			sc.Tracks = EffectiveTracks(sc.Evidence)
 			scopeReq.Target = sc.Target
-			// Thread the katana crawl output for this host into the web scanners so
-			// the discovery stage actually drives coverage.
-			scopeReq.WebEndpoints = sc.Evidence.WebEndpoints
+			surface = sc.Evidence.AttackSurface
+			if surface == nil {
+				rawArtifact := katanaArtifactPath(req.ScanDir, sc.Target)
+				surface, _ = LoadAttackSurface(req.ScanDir, scopeKey, rawArtifact)
+				if surface == nil {
+					seedTarget := primaryWebURL(sc.Target, sc.Evidence)
+					if parsed, parseErr := ParseKatanaAttackSurface(rawArtifact, scopeKey, seedTarget, strings.TrimSpace(req.TargetAuth) != ""); parseErr == nil {
+						EnsureSeedEndpoint(parsed, seedTarget)
+						surface = parsed
+						_ = SaveAttackSurface(req.ScanDir, surface)
+					}
+				}
+			}
+			if surface == nil {
+				seed := sc.Target
+				if !strings.HasPrefix(seed, "http://") && !strings.HasPrefix(seed, "https://") {
+					seed = primaryWebURL(sc.Target, sc.Evidence)
+				}
+				surface = NewSeedAttackSurface(scopeKey, seed)
+			}
+			surfaces[scopeKey] = surface
+			scopeReq.StructuredDispatch = true
 			// Isolate each host's scanner artifacts. Every scan runner derives its
 			// output base from req.ScanDir alone, so two scopes writing under one
 			// ScanDir would clobber each other's results and break VerifyChecksum.
 			scopeReq.ScanDir = filepath.Join(req.ScanDir, "hosts", sanitizeHost(sc.Target))
 		}
 		for i, runner := range p.Runners {
+			runnerReq := scopeReq
 			if old, ok := byKey[resumeKey(scopeKey, runner.Name())]; ok {
+				if surface != nil {
+					runnerReq.EndpointTargets = DispatchTargets(surface, runner.Name(), endpointDispatchLimit(runner.Name(), p.Config.WebMaxEndpoints))
+					CompleteEndpointCoverage(surface, runner.Name(), old)
+				}
 				results[slot] = old
 				slot++
 				continue
@@ -320,14 +346,19 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			// A deselected scanner still produces an explicit terminal record, so
 			// the scan's evidence shows what was not attempted and why.
 			if len(req.Scanners) > 0 && !slices.Contains(req.Scanners, runner.Name()) {
+				SkipEndpointCoverage(surface, runner.Name(), "scanner was not selected")
 				results[slot] = skippedRun(runner.Name(), scopeKey, scopeReq, safeEmit)
 				slot++
 				continue
 			}
 			if !runnerAppliesToScope(runner.Descriptor(), sc) {
+				SkipEndpointCoverage(surface, runner.Name(), "scanner does not apply to this scope")
 				results[slot] = notApplicableClassifierRun(runner.Name(), scopeKey, scopeReq, safeEmit)
 				slot++
 				continue
+			}
+			if surface != nil {
+				runnerReq.EndpointTargets = DispatchTargets(surface, runner.Name(), endpointDispatchLimit(runner.Name(), p.Config.WebMaxEndpoints))
 			}
 			if err := ctx.Err(); err != nil {
 				// Cancellation observed during the walk: fill this and every remaining
@@ -342,11 +373,19 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			}
 			// Executable: defer to the worker pool, remembering the pre-assigned slot
 			// so the concurrent write lands in deterministic output order.
-			tasks = append(tasks, scanTask{runner: runner, scopeKey: scopeKey, hostReq: scopeReq, slot: slot})
+			tasks = append(tasks, scanTask{runner: runner, scopeKey: scopeKey, hostReq: runnerReq, slot: slot})
 			slot++
 		}
 	}
 	p.runTasks(ctx, tasks, results, safeEmit)
+	for _, run := range results {
+		if surface := surfaces[run.Scope]; surface != nil {
+			CompleteEndpointCoverage(surface, run.Scanner, run)
+		}
+	}
+	for _, surface := range surfaces {
+		_ = SaveAttackSurface(req.ScanDir, surface)
+	}
 	out = append(out, results...)
 	return out
 }
@@ -924,9 +963,10 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 	// back to the single seed URL (-u). The list is written in a prepare step.
 	var prepare func() error
 	var args []string
-	if len(req.WebEndpoints) > 0 {
+	endpoints := requestEndpointTargets(req)
+	if len(endpoints) > 0 {
 		listPath := filepath.Join(req.ScanDir, "scanner-output", "nuclei", "targets.txt")
-		endpoints := append([]string(nil), req.WebEndpoints...)
+		endpoints = append([]string(nil), endpoints...)
 		prepare = func() error {
 			if err := os.MkdirAll(filepath.Dir(listPath), 0o700); err != nil {
 				return err
@@ -935,8 +975,12 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 		}
 		args = []string{"-l", listPath, "-jle", artifact, "-nc", "-duc", "-dut"}
 	} else {
+		if req.StructuredDispatch {
+			return commandSpec{notApp: "Nuclei has no dispatcher-approved endpoint to test", timeout: cfg.NucleiTimeout}
+		}
 		args = []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut"}
 	}
+	args = append(args, "-pt", "http,headless")
 	if !(req.TypedAssessment && req.Profile == ProfileThorough) {
 		args = append(args, "-rl", strconv.Itoa(cfg.RateRPS))
 	}

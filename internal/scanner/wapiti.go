@@ -36,7 +36,14 @@ func buildWapiti(req Request, cfg Config) commandSpec {
 	if strings.TrimSpace(cfg.WapitiPath) == "" {
 		return commandSpec{notApp: "Wapiti executable is not configured", timeout: cfg.WapitiTimeout}
 	}
+	targets := requestEndpointTargets(req)
+	if req.StructuredDispatch && len(targets) == 0 {
+		return commandSpec{notApp: "Wapiti has no dispatcher-approved parameter or form endpoint to test", timeout: cfg.WapitiTimeout}
+	}
 	target := strings.TrimSpace(req.Target)
+	if req.StructuredDispatch {
+		target = targets[0]
+	}
 	u, err := url.Parse(target)
 	if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return commandSpec{notApp: "Wapiti requires an explicit HTTP(S) URL", timeout: cfg.WapitiTimeout}
@@ -72,7 +79,10 @@ func buildWapiti(req Request, cfg Config) commandSpec {
 	}
 	// Add katana-discovered in-scope URLs as extra entry points (bounded).
 	added := 0
-	for _, e := range req.WebEndpoints {
+	for _, e := range targets {
+		if e == target {
+			continue
+		}
 		if added >= wapitiMaxStartURLs {
 			break
 		}

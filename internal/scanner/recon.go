@@ -277,9 +277,9 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 			}
 		}
 
-		// Web-discovery crawl: for a live web host, katana enumerates in-scope
-		// URLs and API endpoints that the web scanners then consume via
-		// Request.WebEndpoints. Best-effort and gated on the binary being present,
+		// Web-discovery crawl: for a live web host, katana produces the structured
+		// attack-surface inventory that the dispatcher feeds to web scanners.
+		// Best-effort and gated on the binary being present,
 		// so a missing katana never fails recon — the scanners degrade to the seed
 		// URL. Runs after nmap so open-port evidence can decide web-worthiness.
 		if hostIsWeb(s.Evidence) && katanaAvailable(cfg) {
@@ -292,7 +292,15 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 				katanaRun.Scope = reconHostScopeKey(req.Target, host)
 				runs = append(runs, katanaRun)
 				if katanaRun.Status == "completed" {
-					s.Evidence.WebEndpoints = parseKatanaEndpoints(katanaSpec.artifact)
+					surface, parseErr := ParseKatanaAttackSurface(katanaSpec.artifact, s.Key(), katanaReq.Target, strings.TrimSpace(req.TargetAuth) != "")
+					if parseErr == nil {
+						EnsureSeedEndpoint(surface, katanaReq.Target)
+						s.Evidence.AttackSurface = surface
+						for _, endpoint := range surface.Endpoints {
+							s.Evidence.WebEndpoints = append(s.Evidence.WebEndpoints, endpoint.URL)
+						}
+						_ = SaveAttackSurface(req.ScanDir, surface)
+					}
 				}
 			}
 		}

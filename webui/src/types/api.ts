@@ -4,8 +4,18 @@
 export interface VulnSummary {
   id: string;
   fingerprint?: string;
+  normalized_type?: string;
+  dedupe_scope?: string;
   title: string;
   severity: string;
+  status?: string;
+  status_reason?: string;
+  scanners?: string[];
+  observation_ids?: string[];
+  affected_endpoint_count?: number;
+  affected_instance_count?: number;
+  observation_count?: number;
+  affected_endpoints?: Array<{ endpoint?: string; canonical_endpoint?: string; method?: string; parameter?: string; parameter_location?: string; scanner?: string; observation_ids?: string[] }>;
   target?: string;
   endpoint: string;
   cvss: number;
@@ -143,6 +153,39 @@ export interface ReportScope {
 export interface ScanScopes {
   recon: ScopeRun[];
   scopes: ReportScope[];
+}
+
+export interface AttackSurfaceParameter { name: string; location: string; }
+export interface AttackSurfaceCoverage { scanner: string; status: string; reason?: string; started_at?: string; finished_at?: string; }
+export interface AttackSurfaceEndpoint {
+  id: string;
+  url: string;
+  canonical_url: string;
+  method: string;
+  path: string;
+  spa_routes?: string[];
+  kind: "static" | "api" | "web" | string;
+  sources?: string[];
+  parameters?: AttackSurfaceParameter[];
+  status_code?: number;
+  content_type?: string;
+  sensitive?: boolean;
+  has_parameters?: boolean;
+  has_form?: boolean;
+  observed_with_auth?: boolean;
+  requires_auth?: boolean;
+  discovered_at?: string;
+  scanner_coverage?: AttackSurfaceCoverage[];
+}
+export interface AttackSurfaceResponse {
+  scan_id: string;
+  state: string;
+  reason?: string;
+  summary: { raw: number; unique: number; static: number; api: number; web: number; sensitive: number; parameterized: number; forms: number };
+  items: AttackSurfaceEndpoint[];
+  total: number;
+  page: number;
+  size: number;
 }
 
 export interface ScanInstance {
@@ -432,6 +475,11 @@ export interface FindingsSummaryResponse {
     low: number;
     info: number;
   };
+  raw_observations?: number;
+  unique_findings?: number;
+  active_security_findings?: number;
+  status?: Record<string, number>;
+  severity?: Record<string, number>;
   as_of: string;
   etag: string;
 }

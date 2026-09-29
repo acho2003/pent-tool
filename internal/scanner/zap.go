@@ -102,6 +102,9 @@ func (zapRunner) Descriptor() Descriptor {
 }
 
 func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	if req.StructuredDispatch && len(req.EndpointTargets) == 0 {
+		return notApplicableRun("zap", req, cfg, "ZAP has no dispatcher-approved API, parameter, form, or sensitive endpoint to test", emit)
+	}
 	target, ok := normalizedWebTarget(req.Target)
 	if !ok {
 		return notApplicableRun("zap", req, cfg, "ZAP requires an HTTP or HTTPS target", emit)
@@ -393,9 +396,10 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// endpoints ZAP's own spider may not reach (JS apps, unlinked routes). These
 	// URLs are already FQDN-scoped by the crawl. Bounded by the same web-endpoint
 	// budget and best-effort per URL — a seed failure is logged, not fatal.
-	if len(req.WebEndpoints) > 0 {
+	endpointTargets := requestEndpointTargets(req)
+	if len(endpointTargets) > 0 {
 		seeded := 0
-		for _, endpoint := range req.WebEndpoints {
+		for _, endpoint := range endpointTargets {
 			if seeded >= maxChildren {
 				break
 			}
@@ -411,34 +415,42 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 	}
 
-	// Fixed pipeline: spider the target, drain the passive scanner, then active
-	// scan what was discovered. The stages and their parameters are constant —
-	// nothing about them is model-generated.
-	spiderParams := url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}}
-	if req.TypedAssessment {
-		spiderParams.Set("contextName", contextName)
+	// Legacy scans retain ZAP's crawler. Structured dispatch deliberately does
+	// not spider again: doing so would rediscover and submit POST forms that the
+	// safe dispatcher marked inventory-only. Its active scan therefore operates
+	// on the root anchor plus the explicit GET/HEAD URLs seeded above.
+	if !req.StructuredDispatch {
+		spiderParams := url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}}
+		if req.TypedAssessment {
+			spiderParams.Set("contextName", contextName)
+		}
+		if err := checkAuth(); err != nil {
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		}
+		spider, err := call("/JSON/spider/action/scan/", spiderParams)
+		if err != nil {
+			return finishServiceFailure(run, fmt.Errorf("start ZAP spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+		spiderID := valueString(spider, "scan")
+		if spiderID == "" || spiderID == "<nil>" {
+			return finishServiceFailure(run, fmt.Errorf("ZAP did not return a spider scan id"), secrets, cfg.MaxOutputBytes, emit)
+		}
+		logLine("ZAP spider started: " + spiderID)
+		if err := zapWaitScanChecked(cctx, call, "/JSON/spider/view/status/", spiderID, "spider", logLine, checkAuth); err != nil {
+			zapStopScan(cfg, "/JSON/spider/action/stop/", spiderID)
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		}
+		logLine("ZAP passive scan: waiting for spider traffic to be analyzed")
+		if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
+			return finishServiceFailure(run, fmt.Errorf("ZAP passive scan after spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+		logLine("ZAP passive scan complete after spider")
+	} else {
+		logLine("ZAP spider skipped: structured dispatcher seeded safe endpoints only")
+		if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
+			return finishServiceFailure(run, fmt.Errorf("ZAP passive scan after endpoint seeding: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
 	}
-	if err := checkAuth(); err != nil {
-		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
-	}
-	spider, err := call("/JSON/spider/action/scan/", spiderParams)
-	if err != nil {
-		return finishServiceFailure(run, fmt.Errorf("start ZAP spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
-	}
-	spiderID := valueString(spider, "scan")
-	if spiderID == "" || spiderID == "<nil>" {
-		return finishServiceFailure(run, fmt.Errorf("ZAP did not return a spider scan id"), secrets, cfg.MaxOutputBytes, emit)
-	}
-	logLine("ZAP spider started: " + spiderID)
-	if err := zapWaitScanChecked(cctx, call, "/JSON/spider/view/status/", spiderID, "spider", logLine, checkAuth); err != nil {
-		zapStopScan(cfg, "/JSON/spider/action/stop/", spiderID)
-		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
-	}
-	logLine("ZAP passive scan: waiting for spider traffic to be analyzed")
-	if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
-		return finishServiceFailure(run, fmt.Errorf("ZAP passive scan after spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
-	}
-	logLine("ZAP passive scan complete after spider")
 	// Typed jobs restore daemon-global scan rule state after execution. Legacy
 	// jobs retain the historical DOM XSS mitigation behavior.
 	if req.TypedAssessment {

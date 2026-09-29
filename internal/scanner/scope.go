@@ -28,10 +28,12 @@ type HostEvidence struct {
 	OpenPorts   []Port
 	LiveURLs    []string
 	TLS         bool
-	// WebEndpoints are URLs the katana crawl discovered for this host during
-	// recon. The scan phase threads them into web scanners (Request.WebEndpoints)
-	// so the crawl drives coverage. Persisted with the scope for resume.
+	// WebEndpoints is the legacy flattened compatibility view. New runs persist
+	// and dispatch the normalized AttackSurface instead.
 	WebEndpoints []string
+	// AttackSurface is loaded from the versioned per-scope snapshot. It is not
+	// duplicated inside recon-scopes.json.
+	AttackSurface *AttackSurface `json:"-"`
 }
 
 type SourceRef struct {

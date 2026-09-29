@@ -19,21 +19,30 @@ import (
 // Finding is the private, deterministic report-input record. It is not a
 // scan-time UI finding and is only consumed after all scanner attempts finish.
 type Finding struct {
-	SourceID    string  `json:"source_id"`
-	Scanner     string  `json:"scanner"`
-	Title       string  `json:"title"`
-	Severity    string  `json:"severity"`
-	Target      string  `json:"target,omitempty"`
-	Endpoint    string  `json:"endpoint,omitempty"`
-	Method      string  `json:"method,omitempty"`
-	Parameter   string  `json:"parameter,omitempty"`
-	Description string  `json:"description,omitempty"`
-	Evidence    string  `json:"evidence,omitempty"`
-	Remediation string  `json:"remediation,omitempty"`
-	EvidenceRef string  `json:"evidence_reference"`
-	CVE         string  `json:"cve,omitempty"`
-	CWE         string  `json:"cwe,omitempty"`
-	CVSS        float64 `json:"cvss,omitempty"`
+	SourceID          string  `json:"source_id"`
+	Scanner           string  `json:"scanner"`
+	RuleID            string  `json:"rule_id,omitempty"`
+	Title             string  `json:"title"`
+	Severity          string  `json:"severity"`
+	Target            string  `json:"target,omitempty"`
+	Endpoint          string  `json:"endpoint,omitempty"`
+	Method            string  `json:"method,omitempty"`
+	Parameter         string  `json:"parameter,omitempty"`
+	ParameterLocation string  `json:"parameter_location,omitempty"`
+	Protocol          string  `json:"protocol,omitempty"`
+	Port              string  `json:"port,omitempty"`
+	Package           string  `json:"package,omitempty"`
+	PackageVersion    string  `json:"package_version,omitempty"`
+	SourceLocation    string  `json:"source_location,omitempty"`
+	Container         string  `json:"container,omitempty"`
+	Resource          string  `json:"resource,omitempty"`
+	Description       string  `json:"description,omitempty"`
+	Evidence          string  `json:"evidence,omitempty"`
+	Remediation       string  `json:"remediation,omitempty"`
+	EvidenceRef       string  `json:"evidence_reference"`
+	CVE               string  `json:"cve,omitempty"`
+	CWE               string  `json:"cwe,omitempty"`
+	CVSS              float64 `json:"cvss,omitempty"`
 	// SeverityUnrated marks a placeholder severity: the scanner gave no rating
 	// (e.g. an OSV entry with no CVSS or database severity). Merge and the AI
 	// severity floor ignore it rather than treat the placeholder as a rating.
@@ -251,6 +260,7 @@ func parseNikto(path string) ([]Finding, error) {
 			out = append(out, Finding{
 				SourceID: "nikto:" + str(host["host"]) + ":" + str(host["port"]) + ":" + id + ":" + method + ":" + uri,
 				Scanner:  "nikto", Title: message, Severity: "info", SeverityUnrated: true,
+				RuleID: id,
 				Target: firstNonEmpty(str(host["host"]), str(host["ip"])), Endpoint: endpoint,
 				Description: message, Evidence: evidence, CVE: cve,
 			})
@@ -321,7 +331,7 @@ func parseNuclei(path string) ([]Finding, error) {
 		if id == "" {
 			id = fmt.Sprintf("line-%d", line)
 		}
-		out = append(out, Finding{SourceID: "nuclei:" + id + ":" + str(v["matched-at"]), Scanner: "nuclei", Title: firstNonEmpty(str(info["name"]), id), Severity: severity(str(info["severity"])), Target: str(v["host"]), Endpoint: str(v["matched-at"]), Description: str(info["description"]), Evidence: firstNonEmpty(str(v["matcher-name"]), str(v["extracted-results"])), CVE: firstString(info["classification"], "cve-id"), CWE: firstString(info["classification"], "cwe-id"), CVSS: firstFloat(info["classification"], "cvss-score")})
+		out = append(out, Finding{SourceID: "nuclei:" + id + ":" + str(v["matched-at"]), Scanner: "nuclei", RuleID: id, Title: firstNonEmpty(str(info["name"]), id), Severity: severity(str(info["severity"])), Target: str(v["host"]), Endpoint: str(v["matched-at"]), Description: str(info["description"]), Evidence: firstNonEmpty(str(v["matcher-name"]), str(v["extracted-results"])), CVE: firstString(info["classification"], "cve-id"), CWE: firstString(info["classification"], "cwe-id"), CVSS: firstFloat(info["classification"], "cvss-score")})
 	}
 	return out, s.Err()
 }
@@ -359,7 +369,7 @@ func parseZAP(path string) ([]Finding, error) {
 			}
 			id := firstNonEmpty(str(m["pluginId"]), str(m["pluginid"]), strconv.Itoa(i))
 			nativeConfidence := firstNonEmpty(str(m["confidence"]), str(m["confidencecode"]))
-			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Method: str(im["method"]), Parameter: str(im["param"]), Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, Remediation: firstNonEmpty(str(m["solution"]), str(m["remediation"])), CWE: str(m["cweid"]), Confidence: normalizeScannerConfidence("zap", nativeConfidence), NativeConfidence: nativeConfidence})
+			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", RuleID: id, Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Method: str(im["method"]), Parameter: str(im["param"]), Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, Remediation: firstNonEmpty(str(m["solution"]), str(m["remediation"])), CWE: str(m["cweid"]), Confidence: normalizeScannerConfidence("zap", nativeConfidence), NativeConfidence: nativeConfidence})
 		}
 	}
 	return out, nil
@@ -378,7 +388,7 @@ func parseTrivy(path string) ([]Finding, error) {
 			for i, item := range array(r[key]) {
 				m, _ := item.(map[string]any)
 				id := firstNonEmpty(str(m["VulnerabilityID"]), str(m["ID"]), str(m["RuleID"]), fmt.Sprintf("%s-%d", key, i))
-				out = append(out, Finding{SourceID: "trivy:" + id + ":" + target, Scanner: "trivy", Title: firstNonEmpty(str(m["Title"]), str(m["PkgName"]), id), Severity: severity(str(m["Severity"])), Target: target, Endpoint: firstNonEmpty(str(m["PkgPath"]), str(m["Target"])), Description: firstNonEmpty(str(m["Description"]), str(m["Message"])), Evidence: firstNonEmpty(str(m["InstalledVersion"]), str(m["CauseMetadata"])), CVE: asCVE(id), CVSS: maxCVSS(m["CVSS"])})
+				out = append(out, Finding{SourceID: "trivy:" + id + ":" + target, Scanner: "trivy", RuleID: id, Title: firstNonEmpty(str(m["Title"]), str(m["PkgName"]), id), Severity: severity(str(m["Severity"])), Target: target, Endpoint: firstNonEmpty(str(m["PkgPath"]), str(m["Target"])), Package: str(m["PkgName"]), PackageVersion: str(m["InstalledVersion"]), Description: firstNonEmpty(str(m["Description"]), str(m["Message"])), Evidence: firstNonEmpty(str(m["InstalledVersion"]), str(m["CauseMetadata"])), CVE: asCVE(id), CVSS: maxCVSS(m["CVSS"])})
 			}
 		}
 	}
@@ -420,7 +430,7 @@ func parseOpenVAS(path string) ([]Finding, error) {
 	out := make([]Finding, 0, len(doc.Results))
 	for _, r := range doc.Results {
 		score, _ := strconv.ParseFloat(strings.TrimSpace(r.Severity), 64)
-		out = append(out, Finding{SourceID: "openvas:" + firstNonEmpty(r.ID, r.NVT.OID), Scanner: "openvas", Title: r.Name, Severity: cvssSeverity(score, r.Threat), Target: r.Host, Endpoint: r.Port, Description: r.Description, Evidence: "Greenbone NVT " + r.NVT.OID, CVE: firstCSV(r.NVT.CVE), CVSS: score})
+		out = append(out, Finding{SourceID: "openvas:" + firstNonEmpty(r.ID, r.NVT.OID), Scanner: "openvas", RuleID: r.NVT.OID, Title: r.Name, Severity: cvssSeverity(score, r.Threat), Target: r.Host, Endpoint: r.Port, Port: r.Port, Description: r.Description, Evidence: "Greenbone NVT " + r.NVT.OID, CVE: firstCSV(r.NVT.CVE), CVSS: score})
 	}
 	return out, nil
 }
@@ -442,6 +452,7 @@ func parseSemgrep(path string) ([]Finding, error) {
 		out = append(out, Finding{
 			SourceID:    "semgrep:" + rule + ":" + file + ":" + line,
 			Scanner:     "semgrep",
+			RuleID:      rule,
 			Title:       firstNonEmpty(rule, "semgrep finding"),
 			Severity:    semgrepSeverity(str(extra["severity"])),
 			Target:      file,
@@ -479,6 +490,7 @@ func parseGitleaks(path string) ([]Finding, error) {
 		out = append(out, Finding{
 			SourceID:    "gitleaks:" + rule + ":" + file + ":" + commit,
 			Scanner:     "gitleaks",
+			RuleID:      rule,
 			Title:       firstNonEmpty(rule, "secret"),
 			Severity:    "high",
 			Target:      file,
@@ -519,6 +531,7 @@ func parseOSV(path string) ([]Finding, error) {
 				out = append(out, Finding{
 					SourceID:        "osv:" + name + ":" + id,
 					Scanner:         "osv",
+					RuleID:          id,
 					Title:           firstNonEmpty(id, name),
 					Severity:        sev,
 					SeverityUnrated: !rated,

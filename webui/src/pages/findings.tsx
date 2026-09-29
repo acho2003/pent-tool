@@ -217,8 +217,8 @@ export default function FindingsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Findings</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Vulnerabilities across {ids.length} scan{ids.length === 1 ? "" : "s"}, ranked by
-            severity.
+            Unique findings across {ids.length} scan{ids.length === 1 ? "" : "s"}, ranked by
+            active severity.
           </p>
         </div>
         <div className="flex flex-col items-stretch gap-2 sm:items-end">
@@ -251,6 +251,7 @@ export default function FindingsPage() {
             })}
           </div>
           <div className="flex items-center justify-end gap-2 text-[11px] text-muted-foreground">
+            {summary.data && <span className="mono">{summary.data.unique_findings ?? findings.length} unique · {summary.data.raw_observations ?? 0} observations</span>}
             <span className="mono">updated {updatedLabel}</span>
             <Button
               type="button"
@@ -355,6 +356,7 @@ export default function FindingsPage() {
                         <SeverityBadge severity={f.severity} />
                         <p className="flex-1 font-medium text-foreground truncate">
                           {f.title}
+                          {f.status && <Badge variant="outline" className="ml-2 text-[10px]">{f.status.replaceAll("_", " ")}</Badge>}
                         </p>
                         <span className="mono text-[11px] text-muted-foreground">
                           {timeAgo(f.scan_started_at)}

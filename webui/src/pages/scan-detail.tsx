@@ -71,7 +71,7 @@ import {
 import { LiveFeed, type FeedFilter } from "@/components/live-feed";
 import { ScannerTerminal } from "@/components/scanner-terminal";
 import { Pagination, DEFAULT_PAGE_SIZE } from "@/components/Pagination";
-import type { ScanRecord, ReportScope, ScopeRun, SubScanSummary, VulnSummary } from "@/types/api";
+import type { AttackSurfaceEndpoint, ScanRecord, ReportScope, ScopeRun, SubScanSummary, VulnSummary } from "@/types/api";
 
 export default function ScanDetailPage() {
   const navigate = useNavigate();
@@ -442,6 +442,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 			{(coverageQuery.data.gaps ?? []).length > 0 && <div><p className="mb-2 text-xs font-medium">Coverage gaps</p><div className="space-y-2">{coverageQuery.data.gaps?.map((gap, index) => <div key={`${gap.scanner}-${gap.target_id}-${index}`} className="border-l-2 pl-3"><p className="text-xs font-medium">{gap.scanner} · {gap.state} · {gap.reason_code}</p><p className="text-xs text-muted-foreground">{gap.reason}</p></div>)}</div></div>}
 			{(coverageQuery.data.api_operations ?? []).length > 0 && <div><p className="mb-2 text-xs font-medium">API operations</p><div className="space-y-1">{coverageQuery.data.api_operations?.map((op, index) => <p key={`${op.target_id}-${op.method}-${op.path}-${index}`} className="text-xs"><span className="font-mono">{op.method} {op.path}</span> · {op.status}{!op.eligible && <span className="text-muted-foreground"> — {op.reason}</span>}</p>)}</div></div>}
 		</CardContent></Card>}
+		<AttackSurfaceCard scanId={scan.id} runsSignature={runsSignature} />
 		{scopesQuery.isError && <Card><CardContent className="flex items-center justify-between gap-3 p-4 text-sm"><span className="text-destructive">Could not load scanner runs.</span><Button size="sm" variant="outline" onClick={() => void scopesQuery.refetch()}>Retry</Button></CardContent></Card>}
 		{scopesQuery.isSuccess && !recon.length && !scopes.length && <p className="text-sm text-muted-foreground">No scanner runs yet.</p>}
 		{recon.length > 0 && <section className="space-y-2"><h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Recon</h2>{grid(recon, "")}</section>}
@@ -459,6 +460,45 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		})}
 		{selected && <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle><span className="capitalize">{selected.scanner}</span>{located && <span className="font-normal text-muted-foreground"> @ {located.label}</span>}</CardTitle><CardDescription>Scanner terminal output.</CardDescription></div>{located?.run.has_artifact && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected.scanner, selected.scope || undefined)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></CardHeader><CardContent><ScannerTerminal key={`${selected.scope}|${selected.scanner}`} scanId={scan.id} scanner={selected.scanner} scope={selected.scope || undefined} status={located?.run.status || "pending"} reason={located?.run.reason} truncated={located?.run.truncated} /></CardContent></Card>}
 	</div>;
+}
+
+function AttackSurfaceCard({ scanId, runsSignature }: { scanId: string; runsSignature: string }) {
+	const [page, setPage] = useState(1);
+	const [kind, setKind] = useState("all");
+	const [scanner, setScanner] = useState("");
+	const [status, setStatus] = useState("");
+	const [query, setQuery] = useState("");
+	const size = 25;
+	const result = useQuery({
+		queryKey: ["attack-surface", scanId, runsSignature, page, kind, scanner, status, query],
+		queryFn: () => api.attackSurface(scanId, { page, size, kind: kind === "all" ? "" : kind, scanner, status, q: query }),
+		placeholderData: (previous) => previous,
+	});
+	const data = result.data;
+	const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / size));
+	const reset = (change: () => void) => { change(); setPage(1); };
+	const parameterLabel = (endpoint: AttackSurfaceEndpoint) => (endpoint.parameters ?? []).map((p) => `${p.location}:${p.name}`).join(", ");
+	return <Card>
+		<CardHeader><CardTitle className="text-sm">Attack Surface · {data?.state ?? "loading"}</CardTitle><CardDescription>Discovered resources are inventory, not vulnerabilities. Coverage states show scanner dispatch and execution.</CardDescription></CardHeader>
+		<CardContent className="space-y-4">
+			{result.isError && <div className="flex items-center justify-between text-sm text-destructive"><span>Could not load the attack surface.</span><Button size="sm" variant="outline" onClick={() => void result.refetch()}>Retry</Button></div>}
+			{data?.reason && <p className="text-xs text-muted-foreground">{data.reason}</p>}
+			{data && data.summary.unique > 0 && <>
+				<div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-8">{([
+					["Raw", data.summary.raw], ["Unique", data.summary.unique], ["Web", data.summary.web], ["API", data.summary.api],
+					["Static", data.summary.static], ["Sensitive", data.summary.sensitive], ["Parameters", data.summary.parameterized], ["Forms", data.summary.forms],
+				] as Array<[string, number]>).map(([label, value]) => <div key={label} className="rounded-md border p-2"><p className="text-[10px] uppercase text-muted-foreground">{label}</p><p className="font-mono text-lg">{value}</p></div>)}</div>
+				<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+					<input aria-label="Search endpoints" value={query} onChange={(event) => reset(() => setQuery(event.target.value))} placeholder="Search path or URL" className="h-9 rounded-md border bg-background px-3 text-xs lg:col-span-2" />
+					<select aria-label="Endpoint kind" value={kind} onChange={(event) => reset(() => setKind(event.target.value))} className="h-9 rounded-md border bg-background px-3 text-xs"><option value="all">All kinds</option><option value="web">Web</option><option value="api">API</option><option value="static">Static</option></select>
+					<input aria-label="Scanner filter" value={scanner} onChange={(event) => reset(() => setScanner(event.target.value))} placeholder="Scanner" className="h-9 rounded-md border bg-background px-3 text-xs" />
+					<select aria-label="Coverage status" value={status} onChange={(event) => reset(() => setStatus(event.target.value))} className="h-9 rounded-md border bg-background px-3 text-xs"><option value="">All coverage</option><option value="dispatched">Dispatched</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="skipped">Skipped</option></select>
+				</div>
+				<div className="overflow-x-auto rounded-md border"><table className="w-full text-left text-xs"><thead className="border-b bg-muted/30 text-muted-foreground"><tr><th className="px-3 py-2">Method</th><th className="px-3 py-2">Canonical endpoint</th><th className="px-3 py-2">Classification</th><th className="px-3 py-2">Parameters</th><th className="px-3 py-2">Coverage</th></tr></thead><tbody>{data.items.map((endpoint) => <tr key={endpoint.id} className="border-b last:border-0 align-top"><td className="px-3 py-3 font-mono">{endpoint.method}</td><td className="max-w-md px-3 py-3"><p className="break-all font-mono">{endpoint.canonical_url}</p>{(endpoint.spa_routes ?? []).length > 0 && <p className="mt-1 text-muted-foreground">SPA {(endpoint.spa_routes ?? []).map((route) => `#${route}`).join(", ")}</p>}<p className="mt-1 text-[10px] text-muted-foreground">{(endpoint.sources ?? []).join(", ")}</p></td><td className="px-3 py-3"><div className="flex flex-wrap gap-1"><Badge variant="outline">{endpoint.kind}</Badge>{endpoint.sensitive && <Badge variant="outline">sensitive</Badge>}{endpoint.has_form && <Badge variant="outline">form</Badge>}</div></td><td className="max-w-xs break-words px-3 py-3 text-muted-foreground">{parameterLabel(endpoint) || "—"}</td><td className="px-3 py-3"><div className="space-y-1">{(endpoint.scanner_coverage ?? []).map((coverage) => <p key={coverage.scanner} title={coverage.reason} className="whitespace-nowrap"><span className="font-mono">{coverage.scanner}</span> · {coverage.status}</p>)}</div></td></tr>)}</tbody></table></div>
+				<div className="flex items-center justify-between text-xs text-muted-foreground"><span>Page {Math.min(page, totalPages)} of {totalPages} · {data.total} endpoint{data.total === 1 ? "" : "s"}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Previous</Button><Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Next</Button></div></div>
+			</>}
+		</CardContent>
+	</Card>;
 }
 
 function ScannerStatusCard({ name, run, active, onClick }: { name: string; run?: { status: string; reason?: string; truncated?: boolean }; active: boolean; onClick: () => void }) {

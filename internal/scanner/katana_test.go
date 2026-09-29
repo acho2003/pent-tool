@@ -45,8 +45,13 @@ func TestBuildKatana_BoundedInScopeCrawl(t *testing.T) {
 		t.Errorf("-fs = %q, want fqdn (in-scope crawl)", fs)
 	}
 	// Bounded depth and rate limit present.
-	if d, ok := argValue(spec.args, "-d"); !ok || d != "3" {
-		t.Errorf("-d = %q, want bounded depth 3", d)
+	if d, ok := argValue(spec.args, "-d"); !ok || d != "5" {
+		t.Errorf("-d = %q, want bounded depth 5", d)
+	}
+	for _, flag := range []string{"-jsonl", "-jc", "-xhr", "-fx", "-or", "-ob"} {
+		if !hasArg(spec.args, flag) {
+			t.Errorf("katana args missing structured discovery flag %q: %v", flag, spec.args)
+		}
 	}
 	if rl, ok := argValue(spec.args, "-rl"); !ok || rl != "10" {
 		t.Errorf("-rl = %q, want rate limit from RateRPS", rl)

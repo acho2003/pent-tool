@@ -60,7 +60,11 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 	if strings.TrimSpace(cfg.DalfoxPath) == "" {
 		return commandSpec{notApp: "Dalfox executable is not configured", timeout: cfg.DalfoxTimeout}
 	}
-	urls := parameterizedURLs(req.Target, req.WebEndpoints)
+	target := req.Target
+	if req.StructuredDispatch {
+		target = ""
+	}
+	urls := parameterizedURLs(target, requestEndpointTargets(req))
 	if len(urls) == 0 {
 		return commandSpec{notApp: "Dalfox needs at least one discovered URL with a query parameter to test", timeout: cfg.DalfoxTimeout}
 	}

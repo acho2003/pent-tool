@@ -400,34 +400,44 @@ type WSEvent struct {
 
 // VulnSummary is a simplified vulnerability for the UI.
 type VulnSummary struct {
-	ID                   string   `json:"id"`
-	Fingerprint          string   `json:"fingerprint,omitempty"`
-	Title                string   `json:"title"`
-	Severity             string   `json:"severity"`
-	Target               string   `json:"target,omitempty"`
-	Scope                string   `json:"scope,omitempty"` // scanner reports: host:<h> or source:main
-	Endpoint             string   `json:"endpoint"`
-	CVSS                 float64  `json:"cvss"`
-	CVSSVector           string   `json:"cvss_vector,omitempty"`
-	Description          string   `json:"description,omitempty"`
-	Impact               string   `json:"impact,omitempty"`
-	Method               string   `json:"method,omitempty"`
-	Parameter            string   `json:"parameter,omitempty"`
-	CVE                  string   `json:"cve,omitempty"`
-	CWE                  string   `json:"cwe_id,omitempty"`
-	Confidence           string   `json:"confidence,omitempty"`
-	NativeConfidence     string   `json:"native_confidence,omitempty"`
-	EvidenceCompleteness string   `json:"evidence_completeness,omitempty"`
-	OWASP                string   `json:"owasp,omitempty"`
-	TechnicalAnalysis    string   `json:"technical_analysis,omitempty"`
-	PoCDescription       string   `json:"poc_description,omitempty"`
-	PoCScript            string   `json:"poc_script,omitempty"`
-	Remediation          string   `json:"remediation,omitempty"`
-	Fix                  string   `json:"fix,omitempty"`
-	ExploitationProof    string   `json:"exploitation_proof,omitempty"`
-	VerificationMethod   string   `json:"verification_method,omitempty"`
-	Verified             bool     `json:"verified"`
-	Tags                 []string `json:"tags,omitempty"`
+	ID                    string                    `json:"id"`
+	Fingerprint           string                    `json:"fingerprint,omitempty"`
+	NormalizedType        string                    `json:"normalized_type,omitempty"`
+	DedupeScope           string                    `json:"dedupe_scope,omitempty"`
+	Title                 string                    `json:"title"`
+	Severity              string                    `json:"severity"`
+	Status                string                    `json:"status,omitempty"`
+	StatusReason          string                    `json:"status_reason,omitempty"`
+	Scanners              []string                  `json:"scanners,omitempty"`
+	ObservationIDs        []string                  `json:"observation_ids,omitempty"`
+	AffectedEndpointCount int                       `json:"affected_endpoint_count,omitempty"`
+	AffectedInstanceCount int                       `json:"affected_instance_count,omitempty"`
+	ObservationCount      int                       `json:"observation_count,omitempty"`
+	AffectedEndpoints     []scanner.FindingEndpoint `json:"affected_endpoints,omitempty"`
+	Target                string                    `json:"target,omitempty"`
+	Scope                 string                    `json:"scope,omitempty"` // scanner reports: host:<h> or source:main
+	Endpoint              string                    `json:"endpoint"`
+	CVSS                  float64                   `json:"cvss"`
+	CVSSVector            string                    `json:"cvss_vector,omitempty"`
+	Description           string                    `json:"description,omitempty"`
+	Impact                string                    `json:"impact,omitempty"`
+	Method                string                    `json:"method,omitempty"`
+	Parameter             string                    `json:"parameter,omitempty"`
+	CVE                   string                    `json:"cve,omitempty"`
+	CWE                   string                    `json:"cwe_id,omitempty"`
+	Confidence            string                    `json:"confidence,omitempty"`
+	NativeConfidence      string                    `json:"native_confidence,omitempty"`
+	EvidenceCompleteness  string                    `json:"evidence_completeness,omitempty"`
+	OWASP                 string                    `json:"owasp,omitempty"`
+	TechnicalAnalysis     string                    `json:"technical_analysis,omitempty"`
+	PoCDescription        string                    `json:"poc_description,omitempty"`
+	PoCScript             string                    `json:"poc_script,omitempty"`
+	Remediation           string                    `json:"remediation,omitempty"`
+	Fix                   string                    `json:"fix,omitempty"`
+	ExploitationProof     string                    `json:"exploitation_proof,omitempty"`
+	VerificationMethod    string                    `json:"verification_method,omitempty"`
+	Verified              bool                      `json:"verified"`
+	Tags                  []string                  `json:"tags,omitempty"`
 }
 
 // SubScanSummary is a child target scanned as part of a wildcard parent scan.
@@ -896,6 +906,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/scans", s.handleListScans)
 	mux.HandleFunc("/api/scans/plan", s.handleAssessmentPlan)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
+		if isFindingsRoutePath(r.URL.Path) {
+			s.handleFindingsAPI(w, r)
+			return
+		}
+		if r.Method == http.MethodGet && isScanAttackSurfacePath(r.URL.Path) {
+			s.handleAttackSurface(w, r)
+			return
+		}
 		if r.Method == http.MethodGet && isScanScopesPath(r.URL.Path) {
 			s.handleScanScopes(w, r)
 			return
@@ -1803,6 +1821,8 @@ func (s *Server) handleFindingsSummary(w http.ResponseWriter, r *http.Request) {
 		"low":      0,
 		"info":     0,
 	}
+	statusTotals := make(map[string]int)
+	rawObservations, uniqueFindings, activeFindings := 0, 0, 0
 
 	// Wrap the iteration in safe.Recover so a corrupt scan record cannot
 	// kill the handler. (defer + named recover keeps response writing in
@@ -1811,7 +1831,25 @@ func (s *Server) handleFindingsSummary(w http.ResponseWriter, r *http.Request) {
 		defer safe.Recover("findings-summary", "")
 		seen := make(map[string]struct{})
 		for _, entry := range s.findAllScanSummaries() {
-			for _, v := range entry.rec.Vulns {
+			if snapshot, ok := scanner.LoadFindingsSnapshot(entry.dir); ok {
+				rawObservations += len(snapshot.RawObservations)
+			} else {
+				rawObservations += len(entry.rec.Vulns)
+			}
+			vulns := normalizedVulnsForEntry(entry)
+			uniqueFindings += len(vulns)
+			for _, v := range vulns {
+				status := v.Status
+				if status == "" {
+					status = string(scanner.StatusPotential)
+				}
+				statusTotals[status]++
+				if scanner.FindingActive(scanner.FindingStatus(status)) {
+					activeFindings++
+				}
+				if !scanner.FindingActive(scanner.FindingStatus(status)) {
+					continue
+				}
 				key := dedupFindingKey(entry.rec.Target, v)
 				if _, dup := seen[key]; dup {
 					continue
@@ -1844,9 +1882,14 @@ func (s *Server) handleFindingsSummary(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "no-cache")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"totals": totals,
-		"as_of":  asOf,
-		"etag":   etag,
+		"totals":                   totals,
+		"raw_observations":         rawObservations,
+		"unique_findings":          uniqueFindings,
+		"active_security_findings": activeFindings,
+		"status":                   statusTotals,
+		"severity":                 totals,
+		"as_of":                    asOf,
+		"etag":                     etag,
 	})
 }
 
@@ -1890,7 +1933,7 @@ func (s *Server) handleFindingsList(w http.ResponseWriter, r *http.Request) {
 		defer safe.Recover("findings-list", "")
 		for _, entry := range s.findAllScanSummaries() {
 			rec := entry.rec
-			for _, v := range rec.Vulns {
+			for _, v := range normalizedVulnsForEntry(entry) {
 				key := dedupFindingKey(rec.Target, v)
 				candidate := flatFinding{
 					VulnSummary:   v,
@@ -2994,6 +3037,14 @@ func (s *Server) handleDeleteVuln(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"scan not found"}`))
 		return
+	}
+	if snapshot, ok := scanner.LoadFindingsSnapshot(dir); ok {
+		for _, finding := range snapshot.UniqueFindings {
+			if finding.ID == vulnID {
+				http.Error(w, "scanner-backed findings are immutable; update status instead", http.StatusConflict)
+				return
+			}
+		}
 	}
 
 	// Remove matching vulns

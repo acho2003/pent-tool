@@ -72,11 +72,12 @@ type Request struct {
 	ApplicationURL     string                                            `json:"-"`
 	TypedAssessment    bool                                              `json:"-"`
 	APIEndpoints       []APIEndpoint                                     `json:"-"`
-	// WebEndpoints are URLs discovered by the katana crawl stage for this web
-	// host. When present, web scanners (nuclei today; dalfox/wapiti next) scan
-	// this concrete endpoint list instead of only the single seed URL, so the
-	// crawl output actually drives coverage. Derived by recon, not input.
-	WebEndpoints []string `json:"-"`
+	// EndpointTargets is the dispatcher-approved subset of the normalized attack
+	// surface for this scanner job. WebEndpoints remains as a compatibility input
+	// for callers/tests that have not yet constructed a structured inventory.
+	EndpointTargets    []string `json:"-"`
+	WebEndpoints       []string `json:"-"`
+	StructuredDispatch bool     `json:"-"`
 	// SQLMapApprovedURLs are the parameterized URLs an operator has EXPLICITLY
 	// approved for SQL-injection detection. SQLMap runs only against these — never
 	// against auto-discovered URLs — enforcing the opt-in, approved-request policy.

@@ -32,29 +32,39 @@ type reportManifest struct {
 }
 
 type reportFinding struct {
-	SourceID             string                  `json:"source_id"`
-	Fingerprint          string                  `json:"fingerprint,omitempty"`
-	Scanner              string                  `json:"scanner"`
-	Title                string                  `json:"title"`
-	Severity             string                  `json:"severity"`
-	SeverityUnrated      bool                    `json:"severity_unrated,omitempty"` // placeholder severity the scanner did not rate
-	Target               string                  `json:"target,omitempty"`
-	Endpoint             string                  `json:"endpoint,omitempty"`
-	Method               string                  `json:"method,omitempty"`
-	Parameter            string                  `json:"parameter,omitempty"`
-	Explanation          string                  `json:"explanation"`
-	Evidence             string                  `json:"evidence,omitempty"`
-	EvidenceRef          string                  `json:"evidence_reference"`
-	Impact               string                  `json:"impact,omitempty"`
-	Remediation          string                  `json:"remediation,omitempty"`
-	CVE                  string                  `json:"cve,omitempty"`
-	CWE                  string                  `json:"cwe,omitempty"`
-	CVSS                 float64                 `json:"cvss,omitempty"`
-	Scope                string                  `json:"scope,omitempty"`
-	Sources              []scanner.FindingSource `json:"sources,omitempty"`
-	Confidence           string                  `json:"confidence,omitempty"`
-	NativeConfidence     string                  `json:"native_confidence,omitempty"`
-	EvidenceCompleteness string                  `json:"evidence_completeness,omitempty"`
+	SourceID              string                    `json:"source_id"`
+	Fingerprint           string                    `json:"fingerprint,omitempty"`
+	NormalizedType        string                    `json:"normalized_type,omitempty"`
+	DedupeScope           string                    `json:"dedupe_scope,omitempty"`
+	Scanner               string                    `json:"scanner"`
+	Title                 string                    `json:"title"`
+	Severity              string                    `json:"severity"`
+	Status                string                    `json:"status,omitempty"`
+	StatusReason          string                    `json:"status_reason,omitempty"`
+	Scanners              []string                  `json:"scanners,omitempty"`
+	ObservationIDs        []string                  `json:"observation_ids,omitempty"`
+	AffectedEndpointCount int                       `json:"affected_endpoint_count,omitempty"`
+	AffectedInstanceCount int                       `json:"affected_instance_count,omitempty"`
+	ObservationCount      int                       `json:"observation_count,omitempty"`
+	AffectedEndpoints     []scanner.FindingEndpoint `json:"affected_endpoints,omitempty"`
+	SeverityUnrated       bool                      `json:"severity_unrated,omitempty"` // placeholder severity the scanner did not rate
+	Target                string                    `json:"target,omitempty"`
+	Endpoint              string                    `json:"endpoint,omitempty"`
+	Method                string                    `json:"method,omitempty"`
+	Parameter             string                    `json:"parameter,omitempty"`
+	Explanation           string                    `json:"explanation"`
+	Evidence              string                    `json:"evidence,omitempty"`
+	EvidenceRef           string                    `json:"evidence_reference"`
+	Impact                string                    `json:"impact,omitempty"`
+	Remediation           string                    `json:"remediation,omitempty"`
+	CVE                   string                    `json:"cve,omitempty"`
+	CWE                   string                    `json:"cwe,omitempty"`
+	CVSS                  float64                   `json:"cvss,omitempty"`
+	Scope                 string                    `json:"scope,omitempty"`
+	Sources               []scanner.FindingSource   `json:"sources,omitempty"`
+	Confidence            string                    `json:"confidence,omitempty"`
+	NativeConfidence      string                    `json:"native_confidence,omitempty"`
+	EvidenceCompleteness  string                    `json:"evidence_completeness,omitempty"`
 }
 
 // GenerateCLIReport runs the same report-only AI and deterministic fallback
@@ -97,8 +107,11 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	rec.Events = append(rec.Events, startedEvent)
 	s.saveScanRecordTo(rec, scanDir)
 	s.broadcastToInstance(instanceID, startedEvent)
-	parsed, parseErrs := scanner.ParseRuns(rec.ScannerRuns)
-	manifest := reportManifest{SchemaVersion: 2, Mode: "deterministic_fallback", PromptVersion: reportPromptVersion, GeneratedAt: time.Now().Format(time.RFC3339Nano), SourceRuns: append([]scanner.Run(nil), rec.ScannerRuns...), Findings: fallbackReportFindings(parsed)}
+	snapshot, parseErrs := rebuildFindingsSnapshot(rec, scanDir, true)
+	if snapshot == nil {
+		return ""
+	}
+	manifest := reportManifest{SchemaVersion: 2, Mode: "deterministic_fallback", PromptVersion: reportPromptVersion, GeneratedAt: time.Now().Format(time.RFC3339Nano), SourceRuns: append([]scanner.Run(nil), rec.ScannerRuns...), Findings: fallbackSnapshotFindings(snapshot)}
 	if rec.AssessmentPlan != nil {
 		coverage := buildAssessmentCoverage(rec.ID, rec, scanDir)
 		manifest.SchemaVersion = 3
@@ -114,7 +127,14 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	data, _ := json.MarshalIndent(manifest, "", "  ")
 	_ = os.WriteFile(filepath.Join(scanDir, "report.json"), data, 0o600)
 	copyRec := *rec
-	copyRec.Vulns = reportFindingsToVulns(manifest.Findings)
+	activeReport := make([]reportFinding, 0, len(manifest.Findings))
+	for _, finding := range manifest.Findings {
+		if finding.Status == "" || scanner.FindingActive(scanner.FindingStatus(finding.Status)) {
+			activeReport = append(activeReport, finding)
+		}
+	}
+	copyRec.Vulns = reportFindingsToVulns(activeReport)
+	rec.Vulns = append([]VulnSummary(nil), copyRec.Vulns...)
 	copyRec.ReportMode = manifest.Mode
 	copyRec.ReportGeneratedAt = manifest.GeneratedAt
 	copyRec.ReportScopes = scopes
@@ -131,20 +151,41 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	return path
 }
 
+func fallbackSnapshotFindings(snapshot *scanner.FindingsSnapshot) []reportFinding {
+	if snapshot == nil {
+		return []reportFinding{}
+	}
+	observations := make(map[string]scanner.RawObservation, len(snapshot.RawObservations))
+	for _, observation := range snapshot.RawObservations {
+		observations[observation.ID] = observation
+	}
+	out := make([]reportFinding, 0, len(snapshot.UniqueFindings))
+	for _, f := range snapshot.UniqueFindings {
+		primary := scanner.RawObservation{}
+		if len(f.ObservationIDs) > 0 {
+			primary = observations[f.ObservationIDs[0]]
+		}
+		out = append(out, reportFinding{SourceID: f.ID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: string(f.DedupeScope), Scanner: firstFindingScanner(securityFindingToSummary(f)), Scanners: append([]string(nil), f.Scanners...), Title: f.Title, Severity: f.Severity, SeverityUnrated: primary.SeverityUnrated, Status: string(f.Status), StatusReason: f.StatusReason, Target: f.Target, Endpoint: firstFindingEndpoint(f), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, ObservationIDs: append([]string(nil), f.ObservationIDs...), AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.Endpoints...), Explanation: "The originating scanners reported this normalized issue; review the linked raw observations for evidence.", Evidence: primary.Evidence, EvidenceRef: primary.EvidenceReference, CVE: strings.Join(f.CVE, ", "), CWE: strings.Join(f.CWE, ", "), CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: firstNonBlank(primary.Remediation, "Review the scanner evidence and apply the vendor or project remediation guidance."), Scope: f.Scope})
+	}
+	return out
+}
+
+// fallbackReportFindings remains as a compatibility helper for callers and
+// tests that construct parser findings directly instead of a snapshot.
 func fallbackReportFindings(in []scanner.Finding) []reportFinding {
 	out := make([]reportFinding, 0, len(in))
 	for _, f := range in {
-		out = append(out, reportFinding{SourceID: f.SourceID, Fingerprint: f.Fingerprint, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: firstNonBlank(f.Remediation, "Review the scanner evidence and apply the vendor or project remediation guidance."), Scope: f.Scope, Sources: f.Sources, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness})
+		out = append(out, reportFinding{SourceID: f.SourceID, Fingerprint: f.Fingerprint, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: firstNonBlank(f.Remediation, "Review the scanner evidence and apply the vendor or project remediation guidance."), Scope: f.Scope})
 	}
 	return out
 }
 
 func reportFindingsToVulns(in []reportFinding) []VulnSummary {
 	out := make([]VulnSummary, 0, len(in))
-	for i, f := range in {
+	for _, f := range in {
 		scanners := reportScanners(f)
 		tags := append([]string{"scanner-reported"}, scanners...)
-		out = append(out, VulnSummary{ID: fmt.Sprintf("SCAN-%04d", i+1), Fingerprint: f.Fingerprint, Title: f.Title, Severity: f.Severity, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: f.Evidence + "\n" + reportEvidenceRefs(f), Remediation: f.Remediation, ExploitationProof: "Scanner-reported evidence; no independent exploitation was performed.", VerificationMethod: strings.Join(scanners, ", "), Verified: false, Tags: tags})
+		out = append(out, VulnSummary{ID: f.SourceID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: f.DedupeScope, Title: f.Title, Severity: f.Severity, Status: f.Status, StatusReason: f.StatusReason, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, ObservationIDs: append([]string(nil), f.ObservationIDs...), Scanners: append([]string(nil), scanners...), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.AffectedEndpoints...), Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: f.Evidence + "\n" + reportEvidenceRefs(f), Remediation: f.Remediation, ExploitationProof: "Scanner-reported evidence; no independent exploitation was performed.", VerificationMethod: strings.Join(scanners, ", "), Verified: f.Status == string(scanner.StatusConfirmed), Tags: tags})
 	}
 	return out
 }

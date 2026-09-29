@@ -93,47 +93,69 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		targetKinds[target.ID] = target.Kind
 	}
 
-	// Web-discovery stage: crawl each web target once (katana) so every web
-	// scanner job for that target shares one endpoint list. Without this the
-	// typed-assessment path has no crawl output, and endpoint-driven stages like
-	// dalfox report "no discovered URL to test". Best-effort and gated on the
-	// binary; a completed crawl is recorded so it is visible in the run log.
-	webEndpoints := map[string][]string{}
-	if katanaAvailable(p.Config) {
-		for _, target := range plan.Config.Targets {
-			switch target.Kind {
-			case assessment.KindURL, assessment.KindDomain, assessment.KindHost:
-			default:
-				continue
+	// Web discovery builds one normalized inventory per target. A valid snapshot
+	// is reused on resume; if only the raw JSONL remains, it is reparsed without
+	// touching the target. The runtime inventory refines scanner inputs but never
+	// changes the accepted assessment plan or its fingerprint.
+	surfaces := map[string]*AttackSurface{}
+	for _, target := range plan.Config.Targets {
+		switch target.Kind {
+		case assessment.KindURL, assessment.KindDomain, assessment.KindHost:
+		default:
+			continue
+		}
+		crawlScope := "discovery:" + target.ID
+		inventoryScope := assessmentTargetScope(target)
+		inventoryTarget := target.Value
+		if !strings.HasPrefix(strings.ToLower(inventoryTarget), "http://") && !strings.HasPrefix(strings.ToLower(inventoryTarget), "https://") {
+			inventoryTarget = "http://" + inventoryTarget
+		}
+		crawlReq := Request{
+			Target: target.Value, Scope: crawlScope,
+			ScanDir: filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
+			Profile: plan.Config.Profile, TypedAssessment: true,
+			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),
+		}
+		spec := buildKatana(crawlReq, p.Config)
+		surface, valid := LoadAttackSurface(scanDir, inventoryScope, spec.artifact)
+		if !valid {
+			if parsed, parseErr := ParseKatanaAttackSurface(spec.artifact, inventoryScope, inventoryTarget, crawlReq.TargetAuth != ""); parseErr == nil {
+				surface = parsed
 			}
-			crawlScope := "discovery:" + target.ID
-			crawlReq := Request{
-				Target:          target.Value,
-				Scope:           crawlScope,
-				ScanDir:         filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
-				Profile:         plan.Config.Profile,
-				TypedAssessment: true,
-			}
-			spec := buildKatana(crawlReq, p.Config)
-			if spec.notApp != "" {
-				continue
-			}
+		}
+		if surface == nil && katanaAvailable(p.Config) && spec.notApp == "" {
 			crawlRun := executeSpec(ctx, "katana", crawlReq, p.Config, spec, emit)
 			crawlRun.Scope = crawlScope
 			results = append(results, crawlRun)
 			if crawlRun.Status == "completed" {
-				webEndpoints[target.ID] = parseKatanaEndpoints(spec.artifact)
+				surface, _ = ParseKatanaAttackSurface(spec.artifact, inventoryScope, inventoryTarget, crawlReq.TargetAuth != "")
+			}
+		} else if surface != nil {
+			for _, old := range existing {
+				if old.Scanner == "katana" && old.Scope == crawlScope && old.Terminal() {
+					results = append(results, old)
+					break
+				}
 			}
 		}
+		if surface == nil {
+			surface = NewSeedAttackSurface(inventoryScope, inventoryTarget)
+		}
+		EnsureSeedEndpoint(surface, inventoryTarget)
+		var apiEndpoints []APIEndpoint
+		for _, endpoint := range plan.APIEndpoints {
+			if endpoint.TargetID == target.ID {
+				apiEndpoints = append(apiEndpoints, endpoint)
+			}
+		}
+		MergeOpenAPIEndpoints(surface, inventoryTarget, apiEndpoints)
+		surfaces[target.ID] = surface
+		_ = SaveAttackSurface(scanDir, surface)
 	}
 
 	for jobIndex, job := range plan.Jobs {
 		scope := assessmentJobScope(job)
 		key := assessmentJobRunKey(scope, job.Scanner, job.Variant, plan.Fingerprint)
-		if old, ok := completed[key]; ok && old.Status == "completed" && VerifyChecksum(old) == nil {
-			results = append(results, old)
-			continue
-		}
 		req := Request{
 			Target: job.Target,
 			Scope:  scope,
@@ -141,13 +163,21 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 		}
-		// Share the target's katana crawl output with its web scanners so
-		// endpoint-driven stages (nuclei/zap/dalfox/wapiti) test discovered URLs.
-		req.WebEndpoints = webEndpoints[job.TargetID]
+		surface := surfaces[job.TargetID]
+		if surface != nil {
+			req.StructuredDispatch = true
+		}
 		for _, endpoint := range plan.APIEndpoints {
 			if endpoint.TargetID == job.TargetID {
 				req.APIEndpoints = append(req.APIEndpoints, endpoint)
 			}
+		}
+		if old, ok := completed[key]; ok && old.Status == "completed" && VerifyChecksum(old) == nil {
+			req.EndpointTargets = DispatchTargets(surface, job.Scanner, endpointDispatchLimit(job.Scanner, p.Config.WebMaxEndpoints))
+			CompleteEndpointCoverage(surface, job.Scanner, old)
+			_ = SaveAttackSurface(scanDir, surface)
+			results = append(results, old)
+			continue
 		}
 		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && job.Scanner == "zap" {
 			req.TargetAuth = strings.Join(headers, "\n")
@@ -223,6 +253,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			results = append(results, failedPlannedJob(job, req, plan.Fingerprint, "planned scanner has no execution adapter", emit))
 			continue
 		}
+		req.EndpointTargets = DispatchTargets(surface, job.Scanner, endpointDispatchLimit(job.Scanner, p.Config.WebMaxEndpoints))
+		_ = SaveAttackSurface(scanDir, surface)
 		if err := ctx.Err(); err != nil {
 			run := cancelledRun(job.Scanner, scope, req, err, emit)
 			run.Variant, run.AssessmentTypes, run.PlanFingerprint = job.Variant, jobAssessmentTypes(job), plan.Fingerprint
@@ -289,9 +321,18 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		run.AssessmentTypes = jobAssessmentTypes(job)
 		run.PlanFingerprint = plan.Fingerprint
 		run.AttemptID = attemptID
+		CompleteEndpointCoverage(surface, job.Scanner, run)
+		_ = SaveAttackSurface(scanDir, surface)
 		results = append(results, run)
 	}
 	return results
+}
+
+func assessmentTargetScope(target assessment.Target) string {
+	if target.Kind == assessment.KindURL {
+		return "app:" + target.ID
+	}
+	return "host:" + target.ID
 }
 
 func prepareLocalAssessmentResource(mode assessment.Mode, kind assessment.TargetKind, value, scannerID string) string {

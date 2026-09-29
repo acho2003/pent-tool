@@ -1,5 +1,6 @@
 import type {
 	AssessmentCoverage,
+	AttackSurfaceResponse,
 	AssessmentConfig,
 	AssessmentPlan,
 	AssessmentScannerDefinition,
@@ -21,6 +22,7 @@ import type {
   ToolInfo,
   VersionInfo,
   WSEvent,
+  VulnSummary,
 } from "@/types/api";
 import type { FlatFinding } from "@/lib/findings";
 
@@ -217,6 +219,16 @@ export const api = {
   // Flattened + deduped findings across all scans, computed server-side in a
   // single walk. Replaces the previous per-scan getScan() fan-out.
   listFindings: () => http<FlatFinding[] | null>("/api/findings"),
+  listScanFindings: (scanId: string, params: ListParams = { page: 1, size: 50 }) =>
+    http<Paginated<VulnSummary>>(`/api/scans/${scanId}/findings${listQuery(params)}`),
+  rebuildScanFindings: (scanId: string) =>
+    http<{ status: string; summary: unknown }>(`/api/scans/${scanId}/findings/rebuild`, { method: "POST" }),
+  updateFindingStatus: (scanId: string, findingId: string, status: string, reason: string) =>
+    http<VulnSummary>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}`, { method: "PATCH", body: JSON.stringify({ status, reason }) }),
+  findingEndpoints: (scanId: string, findingId: string, params: ListParams = { page: 1, size: 50 }) =>
+    http<Paginated<VulnSummary["affected_endpoints"] extends Array<infer T> ? T : never>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/endpoints${listQuery(params)}`),
+  findingObservations: (scanId: string, findingId: string, params: ListParams = { page: 1, size: 50 }) =>
+    http<Paginated<Record<string, unknown>>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/observations${listQuery(params)}`),
   deleteScan: (id: string) =>
     http<{ status: string }>(`/api/scans/${id}`, { method: "DELETE" }),
   deleteVuln: (scanId: string, vulnId: string) =>
@@ -319,6 +331,11 @@ export const api = {
 	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
 	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
 	assessmentCoverage: (scanId: string) => http<AssessmentCoverage>(`/api/scans/${scanId}/coverage`),
+	attackSurface: (scanId: string, params?: { page?: number; size?: number; kind?: string; scanner?: string; status?: string; q?: string }) => {
+		const query = new URLSearchParams();
+		for (const [key, value] of Object.entries(params ?? {})) if (value !== undefined && value !== "") query.set(key, String(value));
+		return http<AttackSurfaceResponse>(`/api/scans/${scanId}/attack-surface${query.size ? `?${query}` : ""}`);
+	},
 	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
 	planAssessment: (config: AssessmentConfig) =>
 		http<AssessmentPlan>("/api/scans/plan", { method: "POST", json: config }),
