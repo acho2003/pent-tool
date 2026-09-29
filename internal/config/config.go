@@ -32,6 +32,7 @@ type Config struct {
 	GitleaksPath          string
 	OsvPath               string
 	NiktoPath             string
+	SSHPath               string
 	ZAPURL                string
 	ZAPAPIKey             string
 	ZAPDedicated          bool
@@ -250,6 +251,7 @@ func load() *Config {
 		GitleaksPath:          envOr("XALGORIX_GITLEAKS_PATH", "gitleaks"),
 		OsvPath:               envOr("XALGORIX_OSV_PATH", "osv-scanner"),
 		NiktoPath:             envOr("XALGORIX_NIKTO_PATH", "nikto"),
+		SSHPath:               envOr("XALGORIX_SSH_PATH", "ssh"),
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
 		ZAPDedicated:          strings.EqualFold(envOr("XALGORIX_ZAP_DEDICATED", "false"), "true"),

@@ -113,7 +113,7 @@ func TestTypedPlannerAdapterAvailabilityExcludesLegacyReconStubs(t *testing.T) {
 			t.Fatalf("%s unexpectedly has a direct typed assessment adapter", id)
 		}
 	}
-	for _, id := range []string{"nuclei", "zap", "testssl", "trivy", "semgrep", "gitleaks", "osv", "masscan", "nikto"} {
+	for _, id := range []string{"nuclei", "zap", "testssl", "trivy", "semgrep", "gitleaks", "osv", "masscan", "nikto", "lynis"} {
 		if !HasAssessmentRunner(id) {
 			t.Fatalf("%s should have a typed assessment adapter", id)
 		}

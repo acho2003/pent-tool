@@ -23,6 +23,7 @@ func (s *Server) scannerAvailability() map[string]bool {
 		"subfinder": s.cfg.SubfinderPath, "httpx": s.cfg.HttpxPath, "nmap": s.cfg.NmapPath, "masscan": s.cfg.MasscanPath, "nikto": s.cfg.NiktoPath,
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "vuls": s.cfg.VulsPath,
 		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
+		"lynis": s.cfg.SSHPath,
 	}
 	for id, path := range paths {
 		_, err := exec.LookPath(path)
@@ -32,9 +33,7 @@ func (s *Server) scannerAvailability() map[string]bool {
 	// backend; a configured shared daemon is not sufficient evidence.
 	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
 	available["openvas"] = (strings.TrimSpace(s.cfg.GVMHost) != "" || strings.TrimSpace(s.cfg.GVMSocket) != "") && s.cfg.GVMUsername != "" && s.cfg.GVMPassword != ""
-	for _, id := range []string{"sqlmap", "lynis"} {
-		available[id] = false
-	}
+	available["sqlmap"] = false
 	return available
 }
 

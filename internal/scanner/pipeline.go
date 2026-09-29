@@ -91,6 +91,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.NiktoPath == "" {
 		cfg.NiktoPath = "nikto"
 	}
+	if cfg.SSHPath == "" {
+		cfg.SSHPath = "ssh"
+	}
+	if cfg.LynisTimeout <= 0 {
+		cfg.LynisTimeout = 30 * time.Minute
+	}
 	if cfg.MasscanRate <= 0 {
 		cfg.MasscanRate = 100
 	}

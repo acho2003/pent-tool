@@ -182,6 +182,14 @@ waiting for crawl or active-scan progress. An expired form session gets one
 re-login attempt; another expiry or a failed re-login ends authenticated work
 and records failed coverage.
 
+White Box host audits can use a target-bound `SSH` credential whose encrypted
+`ssh_alias` value names an operator-managed SSH config entry. Vuls uses that
+alias; Lynis runs `lynis audit system --quick --nocolors` on the remote host
+through SSH with batch mode and strict host-key checking. Lynis must be
+installed on the remote host. Its identified warnings and suggestions are
+reported as host findings; the complete native output remains available for
+review.
+
 Example request:
 
 ```json

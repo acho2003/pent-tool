@@ -157,6 +157,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseOSV(run.ArtifactPath)
 	case "vuls":
 		return parseVuls(run.ArtifactPath)
+	case "lynis":
+		return parseLynis(run.ArtifactPath)
 	case "nmap":
 		return parseNmap(run.ArtifactPath)
 	case "testssl":

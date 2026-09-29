@@ -125,6 +125,7 @@ type Config struct {
 	NmapPath          string
 	MasscanPath       string
 	NiktoPath         string
+	SSHPath           string
 	TestsslPath       string
 	SemgrepPath       string
 	GitleaksPath      string
@@ -166,6 +167,7 @@ type Config struct {
 	MasscanTimeout        time.Duration
 	MasscanRate           int
 	NiktoTimeout          time.Duration
+	LynisTimeout          time.Duration
 	TestsslTimeout        time.Duration
 	SemgrepTimeout        time.Duration
 	GitleaksTimeout       time.Duration

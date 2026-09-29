@@ -81,7 +81,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	cfg := assessment.Normalize(input.Config)
 	// RegistryVersion also pins scanner and preparation semantics which affect
 	// execution identity (including which imported API operations are seeded).
-	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: "2"}
+	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: "3"}
 	for i := range plan.Capabilities {
 		evidence := &plan.Capabilities[i]
 		if evidence.Capability != assessment.CapAuthWeb && evidence.Capability != assessment.CapSSH {
@@ -289,6 +289,9 @@ func eligibility(def ScannerDefinition, target assessment.Target, evidence []ass
 		}
 		if target.Kind == assessment.KindSBOM && def.ID == "trivy" {
 			conditional = true // local file readability is checked at execution
+		}
+		if required == assessment.CapSSH && (def.ID == "vuls" || def.ID == "lynis") {
+			conditional = true // the alias and remote tool are checked at execution
 		}
 		if !found {
 			return PlanNotApplicable, "capability.missing", fmt.Sprintf("Required capability %s is unavailable for target %s.", required, target.ID)

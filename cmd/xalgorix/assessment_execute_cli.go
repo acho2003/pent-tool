@@ -108,6 +108,7 @@ func cliAssessmentAvailability(cfg scanner.Config) map[string]bool {
 		"nuclei": cfg.NucleiPath, "zap": "", "testssl": cfg.TestsslPath, "openvas": "",
 		"vuls": cfg.VulsPath, "trivy": cfg.TrivyPath, "semgrep": cfg.SemgrepPath,
 		"gitleaks": cfg.GitleaksPath, "osv": cfg.OsvPath, "masscan": cfg.MasscanPath, "nikto": cfg.NiktoPath,
+		"lynis":     cfg.SSHPath,
 		"subfinder": cfg.SubfinderPath, "httpx": cfg.HttpxPath, "nmap": cfg.NmapPath,
 	}
 	available := make(map[string]bool, len(paths))
