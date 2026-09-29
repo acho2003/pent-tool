@@ -4,7 +4,7 @@ import "testing"
 
 func TestMergeCrossScannerCollapsesSameCVEOnSameScope(t *testing.T) {
 	in := []Finding{
-		{SourceID: "openvas:r1", Scanner: "openvas", Severity: "medium", CVSS: 5.0, CVE: "CVE-2021-41773", Scope: "host:a", Endpoint: "443/tcp", EvidenceRef: "ov.xml#openvas:r1"},
+		{SourceID: "openvas:r1", Scanner: "openvas", Severity: "medium", CVSS: 5.0, CVE: "CVE-2021-41773", Scope: "host:a", Endpoint: "https://a/", EvidenceRef: "ov.xml#openvas:r1"},
 		{SourceID: "nuclei:CVE-2021-41773:https://a/", Scanner: "nuclei", Severity: "critical", CVSS: 9.8, CVE: "cve-2021-41773", CWE: "CWE-22", Scope: "host:a", Endpoint: "https://a/", EvidenceRef: "n.jsonl#nuclei:CVE-2021-41773:https://a/"},
 	}
 	out := mergeCrossScanner(in)
@@ -28,6 +28,14 @@ func TestMergeCrossScannerLeavesDistinctFindingsAlone(t *testing.T) {
 		"different scope": {
 			{SourceID: "openvas:r1", Scanner: "openvas", CVE: "CVE-2021-41773", Scope: "host:a"},
 			{SourceID: "nuclei:x", Scanner: "nuclei", CVE: "CVE-2021-41773", Scope: "host:b"},
+		},
+		"different location": {
+			{SourceID: "nuclei:a", Scanner: "nuclei", CVE: "CVE-2021-41773", Scope: "host:a", Endpoint: "https://a/one"},
+			{SourceID: "zap:b", Scanner: "zap", CVE: "CVE-2021-41773", Scope: "host:a", Endpoint: "https://a/two"},
+		},
+		"ambiguous location": {
+			{SourceID: "nuclei:a", Scanner: "nuclei", CVE: "CVE-2021-41773", Scope: "host:a"},
+			{SourceID: "zap:b", Scanner: "zap", CVE: "CVE-2021-41773", Scope: "host:a"},
 		},
 		"no CVE": {
 			{SourceID: "zap:1", Scanner: "zap", Scope: "host:a"},
@@ -64,14 +72,17 @@ func TestParseRunsStampsScopeAndMerges(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs = %v", errs)
 	}
-	if len(findings) != 2 {
-		t.Fatalf("want merged CVE + legacy finding, got %d: %#v", len(findings), findings)
+	if len(findings) != 3 {
+		t.Fatalf("want separate findings for scanner-specific locations + legacy finding, got %d: %#v", len(findings), findings)
 	}
-	if findings[0].Scope != "host:a.test" || len(findings[0].Sources) != 2 || findings[0].Scanner != "nuclei" {
-		t.Fatalf("merged finding = %#v", findings[0])
+	if findings[0].Scope != "host:a.test" || len(findings[0].Sources) != 0 || findings[0].Scanner != "nuclei" {
+		t.Fatalf("location-specific finding = %#v", findings[0])
 	}
-	if findings[1].Scope != "host:b.test" {
-		t.Fatalf("legacy empty-scope run must fold to host:<target>, got %q", findings[1].Scope)
+	if findings[1].Scope != "host:a.test" || findings[1].Scanner != "openvas" {
+		t.Fatalf("ambiguous service location must remain a separate finding, got %#v", findings[1])
+	}
+	if findings[2].Scope != "host:b.test" {
+		t.Fatalf("legacy empty-scope run must fold to host:<target>, got %q", findings[2].Scope)
 	}
 }
 

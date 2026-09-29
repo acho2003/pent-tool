@@ -54,30 +54,39 @@ func sourceOf(f Finding) FindingSource {
 // a URL vs a port — so the scope alone identifies the asset).
 func mergeLocation(f Finding) string {
 	if strings.HasPrefix(f.Scope, "source:") {
-		return filepath.ToSlash(filepath.Clean(f.Target))
+		if strings.TrimSpace(f.Target) == "" {
+			return ""
+		}
+		return "source:" + filepath.ToSlash(filepath.Clean(f.Target))
 	}
-	return ""
+	if strings.TrimSpace(f.Endpoint) == "" {
+		return ""
+	}
+	// Endpoint is scanner-native but is already normalized by each parser where
+	// possible. Requiring an explicit exact location avoids collapsing a CVE
+	// reported on two paths, ports, or protocols on the same host.
+	return "endpoint:" + strings.TrimSpace(f.Endpoint)
 }
 
 // mergeCrossScanner collapses findings that report the same CVE on the same
-// scope (and, on a source scope, the same file) from different scanners (e.g.
-// openvas and nuclei both flagging one CVE on one host, or trivy and osv both
-// flagging one CVE in one lockfile) into one finding that lists every source.
+// scope and explicit affected location from different scanners (or the same
+// source file for source scans). Missing or ambiguous locations stay separate.
 // The first-seen contributor stays the primary record, keeping its SourceID and
 // EvidenceRef, so the report's source-ID trace is unchanged. Severity and CVSS
 // are raised to the highest any contributor reported, so a merge never
 // downgrades a finding. A scanner's own repeated reports (e.g. trivy flagging
 // one CVE in two lockfiles) stay separate. Output keeps first-seen order.
 func mergeCrossScanner(in []Finding) []Finding {
-	primary := map[string]int{} // scope\x00CVE -> index in out
+	primary := map[string]int{} // scope\x00CVE\x00location -> index in out
 	out := make([]Finding, 0, len(in))
 	for _, f := range in {
 		cve := singleCVE(f.CVE)
-		if cve == "" {
+		location := mergeLocation(f)
+		if cve == "" || location == "" {
 			out = append(out, f)
 			continue
 		}
-		key := f.Scope + "\x00" + cve + "\x00" + mergeLocation(f)
+		key := f.Scope + "\x00" + cve + "\x00" + location
 		i, ok := primary[key]
 		if !ok {
 			primary[key] = len(out)
