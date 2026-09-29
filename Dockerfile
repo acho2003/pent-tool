@@ -61,16 +61,12 @@ FROM golang:1.26-bookworm AS gobuild
 RUN apt-get update && apt-get install -y --no-install-recommends libpcap-dev git \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-COPY --from=webui /src/internal/web/static ./internal/web/static
-ARG VERSION=docker
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" \
-    -o /out/xalgorix ./cmd/xalgorix/
 
-# Scanner clients required by the deterministic pipeline are mandatory image
-# build inputs. Optional legacy utilities remain best-effort below.
+# ── Scanner clients FIRST, before the app source is copied ──────────────────
+# These `go install`s fetch their own modules independent of the app's go.mod,
+# so ordering them ahead of `COPY . .` means a code-only change never busts these
+# slow tool layers — they stay cached across rebuilds. Optional legacy utilities
+# remain best-effort below.
 ENV GOBIN=/go/bin
 # Trivy currently imports encoding/json/jsontext, which Go 1.26 exposes behind
 # the jsonv2 experiment. This is compiled into the binary, not a runtime scanner
@@ -122,6 +118,15 @@ RUN set -eux; \
     ; do go install -v "$pkg" || echo "WARN: optional utility $pkg unavailable"; done; \
     CGO_ENABLED=1 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest \
       || echo "WARN: optional naabu utility unavailable"
+
+# ── App build LAST — only this and below re-run on a code change ─────────────
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+COPY --from=webui /src/internal/web/static ./internal/web/static
+ARG VERSION=docker
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /out/xalgorix ./cmd/xalgorix/
 
 # ── Stage 3: runtime — Kali Linux, full toolset, runs as root ────────────────
 FROM kalilinux/kali-rolling
@@ -175,10 +180,11 @@ RUN getcap -r / 2>/dev/null | awk '{print $1}' | while read -r f; do \
 
 # Go toolchain at runtime so the runtime can `go install` anything not baked in.
 COPY --from=gobuild /usr/local/go /usr/local/go
-# Prebuilt latest Go security tools → on PATH via /root/go/bin.
+# Prebuilt latest Go security tools → on PATH via /root/go/bin. This comes from
+# the gobuild stage's cached tool layers, so it stays cached across code changes.
+# The xalgorix binary itself is copied LAST (near ENTRYPOINT) so a code-only
+# rebuild busts only that final layer, not the tool installs below.
 COPY --from=gobuild /go/bin/ /root/go/bin/
-# The xalgorix binary itself.
-COPY --from=gobuild /out/xalgorix /usr/local/bin/xalgorix
 
 ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.cargo/bin:/root/.local/bin:${PATH}" \
     GOBIN=/root/go/bin \
@@ -274,6 +280,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data
 VOLUME ["/data"]
 EXPOSE 9137
+
+# The xalgorix binary is copied LAST so a code-only change re-runs only this
+# tiny layer (plus the metadata below) and reuses every cached tool layer above.
+COPY --from=gobuild /out/xalgorix /usr/local/bin/xalgorix
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["--web"]
