@@ -100,7 +100,8 @@ New web assessments and schedules default to `web-gentle` (a 2-request/second
 Nuclei limit and a 30-minute per-application budget). For lab or staging targets,
 select `web-thorough` in the web UI or assessment JSON to use Nuclei's default
 rate (up to 150 requests/second) and a 120-minute budget. Nikto uses a 1-second pause in gentle mode and
-a 0.2-second pause in thorough mode. Thorough scans may still take longer in
+no Xalgorix request pause in thorough mode. ZAP and the other web checks have no
+Xalgorix per-request pause; endpoint and time budgets still apply. Thorough scans may still take longer in
 total because they can test more endpoints; skipped or timed-out work is
 reported as partial coverage.
 

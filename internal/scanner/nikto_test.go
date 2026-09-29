@@ -74,17 +74,13 @@ func TestBuildNiktoRejectsTargetsOutsideRootHTTPOrigin(t *testing.T) {
 	}
 }
 
-func TestBuildNiktoThoroughUsesBoundedFasterPause(t *testing.T) {
+func TestBuildNiktoThoroughHasNoRequestPause(t *testing.T) {
 	spec := buildNikto(Request{Target: "http://example.test/", ScanDir: t.TempDir(), Profile: ProfileThorough}, Config{NiktoPath: "nikto"})
-	for i, arg := range spec.args {
+	for _, arg := range spec.args {
 		if arg == "-Pause" {
-			if i+1 >= len(spec.args) || spec.args[i+1] != "0.2" {
-				t.Fatalf("thorough Nikto pause = %v", spec.args)
-			}
-			return
+			t.Fatalf("thorough Nikto must not set a request pause: %v", spec.args)
 		}
 	}
-	t.Fatal("Nikto pause missing")
 }
 
 func TestParseNiktoSupportsNestedAndSingleFindingJSON(t *testing.T) {

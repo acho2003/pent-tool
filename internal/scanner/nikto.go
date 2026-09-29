@@ -44,8 +44,8 @@ func buildNikto(req Request, cfg Config) commandSpec {
 		seconds = 1
 	}
 	// Let Nikto reach its own per-host limit and flush JSON before the process
-	// deadline. Its one-second request pause can otherwise consume the entire
-	// outer budget and leave an empty report.
+	// deadline. The gentle profile's one-second request pause can otherwise
+	// consume the entire outer budget and leave an empty report.
 	grace := seconds / 10
 	if grace > 60 {
 		grace = 60
@@ -60,15 +60,14 @@ func buildNikto(req Request, cfg Config) commandSpec {
 	base := filepath.Join(req.ScanDir, "scanner-output", "nikto")
 	artifact := filepath.Join(base, "results.json")
 	isolatedConfig := filepath.Join(base, "nikto.conf")
-	pause := "1"
-	if req.Profile == ProfileThorough {
-		// Nikto accepts fractional seconds. Five requests/second matches the
-		// approved thorough profile without removing its rate bound.
-		pause = "0.2"
+	args := []string{"-config", isolatedConfig, "-host", u.String(), "-nointeractive", "-nocheck", "-maxtime", strconv.Itoa(niktoSeconds) + "s", "-timeout", "5"}
+	if req.Profile != ProfileThorough {
+		args = append(args, "-Pause", "1")
 	}
+	args = append(args, "-Cgidirs", "none", "-Tuning", "123b", "-Format", "json", "-output", filepath.Join(base, "results"))
 	return commandSpec{
 		path:     cfg.NiktoPath,
-		args:     []string{"-config", isolatedConfig, "-host", u.String(), "-nointeractive", "-nocheck", "-maxtime", strconv.Itoa(niktoSeconds) + "s", "-timeout", "5", "-Pause", pause, "-Cgidirs", "none", "-Tuning", "123b", "-Format", "json", "-output", filepath.Join(base, "results")},
+		args:     args,
 		artifact: artifact, timeout: duration,
 		partialMarker: "Host maximum execution time of",
 		prepare: func() error {
