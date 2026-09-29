@@ -34,7 +34,7 @@ func TestScannerConfigThreadsReconAndTestsslPaths(t *testing.T) {
 		OsvTimeoutSec:       777,
 	}
 
-	sc := scannerConfig(cfg)
+	sc := ScannerConfig(cfg)
 
 	if sc.SubfinderPath != "/usr/local/bin/subfinder" {
 		t.Errorf("SubfinderPath = %q, want /usr/local/bin/subfinder", sc.SubfinderPath)

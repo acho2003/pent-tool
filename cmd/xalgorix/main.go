@@ -65,6 +65,10 @@ func main() {
 	}()
 
 	args := parseArgs()
+	if args.plan && args.runAssessment {
+		fmt.Fprintln(os.Stderr, "Choose either --plan or --run-assessment")
+		os.Exit(1)
+	}
 	if args.plan {
 		if err := runAssessmentPlanCLI(args); err != nil {
 			fmt.Fprintf(os.Stderr, "Assessment plan error: %v\n", err)
@@ -72,8 +76,15 @@ func main() {
 		}
 		return
 	}
+	if args.runAssessment {
+		if err := runAssessmentCLI(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Assessment execution error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if args.assessmentMode != "" || len(args.assessmentTypes) > 0 || args.assessmentConfig != "" {
-		fmt.Fprintln(os.Stderr, "Typed assessment execution is not available yet; use --plan to preview the scanner plan.")
+		fmt.Fprintln(os.Stderr, "Use --plan to preview or --run-assessment to execute a typed assessment.")
 		os.Exit(1)
 	}
 
@@ -309,6 +320,7 @@ type cliArgs struct {
 	assessmentTypes  []string
 	assessmentConfig string
 	plan             bool
+	runAssessment    bool
 	bind             string
 	version          bool
 	update           bool
@@ -376,6 +388,8 @@ func parseCLIArgs(osArgs []string) cliArgs {
 			}
 		case "--plan":
 			args.plan = true
+		case "--run-assessment":
+			args.runAssessment = true
 		case "--port", "-p":
 			if i+1 < len(osArgs) {
 				i++
@@ -429,6 +443,8 @@ func parseCLIArgs(osArgs []string) cliArgs {
 				args.assessmentTypes = append(args.assessmentTypes, strings.Split(strings.TrimPrefix(osArgs[i], "--assessment-type="), ",")...)
 			} else if strings.HasPrefix(osArgs[i], "--assessment-config=") {
 				args.assessmentConfig = strings.TrimPrefix(osArgs[i], "--assessment-config=")
+			} else if osArgs[i] == "--run-assessment" {
+				args.runAssessment = true
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				_, _ = fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
 			} else if strings.HasPrefix(osArgs[i], "--bind=") {
@@ -470,10 +486,11 @@ func printUsage() {
 	fmt.Println("      --artifact-kind <kind> filesystem, repository, image, or sbom")
 	fmt.Println("      --vuls-ssh-host <alias> Operator-managed SSH config alias")
 	fmt.Println("      --scanners <list>     Comma-separated subset of " + strings.Join(scanner.OrderedNames, ",") + " (default: all)")
-	fmt.Println("      --assessment-config <file>  Typed assessment JSON used with --plan")
+	fmt.Println("      --assessment-config <file>  Typed assessment JSON used with --plan or --run-assessment")
 	fmt.Println("      --assessment-mode <mode>    BLACK_BOX, GRAY_BOX, or WHITE_BOX")
 	fmt.Println("      --assessment-type <type>    Repeatable assessment coverage type")
 	fmt.Println("      --plan                      Print a deterministic plan without scanning")
+	fmt.Println("      --run-assessment            Execute a typed assessment and emit JSON results")
 	fmt.Println("  -v, --version             Show version")
 	fmt.Println("  -up, --update             Update to latest version")
 	fmt.Println("  --start                  Start as background service")

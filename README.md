@@ -88,6 +88,25 @@ Supported Trivy artifact kinds are `filesystem`, `repository`, `image`, and `sbo
 
 Wildcard mode uses deterministic subdomain discovery and normalization before running the full pipeline for each discovered target.
 
+### Typed assessments from the CLI
+
+Use `--plan` to validate a JSON assessment without contacting its targets, or
+`--run-assessment --assessment-config assessment.json` to run the typed scanner
+plan and print a JSON result containing the plan, per-scanner runs, findings,
+and parse diagnostics. The CLI applies the same plan builder, profile limits,
+artifact isolation, and local-listener protection as the web application.
+
+The first CLI execution path does not resolve credential references or
+uploaded OpenAPI definitions. Configurations containing either are rejected;
+use the web application for verified target authentication and imported API
+definitions. Each run's raw artifacts are retained under
+`$XALGORIX_DATA_DIR/assessments/` for review.
+
+```sh
+xalgorix --plan --assessment-config assessment.json
+xalgorix --run-assessment --assessment-config assessment.json
+```
+
 ## Native and container configuration
 
 Native installations use configured binary paths and external ZAP/GMP endpoints. Xalgorix does not install tools at scan time. Missing binaries and unavailable services become explicit scanner failures.

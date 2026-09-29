@@ -8,32 +8,51 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/xalgord/xalgorix/v4/internal/web"
 )
 
 const maxAssessmentConfigBytes = 1 << 20
 
 func runAssessmentPlanCLI(args cliArgs) error {
+	cfg, err := assessmentConfigFromCLI(args)
+	if err != nil {
+		return err
+	}
+	appConfig := config.Get()
+	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: cliAssessmentAvailability(web.ScannerConfig(appConfig))})
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(plan); err != nil {
+		return fmt.Errorf("write plan: %w", err)
+	}
+	if len(plan.Errors) > 0 {
+		return fmt.Errorf("plan has %d blocking validation error(s)", len(plan.Errors))
+	}
+	return nil
+}
+
+func assessmentConfigFromCLI(args cliArgs) (assessment.AssessmentConfig, error) {
 	var cfg assessment.AssessmentConfig
 	if args.assessmentConfig != "" {
 		f, err := os.Open(args.assessmentConfig)
 		if err != nil {
-			return fmt.Errorf("open config: %w", err)
+			return cfg, fmt.Errorf("open config: %w", err)
 		}
 		defer f.Close()
 		data, err := io.ReadAll(io.LimitReader(f, maxAssessmentConfigBytes+1))
 		if err != nil {
-			return fmt.Errorf("read config: %w", err)
+			return cfg, fmt.Errorf("read config: %w", err)
 		}
 		if len(data) > maxAssessmentConfigBytes {
-			return fmt.Errorf("assessment config exceeds %d bytes", maxAssessmentConfigBytes)
+			return cfg, fmt.Errorf("assessment config exceeds %d bytes", maxAssessmentConfigBytes)
 		}
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			return fmt.Errorf("decode config: %w", err)
+			return cfg, fmt.Errorf("decode config: %w", err)
 		}
 	}
 	if args.assessmentMode != "" {
@@ -46,7 +65,7 @@ func runAssessmentPlanCLI(args cliArgs) error {
 	}
 	if len(args.targets) > 0 {
 		if len(cfg.Targets) > 0 {
-			return errors.New("--target conflicts with assessment_targets in the config file")
+			return cfg, errors.New("--target conflicts with assessment_targets in the config file")
 		}
 		for i, target := range args.targets {
 			cfg.Targets = append(cfg.Targets, assessment.Target{ID: fmt.Sprintf("target-%d", i+1), Kind: inferAssessmentTargetKind(target), Value: target})
@@ -54,7 +73,7 @@ func runAssessmentPlanCLI(args cliArgs) error {
 	}
 	if args.source != "" {
 		if len(cfg.Targets) > 0 {
-			return errors.New("--source conflicts with assessment_targets in the config file")
+			return cfg, errors.New("--source conflicts with assessment_targets in the config file")
 		}
 		kind := assessment.KindLocalSourcePath
 		if strings.Contains(args.source, "://") {
@@ -65,35 +84,11 @@ func runAssessmentPlanCLI(args cliArgs) error {
 			cfg.Types = []assessment.Type{assessment.TypeSourceCode, assessment.TypeDependencies}
 		}
 	}
+	if cfg.Profile == "" {
+		cfg.Profile = scanner.ProfileGentle
+	}
 
-	availability := map[string]bool{}
-	for id, binary := range map[string]string{
-		"subfinder": "subfinder", "httpx": "httpx", "nmap": "nmap", "nuclei": "nuclei",
-		"testssl": "testssl.sh", "vuls": "vuls", "trivy": "trivy", "semgrep": "semgrep",
-		"gitleaks": "gitleaks", "osv": "osv-scanner",
-	} {
-		_, err := exec.LookPath(binary)
-		availability[id] = err == nil
-	}
-	for _, def := range scanner.ScannerRegistry() {
-		if !scanner.HasAssessmentRunner(def.ID) {
-			availability[def.ID] = false
-		} else if _, exists := availability[def.ID]; !exists {
-			// Service-backed adapters require explicit service configuration;
-			// a registry default is not evidence that one is reachable.
-			availability[def.ID] = false
-		}
-	}
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: availability})
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(plan); err != nil {
-		return fmt.Errorf("write plan: %w", err)
-	}
-	if len(plan.Errors) > 0 {
-		return fmt.Errorf("plan has %d blocking validation error(s)", len(plan.Errors))
-	}
-	return nil
+	return cfg, nil
 }
 
 func inferAssessmentTargetKind(raw string) assessment.TargetKind {

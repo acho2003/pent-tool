@@ -284,7 +284,7 @@ Register exact `/api/scans/plan` before relying on the existing generic scan-ID 
 
 Credential references and schema uploads are explicitly associated with target IDs in the canonical normalized model. Reject ambiguous associations in multi-target requests.
 
-For the CLI, add `--assessment-mode`, repeatable `--assessment-type`, `--assessment-config`, and `--plan`. The configuration file uses the same typed assessment shape and credential references as the API. `--plan` prints the redacted preview without executing target operations. Preserve existing `--target`, `--source`, `--scanners`, and SSH-alias options through the compatibility adapter; reject conflicting canonical and legacy inputs instead of choosing silently. API schema file input is prepared locally under the same bounds as uploads.
+For the CLI, add `--assessment-mode`, repeatable `--assessment-type`, `--assessment-config`, `--plan`, and `--run-assessment`. The configuration file uses the same typed assessment shape as the API. `--plan` prints a preview without executing target operations; `--run-assessment` executes selected direct jobs and emits JSON runs/findings. Credential references and uploaded API-definition IDs are currently rejected by CLI execution because that path cannot resolve the server-managed stores. Preserve existing `--target`, `--source`, `--scanners`, and SSH-alias options through the compatibility adapter; reject conflicting canonical and legacy inputs instead of choosing silently. API schema file input is prepared locally under the same bounds as uploads.
 
 ### JSON migration
 

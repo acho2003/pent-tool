@@ -15,7 +15,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-func scannerConfig(cfg *config.Config) scanner.Config {
+func ScannerConfig(cfg *config.Config) scanner.Config {
 	return scanner.Config{
 		NucleiPath: cfg.NucleiPath, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
 		SubfinderPath: cfg.SubfinderPath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, TestsslPath: cfg.TestsslPath,
@@ -69,7 +69,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 		}
 	}
 
-	pipeline := scanner.NewPipeline(scannerConfig(sess.cfg))
+	pipeline := scanner.NewPipeline(ScannerConfig(sess.cfg))
 	emit := func(evt scanner.Event) {
 		ws := WSEvent{Type: evt.Type, Scanner: evt.Scanner, Stream: evt.Stream, Sequence: evt.Sequence, Output: evt.Output, Content: evt.Output, Target: sess.target, AgentID: sess.id, Timestamp: time.Now().Format(time.RFC3339Nano)}
 		if evt.Type != "scanner_output" {
