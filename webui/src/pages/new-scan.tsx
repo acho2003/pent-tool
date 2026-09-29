@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useStartScan } from "@/api/queries";
 import { api } from "@/api/client";
-import type { AssessmentMode, AssessmentPlan, AssessmentType, ToolInfo } from "@/types/api";
+import type { AssessmentMode, AssessmentPlan, AssessmentType, AssessmentScannerDefinition, ToolInfo } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,6 +30,7 @@ export default function NewScanPage() {
   const [severities, setSeverities] = useState<string[]>([]);
   const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("BLACK_BOX");
   const [assessmentTypes, setAssessmentTypes] = useState<AssessmentType[]>(["WEB_APPLICATION"]);
+  const [optionalAssessmentScanners, setOptionalAssessmentScanners] = useState<string[]>([]);
   const [subdomainDiscovery, setSubdomainDiscovery] = useState(false);
   const [assessmentPlan, setAssessmentPlan] = useState<AssessmentPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -48,6 +49,9 @@ export default function NewScanPage() {
   const [authVerifyURL, setAuthVerifyURL] = useState("");
   const [authVerifyMarker, setAuthVerifyMarker] = useState("");
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
+  const registryQuery = useQuery({ queryKey: ["assessment-scanner-registry"], queryFn: api.scannerRegistry, refetchInterval: 30000 });
+  const registry: AssessmentScannerDefinition[] = registryQuery.data?.scanners ?? [];
+  const optionalDefinitions = registry.filter((definition) => ["optional", "explicit_opt_in"].includes(definition.default_selection) && definition.assessment_types.some((type) => assessmentTypes.includes(type)));
   const tools: ToolInfo[] = health.data?.scanners ?? [];
   const selectable = useMemo(() => tools.filter((t) => t.selectable), [tools]);
   const recon = useMemo(() => tools.filter((t) => !t.selectable), [tools]);
@@ -80,9 +84,9 @@ export default function NewScanPage() {
         subdomain_discovery: subdomainDiscovery,
         access: credentialId ? [{ target_ids: [credentialTargetId], kind: "APPLICATION_HEADERS", credential_id: credentialId, verify_url: authVerifyURL, verify_marker: authVerifyMarker }] : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
-        scanner_selection: picked === null || picked.length === selectable.length
-          ? { mode: "auto" }
-          : { mode: "custom", variants: picked },
+        scanner_selection: optionalAssessmentScanners.length > 0 || (picked !== null && picked.length !== selectable.length)
+          ? { mode: "custom", variants: [...new Set([...(picked ?? selectable.map((tool) => tool.name)), ...optionalAssessmentScanners])] }
+          : { mode: "auto" },
       });
       setAssessmentPlan(plan);
     } catch (err) {
@@ -225,6 +229,7 @@ export default function NewScanPage() {
         <div className="space-y-2"><Label>Profile</Label><Input value="web-gentle" disabled /><p className="text-xs text-muted-foreground">Production-safe default for web coverage.</p></div>
       </div>
       <div className="space-y-2"><Label>Assessment types</Label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ASSESSMENT_TYPES.map((type) => <label key={type} className="flex items-center gap-2 rounded-md border p-2 text-xs"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} />{type.replaceAll("_", " ")}</label>)}</div></div>
+      {optionalDefinitions.length > 0 && <div className="space-y-3 rounded-md border p-3"><div><p className="text-sm font-medium">Advanced optional scanners</p><p className="mt-1 text-xs text-muted-foreground">These scanners are off unless you select them. Availability and target compatibility are checked by the backend planner.</p></div>{optionalDefinitions.map((definition) => <label key={definition.id} className={`flex items-start gap-2 rounded-md border p-3 text-xs ${definition.available ? "cursor-pointer" : "opacity-60"}`}><input type="checkbox" checked={optionalAssessmentScanners.includes(definition.id)} disabled={!definition.available} onChange={() => { setOptionalAssessmentScanners((current) => current.includes(definition.id) ? current.filter((id) => id !== definition.id) : [...current, definition.id]); setAssessmentPlan(null); }} className="mt-0.5" /><span><span className="font-medium">{definition.name} · {definition.risk} risk · {definition.available ? "available" : "unavailable"}</span><span className="mt-1 block text-muted-foreground">{definition.summary}</span></span></label>)}</div>}
       <label className="flex items-start gap-2 rounded-md border p-3 text-sm"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-0.5" /><span>Authorize subdomain discovery for domain targets<p className="mt-1 text-xs text-muted-foreground">Off by default. This adds Subfinder coverage to the plan when a domain target is supplied.</p></span></label>
       <div className="space-y-3 rounded-md border p-3"><div className="space-y-1"><Label htmlFor="api-definition">OpenAPI / Swagger definition</Label><Input id="api-definition" type="file" accept=".json,.yaml,.yml,application/json" onChange={(e) => void uploadAPIDefinition(e)} disabled={uploadingDefinition} /><p className="text-xs text-muted-foreground">Definitions are size-limited, external references are rejected, and spec server URLs do not change target scope.</p></div>{apiDefinitionId && <><p className="break-all font-mono text-xs text-muted-foreground">Uploaded {apiDefinitionInfo} · {apiDefinitionId}</p><div className="space-y-2"><Label>Map this definition to a target</Label><Select value={apiTargetId || "target-1"} onValueChange={(value) => { setAPITargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">The selected target must be an explicit HTTP(S) URL.</p></div></>}</div>
       <div className="space-y-3 rounded-md border p-3"><div><p className="text-sm font-medium">Target-bound authentication headers</p><p className="mt-1 text-xs text-muted-foreground">Header values are encrypted and kept out of the assessment configuration. At scan start, Xalgorix checks the selected in-scope URL for the expected marker. Only after that check succeeds will the dedicated ZAP scan receive the headers.</p></div>{credentialSaved && <p className="text-xs text-emerald-400">Encrypted credential saved. Set the verification URL and a response marker before previewing the plan.</p>}{credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <><div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div></div><div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div><Button type="button" variant="outline" onClick={() => void saveHeaderCredential()} disabled={savingCredential || !headerValue}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button></>}{credentialId && <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="auth-verify-url">Authenticated verification URL</Label><Input id="auth-verify-url" value={authVerifyURL} onChange={(e) => { setAuthVerifyURL(e.target.value); setAssessmentPlan(null); }} placeholder="https://app.example.test/account" /></div><div className="space-y-2"><Label htmlFor="auth-verify-marker">Expected response marker</Label><Input id="auth-verify-marker" value={authVerifyMarker} onChange={(e) => { setAuthVerifyMarker(e.target.value); setAssessmentPlan(null); }} placeholder="A phrase present only when logged in" /></div></div>}</div>

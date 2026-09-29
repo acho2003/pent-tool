@@ -2,6 +2,7 @@ import type {
 	AssessmentCoverage,
 	AssessmentConfig,
 	AssessmentPlan,
+	AssessmentScannerDefinition,
 	CredentialMetadata,
   AuthStatus,
   EnvironmentSettings,
@@ -314,6 +315,7 @@ export const api = {
 	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
 	planAssessment: (config: AssessmentConfig) =>
 		http<AssessmentPlan>("/api/scans/plan", { method: "POST", json: config }),
+	scannerRegistry: () => http<{ registry_version: string; scanners: AssessmentScannerDefinition[] }>("/api/scanners/registry"),
 	createCredential: (credential: { name: string; kind: string; target_ids: string[]; values: Record<string, string> }) =>
 		http<CredentialMetadata>("/api/credentials", { method: "POST", json: credential }),
 	uploadAPIDefinition: async (file: File) =>

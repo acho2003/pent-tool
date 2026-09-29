@@ -54,6 +54,35 @@ func TestScannerStatusListsCatalog(t *testing.T) {
 	}
 }
 
+func TestScannerRegistryReflectsConfiguredNiktoAvailability(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.cfg.NiktoPath = "/usr/bin/true"
+	rr := httptest.NewRecorder()
+	s.handleScannerRegistry(rr, httptest.NewRequest(http.MethodGet, "/api/scanners/registry", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Scanners []struct {
+			ID               string `json:"id"`
+			Available        bool   `json:"available"`
+			DefaultSelection string `json:"default_selection"`
+		} `json:"scanners"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range body.Scanners {
+		if definition.ID == "nikto" {
+			if !definition.Available || definition.DefaultSelection != "optional" {
+				t.Fatalf("Nikto registry definition = %+v", definition)
+			}
+			return
+		}
+	}
+	t.Fatal("Nikto registry definition not returned")
+}
+
 func TestAssessmentPlanPreviewReturnsReasonsAndDoesNotStartScan(t *testing.T) {
 	s := newTestServer(t, nil)
 	body := `{"assessment_mode":"BLACK_BOX","assessment_types":["NETWORK"],"assessment_targets":[{"id":"host","type":"IP","value":"192.0.2.10"}]}`

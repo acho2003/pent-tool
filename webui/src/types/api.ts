@@ -105,6 +105,18 @@ export interface AssessmentPlan {
   fingerprint: string;
   registry_version: string;
 }
+export interface AssessmentScannerDefinition {
+  id: string;
+  name: string;
+  category: string;
+  assessment_types: AssessmentType[];
+  target_types: string[];
+  default_selection: string;
+  risk: string;
+  selectable: boolean;
+  available: boolean;
+  summary: string;
+}
 
 // One run within a scope, from GET /api/scans/{id}/scopes.
 export interface ScopeRun {
