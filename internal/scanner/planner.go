@@ -132,7 +132,15 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		return plan
 	}
 
+	// httpx (reachability probe) and katana (the web-crawl stage that feeds the
+	// scanners) run implicitly, not as selectable per-target coverage jobs, so
+	// they never surface as coverage gaps. subfinder stays planner-managed: it is
+	// a real conditional job (opt-in subdomain discovery).
+	discoveryTools := map[string]bool{"httpx": true, "katana": true}
 	for _, def := range defs {
+		if discoveryTools[def.ID] {
+			continue
+		}
 		matchedTargets := make([]assessment.Target, 0)
 		for _, target := range cfg.Targets {
 			if slices.Contains(def.TargetKinds, target.Kind) {

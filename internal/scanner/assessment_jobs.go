@@ -92,6 +92,41 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	for _, target := range plan.Config.Targets {
 		targetKinds[target.ID] = target.Kind
 	}
+
+	// Web-discovery stage: crawl each web target once (katana) so every web
+	// scanner job for that target shares one endpoint list. Without this the
+	// typed-assessment path has no crawl output, and endpoint-driven stages like
+	// dalfox report "no discovered URL to test". Best-effort and gated on the
+	// binary; a completed crawl is recorded so it is visible in the run log.
+	webEndpoints := map[string][]string{}
+	if katanaAvailable(p.Config) {
+		for _, target := range plan.Config.Targets {
+			switch target.Kind {
+			case assessment.KindURL, assessment.KindDomain, assessment.KindHost:
+			default:
+				continue
+			}
+			crawlScope := "discovery:" + target.ID
+			crawlReq := Request{
+				Target:          target.Value,
+				Scope:           crawlScope,
+				ScanDir:         filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
+				Profile:         plan.Config.Profile,
+				TypedAssessment: true,
+			}
+			spec := buildKatana(crawlReq, p.Config)
+			if spec.notApp != "" {
+				continue
+			}
+			crawlRun := executeSpec(ctx, "katana", crawlReq, p.Config, spec, emit)
+			crawlRun.Scope = crawlScope
+			results = append(results, crawlRun)
+			if crawlRun.Status == "completed" {
+				webEndpoints[target.ID] = parseKatanaEndpoints(spec.artifact)
+			}
+		}
+	}
+
 	for jobIndex, job := range plan.Jobs {
 		scope := assessmentJobScope(job)
 		key := assessmentJobRunKey(scope, job.Scanner, job.Variant, plan.Fingerprint)
@@ -106,6 +141,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 		}
+		// Share the target's katana crawl output with its web scanners so
+		// endpoint-driven stages (nuclei/zap/dalfox/wapiti) test discovered URLs.
+		req.WebEndpoints = webEndpoints[job.TargetID]
 		for _, endpoint := range plan.APIEndpoints {
 			if endpoint.TargetID == job.TargetID {
 				req.APIEndpoints = append(req.APIEndpoints, endpoint)

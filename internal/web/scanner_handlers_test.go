@@ -122,12 +122,22 @@ func TestTypedPlanMarksLegacyReconStubsUnavailable(t *testing.T) {
 		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork},
 		Targets: []assessment.Target{{ID: "host", Kind: assessment.KindIP, Value: "192.0.2.10"}},
 	})
-	for _, id := range []string{"httpx", "nmap"} {
-		if !slices.ContainsFunc(plan.Decisions, func(d scanner.PlanDecision) bool {
-			return d.Scanner == id && d.State == scanner.PlanUnavailable && strings.Contains(d.Reason, "unavailable")
-		}) {
-			t.Fatalf("typed plan must explain missing direct %s adapter: %+v", id, plan.Decisions)
+	// nmap has no scoped assessment adapter yet, so a typed plan must still
+	// explain it as unavailable and never emit a non-executable job.
+	if !slices.ContainsFunc(plan.Decisions, func(d scanner.PlanDecision) bool {
+		return d.Scanner == "nmap" && d.State == scanner.PlanUnavailable && strings.Contains(d.Reason, "unavailable")
+	}) {
+		t.Fatalf("typed plan must explain missing direct nmap adapter: %+v", plan.Decisions)
+	}
+	// Discovery tools (subfinder/httpx/katana) run implicitly — recon and the
+	// katana crawl stage — so they are excluded from coverage decisions entirely
+	// (no false "unavailable" gap) and never emit a job.
+	for _, id := range []string{"httpx", "katana"} {
+		if slices.ContainsFunc(plan.Decisions, func(d scanner.PlanDecision) bool { return d.Scanner == id }) {
+			t.Errorf("discovery tool %s must not appear as a coverage decision: %+v", id, plan.Decisions)
 		}
+	}
+	for _, id := range []string{"httpx", "nmap"} {
 		if slices.ContainsFunc(plan.Jobs, func(job scanner.PlanJob) bool { return job.Scanner == id }) {
 			t.Fatalf("typed plan emitted non-executable %s job", id)
 		}
