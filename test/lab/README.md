@@ -29,3 +29,38 @@ curl -H 'X-Lab-Control: local-only' http://127.0.0.1:18080/__lab/metrics
 The control routes are not linked from the fixture pages and are excluded from
 the counters. Apply the same calls to ports 18081 and 18082 for the other
 applications.
+
+After running an assessment against each application, save its `report.json`
+and metrics response. Record one observation per application in a JSON file:
+
+```json
+{
+  "schema_version": 1,
+  "runs": [
+    {
+      "application_id": "app-a-vulnerable",
+      "result_path": "app-a-vulnerable/report.json",
+      "metrics_path": "app-a-vulnerable/metrics.json",
+      "duration_ms": 12345,
+      "peak_memory_bytes": 123456789
+    }
+  ]
+}
+```
+
+Include all three application IDs from the manifest. Paths are relative to
+the observation file. The duration and peak memory values must come from the
+actual run; do not fill in estimates. Generate a machine-readable scorecard:
+
+```sh
+go run ./test/lab/scorecard --observations /path/to/observations.json --gate
+```
+
+The scorecard counts endpoint requests, true/false positives, false negatives,
+precision, recall, and per-class sample sizes. It identifies these five lab
+classes by affected path plus the reported CWE or title. Findings without a
+matching class or on the fixed application count as false positives. A scan
+result without a typed `assessment_coverage` snapshot cannot pass the gate,
+even if its scanner process exited successfully. Review the class mapping and
+native evidence before publishing a release scorecard; the tool has not yet
+run scanners or proven the quality targets.
