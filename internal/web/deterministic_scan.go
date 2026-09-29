@@ -23,7 +23,7 @@ func scannerConfig(cfg *config.Config) scanner.Config {
 		ZAPURL: cfg.ZAPURL, ZAPAPIKey: cfg.ZAPAPIKey, ZAPDedicated: cfg.ZAPDedicated, GVMHost: cfg.GVMHost, GVMPort: cfg.GVMPort, GVMSocket: cfg.GVMSocket, GVMUser: cfg.GVMUsername, GVMPass: cfg.GVMPassword,
 		RateRPS: int(cfg.RateLimitRPS), MaxWorkers: cfg.MaxWorkers, ScanHeaders: append([]string(nil), cfg.ScanHeaders...), MaxOutputBytes: cfg.ScannerMaxOutputBytes,
 		MasscanRate: cfg.MasscanRate, MasscanTimeout: time.Duration(cfg.MasscanTimeoutSec) * time.Second,
-		NiktoTimeout: time.Duration(cfg.NiktoTimeoutSec) * time.Second,
+		NiktoTimeout:  time.Duration(cfg.NiktoTimeoutSec) * time.Second,
 		NucleiTimeout: time.Duration(cfg.NucleiTimeoutSec) * time.Second, ZAPTimeout: time.Duration(cfg.ZAPTimeoutSec) * time.Second,
 		OpenVASTimeout: time.Duration(cfg.OpenVASTimeoutSec) * time.Second, TrivyTimeout: time.Duration(cfg.TrivyTimeoutSec) * time.Second, VulsTimeout: time.Duration(cfg.VulsTimeoutSec) * time.Second,
 		SubfinderTimeout: time.Duration(cfg.SubfinderTimeoutSec) * time.Second,
