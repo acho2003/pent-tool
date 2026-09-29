@@ -90,6 +90,7 @@ type fakeZAP struct {
 	followRedirects    string
 	accessFails        bool // accessUrl returns 500
 	ascanNoTree        bool // ascan/action/scan returns url_not_found
+	passiveUnavailable bool // pscan/view/recordsToScan returns an API error
 	removeContextFails bool
 	domXSSEnabled      string
 	accessedURLs       []string
@@ -160,6 +161,10 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/JSON/spider/view/status/":
 		body = map[string]string{"status": "100"}
 	case "/JSON/pscan/view/recordsToScan/":
+		if f.passiveUnavailable {
+			http.Error(w, `{"code":"no_implementor"}`, http.StatusBadRequest)
+			return
+		}
 		body = map[string]string{"recordsToScan": "0"}
 	case "/JSON/core/action/accessUrl/":
 		f.mu.Lock()
@@ -268,7 +273,7 @@ func TestZAPReplacerSecretsAreSentInPostBody(t *testing.T) {
 }
 
 func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
-	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[{"pluginId":"40012","alert":"XSS","name":"Reflected XSS","risk":"High","description":"d","cweid":"79","url":"http://example.test/q"}]}`}
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[{"pluginId":"10020","name":"Missing Security Header","risk":"Low","url":"http://example.test/"},{"pluginId":"40012","alert":"XSS","name":"Reflected XSS","risk":"High","description":"d","cweid":"79","url":"http://example.test/q"}]}`}
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
@@ -291,7 +296,22 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 	fake.mu.Lock()
 	leftover := len(fake.rules)
 	maxChildren := fake.spiderMaxChildren
+	paths := append([]string(nil), fake.paths...)
 	fake.mu.Unlock()
+	spiderEnd := slices.Index(paths, "/JSON/spider/view/status/")
+	firstPassive := slices.Index(paths, "/JSON/pscan/view/recordsToScan/")
+	activeStart := slices.Index(paths, "/JSON/ascan/action/scan/")
+	activeEnd := slices.Index(paths, "/JSON/ascan/view/status/")
+	lastPassive := -1
+	for i, path := range paths {
+		if path == "/JSON/pscan/view/recordsToScan/" {
+			lastPassive = i
+		}
+	}
+	export := slices.Index(paths, "/JSON/core/view/alerts/")
+	if !(spiderEnd >= 0 && spiderEnd < firstPassive && firstPassive < activeStart && activeStart < activeEnd && activeEnd < lastPassive && lastPassive < export) {
+		t.Errorf("ZAP did not drain passive scans before and after active scanning: %v", paths)
+	}
 	if maxChildren != "125" {
 		t.Errorf("ZAP spider maxChildren = %q, want 125", maxChildren)
 	}
@@ -305,7 +325,7 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 		t.Errorf("alerts were exported with baseurl %q, not scoped to the target", scope)
 	}
 	findings, err := parseZAP(run.ArtifactPath)
-	if err != nil || len(findings) != 1 || findings[0].Severity != "high" || findings[0].Endpoint != "http://example.test/q" {
+	if err != nil || len(findings) != 2 || findings[0].Endpoint != "http://example.test/" || findings[1].Severity != "high" || findings[1].Endpoint != "http://example.test/q" {
 		t.Fatalf("parsed report = %+v err = %v", findings, err)
 	}
 	log, err := os.ReadFile(run.StdoutPath)
@@ -314,6 +334,20 @@ func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {
 	}
 	if strings.Contains(string(log), "sekret-token") {
 		t.Error("target auth secret leaked into the scanner log")
+	}
+}
+
+func TestZAPFailsWhenPassiveScanningCannotBeConfirmed(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, passiveUnavailable: true}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir()},
+		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+	if run.Status != "failed" || !strings.Contains(run.Reason, "passive scan") {
+		t.Fatalf("unavailable passive scan = %+v", run)
+	}
+	if fake.called("/JSON/ascan/action/scan/") || fake.called("/JSON/core/view/alerts/") {
+		t.Fatal("ZAP must not report complete coverage when passive scanning is unavailable")
 	}
 }
 

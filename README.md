@@ -8,7 +8,7 @@ Each scan runs fixed phases:
 
 1. **Recon** — Subfinder enumerates subdomains (skipped for a bare host or URL), httpx keeps the live hosts, and Nmap records open ports and services per host. Each live host becomes a *host scope*. A target with nothing to expand (for example `localhost:3000`) is scanned as a single host.
 2. **Classify** — from recon evidence alone, each host gets the `web` track (a live HTTP(S) URL, TLS, or an open 80/443/8080/8443 or HTTP-like service) and/or the `server` track (any other open port). A host with no recon evidence is scanned on both tracks.
-3. **Scan** — per host: Nuclei, OWASP ZAP, and testssl.sh on the web track; OpenVAS/Greenbone and Vuls on the server track.
+3. **Scan** — per host: Nuclei, OWASP ZAP, and testssl.sh on the web track; OpenVAS/Greenbone and Vuls on the server track. ZAP spiders the application, drains passive alerts, runs an active scan, drains passive alerts from that traffic, then exports both kinds of alerts. If passive scanning cannot be confirmed, the ZAP run fails instead of reporting complete coverage.
 4. **Source code** — once per scan, on a single *source scope*: Trivy, Semgrep, Gitleaks, and OSV-Scanner. Source comes from `--source` (a local directory, or a git repository cloned into the scan directory) or from a git-URL target. With no source, these tools record `not_applicable`.
 
 Scanners run on a bounded worker pool (`XALGORIX_MAX_WORKERS`, default 3). The heavy tools, ZAP and OpenVAS, never run at the same time.

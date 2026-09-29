@@ -386,9 +386,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		zapStopScan(cfg, "/JSON/spider/action/stop/", spiderID)
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
+	logLine("ZAP passive scan: waiting for spider traffic to be analyzed")
 	if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
-		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		return finishServiceFailure(run, fmt.Errorf("ZAP passive scan after spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}
+	logLine("ZAP passive scan complete after spider")
 	// Typed jobs restore daemon-global scan rule state after execution. Legacy
 	// jobs retain the historical DOM XSS mitigation behavior.
 	if req.TypedAssessment {
@@ -449,9 +451,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		zapStopScan(cfg, "/JSON/ascan/action/stop/", activeID)
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
+	logLine("ZAP passive scan: waiting for active-scan traffic to be analyzed")
 	if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
-		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		return finishServiceFailure(run, fmt.Errorf("ZAP passive scan after active scan: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}
+	logLine("ZAP passive scan complete after active scan")
 	// Scope the export to this target. The ZAP daemon is long-lived and shared
 	// by every scan, so a session-wide report would fold alerts raised against
 	// previously scanned hosts into this scan's artifact.
@@ -570,8 +574,8 @@ func zapWaitScanChecked(ctx context.Context, call zapCallFunc, statusPath, scanI
 }
 
 // zapWaitPassive drains the passive scan queue so alerts raised against
-// already-crawled messages are in the report. A ZAP without the passive-scan
-// add-on answers with an error; that is not a scan failure.
+// already-crawled messages are in the report. Failure to inspect the queue
+// means passive coverage cannot be confirmed.
 func zapWaitPassive(ctx context.Context, call zapCallFunc, log func(string)) error {
 	return zapWaitPassiveChecked(ctx, call, log, nil)
 }
@@ -588,10 +592,14 @@ func zapWaitPassiveChecked(ctx context.Context, call zapCallFunc, log func(strin
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return nil
+			return fmt.Errorf("query ZAP passive scan queue: %w", err)
 		}
 		remaining := valueString(resp, "recordsToScan")
-		if remaining == "0" || remaining == "" || remaining == "<nil>" {
+		count, err := strconv.Atoi(remaining)
+		if err != nil || count < 0 {
+			return fmt.Errorf("invalid ZAP passive scan queue count %q", remaining)
+		}
+		if count == 0 {
 			return nil
 		}
 		log("ZAP passive scan queue: " + remaining + " record(s)")
