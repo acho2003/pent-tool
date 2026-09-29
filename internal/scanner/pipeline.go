@@ -97,6 +97,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.MasscanTimeout <= 0 {
 		cfg.MasscanTimeout = 15 * time.Minute
 	}
+	if cfg.NiktoTimeout <= 0 {
+		cfg.NiktoTimeout = 10 * time.Minute
+	}
 	if cfg.TestsslPath == "" {
 		cfg.TestsslPath = "testssl.sh"
 	}

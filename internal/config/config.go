@@ -43,6 +43,7 @@ type Config struct {
 	ScannerMaxOutputBytes int64
 	MasscanRate           int
 	MasscanTimeoutSec     int
+	NiktoTimeoutSec       int
 	MaxWorkers            int
 	NucleiTimeoutSec      int
 	ZAPTimeoutSec         int
@@ -260,6 +261,7 @@ func load() *Config {
 		ScannerMaxOutputBytes: int64(envOrInt("XALGORIX_SCANNER_MAX_OUTPUT_BYTES", 100<<20)),
 		MasscanRate:           envOrInt("XALGORIX_MASSCAN_RATE", 100),
 		MasscanTimeoutSec:     envOrInt("XALGORIX_MASSCAN_TIMEOUT_SEC", 900),
+		NiktoTimeoutSec:       envOrInt("XALGORIX_NIKTO_TIMEOUT_SEC", 600),
 		MaxWorkers:            envOrInt("XALGORIX_MAX_WORKERS", 3),
 		NucleiTimeoutSec:      envOrInt("XALGORIX_NUCLEI_TIMEOUT_SECONDS", 3600),
 		ZAPTimeoutSec:         envOrInt("XALGORIX_ZAP_TIMEOUT_SECONDS", 7200),

@@ -159,6 +159,7 @@ type Config struct {
 	NmapTimeout           time.Duration
 	MasscanTimeout        time.Duration
 	MasscanRate           int
+	NiktoTimeout          time.Duration
 	TestsslTimeout        time.Duration
 	SemgrepTimeout        time.Duration
 	GitleaksTimeout       time.Duration

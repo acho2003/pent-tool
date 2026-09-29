@@ -106,6 +106,8 @@ Key environment variables:
 | `XALGORIX_MASSCAN_PATH` | `masscan` | Optional typed IP/CIDR discovery executable |
 | `XALGORIX_MASSCAN_RATE` | `100` | Masscan packet rate; this adapter caps it at 1,000 packets/second |
 | `XALGORIX_MASSCAN_TIMEOUT_SEC` | `900` | Maximum duration for one Masscan job |
+| `XALGORIX_NIKTO_PATH` | `nikto` | Optional Nikto executable for explicitly selected root-path web checks |
+| `XALGORIX_NIKTO_TIMEOUT_SEC` | `600` | Maximum duration for one Nikto job; adapter caps it at 10 minutes |
 | `XALGORIX_TESTSSL_PATH` | `testssl.sh` | testssl.sh executable |
 | `XALGORIX_SEMGREP_PATH` | `semgrep` | Semgrep executable |
 | `XALGORIX_GITLEAKS_PATH` | `gitleaks` | Gitleaks executable |

@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -146,8 +149,111 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseTestssl(run.ArtifactPath)
 	case "masscan", "subfinder", "httpx":
 		return nil, nil // recon evidence tools produce no findings
+	case "nikto":
+		return parseNikto(run.ArtifactPath)
 	default:
 		return nil, fmt.Errorf("unsupported scanner %q", run.Scanner)
+	}
+}
+
+var niktoCVEPattern = regexp.MustCompile(`(?i)CVE-\d{4}-\d{4,}`)
+
+func parseNikto(path string) ([]Finding, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("decode Nikto JSON: %w", err)
+	}
+	var hosts []any
+	switch value := root.(type) {
+	case []any:
+		hosts = value
+	case map[string]any:
+		hosts = []any{value}
+	default:
+		return nil, fmt.Errorf("Nikto JSON must be an object or array")
+	}
+	var out []Finding
+	for _, rawHost := range hosts {
+		host := object(rawHost)
+		if host == nil {
+			continue
+		}
+		vulnerabilities := array(host["vulnerabilities"])
+		if len(vulnerabilities) == 0 && (host["msg"] != nil || host["message"] != nil) {
+			vulnerabilities = []any{host}
+		}
+		for index, rawIssue := range vulnerabilities {
+			issue := object(rawIssue)
+			if issue == nil {
+				continue
+			}
+			message := firstNonEmpty(str(issue["msg"]), str(issue["message"]))
+			if message == "" {
+				continue
+			}
+			uri := firstNonEmpty(str(issue["url"]), str(issue["uri"]))
+			endpoint := niktoEndpoint(host, uri)
+			method := strings.ToUpper(firstNonEmpty(str(issue["method"]), "GET"))
+			id := firstNonEmpty(str(issue["id"]), str(issue["testid"]), strconv.Itoa(index+1))
+			refs := firstNonEmpty(str(issue["refs"]), str(issue["references"]))
+			cve := ""
+			if match := niktoCVEPattern.FindString(refs + " " + message); match != "" {
+				cve = strings.ToUpper(match)
+			}
+			evidence := "Nikto test " + id + " (" + method + ")"
+			if refs != "" {
+				evidence += "; references: " + refs
+			}
+			out = append(out, Finding{
+				SourceID: "nikto:" + str(host["host"]) + ":" + str(host["port"]) + ":" + id + ":" + method + ":" + uri,
+				Scanner:  "nikto", Title: message, Severity: "info", SeverityUnrated: true,
+				Target: firstNonEmpty(str(host["host"]), str(host["ip"])), Endpoint: endpoint,
+				Description: message, Evidence: evidence, CVE: cve,
+			})
+		}
+	}
+	return out, nil
+}
+
+func niktoEndpoint(host map[string]any, uri string) string {
+	if uri == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(uri); err == nil && parsed.IsAbs() {
+		return parsed.String()
+	}
+	name := firstNonEmpty(str(host["host"]), str(host["ip"]))
+	if name == "" {
+		return uri
+	}
+	port := str(host["port"])
+	scheme := "http"
+	if niktoTLS(host["ssl"]) || niktoTLS(host["tls"]) {
+		scheme = "https"
+	}
+	if port != "" && !(scheme == "http" && port == "80") && !(scheme == "https" && port == "443") {
+		name = net.JoinHostPort(name, port)
+	}
+	if strings.HasPrefix(uri, "/") {
+		return scheme + "://" + name + uri
+	}
+	return scheme + "://" + name + "/" + uri
+}
+
+func niktoTLS(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case float64:
+		return v == 1
+	case string:
+		return strings.EqualFold(v, "true") || v == "1"
+	default:
+		return false
 	}
 }
 

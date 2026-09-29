@@ -32,7 +32,7 @@ func (s *Server) scannerAvailability() map[string]bool {
 	// backend; a configured shared daemon is not sufficient evidence.
 	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
 	available["openvas"] = (strings.TrimSpace(s.cfg.GVMHost) != "" || strings.TrimSpace(s.cfg.GVMSocket) != "") && s.cfg.GVMUsername != "" && s.cfg.GVMPassword != ""
-	for _, id := range []string{"nikto", "sqlmap", "lynis"} {
+	for _, id := range []string{"sqlmap", "lynis"} {
 		available[id] = false
 	}
 	return available

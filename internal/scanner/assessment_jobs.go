@@ -20,7 +20,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "masscan" {
+	if id == "masscan" || id == "nikto" {
 		return true
 	}
 	for _, runner := range NewPipeline(Config{}).Runners {
@@ -68,6 +68,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	// pipeline prevents empty legacy scanner selections from silently adding raw
 	// network probes to existing scans.
 	byName["masscan"] = masscanRunner{}
+	// Nikto is opt-in and root-path-only; it does not enter legacy runs.
+	byName["nikto"] = niktoRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
 		if run.Terminal() {

@@ -1,0 +1,81 @@
+package scanner
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestBuildNiktoIsBoundedAndIsolated(t *testing.T) {
+	dir := t.TempDir()
+	spec := buildNikto(Request{Target: "https://Example.test:8443/", ScanDir: dir}, Config{NiktoPath: "nikto", NiktoTimeout: 30 * time.Minute})
+	if spec.notApp != "" || spec.timeout != niktoMaxDuration {
+		t.Fatalf("unexpected spec: %+v", spec)
+	}
+	want := []string{"-config", filepath.Join(dir, "scanner-output", "nikto", "nikto.conf"), "-host", "https://Example.test:8443/", "-nointeractive", "-nocheck", "-maxtime", "600", "-timeout", "5", "-Pause", "1", "-Cgidirs", "none", "-Tuning", "123b", "-Format", "json", "-output", filepath.Join(dir, "scanner-output", "nikto", "results.json")}
+	if !reflect.DeepEqual(spec.args, want) {
+		t.Fatalf("Nikto args = %#v, want %#v", spec.args, want)
+	}
+	for _, arg := range spec.args {
+		if arg == "-followredirects" || arg == "upload" || arg == "injection" || arg == "dos" || arg == "sqli" || arg == "authbypass" || arg == "cmdexec" {
+			t.Fatalf("unsafe/unbounded option included: %q", arg)
+		}
+	}
+	if err := spec.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(spec.args[1])
+	if err != nil || !strings.Contains(string(data), "Xalgorix bounded") {
+		t.Fatalf("isolated config not written: data=%q err=%v", data, err)
+	}
+	info, err := os.Stat(spec.args[1])
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("config permissions = %v, err=%v", info.Mode().Perm(), err)
+	}
+}
+
+func TestBuildNiktoRejectsTargetsOutsideRootHTTPOrigin(t *testing.T) {
+	for _, target := range []string{
+		"https://example.test/admin", "https://example.test/?x=1", "https://user:pass@example.test/",
+		"https://example.test/#fragment", "ftp://example.test/", "example.test", "https://example.test:bad/",
+	} {
+		spec := buildNikto(Request{Target: target, ScanDir: t.TempDir()}, Config{NiktoPath: "nikto"})
+		if spec.notApp == "" {
+			t.Errorf("target %q was accepted", target)
+		}
+	}
+}
+
+func TestParseNiktoSupportsNestedAndSingleFindingJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nikto.json")
+	input := `[{"host":"example.test","port":"8443","ssl":true,"vulnerabilities":[{"id":"123","method":"GET","url":"/backup.zip","msg":"Backup archive exposed CVE-2024-12345","refs":"CVE-2024-12345"}]},{"host":"other.test","port":"80","id":"456","method":"GET","uri":"/server-info","message":"Server information disclosure"}]`
+	if err := os.WriteFile(path, []byte(input), 0600); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := parseNikto(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("got %d findings: %+v", len(findings), findings)
+	}
+	if findings[0].Endpoint != "https://example.test:8443/backup.zip" || findings[0].CVE != "CVE-2024-12345" || !findings[0].SeverityUnrated {
+		t.Fatalf("nested issue lost location or CVE: %+v", findings[0])
+	}
+	if findings[1].Endpoint != "http://other.test/server-info" || findings[1].Evidence != "Nikto test 456 (GET)" {
+		t.Fatalf("single issue parse incorrect: %+v", findings[1])
+	}
+}
+
+func TestParseNiktoReportsInvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nikto.json")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseNikto(path); err == nil {
+		t.Fatal("expected JSON parse error")
+	}
+}
