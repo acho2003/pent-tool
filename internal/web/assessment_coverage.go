@@ -95,9 +95,21 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 	coverage.Types = append([]assessment.Type(nil), plan.Config.Types...)
 	coverage.TypeCoverage = append([]scanner.TypeCoverage(nil), plan.Coverage...)
 	for _, capability := range plan.Capabilities {
+		state, reason := capability.State, capability.Reason
+		if capability.Capability == assessment.CapAuthWeb {
+			for _, run := range record.ScannerRuns {
+				if run.Scanner == "zap" && run.Status == "failed" && strings.Contains(run.Reason, "authenticated session") {
+					for _, job := range plan.Jobs {
+						if job.Scanner == "zap" && job.TargetID == capability.TargetID && job.Target == run.Target {
+							state, reason = assessment.StateUnavailable, "authenticated session expired during scanning; remaining checks were not completed"
+						}
+					}
+				}
+			}
+		}
 		coverage.Capabilities = append(coverage.Capabilities, assessmentCapabilityCoverage{
 			Capability: string(capability.Capability), TargetID: capability.TargetID,
-			State: capability.State, Reason: capability.Reason,
+			State: state, Reason: reason,
 		})
 	}
 	for _, endpoint := range plan.APIEndpoints {

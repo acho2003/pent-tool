@@ -100,6 +100,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && job.Scanner == "zap" {
 			req.TargetAuth = strings.Join(headers, "\n")
+			req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
 		}
 		if parsed, err := url.Parse(job.Target); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
 			req.ApplicationURL = job.Target

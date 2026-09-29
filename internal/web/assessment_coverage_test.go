@@ -67,6 +67,16 @@ func TestAssessmentCoverageLabelsLegacyRecords(t *testing.T) {
 	}
 }
 
+func TestAssessmentCoverageMarksExpiredSessionUnavailable(t *testing.T) {
+	target := "https://app.example.test/Portal"
+	plan := &scanner.AssessmentPlan{Config: assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication}}, Capabilities: []assessment.CapabilityEvidence{{Capability: assessment.CapAuthWeb, TargetID: "app", State: assessment.StateVerified}}, Jobs: []scanner.PlanJob{{ID: "zap:app", Scanner: "zap", TargetID: "app", Target: target, State: scanner.PlanSelected, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication}}}, Coverage: []scanner.TypeCoverage{{Type: assessment.TypeWebApplication, State: "planned"}}}
+	record := &ScanRecord{AssessmentPlan: plan, Status: "finished", ScannerRuns: []scanner.Run{{Scanner: "zap", Target: target, Status: "failed", Reason: "authenticated session expired or verification failed"}}}
+	coverage := buildAssessmentCoverage("expired", record, "")
+	if coverage.State != "partial" || len(coverage.Capabilities) != 1 || coverage.Capabilities[0].State != assessment.StateUnavailable || !strings.Contains(coverage.Capabilities[0].Reason, "expired") {
+		t.Fatalf("expired login was not reported as a coverage gap: %+v", coverage)
+	}
+}
+
 func TestAssessmentCoverageMarksFinishedJobsCompleteOnlyWhenCoverageIsComplete(t *testing.T) {
 	plan := &scanner.AssessmentPlan{
 		Config:      assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test"}}},

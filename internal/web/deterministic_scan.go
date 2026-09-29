@@ -115,8 +115,17 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 				runs = nil
 			} else {
 				pipeline.Config.AssessmentAuthHeaders = authHeaders
+				refreshers, refreshErr := s.assessmentAuthRefreshers(sess.assessmentPlan, authHeaders)
+				if refreshErr != nil {
+					sess.record.Status = "failed"
+					sess.record.StopReason = refreshErr.Error()
+				} else {
+					pipeline.Config.AssessmentAuthRefresh = refreshers
+				}
 				sess.record.AssessmentPlan = sess.assessmentPlan
-				runs = pipeline.RunAssessmentJobs(ctx, *sess.assessmentPlan, sess.scanDir, sess.record.ScannerRuns, emit)
+				if refreshErr == nil {
+					runs = pipeline.RunAssessmentJobs(ctx, *sess.assessmentPlan, sess.scanDir, sess.record.ScannerRuns, emit)
+				}
 			}
 		}
 	} else {

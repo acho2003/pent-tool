@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -144,5 +145,72 @@ func TestFormLoginNeverPostsCredentialsOutsideApplication(t *testing.T) {
 	redirectAfterPost.Store(true)
 	if _, err := verifyFormSession(context.Background(), app.URL+"/app", app.URL+"/app/login", "marker", values); err == nil || foreignRequests.Load() != 0 {
 		t.Fatalf("foreign login redirect was followed: err=%v requests=%d", err, foreignRequests.Load())
+	}
+}
+
+func TestFormSessionRenewsOnceAndStopsOnSecondExpiry(t *testing.T) {
+	var generation atomic.Int32
+	var logins atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/login":
+			if r.Method == http.MethodGet {
+				_, _ = w.Write([]byte(`<form method="post" action="/app/login"><input name="username"><input name="password" type="password"></form>`))
+				return
+			}
+			if r.PostFormValue("password") != "renew-secret" {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			logins.Add(1)
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: fmt.Sprint(generation.Load()), Path: "/app"})
+			_, _ = w.Write([]byte("logged in"))
+		case "/app/verify":
+			cookie, err := r.Cookie("session")
+			if err != nil || cookie.Value != fmt.Sprint(generation.Load()) {
+				http.Error(w, "expired", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte("private marker"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	s := newTestServer(t, nil)
+	keyPath := t.TempDir() + "/credential.key"
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	vault, err := s.credentialVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := vault.Create(credentials.Record{Name: "renew", Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, Values: map[string]string{"login_url": server.URL + "/app/login", "username": "operator", "password": "renew-secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &scanner.AssessmentPlan{Config: assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: server.URL + "/app"}}, Access: []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, CredentialID: meta.ID, VerifyURL: server.URL + "/app/verify", VerifyMarker: "private marker"}}}, Capabilities: []assessment.CapabilityEvidence{{Capability: assessment.CapAuthWeb, TargetID: "app", State: assessment.StateAvailable}}}
+	headers, err := s.prepareAssessmentAuthentication(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshers, err := s.assessmentAuthRefreshers(plan, headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := headers["app"]
+	if _, err := refreshers["app"](context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	generation.Add(1)
+	renewed, err := refreshers["app"](context.Background(), current)
+	if err != nil || renewed[0] != "Cookie: session=1" || logins.Load() != 2 {
+		t.Fatalf("first expiry did not renew once: headers=%v logins=%d err=%v", renewed, logins.Load(), err)
+	}
+	generation.Add(1)
+	if _, err := refreshers["app"](context.Background(), renewed); err == nil || strings.Contains(err.Error(), "renew-secret") || logins.Load() != 2 {
+		t.Fatalf("second expiry did not stop securely: logins=%d err=%v", logins.Load(), err)
 	}
 }

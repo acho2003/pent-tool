@@ -60,14 +60,15 @@ type Request struct {
 	// the crash-persisted record built from them — carry their per-host scope
 	// instead of collapsing per-host same-named runs. Pipeline.Run sets it per
 	// scope; recon sets it per tool. Not serialized: it is derived, not input.
-	Scope           string        `json:"-"`
-	Artifact        Artifact      `json:"artifact,omitempty"`
-	VulsSSHHost     string        `json:"vuls_ssh_host,omitempty"`
-	TargetAuth      string        `json:"-"`
-	Profile         string        `json:"-"`
-	ApplicationURL  string        `json:"-"`
-	TypedAssessment bool          `json:"-"`
-	APIEndpoints    []APIEndpoint `json:"-"`
+	Scope           string                                            `json:"-"`
+	Artifact        Artifact                                          `json:"artifact,omitempty"`
+	VulsSSHHost     string                                            `json:"vuls_ssh_host,omitempty"`
+	TargetAuth      string                                            `json:"-"`
+	AuthRefresh     func(context.Context, []string) ([]string, error) `json:"-"`
+	Profile         string                                            `json:"-"`
+	ApplicationURL  string                                            `json:"-"`
+	TypedAssessment bool                                              `json:"-"`
+	APIEndpoints    []APIEndpoint                                     `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -148,6 +149,10 @@ type Config struct {
 	// AssessmentAuthHeaders contains runtime-only, target-bound credentials for
 	// typed jobs. It must never be serialized or logged.
 	AssessmentAuthHeaders map[string][]string
+	// AssessmentAuthRefresh checks an authenticated session during a typed job.
+	// It returns replacement header lines after at most one form re-login.
+	// Callbacks and returned secrets remain runtime-only.
+	AssessmentAuthRefresh map[string]func(context.Context, []string) ([]string, error)
 	MaxOutputBytes        int64
 	NucleiTimeout         time.Duration
 	ZAPTimeout            time.Duration

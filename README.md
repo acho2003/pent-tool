@@ -176,8 +176,11 @@ are not queued. Typed ZAP jobs can use encrypted, target-bound HTTP headers or
 form login credentials. Before scanning, the server checks an in-scope URL for
 the configured authenticated response marker. Failed verification skips the
 authenticated job. Form login currently supports an HTML POST form with
-username/password fields and hidden CSRF fields; session expiry during a long
-scan is not yet refreshed automatically.
+username/password fields and hidden CSRF fields. During typed ZAP scans, the
+session is checked at stage boundaries and approximately once per minute while
+waiting for crawl or active-scan progress. An expired form session gets one
+re-login attempt; another expiry or a failed re-login ends authenticated work
+and records failed coverage.
 
 Example request:
 

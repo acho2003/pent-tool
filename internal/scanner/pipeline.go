@@ -846,10 +846,18 @@ func secretValues(req Request, cfg Config) []string {
 	vals := []string{cfg.ZAPAPIKey, cfg.GVMPass}
 	vals = append(vals, req.Secrets...)
 	headers := append([]string(nil), cfg.ScanHeaders...)
-	headers = append(headers, strings.FieldsFunc(req.TargetAuth, func(r rune) bool { return r == '\n' || r == ';' })...)
+	headers = append(headers, strings.Split(req.TargetAuth, "\n")...)
 	for _, part := range headers {
 		if i := strings.Index(part, ":"); i >= 0 {
-			vals = append(vals, strings.TrimSpace(part[i+1:]))
+			value := strings.TrimSpace(part[i+1:])
+			vals = append(vals, value)
+			if strings.EqualFold(strings.TrimSpace(part[:i]), "Cookie") {
+				for _, cookie := range strings.Split(value, ";") {
+					if _, secret, ok := strings.Cut(strings.TrimSpace(cookie), "="); ok && secret != "" {
+						vals = append(vals, secret)
+					}
+				}
+			}
 		}
 	}
 	return vals

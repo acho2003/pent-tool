@@ -121,6 +121,75 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 	return headersByTarget, nil
 }
 
+// assessmentAuthRefreshers rechecks the complete target-bound header set while
+// ZAP is running. Form sessions get one fresh login if their marker disappears;
+// a second expiry stops authenticated work instead of silently downgrading it.
+func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers map[string][]string) (map[string]func(context.Context, []string) ([]string, error), error) {
+	refreshers := map[string]func(context.Context, []string) ([]string, error){}
+	if len(headers) == 0 {
+		return refreshers, nil
+	}
+	vault, err := s.openCredentialVault()
+	if err != nil {
+		return nil, fmt.Errorf("authenticated session renewal is unavailable")
+	}
+	for _, target := range plan.Config.Targets {
+		if len(headers[target.ID]) == 0 {
+			continue
+		}
+		var verifyURL, marker string
+		var formValues map[string]string
+		for _, binding := range plan.Config.Access {
+			if !webAuthenticationKind(binding.Kind) {
+				continue
+			}
+			for _, id := range binding.TargetIDs {
+				if id != target.ID {
+					continue
+				}
+				if verifyURL == "" {
+					verifyURL, marker = binding.VerifyURL, binding.VerifyMarker
+				}
+				if binding.Kind == assessment.AccessFormLogin {
+					if formValues != nil {
+						return nil, fmt.Errorf("multiple form sessions for one target are unsupported")
+					}
+					record, getErr := vault.Get(binding.CredentialID, target.ID)
+					if getErr != nil || record.Kind != assessment.AccessFormLogin {
+						return nil, fmt.Errorf("form session renewal credential is unavailable")
+					}
+					formValues = record.Values
+					verifyURL, marker = binding.VerifyURL, binding.VerifyMarker
+				}
+			}
+		}
+		appURL := target.Value
+		refreshed := false
+		refreshers[target.ID] = func(ctx context.Context, current []string) ([]string, error) {
+			if err := verifyHeaderSession(ctx, verifyURL, marker, current, appURL); err == nil {
+				return current, nil
+			}
+			if formValues == nil || refreshed {
+				return nil, fmt.Errorf("authenticated session expired or verification failed")
+			}
+			refreshed = true
+			cookie, err := verifyFormSession(ctx, appURL, verifyURL, marker, formValues)
+			if err != nil {
+				return nil, fmt.Errorf("authenticated session renewal failed")
+			}
+			next := append([]string(nil), current...)
+			for i, line := range next {
+				if strings.HasPrefix(strings.ToLower(line), "cookie:") {
+					next[i] = cookie
+					return next, nil
+				}
+			}
+			return nil, fmt.Errorf("authenticated session cookie is missing")
+		}
+	}
+	return refreshers, nil
+}
+
 func webAuthenticationKind(kind assessment.AccessKind) bool {
 	switch kind {
 	case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin:

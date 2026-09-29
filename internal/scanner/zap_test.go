@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +16,42 @@ import (
 	"testing"
 	"time"
 )
+
+func TestZAPAuthMonitorRenewsAndStopsOnFailure(t *testing.T) {
+	checks, replacements := 0, 0
+	monitor := &zapAuthMonitor{current: []string{"Cookie: old"}, interval: time.Hour, refresh: func(ctx context.Context, current []string) ([]string, error) {
+		checks++
+		if checks == 1 {
+			return []string{"Cookie: new"}, nil
+		}
+		return nil, fmt.Errorf("secret credential must not escape")
+	}}
+	replace := func(next []string) error { replacements++; return nil }
+	if err := monitor.check(context.Background(), replace); err != nil || monitor.current[0] != "Cookie: new" || replacements != 1 {
+		t.Fatalf("renewal failed: %+v, %v", monitor, err)
+	}
+	if err := monitor.check(context.Background(), replace); err != nil || checks != 1 {
+		t.Fatalf("checked before interval: %v", err)
+	}
+	monitor.next = time.Time{}
+	if err := monitor.check(context.Background(), replace); err == nil || strings.Contains(err.Error(), "secret") || replacements != 1 {
+		t.Fatalf("expiry did not fail safely: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	monitor.next = time.Time{}
+	if err := monitor.check(ctx, replace); err != context.Canceled {
+		t.Fatalf("cancelled monitor returned %v", err)
+	}
+}
+
+func TestSessionCookieValuesAreRedacted(t *testing.T) {
+	secrets := secretValues(Request{TargetAuth: "Cookie: first=one-secret; second=two-secret"}, Config{})
+	redacted := redact("evidence one-secret and two-secret", secrets)
+	if strings.Contains(redacted, "one-secret") || strings.Contains(redacted, "two-secret") {
+		t.Fatalf("session cookie value leaked through redaction: %s", redacted)
+	}
+}
 
 func TestParseZAPPreservesEveryAffectedInstance(t *testing.T) {
 	path := writeFixture(t, "zap-instances.json", `{"alerts":[{"pluginId":"10021","name":"XSS","risk":"High","confidence":"Medium","cweid":"79","solution":"Encode output","instances":[{"uri":"https://app.test/Case","method":"GET","param":"q","evidence":"<x>"},{"uri":"https://app.test/Case","method":"POST","param":"body.name","evidence":"<y>"}]}]}`)
@@ -316,7 +353,7 @@ func TestZAPTypedAssessmentUsesFreshPathBoundContextAndCleansIt(t *testing.T) {
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 	target := "https://Example.test:8443/Portal/CaseSensitive/"
-	req := Request{Target: target, ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true, TargetAuth: "Authorization: Bearer scoped-secret"}
+	req := Request{Target: target, ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true, TargetAuth: "Authorization: Bearer scoped-secret", AuthRefresh: func(ctx context.Context, current []string) ([]string, error) { return current, nil }}
 	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 77, MaxOutputBytes: 1 << 20}
 	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
 	if run.Status != "completed" {
@@ -361,6 +398,43 @@ func TestZAPTypedAssessmentUsesFreshPathBoundContextAndCleansIt(t *testing.T) {
 	}
 	if domXSSEnabled != "true" {
 		t.Errorf("typed scan did not restore prior DOM XSS scanner policy: %q", domXSSEnabled)
+	}
+}
+
+func TestZAPTypedSessionRefreshUpdatesScopedRuleOrStops(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true"}
+	var replacements []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/JSON/replacer/action/addRule/" {
+			_ = r.ParseForm()
+			replacements = append(replacements, r.Form.Get("replacement"))
+		}
+		fake.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
+	req := Request{Target: "https://example.test/app/", ScanDir: t.TempDir(), Scope: "app:one", TypedAssessment: true, TargetAuth: "Cookie: old-secret", AuthRefresh: func(ctx context.Context, current []string) ([]string, error) {
+		return []string{"Cookie: new-secret"}, nil
+	}}
+	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	if run.Status != "completed" || !slices.Equal(replacements, []string{"old-secret", "new-secret"}) {
+		t.Fatalf("renewed ZAP session was not installed: status=%s replacements=%v reason=%s", run.Status, replacements, run.Reason)
+	}
+	req.ScanDir = t.TempDir()
+	req.AuthRefresh = func(ctx context.Context, current []string) ([]string, error) {
+		return nil, fmt.Errorf("private-password")
+	}
+	failed := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	if failed.Status != "failed" || !strings.Contains(failed.Reason, "authenticated session") || strings.Contains(failed.Reason, "private-password") {
+		t.Fatalf("failed session check was not safe: %+v", failed)
+	}
+}
+
+func TestZAPTypedAuthenticationRequiresRuntimeVerifier(t *testing.T) {
+	req := Request{Target: "https://example.test/app/", ScanDir: t.TempDir(), TypedAssessment: true, TargetAuth: "Cookie: private"}
+	run := zapRunner{}.Run(t.Context(), req, Config{ZAPURL: "http://127.0.0.1:1", ZAPDedicated: true}, nil)
+	if run.Status != "failed" || !strings.Contains(run.Reason, "session verifier") || strings.Contains(run.Reason, "private") {
+		t.Fatalf("unmonitored authenticated job was not rejected: %+v", run)
 	}
 }
 

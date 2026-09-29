@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,6 +112,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.TypedAssessment && !cfg.ZAPDedicated {
 		return failedServiceRun("zap", req, "typed assessments require XALGORIX_ZAP_DEDICATED=true for a dedicated managed ZAP daemon", emit)
 	}
+	if req.TypedAssessment && strings.TrimSpace(req.TargetAuth) != "" && req.AuthRefresh == nil {
+		return failedServiceRun("zap", req, "authenticated assessment requires an active session verifier", emit)
+	}
 	release, err := acquireZAPServiceLease(ctx, cfg.ZAPURL)
 	if err != nil {
 		run := cancelledRun("zap", req.Scope, req, err, emit)
@@ -128,8 +132,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		defer logFile.Close()
 	}
 	seq := int64(0)
+	secrets := secretValues(req, cfg)
 	logLine := func(s string) {
-		clean := redact(s, secretValues(req, cfg))
+		clean := redact(s, secrets)
 		data := []byte(clean + "\n")
 		if logFile != nil {
 			data = appendCappedFile(logFile, data, cfg.MaxOutputBytes, &run.Truncated)
@@ -190,7 +195,6 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 		return out, nil
 	}
-	secrets := secretValues(req, cfg)
 	if _, err := call("/JSON/core/view/version/", url.Values{}); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
@@ -273,6 +277,36 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			return finishServiceFailure(run, fmt.Errorf("configure ZAP header %s: %w", strings.TrimSpace(name), err), secrets, cfg.MaxOutputBytes, emit)
 		}
 	}
+	// Check authentication at stage boundaries and while waiting on long ZAP
+	// jobs. A refreshed cookie replaces its scoped daemon rule in this lease.
+	authMonitor := &zapAuthMonitor{current: headers, refresh: req.AuthRefresh, interval: time.Minute}
+	checkAuth := func() error {
+		return authMonitor.check(cctx, func(next []string) error {
+			for i, raw := range next {
+				if i >= len(headers) || raw == headers[i] {
+					continue
+				}
+				name, value, ok := strings.Cut(raw, ":")
+				if !ok || i >= len(rules) || !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(strings.SplitN(headers[i], ":", 2)[0])) {
+					return errors.New("authenticated session renewal returned invalid headers")
+				}
+				if err := zapRemoveRule(cfg, rules[i]); err != nil {
+					return errors.New("authenticated session header could not be replaced")
+				}
+				params := url.Values{"description": {rules[i]}, "enabled": {"true"}, "matchType": {"REQ_HEADER"}, "matchRegex": {"false"}, "matchString": {strings.TrimSpace(name)}, "replacement": {strings.TrimSpace(value)}, "url": {scopeRegex}}
+				if _, err := zapPostResponse(cctx, cfg, "/JSON/replacer/action/addRule/", params); err != nil {
+					return errors.New("authenticated session header could not be installed")
+				}
+				secrets = append(secrets, strings.TrimSpace(value))
+			}
+			headers = append([]string(nil), next...)
+			logLine("authenticated session renewed")
+			return nil
+		})
+	}
+	if err := checkAuth(); err != nil {
+		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
 
 	// Best-effort: seed the target into ZAP's Sites tree before crawling, so a
 	// site the spider can't harvest links from (a JS app, or one with no crawlable
@@ -296,6 +330,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.TypedAssessment && len(req.APIEndpoints) > 0 {
 		seeded := 0
 		for _, endpoint := range req.APIEndpoints {
+			if err := checkAuth(); err != nil {
+				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+			}
 			result := APIEndpointResult{Method: endpoint.Method, Path: endpoint.Path}
 			if !endpoint.Eligible || !endpoint.Resolved {
 				result.Status, result.Reason = "skipped", endpoint.Reason
@@ -333,6 +370,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.TypedAssessment {
 		spiderParams.Set("contextName", contextName)
 	}
+	if err := checkAuth(); err != nil {
+		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
 	spider, err := call("/JSON/spider/action/scan/", spiderParams)
 	if err != nil {
 		return finishServiceFailure(run, fmt.Errorf("start ZAP spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
@@ -342,11 +382,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return finishServiceFailure(run, fmt.Errorf("ZAP did not return a spider scan id"), secrets, cfg.MaxOutputBytes, emit)
 	}
 	logLine("ZAP spider started: " + spiderID)
-	if err := zapWaitScan(cctx, call, "/JSON/spider/view/status/", spiderID, "spider", logLine); err != nil {
+	if err := zapWaitScanChecked(cctx, call, "/JSON/spider/view/status/", spiderID, "spider", logLine, checkAuth); err != nil {
 		zapStopScan(cfg, "/JSON/spider/action/stop/", spiderID)
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
-	if err := zapWaitPassive(cctx, call, logLine); err != nil {
+	if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
 	// Typed jobs restore daemon-global scan rule state after execution. Legacy
@@ -386,6 +426,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		activeParams.Set("contextId", contextID)
 		activeParams.Set("inScopeOnly", "true")
 	}
+	if err := checkAuth(); err != nil {
+		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
 	active, err := call("/JSON/ascan/action/scan/", activeParams)
 	if err != nil {
 		// The active scan runs over the Sites tree. An empty tree (the spider
@@ -402,16 +445,19 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return finishServiceFailure(run, fmt.Errorf("ZAP did not return an active scan id"), secrets, cfg.MaxOutputBytes, emit)
 	}
 	logLine("ZAP active scan started: " + activeID)
-	if err := zapWaitScan(cctx, call, "/JSON/ascan/view/status/", activeID, "active scan", logLine); err != nil {
+	if err := zapWaitScanChecked(cctx, call, "/JSON/ascan/view/status/", activeID, "active scan", logLine, checkAuth); err != nil {
 		zapStopScan(cfg, "/JSON/ascan/action/stop/", activeID)
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
-	if err := zapWaitPassive(cctx, call, logLine); err != nil {
+	if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
 	// Scope the export to this target. The ZAP daemon is long-lived and shared
 	// by every scan, so a session-wide report would fold alerts raised against
 	// previously scanned hosts into this scan's artifact.
+	if err := checkAuth(); err != nil {
+		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
 	report, err := fetch("/JSON/core/view/alerts/", url.Values{"baseurl": {target}}, 10*time.Minute)
 	if err != nil {
 		return finishServiceFailure(run, fmt.Errorf("export ZAP alerts: %w", err), secrets, cfg.MaxOutputBytes, emit)
@@ -459,10 +505,47 @@ func zapScannerEnabled(response map[string]any, id string) (bool, bool) {
 
 type zapCallFunc func(string, url.Values) (map[string]any, error)
 
+type zapAuthMonitor struct {
+	current  []string
+	refresh  func(context.Context, []string) ([]string, error)
+	interval time.Duration
+	next     time.Time
+}
+
+func (m *zapAuthMonitor) check(ctx context.Context, replace func([]string) error) error {
+	if m.refresh == nil || (!m.next.IsZero() && time.Now().Before(m.next)) {
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	next, err := m.refresh(ctx, append([]string(nil), m.current...))
+	if err != nil || len(next) != len(m.current) {
+		return errors.New("authenticated session expired or verification failed")
+	}
+	if !slices.Equal(next, m.current) {
+		if err := replace(next); err != nil {
+			return err
+		}
+		m.current = append([]string(nil), next...)
+	}
+	m.next = time.Now().Add(m.interval)
+	return nil
+}
+
 // zapWaitScan polls a spider or active-scan job until ZAP reports 100%.
 func zapWaitScan(ctx context.Context, call zapCallFunc, statusPath, scanID, label string, log func(string)) error {
+	return zapWaitScanChecked(ctx, call, statusPath, scanID, label, log, nil)
+}
+
+func zapWaitScanChecked(ctx context.Context, call zapCallFunc, statusPath, scanID, label string, log func(string), check func() error) error {
 	last := ""
 	for {
+		if check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
 		resp, err := call(statusPath, url.Values{"scanId": {scanID}})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -490,7 +573,16 @@ func zapWaitScan(ctx context.Context, call zapCallFunc, statusPath, scanID, labe
 // already-crawled messages are in the report. A ZAP without the passive-scan
 // add-on answers with an error; that is not a scan failure.
 func zapWaitPassive(ctx context.Context, call zapCallFunc, log func(string)) error {
+	return zapWaitPassiveChecked(ctx, call, log, nil)
+}
+
+func zapWaitPassiveChecked(ctx context.Context, call zapCallFunc, log func(string), check func() error) error {
 	for {
+		if check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
 		resp, err := call("/JSON/pscan/view/recordsToScan/", url.Values{})
 		if err != nil {
 			if ctx.Err() != nil {
