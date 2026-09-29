@@ -276,6 +276,26 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 				}
 			}
 		}
+
+		// Web-discovery crawl: for a live web host, katana enumerates in-scope
+		// URLs and API endpoints that the web scanners then consume via
+		// Request.WebEndpoints. Best-effort and gated on the binary being present,
+		// so a missing katana never fails recon — the scanners degrade to the seed
+		// URL. Runs after nmap so open-port evidence can decide web-worthiness.
+		if hostIsWeb(s.Evidence) && katanaAvailable(cfg) {
+			katanaReq := req
+			katanaReq.Target = primaryWebURL(host, s.Evidence)
+			katanaReq.Scope = reconHostScopeKey(req.Target, host)
+			katanaSpec := buildKatana(katanaReq, cfg)
+			if katanaSpec.notApp == "" {
+				katanaRun := executeSpecWithTranscript(ctx, "katana", katanaReq, cfg, katanaSpec, emit)
+				katanaRun.Scope = reconHostScopeKey(req.Target, host)
+				runs = append(runs, katanaRun)
+				if katanaRun.Status == "completed" {
+					s.Evidence.WebEndpoints = parseKatanaEndpoints(katanaSpec.artifact)
+				}
+			}
+		}
 		scopes = append(scopes, s)
 	}
 	// Persist the complete discovered scope set so a resume interrupted mid-scan

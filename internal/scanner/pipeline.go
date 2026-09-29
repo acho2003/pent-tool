@@ -282,6 +282,9 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			// EffectiveTracks.
 			sc.Tracks = EffectiveTracks(sc.Evidence)
 			scopeReq.Target = sc.Target
+			// Thread the katana crawl output for this host into the web scanners so
+			// the discovery stage actually drives coverage.
+			scopeReq.WebEndpoints = sc.Evidence.WebEndpoints
 			// Isolate each host's scanner artifacts. Every scan runner derives its
 			// output base from req.ScanDir alone, so two scopes writing under one
 			// ScanDir would clobber each other's results and break VerifyChecksum.

@@ -146,3 +146,44 @@ func TestBuildNuclei_ConsumesWebEndpoints(t *testing.T) {
 		t.Errorf("without endpoints nuclei should not use -l")
 	}
 }
+
+func TestHostIsWeb(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   HostEvidence
+		want bool
+	}{
+		{"live url", HostEvidence{LiveURLs: []string{"https://x/"}}, true},
+		{"tls", HostEvidence{TLS: true}, true},
+		{"web port", HostEvidence{OpenPorts: []Port{{Number: 8080}}}, true},
+		{"https port", HostEvidence{OpenPorts: []Port{{Number: 443}}}, true},
+		{"ssh only", HostEvidence{OpenPorts: []Port{{Number: 22}}}, false},
+		{"empty", HostEvidence{}, false},
+	}
+	for _, c := range cases {
+		if got := hostIsWeb(c.ev); got != c.want {
+			t.Errorf("%s: hostIsWeb = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestPrimaryWebURL(t *testing.T) {
+	if got := primaryWebURL("h", HostEvidence{LiveURLs: []string{"https://h/app"}}); got != "https://h/app" {
+		t.Errorf("live url not preferred: %q", got)
+	}
+	if got := primaryWebURL("h", HostEvidence{TLS: true}); got != "https://h" {
+		t.Errorf("tls host = %q, want https://h", got)
+	}
+	if got := primaryWebURL("h", HostEvidence{}); got != "http://h" {
+		t.Errorf("plain host = %q, want http://h", got)
+	}
+}
+
+func TestKatanaAvailable(t *testing.T) {
+	if katanaAvailable(Config{KatanaPath: ""}) {
+		t.Error("empty path should be unavailable")
+	}
+	if katanaAvailable(Config{KatanaPath: "/nonexistent/katana-xyz"}) {
+		t.Error("nonexistent absolute path should be unavailable")
+	}
+}
