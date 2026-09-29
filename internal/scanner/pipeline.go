@@ -91,6 +91,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.NiktoPath == "" {
 		cfg.NiktoPath = "nikto"
 	}
+	if cfg.KatanaPath == "" {
+		cfg.KatanaPath = "katana"
+	}
 	if cfg.SSHPath == "" {
 		cfg.SSHPath = "ssh"
 	}
@@ -105,6 +108,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.NiktoTimeout <= 0 {
 		cfg.NiktoTimeout = 10 * time.Minute
+	}
+	if cfg.KatanaTimeout <= 0 {
+		cfg.KatanaTimeout = 10 * time.Minute
 	}
 	if cfg.TestsslPath == "" {
 		cfg.TestsslPath = "testssl.sh"
@@ -889,7 +895,24 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 		return commandSpec{notApp: "Nuclei requires a submitted host or URL", timeout: cfg.NucleiTimeout}
 	}
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "nuclei", "results.jsonl")
-	args := []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut"}
+	// When the katana discovery stage produced an endpoint list for this host,
+	// scan those concrete URLs (-l) so the crawl drives coverage; otherwise fall
+	// back to the single seed URL (-u). The list is written in a prepare step.
+	var prepare func() error
+	var args []string
+	if len(req.WebEndpoints) > 0 {
+		listPath := filepath.Join(req.ScanDir, "scanner-output", "nuclei", "targets.txt")
+		endpoints := append([]string(nil), req.WebEndpoints...)
+		prepare = func() error {
+			if err := os.MkdirAll(filepath.Dir(listPath), 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(listPath, []byte(strings.Join(endpoints, "\n")+"\n"), 0o600)
+		}
+		args = []string{"-l", listPath, "-jle", artifact, "-nc", "-duc", "-dut"}
+	} else {
+		args = []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut"}
+	}
 	if !(req.TypedAssessment && req.Profile == ProfileThorough) {
 		args = append(args, "-rl", strconv.Itoa(cfg.RateRPS))
 	}
@@ -911,7 +934,7 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 	if req.Profile == ProfileThorough {
 		timeout = 0
 	}
-	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: timeout}
+	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: timeout, prepare: prepare}
 }
 
 func buildTrivy(req Request, cfg Config) commandSpec {

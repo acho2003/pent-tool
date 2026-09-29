@@ -72,6 +72,11 @@ type Request struct {
 	ApplicationURL     string                                            `json:"-"`
 	TypedAssessment    bool                                              `json:"-"`
 	APIEndpoints       []APIEndpoint                                     `json:"-"`
+	// WebEndpoints are URLs discovered by the katana crawl stage for this web
+	// host. When present, web scanners (nuclei today; dalfox/wapiti next) scan
+	// this concrete endpoint list instead of only the single seed URL, so the
+	// crawl output actually drives coverage. Derived by recon, not input.
+	WebEndpoints []string `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -129,6 +134,7 @@ type Config struct {
 	NmapPath          string
 	MasscanPath       string
 	NiktoPath         string
+	KatanaPath        string
 	SSHPath           string
 	TestsslPath       string
 	SemgrepPath       string
@@ -173,6 +179,7 @@ type Config struct {
 	MasscanTimeout         time.Duration
 	MasscanRate            int
 	NiktoTimeout           time.Duration
+	KatanaTimeout          time.Duration
 	LynisTimeout           time.Duration
 	TestsslTimeout         time.Duration
 	SemgrepTimeout         time.Duration
