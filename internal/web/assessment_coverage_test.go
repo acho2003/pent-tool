@@ -67,6 +67,29 @@ func TestAssessmentCoverageLabelsLegacyRecords(t *testing.T) {
 	}
 }
 
+func TestAssessmentCoverageMarksFinishedJobsCompleteOnlyWhenCoverageIsComplete(t *testing.T) {
+	plan := &scanner.AssessmentPlan{
+		Config:      assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test"}}},
+		Jobs:        []scanner.PlanJob{{ID: "nuclei:app", State: scanner.PlanSelected, Scanner: "nuclei", Variant: "nuclei", TargetID: "app", Target: "https://app.example.test", AssessmentTypes: []assessment.Type{assessment.TypeWebApplication}}},
+		Coverage:    []scanner.TypeCoverage{{Type: assessment.TypeWebApplication, State: "planned"}},
+		Fingerprint: "sha256:complete-plan",
+	}
+	record := &ScanRecord{ID: "complete-scan", Status: "finished", AssessmentPlan: plan, ScannerRuns: []scanner.Run{{Scanner: "nuclei", Variant: "nuclei", Target: "https://app.example.test", PlanFingerprint: plan.Fingerprint, Status: "completed"}}}
+	coverage := buildAssessmentCoverage(record.ID, record, "")
+	if coverage.State != "complete" || coverage.TypeCoverage[0].State != "complete" {
+		t.Fatalf("completed assessment was not marked complete: %+v", coverage)
+	}
+
+	plan.Config.Types = []assessment.Type{assessment.TypeAPI}
+	plan.Jobs[0].AssessmentTypes = []assessment.Type{assessment.TypeAPI}
+	plan.Coverage[0].Type = assessment.TypeAPI
+	plan.APIEndpoints = []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/health", Resolved: true, Eligible: true}}
+	coverage = buildAssessmentCoverage(record.ID, record, "")
+	if coverage.State != "partial" || coverage.TypeCoverage[0].State != "partial" || coverage.Operations[0].Status != "inventoried_not_executed" {
+		t.Fatalf("unattempted API operation was treated as tested: %+v", coverage)
+	}
+}
+
 func TestAssessmentCoverageReflectsAPIOperationSeedOutcomes(t *testing.T) {
 	plan := &scanner.AssessmentPlan{
 		Config: assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/Portal"}}},

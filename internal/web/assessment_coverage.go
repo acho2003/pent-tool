@@ -191,6 +191,14 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 				break
 			}
 		}
+		if typeCoverage.Type == assessment.TypeAPI {
+			for _, operation := range coverage.Operations {
+				if operation.Status != "tested" {
+					hasGap = true
+					break
+				}
+			}
+		}
 		switch {
 		case matching == 0:
 			typeCoverage.State = "not_tested"
@@ -223,7 +231,7 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 			coverage.State = "partial"
 		}
 		for _, typeCoverage := range coverage.TypeCoverage {
-			if typeCoverage.State != "planned" {
+			if typeCoverage.State != "complete" {
 				coverage.State = "partial"
 				break
 			}
