@@ -223,6 +223,9 @@ func TestApplicabilityAndArguments(t *testing.T) {
 	if strings.Contains(thoroughNuclei, "-rl ") {
 		t.Errorf("thorough Nuclei args %q must use Nuclei's default rate", thoroughNuclei)
 	}
+	if got := buildNuclei(Request{Target: "https://example.com/Portal/", TypedAssessment: true, Profile: ProfileThorough}, Config{NucleiTimeout: time.Second}).timeout; got != 0 {
+		t.Errorf("thorough Nuclei timeout = %s, want no overall deadline", got)
+	}
 	gentleNuclei := strings.Join(buildNuclei(Request{Target: "https://example.com/Portal/", TypedAssessment: true, Profile: ProfileGentle}, cfg).args, " ")
 	if !strings.Contains(gentleNuclei, "-rl 17") {
 		t.Errorf("gentle Nuclei args %q must retain the configured rate", gentleNuclei)
@@ -240,6 +243,19 @@ func TestApplicabilityAndArguments(t *testing.T) {
 	vuls := vulsConfig("prod-web", "/operator/.ssh/config")
 	if !strings.Contains(vuls, `scanMode = ["fast"]`) || !strings.Contains(vuls, `sshConfigPath = "/operator/.ssh/config"`) {
 		t.Fatalf("Vuls config is not fixed fast/SSH-alias mode: %s", vuls)
+	}
+}
+
+func TestOptionalTimeoutWithoutDeadlineStillCancels(t *testing.T) {
+	parent, stop := context.WithCancel(context.Background())
+	ctx, cancel := withOptionalTimeout(parent, 0)
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("unlimited scan unexpectedly has a deadline")
+	}
+	stop()
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("unlimited scan did not honor cancellation: %v", ctx.Err())
 	}
 }
 

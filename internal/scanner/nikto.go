@@ -36,32 +36,34 @@ func buildNikto(req Request, cfg Config) commandSpec {
 		return commandSpec{notApp: "this Nikto adapter is limited to application root URLs because Nikto cannot enforce a nested path boundary", timeout: cfg.NiktoTimeout}
 	}
 	duration := cfg.NiktoTimeout
-	if duration <= 0 || duration > niktoMaxDuration {
-		duration = niktoMaxDuration
-	}
-	seconds := int(duration / time.Second)
-	if seconds < 1 {
-		seconds = 1
-	}
-	// Let Nikto reach its own per-host limit and flush JSON before the process
-	// deadline. The gentle profile's one-second request pause can otherwise
-	// consume the entire outer budget and leave an empty report.
-	grace := seconds / 10
-	if grace > 60 {
-		grace = 60
-	}
-	if grace < 1 && seconds > 1 {
-		grace = 1
-	}
-	niktoSeconds := seconds - grace
-	if niktoSeconds < 1 {
-		niktoSeconds = 1
-	}
 	base := filepath.Join(req.ScanDir, "scanner-output", "nikto")
 	artifact := filepath.Join(base, "results.json")
 	isolatedConfig := filepath.Join(base, "nikto.conf")
-	args := []string{"-config", isolatedConfig, "-host", u.String(), "-nointeractive", "-nocheck", "-maxtime", strconv.Itoa(niktoSeconds) + "s", "-timeout", "5"}
-	if req.Profile != ProfileThorough {
+	args := []string{"-config", isolatedConfig, "-host", u.String(), "-nointeractive", "-nocheck"}
+	if req.Profile == ProfileThorough {
+		duration = 0
+	} else {
+		if duration <= 0 || duration > niktoMaxDuration {
+			duration = niktoMaxDuration
+		}
+		seconds := int(duration / time.Second)
+		if seconds < 1 {
+			seconds = 1
+		}
+		// Give Nikto time to flush JSON before the outer process deadline.
+		grace := seconds / 10
+		if grace > 60 {
+			grace = 60
+		}
+		if grace < 1 && seconds > 1 {
+			grace = 1
+		}
+		niktoSeconds := seconds - grace
+		if niktoSeconds < 1 {
+			niktoSeconds = 1
+		}
+		args = append(args, "-maxtime", strconv.Itoa(niktoSeconds)+"s")
+		args = append(args, "-timeout", "5")
 		args = append(args, "-Pause", "1")
 	}
 	args = append(args, "-Cgidirs", "none", "-Tuning", "123b", "-Format", "json", "-output", filepath.Join(base, "results"))

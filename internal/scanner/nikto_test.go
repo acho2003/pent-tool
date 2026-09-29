@@ -75,10 +75,13 @@ func TestBuildNiktoRejectsTargetsOutsideRootHTTPOrigin(t *testing.T) {
 }
 
 func TestBuildNiktoThoroughHasNoRequestPause(t *testing.T) {
-	spec := buildNikto(Request{Target: "http://example.test/", ScanDir: t.TempDir(), Profile: ProfileThorough}, Config{NiktoPath: "nikto"})
+	spec := buildNikto(Request{Target: "http://example.test/", ScanDir: t.TempDir(), Profile: ProfileThorough}, Config{NiktoPath: "nikto", NiktoTimeout: time.Second})
+	if spec.timeout != 0 {
+		t.Fatalf("thorough Nikto timeout = %s, want no overall deadline", spec.timeout)
+	}
 	for _, arg := range spec.args {
-		if arg == "-Pause" {
-			t.Fatalf("thorough Nikto must not set a request pause: %v", spec.args)
+		if arg == "-Pause" || arg == "-maxtime" {
+			t.Fatalf("thorough Nikto must not set a request pause or host deadline: %v", spec.args)
 		}
 	}
 }

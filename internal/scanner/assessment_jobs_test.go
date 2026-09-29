@@ -243,6 +243,19 @@ func TestRunAssessmentJobsStopsPerTargetAtWebBudget(t *testing.T) {
 	}
 }
 
+func TestRunAssessmentJobsThoroughHasNoWebDeadline(t *testing.T) {
+	runner := &assessmentJobRunner{delay: 10 * time.Millisecond}
+	pipeline := &Pipeline{Config: Config{WebBudget: time.Nanosecond}, Runners: []Runner{runner}}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{Profile: ProfileThorough}, Fingerprint: "sha256:unlimited-budget", Jobs: []PlanJob{
+		{ID: "first", State: PlanSelected, Scanner: runner.Name(), TargetID: "app", Target: "https://app.example.test/", Variant: "first"},
+		{ID: "second", State: PlanSelected, Scanner: runner.Name(), TargetID: "app", Target: "https://app.example.test/", Variant: "second"},
+	}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if pipeline.Config.WebBudget != 0 || runner.calls != 2 || len(runs) != 2 || runs[0].Status != "completed" || runs[1].Status != "completed" {
+		t.Fatalf("thorough web jobs retained a deadline: budget=%s calls=%d runs=%+v", pipeline.Config.WebBudget, runner.calls, runs)
+	}
+}
+
 func TestRunAssessmentJobsSharesWebBudgetAcrossPendingStages(t *testing.T) {
 	runner := &budgetAwareJobRunner{}
 	pipeline := &Pipeline{Config: Config{WebBudget: 180 * time.Millisecond}, Runners: []Runner{runner}}

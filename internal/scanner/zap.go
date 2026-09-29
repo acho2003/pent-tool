@@ -151,10 +151,12 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		emit(Event{Type: "scanner_started", Scanner: "zap", Run: run})
 	}
 	zapTimeout := cfg.ZAPTimeout
-	if cfg.WebBudget > 0 && cfg.WebBudget < zapTimeout {
+	if req.Profile == ProfileThorough {
+		zapTimeout = 0
+	} else if cfg.WebBudget > 0 && cfg.WebBudget < zapTimeout {
 		zapTimeout = cfg.WebBudget
 	}
-	cctx, cancel := context.WithTimeout(ctx, zapTimeout)
+	cctx, cancel := withOptionalTimeout(ctx, zapTimeout)
 	defer cancel()
 	client := &http.Client{}
 	// Every exchange with ZAP is a plain HTTP API call: the daemon is reached

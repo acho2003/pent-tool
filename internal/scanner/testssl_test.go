@@ -30,6 +30,13 @@ func TestBuildTestsslCommand(t *testing.T) {
 	}
 }
 
+func TestBuildTestsslThoroughHasNoOverallDeadline(t *testing.T) {
+	spec := buildTestssl(Request{Target: "https://example.test/", ScanDir: t.TempDir(), Profile: ProfileThorough}, Config{TestsslPath: "testssl.sh", TestsslTimeout: time.Second})
+	if spec.timeout != 0 {
+		t.Fatalf("thorough testssl timeout = %s, want no overall deadline", spec.timeout)
+	}
+}
+
 func TestBuildTestsslRejectsArtifactTarget(t *testing.T) {
 	req := Request{Target: "artifact://blob", ScanDir: t.TempDir()}
 	spec := buildTestssl(req, Config{TestsslPath: "testssl.sh", TestsslTimeout: time.Minute})

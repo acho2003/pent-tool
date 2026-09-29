@@ -26,7 +26,11 @@ func buildTestssl(req Request, cfg Config) commandSpec {
 		"--jsonfile", artifact,
 		target, // must remain the final arg
 	}
-	return commandSpec{path: cfg.TestsslPath, args: args, artifact: artifact, timeout: cfg.TestsslTimeout, classify: testsslConnectFailure}
+	timeout := cfg.TestsslTimeout
+	if req.Profile == ProfileThorough {
+		timeout = 0
+	}
+	return commandSpec{path: cfg.TestsslPath, args: args, artifact: artifact, timeout: timeout, classify: testsslConnectFailure}
 }
 
 // testsslConnectFailure recognizes testssl's own "cannot reach the TLS port"

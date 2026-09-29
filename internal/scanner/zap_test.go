@@ -351,6 +351,17 @@ func TestZAPFailsWhenPassiveScanningCannotBeConfirmed(t *testing.T) {
 	}
 }
 
+func TestZAPThoroughHasNoOverallDeadline(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir(), Profile: ProfileThorough},
+		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: time.Nanosecond, WebBudget: time.Nanosecond, MaxOutputBytes: 1 << 20}, nil)
+	if run.Status != "completed" {
+		t.Fatalf("thorough ZAP retained an overall deadline: %+v", run)
+	}
+}
+
 func TestZAPServiceLeaseSerializesPipelinesAndHonorsCancellation(t *testing.T) {
 	release, err := acquireZAPServiceLease(context.Background(), "http://zap.example.test:8080/")
 	if err != nil {

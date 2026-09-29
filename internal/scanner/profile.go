@@ -18,7 +18,7 @@ type WebProfile struct {
 
 func DefaultWebProfile(name string) WebProfile {
 	if name == ProfileThorough {
-		return WebProfile{Name: ProfileThorough, RateRPS: 150, MaxEndpoints: 2000, Budget: 120 * time.Minute, Browser: true, AllowStateChanging: false}
+		return WebProfile{Name: ProfileThorough, RateRPS: 150, MaxEndpoints: 2000, Budget: 0, Browser: true, AllowStateChanging: false}
 	}
 	return WebProfile{Name: ProfileGentle, RateRPS: 2, MaxEndpoints: 500, Budget: 30 * time.Minute, Browser: true, AllowStateChanging: false}
 }

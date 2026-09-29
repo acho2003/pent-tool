@@ -587,6 +587,13 @@ func (r commandRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 	return executeSpec(ctx, r.name, req, cfg, spec, emit)
 }
 
+func withOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec commandSpec, emit EmitFunc) Run {
 	now := time.Now()
 	run := Run{Scanner: name, Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: now.Format(time.RFC3339Nano), ExitCode: -1}
@@ -627,7 +634,7 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if emit != nil {
 		emit(Event{Type: "scanner_started", Scanner: name, Run: run})
 	}
-	cmdCtx, cancel := context.WithTimeout(ctx, spec.timeout)
+	cmdCtx, cancel := withOptionalTimeout(ctx, spec.timeout)
 	defer cancel()
 	stdout, err := os.OpenFile(run.StdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -900,7 +907,11 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 			args = append(args, "-H", strings.TrimSpace(h))
 		}
 	}
-	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: cfg.NucleiTimeout}
+	timeout := cfg.NucleiTimeout
+	if req.Profile == ProfileThorough {
+		timeout = 0
+	}
+	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: timeout}
 }
 
 func buildTrivy(req Request, cfg Config) commandSpec {

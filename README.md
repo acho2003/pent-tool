@@ -99,11 +99,11 @@ artifact isolation, and local-listener protection as the web application.
 New web assessments and schedules default to `web-gentle` (a 2-request/second
 Nuclei limit and a 30-minute per-application budget). For lab or staging targets,
 select `web-thorough` in the web UI or assessment JSON to use Nuclei's default
-rate (up to 150 requests/second) and a 120-minute budget. Nikto uses a 1-second pause in gentle mode and
-no Xalgorix request pause in thorough mode. ZAP and the other web checks have no
-Xalgorix per-request pause; endpoint and time budgets still apply. Thorough scans may still take longer in
-total because they can test more endpoints; skipped or timed-out work is
-reported as partial coverage.
+rate (up to 150 requests/second) with no application-wide time budget or overall
+Nuclei, Nikto, ZAP, or testssl scan deadline. Nikto uses a 1-second pause in
+gentle mode and no Xalgorix request pause in thorough mode. Connection and
+per-request timeouts, the 2,000-endpoint inventory limit, and manual cancellation
+still apply. Skipped or failed work is reported as partial coverage.
 
 The CLI accepts local OpenAPI 3.0/3.1 or Swagger 2.0 files using repeatable
 `--api-definition target-id=file` options. Target IDs must match explicit
