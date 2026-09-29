@@ -171,6 +171,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseNikto(run.ArtifactPath)
 	case "dalfox":
 		return parseDalfox(run.ArtifactPath)
+	case "wapiti":
+		return parseWapiti(run.ArtifactPath)
 	default:
 		return nil, fmt.Errorf("unsupported scanner %q", run.Scanner)
 	}

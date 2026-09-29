@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" {
+	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" {
 		return true
 	}
 	for _, runner := range NewPipeline(Config{}).Runners {
@@ -74,6 +74,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["nikto"] = niktoRunner{}
 	// Dalfox is opt-in XSS detection over discovered parameterized URLs.
 	byName["dalfox"] = dalfoxRunner{}
+	// Wapiti is opt-in bounded web fuzzing seeded with discovered endpoints.
+	byName["wapiti"] = wapitiRunner{}
 	byName["lynis"] = lynisRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {

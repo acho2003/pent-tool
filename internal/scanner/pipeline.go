@@ -97,6 +97,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.DalfoxPath == "" {
 		cfg.DalfoxPath = "dalfox"
 	}
+	if cfg.WapitiPath == "" {
+		cfg.WapitiPath = "wapiti"
+	}
 	if cfg.SSHPath == "" {
 		cfg.SSHPath = "ssh"
 	}
@@ -117,6 +120,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.DalfoxTimeout <= 0 {
 		cfg.DalfoxTimeout = 15 * time.Minute
+	}
+	if cfg.WapitiTimeout <= 0 {
+		cfg.WapitiTimeout = 20 * time.Minute
 	}
 	if cfg.TestsslPath == "" {
 		cfg.TestsslPath = "testssl.sh"

@@ -136,6 +136,7 @@ type Config struct {
 	NiktoPath         string
 	KatanaPath        string
 	DalfoxPath        string
+	WapitiPath        string
 	SSHPath           string
 	TestsslPath       string
 	SemgrepPath       string
@@ -182,6 +183,7 @@ type Config struct {
 	NiktoTimeout           time.Duration
 	KatanaTimeout          time.Duration
 	DalfoxTimeout          time.Duration
+	WapitiTimeout          time.Duration
 	LynisTimeout           time.Duration
 	TestsslTimeout         time.Duration
 	SemgrepTimeout         time.Duration
