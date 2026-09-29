@@ -263,6 +263,14 @@ func eligibility(def ScannerDefinition, target assessment.Target, evidence []ass
 	}
 	conditional := false
 	for _, required := range def.RequiredCapabilities {
+		if def.ID == "trivy" && required == assessment.CapSource {
+			switch target.Kind {
+			case assessment.KindDockerImage:
+				required = assessment.CapImage
+			case assessment.KindSBOM:
+				required = assessment.CapSBOM
+			}
+		}
 		found := false
 		for _, e := range evidence {
 			if e.TargetID == target.ID && e.Capability == required && e.State != assessment.StateUnavailable {
@@ -278,6 +286,9 @@ func eligibility(def ScannerDefinition, target assessment.Target, evidence []ass
 		}
 		if required == assessment.CapNetwork && target.Kind == assessment.KindURL && def.ID == "testssl" {
 			found = true
+		}
+		if target.Kind == assessment.KindSBOM && def.ID == "trivy" {
+			conditional = true // local file readability is checked at execution
 		}
 		if !found {
 			return PlanNotApplicable, "capability.missing", fmt.Sprintf("Required capability %s is unavailable for target %s.", required, target.ID)

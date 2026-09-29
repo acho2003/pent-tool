@@ -886,13 +886,20 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 }
 
 func buildTrivy(req Request, cfg Config) commandSpec {
+	if req.TypedAssessment && req.Artifact.Kind != "" {
+		return buildTrivyArtifact(req, cfg)
+	}
 	// SAST source scope: filesystem-scan the resolved source directory.
 	if src := strings.TrimSpace(req.Target); src != "" {
 		artifact := filepath.Join(req.ScanDir, "scanner-output", "trivy", "results.json")
 		args := []string{"fs", "--format", "json", "--output", artifact, "--scanners", "vuln,misconfig,secret,license", src}
 		return commandSpec{path: cfg.TrivyPath, args: args, artifact: artifact, timeout: cfg.TrivyTimeout}
 	}
-	// Fallback: artifact-based scan (image/sbom/etc.) when no source path.
+	return buildTrivyArtifact(req, cfg)
+}
+
+func buildTrivyArtifact(req Request, cfg Config) commandSpec {
+	// Artifact-based scan (image/SBOM/etc.) when explicitly selected.
 	kind := strings.ToLower(strings.TrimSpace(req.Artifact.Kind))
 	ref := strings.TrimSpace(req.Artifact.Ref)
 	if kind == "" || ref == "" {

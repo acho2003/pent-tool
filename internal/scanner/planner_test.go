@@ -89,6 +89,25 @@ func TestPlanAssessmentWhiteBoxDoesNotInventCredentialsAndCustomSelection(t *tes
 	}
 }
 
+func TestPlanAssessmentTrivyUsesImageAndSBOMCapabilities(t *testing.T) {
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox, Types: []assessment.Type{assessment.TypeContainer, assessment.TypeDependencies}, Targets: []assessment.Target{{ID: "image", Kind: assessment.KindDockerImage, Value: "registry.test/app@sha256:" + strings.Repeat("a", 64)}, {ID: "sbom", Kind: assessment.KindSBOM, Value: "/data/bom.json"}}}
+	plan := PlanAssessment(PlanInput{Config: cfg})
+	if len(plan.Errors) != 0 {
+		t.Fatalf("valid resources rejected: %+v", plan.Errors)
+	}
+	for _, id := range []string{"image", "sbom"} {
+		found := false
+		for _, job := range plan.Jobs {
+			if job.Scanner == "trivy" && job.TargetID == id && job.State == PlanConditional {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("Trivy %s job missing from plan: %+v", id, plan.Decisions)
+		}
+	}
+}
+
 func TestPlanFingerprintStableAcrossCallsAndUnsupportedTypesExplainCoverage(t *testing.T) {
 	cfg := assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox, Types: []assessment.Type{assessment.TypeKubernetes}, Targets: []assessment.Target{{ID: "cluster", Kind: assessment.KindKubernetesCluster, Value: "prod"}}}
 	a := PlanAssessment(PlanInput{Config: cfg})

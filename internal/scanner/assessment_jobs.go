@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -79,6 +80,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 
 	results := make([]Run, 0, len(plan.Jobs))
 	webDeadlines := map[string]time.Time{}
+	targetKinds := map[string]assessment.TargetKind{}
+	for _, target := range plan.Config.Targets {
+		targetKinds[target.ID] = target.Kind
+	}
 	for _, job := range plan.Jobs {
 		scope := assessmentJobScope(job)
 		key := assessmentJobRunKey(scope, job.Scanner, job.Variant, plan.Fingerprint)
@@ -102,19 +107,27 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			req.TargetAuth = strings.Join(headers, "\n")
 			req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
 		}
+		if job.Scanner == "trivy" {
+			switch targetKinds[job.TargetID] {
+			case assessment.KindDockerImage:
+				req.Artifact = Artifact{Kind: "image", Ref: job.Target}
+			case assessment.KindSBOM:
+				req.Artifact = Artifact{Kind: "sbom", Ref: job.Target}
+			}
+		}
 		if parsed, err := url.Parse(job.Target); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
 			req.ApplicationURL = job.Target
 		}
 
 		if job.State == PlanConditional {
-			reason := job.Reason
-			if reason == "" {
-				reason = "conditional job awaits target-scoped preparation"
+			if reason := prepareLocalAssessmentResource(plan.Config.Mode, targetKinds[job.TargetID], job.Target, job.Scanner); reason != "" {
+				results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
+				continue
 			}
-			results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
-			continue
+			// The accepted plan remains immutable; this job alone is promoted
+			// after its scoped resource passes the runtime check.
 		}
-		if job.State != PlanSelected {
+		if job.State != PlanSelected && job.State != PlanConditional {
 			reason := job.Reason
 			if reason == "" {
 				reason = "job is not selected by the accepted plan"
@@ -186,6 +199,37 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		results = append(results, run)
 	}
 	return results
+}
+
+func prepareLocalAssessmentResource(mode assessment.Mode, kind assessment.TargetKind, value, scannerID string) string {
+	switch kind {
+	case assessment.KindLocalSourcePath:
+		if mode != assessment.ModeWhiteBox || !filepath.IsAbs(value) {
+			return "White Box local source must be an absolute server path"
+		}
+		info, err := os.Stat(value)
+		if err != nil || !info.IsDir() {
+			return "local source directory is unavailable"
+		}
+		return ""
+	case assessment.KindSBOM:
+		if scannerID != "trivy" || !filepath.IsAbs(value) {
+			return "SBOM requires an absolute server file path and a supported adapter"
+		}
+		info, err := os.Stat(value)
+		if err != nil || !info.Mode().IsRegular() {
+			return "SBOM file is unavailable"
+		}
+		return ""
+	case assessment.KindDockerImage:
+		pinned, _ := regexp.MatchString(`^[^\s@]+@sha256:[a-fA-F0-9]{64}$`, value)
+		if mode != assessment.ModeWhiteBox || scannerID != "trivy" || !pinned {
+			return "Trivy image assessment requires a digest-pinned image reference in White Box mode"
+		}
+		return ""
+	default:
+		return "conditional job awaits target-scoped preparation"
+	}
 }
 
 func failedAssessmentJobs(jobs []PlanJob, scanDir, fingerprint, reason string, emit EmitFunc) []Run {

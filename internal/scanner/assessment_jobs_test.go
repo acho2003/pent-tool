@@ -20,6 +20,17 @@ type assessmentJobRunner struct {
 	delay  time.Duration
 }
 
+type resourceJobRunner struct{ calls int }
+
+func (r *resourceJobRunner) Name() string { return "trivy" }
+func (r *resourceJobRunner) Descriptor() Descriptor {
+	return Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight}
+}
+func (r *resourceJobRunner) Run(_ context.Context, req Request, _ Config, _ EmitFunc) Run {
+	r.calls++
+	return Run{Scanner: "trivy", Target: req.Target, Status: "completed"}
+}
+
 func (r *assessmentJobRunner) Name() string { return "assessment-test" }
 func (r *assessmentJobRunner) Descriptor() Descriptor {
 	return Descriptor{Name: r.Name(), Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}
@@ -107,6 +118,61 @@ func TestRunAssessmentJobsDoesNotRunConditionalJobsBeforePreparation(t *testing.
 	runs := pipeline.RunAssessmentJobs(context.Background(), plan, t.TempDir(), nil, nil)
 	if len(runs) != 1 || runs[0].Status != "skipped" || !strings.Contains(runs[0].Reason, "preparation") || runner.calls != 0 {
 		t.Fatalf("conditional job ran before preparation: runs=%+v calls=%d", runs, runner.calls)
+	}
+}
+
+func TestWhiteBoxResourcePreparationAndTrivyVariants(t *testing.T) {
+	source := t.TempDir()
+	sbom := filepath.Join(t.TempDir(), "bom.json")
+	if err := os.WriteFile(sbom, []byte(`{"bomFormat":"CycloneDX"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if reason := prepareLocalAssessmentResource(assessment.ModeWhiteBox, assessment.KindLocalSourcePath, source, "trivy"); reason != "" {
+		t.Fatalf("source was skipped: %s", reason)
+	}
+	if reason := prepareLocalAssessmentResource(assessment.ModeWhiteBox, assessment.KindSBOM, sbom, "trivy"); reason != "" {
+		t.Fatalf("SBOM was skipped: %s", reason)
+	}
+	if reason := prepareLocalAssessmentResource(assessment.ModeWhiteBox, assessment.KindDockerImage, "registry.test/app@sha256:"+strings.Repeat("a", 64), "trivy"); reason != "" {
+		t.Fatalf("digest-pinned image was skipped: %s", reason)
+	}
+	for _, tc := range []struct {
+		kind  assessment.TargetKind
+		value string
+		mode  assessment.Mode
+	}{
+		{assessment.KindLocalSourcePath, source, assessment.ModeBlackBox},
+		{assessment.KindLocalSourcePath, filepath.Join(source, "missing"), assessment.ModeWhiteBox},
+		{assessment.KindSBOM, source, assessment.ModeWhiteBox},
+		{assessment.KindDockerImage, "registry.test/app:latest", assessment.ModeWhiteBox},
+	} {
+		if reason := prepareLocalAssessmentResource(tc.mode, tc.kind, tc.value, "trivy"); reason == "" {
+			t.Fatalf("unsafe resource was prepared: %+v", tc)
+		}
+	}
+	image := buildTrivy(Request{Target: "registry.test/app@sha256:" + strings.Repeat("a", 64), TypedAssessment: true, Artifact: Artifact{Kind: "image", Ref: "registry.test/app@sha256:" + strings.Repeat("a", 64)}, ScanDir: t.TempDir()}, Config{TrivyPath: "trivy"})
+	if len(image.args) == 0 || image.args[0] != "image" {
+		t.Fatalf("image used wrong command: %+v", image)
+	}
+	sbomCommand := buildTrivy(Request{Target: sbom, TypedAssessment: true, Artifact: Artifact{Kind: "sbom", Ref: sbom}, ScanDir: t.TempDir()}, Config{TrivyPath: "trivy"})
+	if len(sbomCommand.args) == 0 || sbomCommand.args[0] != "sbom" {
+		t.Fatalf("SBOM used wrong command: %+v", sbomCommand)
+	}
+}
+
+func TestConditionalWhiteBoxSourceRunsAfterLocalPreparation(t *testing.T) {
+	source := t.TempDir()
+	runner := &resourceJobRunner{}
+	pipeline := &Pipeline{Runners: []Runner{runner}}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox, Targets: []assessment.Target{{ID: "src", Kind: assessment.KindLocalSourcePath, Value: source}}}, Fingerprint: "sha256:source", Jobs: []PlanJob{{ID: "trivy:src", Scanner: "trivy", TargetID: "src", Target: source, Variant: "trivy", State: PlanConditional}}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if runner.calls != 1 || len(runs) != 1 || runs[0].Status != "completed" {
+		t.Fatalf("prepared source was not scanned: calls=%d runs=%+v", runner.calls, runs)
+	}
+	plan.Jobs[0].Target = filepath.Join(source, "missing")
+	runs = pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if runner.calls != 1 || len(runs) != 1 || runs[0].Status != "skipped" {
+		t.Fatalf("missing source was scanned: calls=%d runs=%+v", runner.calls, runs)
 	}
 }
 
