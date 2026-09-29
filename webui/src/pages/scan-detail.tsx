@@ -376,6 +376,17 @@ function scopeHeading(sc: ReportScope): string {
 	return `HOST  ${sc.target || sc.id.replace(/^host:/, "")}`;
 }
 
+// Scanner-group display order + labels (mirrors the backend registry Group).
+const RUN_GROUP_ORDER = ["web_api", "network_servers", "cloud", "kubernetes", "code"];
+const RUN_GROUP_LABELS: Record<string, string> = {
+	web_api: "Web & API",
+	network_servers: "Network & servers",
+	cloud: "Cloud",
+	kubernetes: "Kubernetes",
+	code: "Source, dependencies & containers",
+};
+const runGroupLabel = (g: string) => RUN_GROUP_LABELS[g] ?? (g || "Other");
+
 function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	const [picked, setPicked] = useState<RunKey | null>(null);
 	const [openState, setOpenState] = useState<Record<string, boolean>>({});
@@ -383,6 +394,12 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	const runsSignature = useMemo(() => (scan.scanner_runs ?? []).map((r) => `${r.scope ?? ""}|${r.scanner}|${r.status}`).join(","), [scan.scanner_runs]);
 	const scopesQuery = useQuery({ queryKey: ["scan-scopes", scan.id, runsSignature], queryFn: () => api.scanScopes(scan.id), placeholderData: (prev) => prev });
 	const coverageQuery = useQuery({ queryKey: ["assessment-coverage", scan.id, runsSignature], queryFn: () => api.assessmentCoverage(scan.id), enabled: !!scan.id, placeholderData: (prev) => prev });
+	const registryQuery = useQuery({ queryKey: ["scanner-registry-groups"], queryFn: api.scannerRegistry, staleTime: 60000 });
+	const groupOf = useMemo(() => {
+		const m: Record<string, string> = {};
+		for (const d of registryQuery.data?.scanners ?? []) m[d.id] = d.group;
+		return (id: string) => m[id] ?? "";
+	}, [registryQuery.data]);
 	const recon = scopesQuery.data?.recon ?? [];
 	const scopes = scopesQuery.data?.scopes ?? [];
 	const hostCount = scopes.filter((s) => s.kind !== "source").length;
@@ -428,10 +445,17 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [scopes, hostCount]);
 	const isOpen = (sc: ReportScope) => openState[sc.id] ?? defaultOpen(sc);
-	const grid = (runs: ScopeRun[], fallbackScope: string) => <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{runs.map((r) => {
+	const cards = (runs: ScopeRun[], fallbackScope: string) => <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{runs.map((r) => {
 		const k = keyOf(r, fallbackScope);
 		return <ScannerStatusCard key={`${k.scope}|${k.scanner}`} name={r.scanner} run={r} active={sameKey(selected, k)} onClick={() => setPicked(k)} />;
 	})}</div>;
+	// Render a scope's runs grouped by scanner group (web/network/cloud/k8s/code),
+	// each under a small subheader. A single group falls back to a flat grid.
+	const grid = (runs: ScopeRun[], fallbackScope: string) => {
+		const present = [...RUN_GROUP_ORDER, ...[...new Set(runs.map((r) => groupOf(r.scanner)))].filter((g) => !RUN_GROUP_ORDER.includes(g))].filter((g) => runs.some((r) => groupOf(r.scanner) === g));
+		if (present.length <= 1) return cards(runs, fallbackScope);
+		return <div className="space-y-3">{present.map((g) => <div key={g} className="space-y-2"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{runGroupLabel(g)}</p>{cards(runs.filter((r) => groupOf(r.scanner) === g), fallbackScope)}</div>)}</div>;
+	};
 	return <div className="space-y-6">
 		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>
 		<header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h1 className="font-mono text-2xl font-semibold">{scan.target}</h1><div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{scan.id}</span><span>·</span><span>{formatDuration(scan.started_at, scan.finished_at)}</span><Badge variant="outline">schema v{scan.schema_version ?? 2}</Badge>{scan.assessment && <><Badge variant="outline">{scan.assessment.assessment_mode.replaceAll("_", " ")}</Badge><Badge variant="outline">{scan.profile || scan.assessment.profile || "web-gentle"}</Badge></>}</div></div><div className="flex gap-2"><ScanStatusPill status={scan.status} /><Button variant="outline" size="sm" asChild><a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer"><Download className="mr-1 h-4 w-4" /> Report</a></Button></div></header>

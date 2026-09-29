@@ -120,6 +120,7 @@ export interface AssessmentScannerDefinition {
   id: string;
   name: string;
   category: string;
+  group: string;
   assessment_types: AssessmentType[];
   target_types: string[];
   default_selection: string;
