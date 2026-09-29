@@ -51,11 +51,13 @@ type observedFinding struct {
 }
 
 type scanResult struct {
-	State      string `json:"state"`
-	Assessment *struct {
-		State string `json:"state"`
-	} `json:"assessment_coverage"`
-	Findings []observedFinding `json:"findings"`
+	State      string             `json:"state"`
+	Assessment *scanCoverageState `json:"assessment_coverage"`
+	Findings   []observedFinding  `json:"findings"`
+}
+
+type scanCoverageState struct {
+	State string `json:"state"`
 }
 
 type labMetrics struct {

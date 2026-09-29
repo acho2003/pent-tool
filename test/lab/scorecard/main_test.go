@@ -56,3 +56,32 @@ func TestScorecardRequiresEveryApplicationAndComparableCoverage(t *testing.T) {
 		t.Fatal("CWE matching conflated separate identifiers")
 	}
 }
+
+func TestScorecardGatePassesOnlyFullyMeasuredLabeledRun(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, value any) string {
+		t.Helper()
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	manifest := labManifest{SchemaVersion: 1, Applications: []labApplication{{ID: "vulnerable", BaseURL: "http://127.0.0.1:18080", ExpectedEndpoints: []string{"/search"}, ExpectedFindings: []findingLabel{{Class: "reflected_xss", Path: "/search", Severity: "high"}}}}}
+	observations := observationManifest{SchemaVersion: 1, Runs: []observedRun{{
+		ApplicationID: "vulnerable", ResultPath: write("result.json", scanResult{Assessment: &scanCoverageState{State: "complete"}, Findings: []observedFinding{{CWE: "CWE-79", Endpoint: "http://127.0.0.1:18080/search"}}}),
+		MetricsPath: write("metrics.json", labMetrics{Requests: 1, Paths: map[string]int{"/search": 1}}), DurationMS: 1000, PeakMemoryBytes: 1000,
+	}}}
+	got, err := evaluate(manifest, observations, dir)
+	if err != nil || !got.GatePassed || got.Precision != 1 || got.Recall != 1 || got.TP != 1 {
+		t.Fatalf("complete measured run did not pass: %+v err=%v", got, err)
+	}
+	observations.Runs[0].PeakMemoryBytes = 0
+	got, err = evaluate(manifest, observations, dir)
+	if err != nil || got.GatePassed {
+		t.Fatalf("missing memory measurement passed: %+v err=%v", got, err)
+	}
+}
