@@ -22,15 +22,19 @@ type fakeRunner struct {
 	applies func(Scope) bool
 }
 
+var fakeRunnerStateMu sync.Mutex
+
 func (f fakeRunner) Name() string { return f.name }
 func (f fakeRunner) Descriptor() Descriptor {
 	return Descriptor{Name: f.name, Phase: PhaseWeb, Weight: WeightLight, Tracks: f.tracks, Applies: f.applies}
 }
 func (f fakeRunner) Run(_ context.Context, req Request, _ Config, emit EmitFunc) Run {
+	fakeRunnerStateMu.Lock()
 	*f.seen = append(*f.seen, f.name)
 	if f.gotDir != nil {
 		*f.gotDir = append(*f.gotDir, req.ScanDir)
 	}
+	fakeRunnerStateMu.Unlock()
 	if f.cancel != nil {
 		f.cancel()
 	}
