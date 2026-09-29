@@ -24,6 +24,8 @@ func (s *Server) scannerAvailability() map[string]bool {
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "vuls": s.cfg.VulsPath,
 		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 		"lynis": s.cfg.SSHPath,
+		// Staged web-pipeline adapters: availability is genuine binary presence.
+		"katana": s.cfg.KatanaPath, "dalfox": s.cfg.DalfoxPath, "wapiti": s.cfg.WapitiPath, "sqlmap": s.cfg.SqlmapPath,
 	}
 	for id, path := range paths {
 		_, err := exec.LookPath(path)
@@ -33,7 +35,6 @@ func (s *Server) scannerAvailability() map[string]bool {
 	// backend; a configured shared daemon is not sufficient evidence.
 	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
 	available["openvas"] = (strings.TrimSpace(s.cfg.GVMHost) != "" || strings.TrimSpace(s.cfg.GVMSocket) != "") && s.cfg.GVMUsername != "" && s.cfg.GVMPassword != ""
-	available["sqlmap"] = false
 	return available
 }
 

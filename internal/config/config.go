@@ -32,6 +32,10 @@ type Config struct {
 	GitleaksPath          string
 	OsvPath               string
 	NiktoPath             string
+	KatanaPath            string
+	DalfoxPath            string
+	WapitiPath            string
+	SqlmapPath            string
 	SSHPath               string
 	ZAPURL                string
 	ZAPAPIKey             string
@@ -251,6 +255,10 @@ func load() *Config {
 		GitleaksPath:          envOr("XALGORIX_GITLEAKS_PATH", "gitleaks"),
 		OsvPath:               envOr("XALGORIX_OSV_PATH", "osv-scanner"),
 		NiktoPath:             envOr("XALGORIX_NIKTO_PATH", "nikto"),
+		KatanaPath:            envOr("XALGORIX_KATANA_PATH", "katana"),
+		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
+		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
+		SqlmapPath:            envOr("XALGORIX_SQLMAP_PATH", "sqlmap"),
 		SSHPath:               envOr("XALGORIX_SSH_PATH", "ssh"),
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
