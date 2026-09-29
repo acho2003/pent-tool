@@ -26,10 +26,12 @@ type Config struct {
 	SubfinderPath         string
 	HttpxPath             string
 	NmapPath              string
+	MasscanPath           string
 	TestsslPath           string
 	SemgrepPath           string
 	GitleaksPath          string
 	OsvPath               string
+	NiktoPath             string
 	ZAPURL                string
 	ZAPAPIKey             string
 	ZAPDedicated          bool
@@ -39,6 +41,8 @@ type Config struct {
 	GVMUsername           string
 	GVMPassword           string
 	ScannerMaxOutputBytes int64
+	MasscanRate           int
+	MasscanTimeoutSec     int
 	MaxWorkers            int
 	NucleiTimeoutSec      int
 	ZAPTimeoutSec         int
@@ -239,10 +243,12 @@ func load() *Config {
 		SubfinderPath:         envOr("XALGORIX_SUBFINDER_PATH", "subfinder"),
 		HttpxPath:             envOr("XALGORIX_HTTPX_PATH", "httpx"),
 		NmapPath:              envOr("XALGORIX_NMAP_PATH", "nmap"),
+		MasscanPath:           envOr("XALGORIX_MASSCAN_PATH", "masscan"),
 		TestsslPath:           envOr("XALGORIX_TESTSSL_PATH", "testssl.sh"),
 		SemgrepPath:           envOr("XALGORIX_SEMGREP_PATH", "semgrep"),
 		GitleaksPath:          envOr("XALGORIX_GITLEAKS_PATH", "gitleaks"),
 		OsvPath:               envOr("XALGORIX_OSV_PATH", "osv-scanner"),
+		NiktoPath:             envOr("XALGORIX_NIKTO_PATH", "nikto"),
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
 		ZAPDedicated:          strings.EqualFold(envOr("XALGORIX_ZAP_DEDICATED", "false"), "true"),
@@ -252,6 +258,8 @@ func load() *Config {
 		GVMUsername:           envOr("XALGORIX_GVM_USERNAME", ""),
 		GVMPassword:           envOr("XALGORIX_GVM_PASSWORD", ""),
 		ScannerMaxOutputBytes: int64(envOrInt("XALGORIX_SCANNER_MAX_OUTPUT_BYTES", 100<<20)),
+		MasscanRate:           envOrInt("XALGORIX_MASSCAN_RATE", 100),
+		MasscanTimeoutSec:     envOrInt("XALGORIX_MASSCAN_TIMEOUT_SEC", 900),
 		MaxWorkers:            envOrInt("XALGORIX_MAX_WORKERS", 3),
 		NucleiTimeoutSec:      envOrInt("XALGORIX_NUCLEI_TIMEOUT_SECONDS", 3600),
 		ZAPTimeoutSec:         envOrInt("XALGORIX_ZAP_TIMEOUT_SECONDS", 7200),

@@ -24,6 +24,22 @@ func TestScannerRegistryPreservesLegacyCatalogAndAddsUnavailableAdapters(t *test
 	}
 }
 
+func TestMasscanRemainsOptionalAndRequiresInstalledAdapterAndExplicitSelection(t *testing.T) {
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork},
+		Targets:          []assessment.Target{{ID: "net", Kind: assessment.KindIP, Value: "192.0.2.10"}},
+		ScannerSelection: assessment.ScannerSelection{Mode: "custom", Variants: []string{"masscan"}},
+	}
+	unavailable := PlanAssessment(PlanInput{Config: cfg, Availability: map[string]bool{"masscan": false}})
+	if len(unavailable.Jobs) != 0 || !slices.ContainsFunc(unavailable.Decisions, func(d PlanDecision) bool { return d.Scanner == "masscan" && d.State == PlanUnavailable }) {
+		t.Fatalf("unavailable Masscan was planned: %+v", unavailable)
+	}
+	available := PlanAssessment(PlanInput{Config: cfg, Availability: map[string]bool{"masscan": true}})
+	if len(available.Jobs) != 1 || available.Jobs[0].Scanner != "masscan" || available.Jobs[0].State != PlanSelected || !HasAssessmentRunner("masscan") {
+		t.Fatalf("explicitly selected Masscan job missing: %+v", available)
+	}
+}
+
 func TestPlanAssessmentBlackBoxNetworkDoesNotSelectCodeOrUnsupportedTools(t *testing.T) {
 	plan := PlanAssessment(PlanInput{Config: assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "host", Kind: assessment.KindIP, Value: "192.0.2.10"}}}})
 	if len(plan.Errors) > 0 {

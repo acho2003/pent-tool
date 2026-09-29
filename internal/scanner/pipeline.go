@@ -85,6 +85,18 @@ func applyDefaults(cfg *Config) {
 	if cfg.NmapPath == "" {
 		cfg.NmapPath = "nmap"
 	}
+	if cfg.MasscanPath == "" {
+		cfg.MasscanPath = "masscan"
+	}
+	if cfg.NiktoPath == "" {
+		cfg.NiktoPath = "nikto"
+	}
+	if cfg.MasscanRate <= 0 {
+		cfg.MasscanRate = 100
+	}
+	if cfg.MasscanTimeout <= 0 {
+		cfg.MasscanTimeout = 15 * time.Minute
+	}
 	if cfg.TestsslPath == "" {
 		cfg.TestsslPath = "testssl.sh"
 	}

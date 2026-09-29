@@ -122,6 +122,8 @@ type Config struct {
 	SubfinderPath     string
 	HttpxPath         string
 	NmapPath          string
+	MasscanPath       string
+	NiktoPath         string
 	TestsslPath       string
 	SemgrepPath       string
 	GitleaksPath      string
@@ -155,6 +157,8 @@ type Config struct {
 	SubfinderTimeout      time.Duration
 	HttpxTimeout          time.Duration
 	NmapTimeout           time.Duration
+	MasscanTimeout        time.Duration
+	MasscanRate           int
 	TestsslTimeout        time.Duration
 	SemgrepTimeout        time.Duration
 	GitleaksTimeout       time.Duration

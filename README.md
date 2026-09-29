@@ -103,11 +103,14 @@ Key environment variables:
 | `XALGORIX_SUBFINDER_PATH` | `subfinder` | Subfinder executable (recon) |
 | `XALGORIX_HTTPX_PATH` | `httpx` | httpx executable (recon) |
 | `XALGORIX_NMAP_PATH` | `nmap` | Nmap executable (recon) |
+| `XALGORIX_MASSCAN_PATH` | `masscan` | Optional typed IP/CIDR discovery executable |
+| `XALGORIX_MASSCAN_RATE` | `100` | Masscan packet rate; this adapter caps it at 1,000 packets/second |
+| `XALGORIX_MASSCAN_TIMEOUT_SEC` | `900` | Maximum duration for one Masscan job |
 | `XALGORIX_TESTSSL_PATH` | `testssl.sh` | testssl.sh executable |
 | `XALGORIX_SEMGREP_PATH` | `semgrep` | Semgrep executable |
 | `XALGORIX_GITLEAKS_PATH` | `gitleaks` | Gitleaks executable |
 | `XALGORIX_OSV_PATH` | `osv-scanner` | OSV-Scanner executable |
-| `XALGORIX_MAX_WORKERS` | `3` | Concurrent scanner limit (ZAP/OpenVAS are additionally serialized) |
+| `XALGORIX_MAX_WORKERS` | `3` | Concurrent scanner limit (ZAP/OpenVAS/Masscan are additionally serialized) |
 | `XALGORIX_ZAP_URL` | empty | Internal ZAP API URL |
 | `XALGORIX_ZAP_API_KEY` | empty | ZAP API key |
 | `XALGORIX_ZAP_DEDICATED` | `false` | Set `true` only when this deployment owns a dedicated ZAP daemon for isolated assessments |

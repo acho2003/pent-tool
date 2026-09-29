@@ -20,6 +20,9 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
+	if id == "masscan" {
+		return true
+	}
 	for _, runner := range NewPipeline(Config{}).Runners {
 		if runner.Name() == id {
 			return true
@@ -61,6 +64,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	for _, runner := range p.Runners {
 		byName[runner.Name()] = runner
 	}
+	// Masscan is an assessment-only opt-in runner. Keeping it out of the legacy
+	// pipeline prevents empty legacy scanner selections from silently adding raw
+	// network probes to existing scans.
+	byName["masscan"] = masscanRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
 		if run.Terminal() {
