@@ -158,10 +158,31 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if len(ab.TargetIDs) == 0 {
 			probs = append(probs, blocking("access.unbound", fmt.Sprintf("access binding %q lists no target_ids", ab.Kind)))
 		}
+		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey {
+			if strings.TrimSpace(ab.CredentialID) != "" {
+				if strings.TrimSpace(ab.VerifyURL) == "" || strings.TrimSpace(ab.VerifyMarker) == "" {
+					probs = append(probs, blocking("access.verification_required", "application credentials require an in-scope verify_url and expected verify_marker"))
+				} else if err := validateTargetValue(Target{Kind: KindURL, Value: ab.VerifyURL}); err != nil {
+					probs = append(probs, blocking("access.verify_url.invalid", "credential verification URL must be an absolute HTTP(S) URL without embedded credentials or fragments"))
+				}
+				if len(ab.VerifyMarker) > 256 || strings.ContainsAny(ab.VerifyMarker, "\r\n\x00") {
+					probs = append(probs, blocking("access.verify_marker.invalid", "credential verification marker must be 1–256 printable characters"))
+				}
+			}
+		}
 		for _, id := range ab.TargetIDs {
 			if !ids[id] {
 				probs = append(probs, blocking("access.target.unknown",
 					fmt.Sprintf("access binding %q references unknown target id %q", ab.Kind, id)))
+			}
+			if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey {
+				for _, target := range cfg.Targets {
+					if target.ID == id && target.Kind != KindURL {
+						probs = append(probs, blocking("access.target_must_be_url", fmt.Sprintf("application credential target %q must be an explicit URL", id)))
+					} else if target.ID == id && ab.VerifyURL != "" && !verificationURLWithinTarget(target.Value, ab.VerifyURL) {
+						probs = append(probs, blocking("access.verify_url.out_of_scope", fmt.Sprintf("verification URL for target %q must use the same origin and remain under its path boundary", id)))
+					}
+				}
 			}
 		}
 	}
@@ -195,6 +216,17 @@ func Validate(cfg AssessmentConfig) []Problem {
 
 	probs = append(probs, validateModePolicy(cfg)...)
 	return probs
+}
+
+func verificationURLWithinTarget(targetURL, verifyURL string) bool {
+	target, targetErr := url.Parse(targetURL)
+	verify, verifyErr := url.Parse(verifyURL)
+	if targetErr != nil || verifyErr != nil || target.Host == "" || verify.Host == "" || !strings.EqualFold(target.Scheme, verify.Scheme) || !strings.EqualFold(target.Host, verify.Host) || verify.User != nil || verify.Fragment != "" || verify.RawQuery != "" {
+		return false
+	}
+	base := strings.TrimSuffix(target.EscapedPath(), "/")
+	path := verify.EscapedPath()
+	return base == "" || path == base || strings.HasPrefix(path, base+"/")
 }
 
 func validateTargetValue(target Target) error {

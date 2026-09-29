@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -56,7 +58,8 @@ func (f *fakeZAP) called(path string) bool {
 
 func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.record(r.URL.Path)
-	if r.URL.Query().Get("apikey") != "zap-key" {
+	_ = r.ParseForm()
+	if r.URL.Query().Get("apikey") != "zap-key" && r.Header.Get("X-ZAP-API-Key") != "zap-key" {
 		http.Error(w, `{"code":"bad_api_key"}`, http.StatusForbidden)
 		return
 	}
@@ -85,8 +88,8 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = map[string]string{"version": "2.15.0"}
 	case "/JSON/replacer/action/addRule/":
 		f.mu.Lock()
-		f.rules[r.URL.Query().Get("description")] = true
-		f.replacerURL = r.URL.Query().Get("url")
+		f.rules[r.Form.Get("description")] = true
+		f.replacerURL = r.Form.Get("url")
 		f.mu.Unlock()
 	case "/JSON/replacer/action/removeRule/":
 		f.mu.Lock()
@@ -150,6 +153,32 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func TestZAPReplacerSecretsAreSentInPostBody(t *testing.T) {
+	secret := "Bearer request-secret"
+	var queryLeak atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, secret) {
+			queryLeak.Store(true)
+		}
+		_ = r.ParseForm()
+		if r.Form.Get("replacement") != secret {
+			t.Errorf("POST body did not contain replacement")
+		}
+		if r.Header.Get("X-ZAP-API-Key") != "zap-key" {
+			t.Errorf("API key header missing")
+		}
+		w.Write([]byte(`{"Result":"OK"}`))
+	}))
+	defer srv.Close()
+	_, err := zapPostResponse(context.Background(), Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key"}, "/JSON/replacer/action/addRule/", url.Values{"replacement": {secret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queryLeak.Load() {
+		t.Fatal("credential leaked into ZAP request URL")
+	}
 }
 
 func TestZAPRunDrivesAPIAndWritesReport(t *testing.T) {

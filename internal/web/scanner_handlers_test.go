@@ -199,7 +199,7 @@ func TestAssessmentPlanUsesBoundCredentialWithoutReturningSecretOrClaimingVerifi
 	if err := json.Unmarshal(created.Body.Bytes(), &metadata); err != nil || metadata.ID == "" {
 		t.Fatalf("credential metadata=%+v err=%v", metadata, err)
 	}
-	body := `{"assessment_mode":"GRAY_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/"},{"id":"other","type":"URL","value":"https://other.example.test/"}],"access":[{"target_ids":["app"],"kind":"APPLICATION_HEADERS","credential_id":"` + metadata.ID + `"}]}`
+	body := `{"assessment_mode":"GRAY_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/"},{"id":"other","type":"URL","value":"https://other.example.test/"}],"access":[{"target_ids":["app"],"kind":"APPLICATION_HEADERS","credential_id":"` + metadata.ID + `","verify_url":"https://app.example.test/profile","verify_marker":"Account dashboard"}]}`
 	planned := httptest.NewRecorder()
 	s.handleAssessmentPlan(planned, httptest.NewRequest(http.MethodPost, "/api/scans/plan", strings.NewReader(body)))
 	if planned.Code != http.StatusOK {

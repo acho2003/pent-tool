@@ -84,16 +84,27 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 		}
+		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && job.Scanner == "zap" {
+			req.TargetAuth = strings.Join(headers, "\n")
+		}
 		if parsed, err := url.Parse(job.Target); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
 			req.ApplicationURL = job.Target
 		}
 
 		if job.State == PlanConditional {
-			results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, "conditional job awaits target-scoped preparation", emit))
+			reason := job.Reason
+			if reason == "" {
+				reason = "conditional job awaits target-scoped preparation"
+			}
+			results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
 			continue
 		}
 		if job.State != PlanSelected {
-			results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, "job is not selected by the accepted plan", emit))
+			reason := job.Reason
+			if reason == "" {
+				reason = "job is not selected by the accepted plan"
+			}
+			results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
 			continue
 		}
 		if req.ApplicationURL != "" && p.Config.WebBudget > 0 {

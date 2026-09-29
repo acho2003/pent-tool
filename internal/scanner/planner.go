@@ -43,6 +43,7 @@ type PlanJob struct {
 	Variant         string            `json:"variant"`
 	Dependencies    []string          `json:"dependencies,omitempty"`
 	ExecutionMode   string            `json:"execution_mode,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
 }
 
 type TypeCoverage struct {

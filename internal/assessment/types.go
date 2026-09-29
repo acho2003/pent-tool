@@ -177,6 +177,7 @@ type AccessBinding struct {
 	Kind          AccessKind `json:"kind"`
 	CredentialID  string     `json:"credential_id,omitempty"`
 	VerifyURL     string     `json:"verify_url,omitempty"`
+	VerifyMarker  string     `json:"verify_marker,omitempty"`
 	APIOperations []string   `json:"api_operations,omitempty"`
 }
 

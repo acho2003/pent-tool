@@ -106,7 +106,16 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 			sess.record.Status = "failed"
 			sess.record.StopReason = "assessment plan became stale or invalid before execution"
 		} else {
-			runs = pipeline.RunAssessmentJobs(ctx, *sess.assessmentPlan, sess.scanDir, sess.record.ScannerRuns, emit)
+			authHeaders, authErr := s.prepareAssessmentAuthentication(ctx, sess.assessmentPlan)
+			if authErr != nil {
+				sess.record.Status = "failed"
+				sess.record.StopReason = "assessment authentication preparation failed"
+				runs = nil
+			} else {
+				pipeline.Config.AssessmentAuthHeaders = authHeaders
+				sess.record.AssessmentPlan = sess.assessmentPlan
+				runs = pipeline.RunAssessmentJobs(ctx, *sess.assessmentPlan, sess.scanDir, sess.record.ScannerRuns, emit)
+			}
 		}
 	} else {
 		runs = pipeline.Run(ctx, scanner.Request{Target: sess.target, Scanners: sess.scanners, ScanDir: sess.scanDir, Artifact: sess.artifact, VulsSSHHost: sess.vulsSSHHost, TargetAuth: sess.targetAuth, Profile: sess.profile, ApplicationURL: sess.target}, sess.record.ScannerRuns, emit)

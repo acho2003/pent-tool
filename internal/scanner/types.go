@@ -134,26 +134,29 @@ type Config struct {
 	GVMUser      string
 	GVMPass      string
 
-	RateRPS          int
-	WebProfile       string
-	WebMaxEndpoints  int
-	WebBudget        time.Duration
-	WebBrowser       bool
-	MaxWorkers       int
-	ScanHeaders      []string
-	MaxOutputBytes   int64
-	NucleiTimeout    time.Duration
-	ZAPTimeout       time.Duration
-	OpenVASTimeout   time.Duration
-	TrivyTimeout     time.Duration
-	VulsTimeout      time.Duration
-	SubfinderTimeout time.Duration
-	HttpxTimeout     time.Duration
-	NmapTimeout      time.Duration
-	TestsslTimeout   time.Duration
-	SemgrepTimeout   time.Duration
-	GitleaksTimeout  time.Duration
-	OsvTimeout       time.Duration
+	RateRPS         int
+	WebProfile      string
+	WebMaxEndpoints int
+	WebBudget       time.Duration
+	WebBrowser      bool
+	MaxWorkers      int
+	ScanHeaders     []string
+	// AssessmentAuthHeaders contains runtime-only, target-bound credentials for
+	// typed jobs. It must never be serialized or logged.
+	AssessmentAuthHeaders map[string][]string
+	MaxOutputBytes        int64
+	NucleiTimeout         time.Duration
+	ZAPTimeout            time.Duration
+	OpenVASTimeout        time.Duration
+	TrivyTimeout          time.Duration
+	VulsTimeout           time.Duration
+	SubfinderTimeout      time.Duration
+	HttpxTimeout          time.Duration
+	NmapTimeout           time.Duration
+	TestsslTimeout        time.Duration
+	SemgrepTimeout        time.Duration
+	GitleaksTimeout       time.Duration
+	OsvTimeout            time.Duration
 }
 
 type EmitFunc func(Event)

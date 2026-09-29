@@ -235,7 +235,10 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// Apply configured scan and per-target authentication headers through
 	// deterministic ZAP replacer rules before crawling. No model interprets
 	// authentication material.
-	headers := append([]string(nil), cfg.ScanHeaders...)
+	var headers []string
+	if !req.TypedAssessment {
+		headers = append(headers, cfg.ScanHeaders...)
+	}
 	headers = append(headers, strings.Split(req.TargetAuth, "\n")...)
 	var rules []string
 	// ZAP replacer rules live in the daemon, not in the scan: leaving them
@@ -265,7 +268,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		if req.TypedAssessment {
 			params.Set("url", scopeRegex)
 		}
-		_, err := call("/JSON/replacer/action/addRule/", params)
+		_, err := zapPostResponse(cctx, cfg, "/JSON/replacer/action/addRule/", params)
 		if err != nil {
 			return finishServiceFailure(run, fmt.Errorf("configure ZAP header %s: %w", strings.TrimSpace(name), err), secrets, cfg.MaxOutputBytes, emit)
 		}
@@ -513,6 +516,44 @@ func zapPost(cfg Config, path string, q url.Values) error {
 		}
 	}
 	return nil
+}
+
+// zapPostResponse sends action parameters in a form body. Authentication
+// replacer rules contain credentials, so they must not appear in the URL/query
+// where reverse proxies commonly record them. ZAP accepts its API key header.
+func zapPostResponse(parent context.Context, cfg Config, path string, body url.Values) (map[string]any, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.ZAPURL, "/")+path, strings.NewReader(body.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if cfg.ZAPAPIKey != "" {
+		req.Header.Set("X-ZAP-API-Key", cfg.ZAPAPIKey)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("ZAP API %s", resp.Status)
+	}
+	var result map[string]any
+	if json.Unmarshal(data, &result) == nil {
+		if code := valueString(result, "code"); code != "" && code != "<nil>" {
+			return nil, fmt.Errorf("ZAP API %s: %s", code, valueString(result, "message"))
+		}
+	}
+	return result, nil
 }
 
 func valueString(m map[string]any, key string) string {
