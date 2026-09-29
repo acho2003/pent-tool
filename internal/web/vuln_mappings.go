@@ -1,6 +1,9 @@
 package web
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // VulnMappings holds inferred security framework references for a vulnerability.
 type VulnMappings struct {
@@ -45,6 +48,8 @@ var vulnTypeToCWE = map[string]cweEntry{
 // cweIDToName provides O(1) reverse lookup from CWE ID → name for
 // agent-provided CWE values that may not exist in vulnTypeToCWE.
 var cweIDToName map[string]string
+
+var cweIDPattern = regexp.MustCompile(`(?i)\bcwe[-\s]?(\d+)\b`)
 
 func init() {
 	cweIDToName = make(map[string]string, len(vulnTypeToCWE))
@@ -189,7 +194,11 @@ func InferVulnMappings(v VulnSummary) VulnMappings {
 
 	// If agent already provided CWE, use it with O(1) name lookup
 	if v.CWE != "" {
-		m.CWEID = v.CWE
+		if match := cweIDPattern.FindStringSubmatch(v.CWE); len(match) == 2 {
+			m.CWEID = "CWE-" + match[1]
+		} else {
+			m.CWEID = strings.TrimSpace(v.CWE)
+		}
 		m.CWEName = cweIDToName[v.CWE] // empty string if unknown — fine
 	}
 

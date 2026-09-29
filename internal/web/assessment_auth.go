@@ -23,12 +23,12 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 		return headersByTarget, nil
 	}
 	for i := range plan.Jobs {
-		if plan.Jobs[i].Scanner == "zap" {
+		if plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei" {
 			plan.Jobs[i].ExecutionMode = "unauthenticated"
 		}
 	}
 	for i := range plan.Decisions {
-		if plan.Decisions[i].Scanner == "zap" {
+		if plan.Decisions[i].Scanner == "zap" || plan.Decisions[i].Scanner == "nuclei" {
 			plan.Decisions[i].ExecutionMode = "unauthenticated"
 		}
 	}
@@ -43,7 +43,7 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 			}
 		}
 		for i := range plan.Jobs {
-			if plan.Jobs[i].Scanner == "zap" && hasUnavailableAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
+			if (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") && hasUnavailableAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
 				plan.Jobs[i].State = scanner.PlanSkipped
 				plan.Jobs[i].Reason = "authenticated scan skipped because credential verification was unavailable"
 			}
@@ -101,19 +101,19 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 			headersByTarget[targetID] = append(headersByTarget[targetID], lines...)
 			setAuthCapability(plan, targetID, assessment.StateVerified, "target-bound credentials passed the configured verification check")
 			for i := range plan.Jobs {
-				if plan.Jobs[i].TargetID == targetID && plan.Jobs[i].Scanner == "zap" {
+				if plan.Jobs[i].TargetID == targetID && (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") {
 					plan.Jobs[i].ExecutionMode = "authenticated"
 				}
 			}
 			for i := range plan.Decisions {
-				if plan.Decisions[i].TargetID == targetID && plan.Decisions[i].Scanner == "zap" {
+				if plan.Decisions[i].TargetID == targetID && (plan.Decisions[i].Scanner == "zap" || plan.Decisions[i].Scanner == "nuclei") {
 					plan.Decisions[i].ExecutionMode = "authenticated"
 				}
 			}
 		}
 	}
 	for i := range plan.Jobs {
-		if plan.Jobs[i].Scanner == "zap" && plan.Jobs[i].ExecutionMode != "authenticated" && hasUnavailableAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
+		if (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") && plan.Jobs[i].ExecutionMode != "authenticated" && hasUnavailableAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
 			plan.Jobs[i].State = scanner.PlanSkipped
 			plan.Jobs[i].Reason = "authenticated scan skipped: " + unavailableAuthReason(plan.Capabilities, plan.Jobs[i].TargetID)
 		}

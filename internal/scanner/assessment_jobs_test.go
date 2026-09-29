@@ -24,6 +24,7 @@ type resourceJobRunner struct {
 	calls       int
 	name, alias string
 	authKind    string
+	authHeader  string
 	gvmID       string
 }
 
@@ -52,8 +53,51 @@ func (r *resourceJobRunner) Run(_ context.Context, req Request, _ Config, _ Emit
 	r.calls++
 	r.alias = req.VulsSSHHost
 	r.authKind = req.AuthKind
+	r.authHeader = req.TargetAuth
 	r.gvmID = req.GVMSSHCredentialID
 	return Run{Scanner: r.Name(), Target: req.Target, Status: "completed"}
+}
+
+func TestRunAssessmentJobsPassesVerifiedFormSessionToNuclei(t *testing.T) {
+	runner := &resourceJobRunner{name: "nuclei"}
+	refreshCalls := 0
+	pipeline := &Pipeline{Config: Config{
+		KatanaPath:            "/nonexistent/katana",
+		AssessmentAuthHeaders: map[string][]string{"app": {"Cookie: session=old"}},
+		AssessmentAuthRefresh: map[string]func(context.Context, []string) ([]string, error){"app": func(_ context.Context, current []string) ([]string, error) {
+			refreshCalls++
+			return []string{"Cookie: session=renewed"}, nil
+		}},
+	}, Runners: []Runner{runner}}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{
+		Profile: ProfileThorough,
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+		Access:  []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}}},
+	}, Fingerprint: "sha256:nuclei-auth", Jobs: []PlanJob{{Scanner: "nuclei", TargetID: "app", Target: "https://app.example.test/", Variant: "nuclei", State: PlanSelected}}}
+	root := t.TempDir()
+	artifact := filepath.Join(root, "previous-result.jsonl")
+	if err := os.WriteFile(artifact, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := finalizeRun(Run{Scanner: "nuclei", Scope: "app:app", Target: "https://app.example.test/", Variant: "nuclei", Status: "completed", PlanFingerprint: plan.Fingerprint, ArtifactPath: artifact})
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, root, []Run{old}, nil)
+	if len(runs) != 1 || runs[0].Status != "completed" || !runs[0].Authenticated || runner.authHeader != "Cookie: session=renewed" || runner.authKind != "form login" || refreshCalls < 2 {
+		t.Fatalf("verified form session did not reach Nuclei: runs=%+v header=%q kind=%q refreshes=%d", runs, runner.authHeader, runner.authKind, refreshCalls)
+	}
+}
+
+func TestRunAssessmentJobsSkipsNucleiWhenFormSessionUnavailable(t *testing.T) {
+	runner := &resourceJobRunner{name: "nuclei"}
+	pipeline := &Pipeline{Config: Config{KatanaPath: "/nonexistent/katana"}, Runners: []Runner{runner}}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{
+		Profile: ProfileThorough,
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+		Access:  []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}}},
+	}, Fingerprint: "sha256:nuclei-auth", Jobs: []PlanJob{{Scanner: "nuclei", TargetID: "app", Target: "https://app.example.test/", Variant: "nuclei", State: PlanSelected}}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if len(runs) != 1 || runs[0].Status != "skipped" || runner.calls != 0 {
+		t.Fatalf("unverified Nuclei job ran: runs=%+v calls=%d", runs, runner.calls)
+	}
 }
 
 func TestRunAssessmentJobsLabelsVerifiedFormSessionForZAP(t *testing.T) {

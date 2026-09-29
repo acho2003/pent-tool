@@ -91,6 +91,7 @@ type Request struct {
 
 type Run struct {
 	Scanner            string              `json:"scanner"`
+	Authenticated      bool                `json:"authenticated,omitempty"`
 	Variant            string              `json:"variant,omitempty"`
 	AssessmentTypes    []assessment.Type   `json:"assessment_types,omitempty"`
 	PlanFingerprint    string              `json:"plan_fingerprint,omitempty"`

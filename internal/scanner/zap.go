@@ -115,7 +115,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.TypedAssessment && !cfg.ZAPDedicated {
 		return failedServiceRun("zap", req, "typed assessments require XALGORIX_ZAP_DEDICATED=true for a dedicated managed ZAP daemon", emit)
 	}
-	if req.TypedAssessment && strings.TrimSpace(req.TargetAuth) != "" && req.AuthRefresh == nil {
+	if req.TypedAssessment && (strings.TrimSpace(req.TargetAuth) != "" || strings.EqualFold(req.AuthKind, "form login")) && req.AuthRefresh == nil {
 		return failedServiceRun("zap", req, "authenticated assessment requires an active session verifier", emit)
 	}
 	release, err := acquireZAPServiceLease(ctx, cfg.ZAPURL)
@@ -248,7 +248,16 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if !req.TypedAssessment {
 		headers = append(headers, cfg.ScanHeaders...)
 	}
-	headers = append(headers, strings.Split(req.TargetAuth, "\n")...)
+	for _, raw := range strings.Split(req.TargetAuth, "\n") {
+		if strings.TrimSpace(raw) != "" {
+			headers = append(headers, raw)
+		}
+	}
+	if len(headers) == 0 {
+		logLine("Authentication: no credentials supplied; running unauthenticated ZAP scan")
+	} else if req.AuthRefresh == nil {
+		logLine("Authentication: credentials supplied without a session verifier; authenticated state cannot be confirmed")
+	}
 	var rules []string
 	// ZAP replacer rules live in the daemon, not in the scan: leaving them
 	// behind would replay this target's credentials onto the next one.

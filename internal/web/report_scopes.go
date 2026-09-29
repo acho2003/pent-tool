@@ -30,18 +30,20 @@ type reportScopeRun struct {
 	Reason  string `json:"reason,omitempty"`
 	// Scope is the run's own scope key (a per-host nmap run keeps its
 	// "recon:<t>:<h>" key), so a UI can fetch exactly this run's output.
-	Scope       string `json:"scope,omitempty"`
-	Truncated   bool   `json:"truncated,omitempty"`
-	HasArtifact bool   `json:"has_artifact,omitempty"`
+	Scope         string `json:"scope,omitempty"`
+	Authenticated bool   `json:"authenticated,omitempty"`
+	Truncated     bool   `json:"truncated,omitempty"`
+	HasArtifact   bool   `json:"has_artifact,omitempty"`
 }
 
 // scopeRunOf is one run's coverage row within the scope id it is grouped under.
 func scopeRunOf(run scanner.Run, id string) reportScopeRun {
 	return reportScopeRun{
 		Scanner: run.Scanner, Status: run.Status, Reason: run.Reason,
-		Scope:       firstNonBlank(run.Scope, id),
-		Truncated:   run.Truncated,
-		HasArtifact: run.Status == "completed" && run.ArtifactPath != "",
+		Scope:         firstNonBlank(run.Scope, id),
+		Authenticated: run.Authenticated,
+		Truncated:     run.Truncated,
+		HasArtifact:   run.Status == "completed" && run.ArtifactPath != "",
 	}
 }
 

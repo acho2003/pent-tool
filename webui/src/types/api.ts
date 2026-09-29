@@ -71,6 +71,7 @@ export interface WSEvent {
 export interface ScannerArtifact { kind: "filesystem" | "repository" | "image" | "sbom" | string; ref: string; }
 export interface ScannerRun {
   scanner: string;
+  authenticated?: boolean;
   scope?: string;
   target: string;
   status: "completed" | "failed" | "cancelled" | "not_applicable" | "skipped" | "running";
@@ -131,6 +132,7 @@ export interface AssessmentScannerDefinition {
 // One run within a scope, from GET /api/scans/{id}/scopes.
 export interface ScopeRun {
   scanner: string;
+  authenticated?: boolean;
   status: string;
   reason?: string;
   scope?: string;

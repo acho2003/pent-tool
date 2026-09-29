@@ -111,6 +111,9 @@ func formatReportDuration(startTime, endTime time.Time) string {
 }
 
 func reportDisplayText(value string, fallback string, max int) string {
+	// Keep generated PDF/HTML text ASCII-safe. Native scanner output often
+	// contains UTF-8 punctuation which otherwise becomes mojibake in reports.
+	value = strings.NewReplacer("—", "-", "–", "-", "â€”", "-", "â€“", "-").Replace(value)
 	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 	if value == "" {
 		value = fallback
@@ -1093,14 +1096,14 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetY(15)
 		pdf.SetFont("Helvetica", "B", 22)
 		setColor(coral)
-		pdf.CellFormat(190, 12, "Findings Summary", "", 1, "L", false, 0, "")
+		pdf.CellFormat(190, 12, "Vulnerabilities by Host", "", 1, "L", false, 0, "")
 		drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
 		pdf.Ln(8)
 
 		pdf.SetFont("Helvetica", "", 8)
 		setColor(white)
 		pdf.SetX(10)
-		pdf.MultiCell(190, 4, "The following table summarizes all findings with their security framework mappings (CWE, OWASP Top 10 2021). Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
+		pdf.MultiCell(190, 4, "Unique scanner findings grouped by host. Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
 		pdf.Ln(4)
 
 		// Table header
@@ -1179,7 +1182,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 
 			setColor(white)
 			pdf.SetFont("Helvetica", "", 7)
-			cvssStr := "—"
+			cvssStr := "-"
 			if v.CVSS > 0 {
 				cvssStr = fmt.Sprintf("%.1f", v.CVSS)
 			}
@@ -1191,20 +1194,20 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				cveStr = cveStr[:19] + "..."
 			}
 			if cveStr == "" {
-				cveStr = "—"
+				cveStr = "-"
 			}
 			pdf.CellFormat(40, 7, cveStr, "", 0, "L", false, 0, "")
 
 			setColor(teal)
 			cweStr := mappings.CWEID
 			if cweStr == "" {
-				cweStr = "—"
+				cweStr = "-"
 			}
 			pdf.CellFormat(18, 7, cweStr, "", 0, "L", false, 0, "")
 
 			owaspStr := mappings.OWASP
 			if owaspStr == "" {
-				owaspStr = "—"
+				owaspStr = "-"
 			}
 			pdf.CellFormat(20, 7, owaspStr, "", 1, "L", false, 0, "")
 		}
@@ -1386,12 +1389,6 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			if v.PoCScript != "" {
 				sections = append(sections, section{"POC SCRIPT", v.PoCScript})
 			}
-			if v.ExploitationProof != "" {
-				sections = append(sections, section{"EXPLOITATION PROOF", v.ExploitationProof})
-			}
-			if v.Remediation != "" {
-				sections = append(sections, section{"REMEDIATION", v.Remediation})
-			}
 			if v.Fix != "" {
 				sections = append(sections, section{"SUGGESTED FIX", v.Fix})
 			}
@@ -1417,7 +1414,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 
 				// Content
 				pdf.SetFont("Helvetica", "", 9)
-				if sec.label == "POC SCRIPT" || sec.label == "ENDPOINT" || sec.label == "EXPLOITATION PROOF" {
+				if sec.label == "POC SCRIPT" || sec.label == "ENDPOINT" {
 					// Code-style content with dynamic height
 					codeY := pdf.GetY()
 					content := prepareReportCodeBlock(sec.content, 34, 96)
@@ -1441,16 +1438,12 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 					drawRect(14, codeY, 182, blockHeight, codeBg)
 					pdf.SetXY(17, codeY+3)
 					pdf.SetFont("Courier", "", 7)
-					if sec.label == "EXPLOITATION PROOF" {
-						setColor([3]int{255, 200, 100}) // Gold/amber for exploitation proof
-					} else {
-						setColor(cyan)
-					}
-					pdf.MultiCell(175, 4, content, "", "L", false)
+					setColor(cyan)
+					pdf.MultiCell(175, 4, reportDisplayText(content, "", 0), "", "L", false)
 				} else {
 					setColor(white)
 					pdf.SetX(14)
-					pdf.MultiCell(182, 5, sec.content, "", "L", false)
+					pdf.MultiCell(182, 5, reportDisplayText(sec.content, "", 0), "", "L", false)
 				}
 				pdf.Ln(4)
 			}

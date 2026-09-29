@@ -75,6 +75,16 @@ export default function NewScanPage() {
     setAssessmentPlan(null);
   }
 
+  function authenticationSetupError(): string | null {
+    if (credentialKind === "FORM_LOGIN" && !credentialId) {
+      return "Save the form-login credential before previewing an authenticated assessment.";
+    }
+    if (credentialId && (!authVerifyURL.trim() || !authVerifyMarker.trim())) {
+      return "Add a protected verification URL and a response marker that appears only after login.";
+    }
+    return null;
+  }
+
   async function previewAssessmentPlan() {
     setPlanError(null);
     setAssessmentPlan(null);
@@ -82,6 +92,11 @@ export default function NewScanPage() {
       setPlanError("Add at least one URL or host and select an assessment type.");
       return;
     }
+	const authError = authenticationSetupError();
+	if (authError) {
+	  setPlanError(authError);
+	  return;
+	}
     setPlanning(true);
     try {
       const plan = await api.planAssessment({
@@ -190,10 +205,19 @@ export default function NewScanPage() {
 
   async function submit(saveOnly: boolean) {
     setError(null);
+	const authError = authenticationSetupError();
+	if (authError) {
+	  setError(authError);
+	  return;
+	}
     if (!assessmentPlan) {
       setError("Preview the assessment plan after your last configuration change before saving or starting.");
       return;
     }
+	if (credentialId && !assessmentPlan.config.access?.some((binding) => binding.credential_id === credentialId && binding.target_ids.includes(credentialTargetId))) {
+	  setError("The previewed plan does not include this login credential. Preview the plan again before starting.");
+	  return;
+	}
     if (!targets.length && (artifactKind === "none" || !artifactRef.trim())) {
       setError("Add at least one target or a source artifact.");
       return;
@@ -246,7 +270,7 @@ export default function NewScanPage() {
       <div className="space-y-3 rounded-md border p-3">
         <div>
           <p className="text-sm font-medium">Target-bound web authentication</p>
-          <p className="mt-1 text-xs text-muted-foreground">Credentials are encrypted. At scan start, Xalgorix verifies the selected account page before sharing the scoped header or session cookie with the dedicated ZAP scan.</p>
+		  <p className="mt-1 text-xs text-muted-foreground">Save the credential, set a protected verification URL and marker, then preview the plan. At scan start, Xalgorix verifies the session before Katana, Nuclei, and ZAP use it.</p>
         </div>
         {credentialSaved && <p className="text-xs text-emerald-400">Encrypted credential saved. Set an authenticated verification URL and a response marker before previewing the plan.</p>}
         {credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <>

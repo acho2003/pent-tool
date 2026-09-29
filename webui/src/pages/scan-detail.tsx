@@ -501,9 +501,9 @@ function AttackSurfaceCard({ scanId, runsSignature }: { scanId: string; runsSign
 	</Card>;
 }
 
-function ScannerStatusCard({ name, run, active, onClick }: { name: string; run?: { status: string; reason?: string; truncated?: boolean }; active: boolean; onClick: () => void }) {
+function ScannerStatusCard({ name, run, active, onClick }: { name: string; run?: { status: string; reason?: string; truncated?: boolean; authenticated?: boolean }; active: boolean; onClick: () => void }) {
 	const status = run?.status ?? "pending";
-	return <button type="button" onClick={onClick} className={cn("rounded-lg border p-4 text-left transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>;
+	return <button type="button" onClick={onClick} className={cn("rounded-lg border p-4 text-left transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{run?.authenticated && <Badge variant="outline" className="mt-2">Authenticated session</Badge>}{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>;
 }
 
 function currentPhaseLabel(p?: number): string {

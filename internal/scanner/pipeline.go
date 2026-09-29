@@ -718,6 +718,13 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	}
 	defer stderr.Close()
 	secrets := secretValues(req, cfg)
+	if req.TypedAssessment && req.TargetAuth != "" && (name == "katana" || name == "nuclei") {
+		message := "Authentication: verified target-bound session attached to " + name + " requests\n"
+		_, _ = io.WriteString(stdout, message)
+		if emit != nil {
+			emit(Event{Type: "scanner_output", Scanner: name, Stream: "stdout", Output: message})
+		}
+	}
 	var seq atomic.Int64
 	// os/exec drains stdout and stderr concurrently. Serialize callbacks so
 	// persistence and WebSocket consumers observe a race-free total sequence.

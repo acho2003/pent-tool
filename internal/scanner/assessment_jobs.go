@@ -105,6 +105,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			continue
 		}
 		crawlScope := "discovery:" + target.ID
+		authBound := assessmentWebAuthBound(plan.Config.Access, target.ID)
+		if authBound {
+			if err := p.refreshAssessmentWebAuth(ctx, target.ID); err != nil {
+				// A requested authenticated crawl must not quietly become a
+				// public crawl when a cookie has expired or login failed.
+				continue
+			}
+		}
 		inventoryScope := assessmentTargetScope(target)
 		inventoryTarget := target.Value
 		if !strings.HasPrefix(strings.ToLower(inventoryTarget), "http://") && !strings.HasPrefix(strings.ToLower(inventoryTarget), "https://") {
@@ -118,7 +126,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		spec := buildKatana(crawlReq, p.Config)
 		surface, valid := LoadAttackSurface(scanDir, inventoryScope, spec.artifact)
-		if !valid {
+		if valid && authBound && !attackSurfaceObservedWithAuth(surface) {
+			surface, valid = nil, false
+		}
+		if !valid && !authBound {
 			if parsed, parseErr := ParseKatanaAttackSurface(spec.artifact, inventoryScope, inventoryTarget, crawlReq.TargetAuth != ""); parseErr == nil {
 				surface = parsed
 			}
@@ -126,6 +137,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if surface == nil && katanaAvailable(p.Config) && spec.notApp == "" {
 			crawlRun := executeSpec(ctx, "katana", crawlReq, p.Config, spec, emit)
 			crawlRun.Scope = crawlScope
+			crawlRun.Authenticated = authBound && crawlReq.TargetAuth != "" && crawlRun.Status == "completed"
 			results = append(results, crawlRun)
 			if crawlRun.Status == "completed" {
 				surface, _ = ParseKatanaAttackSurface(spec.artifact, inventoryScope, inventoryTarget, crawlReq.TargetAuth != "")
@@ -163,6 +175,20 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 		}
+		if job.State != PlanSelected && job.State != PlanConditional {
+			reason := job.Reason
+			if reason == "" {
+				reason = "job is not selected by the accepted plan"
+			}
+			results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
+			continue
+		}
+		if assessmentWebAuthBound(plan.Config.Access, job.TargetID) && (job.Scanner == "zap" || job.Scanner == "nuclei") {
+			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err != nil {
+				results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, "authenticated scan skipped: session verification failed", emit))
+				continue
+			}
+		}
 		surface := surfaces[job.TargetID]
 		if surface != nil {
 			req.StructuredDispatch = true
@@ -172,16 +198,18 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				req.APIEndpoints = append(req.APIEndpoints, endpoint)
 			}
 		}
-		if old, ok := completed[key]; ok && old.Status == "completed" && VerifyChecksum(old) == nil {
+		if old, ok := completed[key]; ok && old.Status == "completed" && (!assessmentWebAuthBound(plan.Config.Access, job.TargetID) || old.Authenticated || (job.Scanner != "zap" && job.Scanner != "nuclei")) && VerifyChecksum(old) == nil {
 			req.EndpointTargets = DispatchTargets(surface, job.Scanner, endpointDispatchLimit(job.Scanner, p.Config.WebMaxEndpoints))
 			CompleteEndpointCoverage(surface, job.Scanner, old)
 			_ = SaveAttackSurface(scanDir, surface)
 			results = append(results, old)
 			continue
 		}
-		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && job.Scanner == "zap" {
+		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && (job.Scanner == "zap" || job.Scanner == "nuclei") {
 			req.TargetAuth = strings.Join(headers, "\n")
-			req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
+			if job.Scanner == "zap" {
+				req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
+			}
 			req.AuthKind = "HTTP headers"
 			for _, binding := range plan.Config.Access {
 				if binding.Kind == assessment.AccessFormLogin && slices.Contains(binding.TargetIDs, job.TargetID) {
@@ -228,14 +256,6 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 			// The accepted plan remains immutable; this job alone is promoted
 			// after its scoped resource passes the runtime check.
-		}
-		if job.State != PlanSelected && job.State != PlanConditional {
-			reason := job.Reason
-			if reason == "" {
-				reason = "job is not selected by the accepted plan"
-			}
-			results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
-			continue
 		}
 		if req.ApplicationURL != "" && p.Config.WebBudget > 0 {
 			deadline, exists := webDeadlines[job.TargetID]
@@ -316,6 +336,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				run.Reason = "web profile time budget exhausted; assessment coverage is partial"
 			}
 		}
+		run.Authenticated = req.TargetAuth != "" && run.Status == "completed" && (job.Scanner == "zap" || job.Scanner == "nuclei")
 		run.Scope = scope
 		run.Variant = job.Variant
 		run.AssessmentTypes = jobAssessmentTypes(job)
@@ -333,6 +354,44 @@ func assessmentTargetScope(target assessment.Target) string {
 		return "app:" + target.ID
 	}
 	return "host:" + target.ID
+}
+
+func assessmentWebAuthBound(bindings []assessment.AccessBinding, targetID string) bool {
+	for _, binding := range bindings {
+		switch binding.Kind {
+		case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin:
+			if slices.Contains(binding.TargetIDs, targetID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *Pipeline) refreshAssessmentWebAuth(ctx context.Context, targetID string) error {
+	current := p.Config.AssessmentAuthHeaders[targetID]
+	refresh := p.Config.AssessmentAuthRefresh[targetID]
+	if len(current) == 0 || refresh == nil {
+		return fmt.Errorf("authenticated session is unavailable")
+	}
+	next, err := refresh(ctx, append([]string(nil), current...))
+	if err != nil || len(next) == 0 {
+		return fmt.Errorf("authenticated session verification failed")
+	}
+	p.Config.AssessmentAuthHeaders[targetID] = append([]string(nil), next...)
+	return nil
+}
+
+func attackSurfaceObservedWithAuth(surface *AttackSurface) bool {
+	if surface == nil || surface.SourceChecksum == "" {
+		return false
+	}
+	for _, endpoint := range surface.Endpoints {
+		if endpoint.ObservedWithAuth {
+			return true
+		}
+	}
+	return false
 }
 
 func prepareLocalAssessmentResource(mode assessment.Mode, kind assessment.TargetKind, value, scannerID string) string {
