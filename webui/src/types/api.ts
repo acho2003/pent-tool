@@ -376,6 +376,9 @@ export interface EnvironmentSettings {
 }
 
 export interface ScanSchedule {
+  assessment?: AssessmentConfig;
+  profile?: string;
+  plan_fingerprint?: string;
   id: string;
   name: string;
   interval: string;
