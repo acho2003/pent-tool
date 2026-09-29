@@ -17,6 +17,7 @@ export interface VulnSummary {
   cve?: string;
   cwe_id?: string;
   confidence?: string;
+  native_confidence?: string;
   evidence_completeness?: string;
   owasp?: string;
   technical_analysis?: string;

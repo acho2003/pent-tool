@@ -25,7 +25,7 @@ func TestParseZAPPreservesEveryAffectedInstance(t *testing.T) {
 	if len(findings) != 2 {
 		t.Fatalf("expected both alert instances, got %+v", findings)
 	}
-	if findings[0].Method != "GET" || findings[0].Parameter != "q" || findings[0].Remediation != "Encode output" || findings[0].Confidence != "Medium" {
+	if findings[0].Method != "GET" || findings[0].Parameter != "q" || findings[0].Remediation != "Encode output" || findings[0].Confidence != "MEDIUM" || findings[0].NativeConfidence != "Medium" {
 		t.Fatalf("first instance evidence missing: %+v", findings[0])
 	}
 	if findings[1].Method != "POST" || findings[1].Parameter != "body.name" || findings[0].SourceID == findings[1].SourceID {

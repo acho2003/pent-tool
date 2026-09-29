@@ -47,6 +47,7 @@ type Finding struct {
 	Sources              []FindingSource `json:"sources,omitempty"`
 	Fingerprint          string          `json:"fingerprint,omitempty"`
 	Confidence           string          `json:"confidence,omitempty"`
+	NativeConfidence     string          `json:"native_confidence,omitempty"`
 	EvidenceCompleteness string          `json:"evidence_completeness,omitempty"`
 }
 
@@ -89,9 +90,6 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 		for i := range parsed {
 			parsed[i].EvidenceRef = run.ArtifactPath + "#" + parsed[i].SourceID
 			parsed[i].Scope = scope
-			if parsed[i].Confidence == "" {
-				parsed[i].Confidence = "scanner-reported"
-			}
 			if parsed[i].EvidenceCompleteness == "" {
 				parsed[i].EvidenceCompleteness = "artifact"
 			}
@@ -173,6 +171,22 @@ func ParseRun(run Run) ([]Finding, error) {
 }
 
 var niktoCVEPattern = regexp.MustCompile(`(?i)CVE-\d{4}-\d{4,}`)
+
+func normalizeScannerConfidence(scanner, raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch scanner {
+	case "zap":
+		switch {
+		case strings.Contains(value, "high"), value == "3":
+			return "HIGH"
+		case strings.Contains(value, "medium"), value == "2":
+			return "MEDIUM"
+		case strings.Contains(value, "low"), value == "1":
+			return "LOW"
+		}
+	}
+	return ""
+}
 
 func parseNikto(path string) ([]Finding, error) {
 	data, err := os.ReadFile(path)
@@ -334,7 +348,8 @@ func parseZAP(path string) ([]Finding, error) {
 				}
 			}
 			id := firstNonEmpty(str(m["pluginId"]), str(m["pluginid"]), strconv.Itoa(i))
-			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Method: str(im["method"]), Parameter: str(im["param"]), Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, Remediation: firstNonEmpty(str(m["solution"]), str(m["remediation"])), CWE: str(m["cweid"]), Confidence: firstNonEmpty(str(m["confidence"]), str(m["confidencecode"]))})
+			nativeConfidence := firstNonEmpty(str(m["confidence"]), str(m["confidencecode"]))
+			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Method: str(im["method"]), Parameter: str(im["param"]), Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, Remediation: firstNonEmpty(str(m["solution"]), str(m["remediation"])), CWE: str(m["cweid"]), Confidence: normalizeScannerConfidence("zap", nativeConfidence), NativeConfidence: nativeConfidence})
 		}
 	}
 	return out, nil

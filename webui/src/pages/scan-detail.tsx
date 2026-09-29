@@ -1036,6 +1036,7 @@ function FindingDetailsDialog({
               <DetailRow label="Method" value={finding.method} mono />
               <DetailRow label="Parameter" value={finding.parameter} mono />
               <DetailRow label="Confidence" value={finding.confidence} />
+              <DetailRow label="Scanner confidence" value={finding.native_confidence} />
               <DetailRow label="Evidence quality" value={finding.evidence_completeness} />
               <DetailRow label="Fingerprint" value={finding.fingerprint} mono />
               <DetailRow label="CVSS vector" value={finding.cvss_vector} mono />

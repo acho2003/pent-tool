@@ -416,6 +416,7 @@ type VulnSummary struct {
 	CVE                  string   `json:"cve,omitempty"`
 	CWE                  string   `json:"cwe_id,omitempty"`
 	Confidence           string   `json:"confidence,omitempty"`
+	NativeConfidence     string   `json:"native_confidence,omitempty"`
 	EvidenceCompleteness string   `json:"evidence_completeness,omitempty"`
 	OWASP                string   `json:"owasp,omitempty"`
 	TechnicalAnalysis    string   `json:"technical_analysis,omitempty"`
