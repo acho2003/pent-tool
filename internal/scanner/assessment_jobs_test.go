@@ -23,6 +23,7 @@ type assessmentJobRunner struct {
 type resourceJobRunner struct {
 	calls       int
 	name, alias string
+	gvmID       string
 }
 
 func (r *resourceJobRunner) Name() string {
@@ -37,6 +38,7 @@ func (r *resourceJobRunner) Descriptor() Descriptor {
 func (r *resourceJobRunner) Run(_ context.Context, req Request, _ Config, _ EmitFunc) Run {
 	r.calls++
 	r.alias = req.VulsSSHHost
+	r.gvmID = req.GVMSSHCredentialID
 	return Run{Scanner: r.Name(), Target: req.Target, Status: "completed"}
 }
 
@@ -197,6 +199,21 @@ func TestTypedVulsRequiresTargetBoundSSHAlias(t *testing.T) {
 	runs = pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
 	if runner.calls != 1 || runner.alias != "audit-host" || runs[0].Status != "completed" {
 		t.Fatalf("bound host audit failed: %+v alias=%s", runs, runner.alias)
+	}
+}
+
+func TestTypedOpenVASDoesNotDowngradeRequestedHostCredentials(t *testing.T) {
+	runner := &resourceJobRunner{name: "openvas"}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox, Targets: []assessment.Target{{ID: "host", Kind: assessment.KindHost, Value: "host.example.test"}}}, Fingerprint: "sha256:gvm", Jobs: []PlanJob{{ID: "openvas:host", Scanner: "openvas", TargetID: "host", Target: "host.example.test", Variant: "openvas", State: PlanSelected}}}
+	pipeline := &Pipeline{Config: Config{AssessmentSSHRequested: map[string]bool{"host": true}}, Runners: []Runner{runner}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if runner.calls != 0 || runs[0].Status != "skipped" || !strings.Contains(runs[0].Reason, "credential") {
+		t.Fatalf("OpenVAS silently downgraded: %+v", runs)
+	}
+	pipeline.Config.AssessmentGVMSSH = map[string]GVMSSHCredential{"host": {ID: "58ff2793-2dc7-43fe-85f9-20bfac5a87e4", Port: 2222}}
+	runs = pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if runner.calls != 1 || runs[0].Status != "completed" || runner.gvmID != "58ff2793-2dc7-43fe-85f9-20bfac5a87e4" {
+		t.Fatalf("credentialed OpenVAS job did not run: %+v", runs)
 	}
 }
 

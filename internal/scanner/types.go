@@ -60,15 +60,17 @@ type Request struct {
 	// the crash-persisted record built from them — carry their per-host scope
 	// instead of collapsing per-host same-named runs. Pipeline.Run sets it per
 	// scope; recon sets it per tool. Not serialized: it is derived, not input.
-	Scope           string                                            `json:"-"`
-	Artifact        Artifact                                          `json:"artifact,omitempty"`
-	VulsSSHHost     string                                            `json:"vuls_ssh_host,omitempty"`
-	TargetAuth      string                                            `json:"-"`
-	AuthRefresh     func(context.Context, []string) ([]string, error) `json:"-"`
-	Profile         string                                            `json:"-"`
-	ApplicationURL  string                                            `json:"-"`
-	TypedAssessment bool                                              `json:"-"`
-	APIEndpoints    []APIEndpoint                                     `json:"-"`
+	Scope              string                                            `json:"-"`
+	Artifact           Artifact                                          `json:"artifact,omitempty"`
+	VulsSSHHost        string                                            `json:"vuls_ssh_host,omitempty"`
+	GVMSSHCredentialID string                                            `json:"-"`
+	GVMSSHPort         int                                               `json:"-"`
+	TargetAuth         string                                            `json:"-"`
+	AuthRefresh        func(context.Context, []string) ([]string, error) `json:"-"`
+	Profile            string                                            `json:"-"`
+	ApplicationURL     string                                            `json:"-"`
+	TypedAssessment    bool                                              `json:"-"`
+	APIEndpoints       []APIEndpoint                                     `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -153,25 +155,32 @@ type Config struct {
 	// AssessmentAuthRefresh checks an authenticated session during a typed job.
 	// It returns replacement header lines after at most one form re-login.
 	// Callbacks and returned secrets remain runtime-only.
-	AssessmentAuthRefresh map[string]func(context.Context, []string) ([]string, error)
-	AssessmentSSHAliases  map[string]string
-	MaxOutputBytes        int64
-	NucleiTimeout         time.Duration
-	ZAPTimeout            time.Duration
-	OpenVASTimeout        time.Duration
-	TrivyTimeout          time.Duration
-	VulsTimeout           time.Duration
-	SubfinderTimeout      time.Duration
-	HttpxTimeout          time.Duration
-	NmapTimeout           time.Duration
-	MasscanTimeout        time.Duration
-	MasscanRate           int
-	NiktoTimeout          time.Duration
-	LynisTimeout          time.Duration
-	TestsslTimeout        time.Duration
-	SemgrepTimeout        time.Duration
-	GitleaksTimeout       time.Duration
-	OsvTimeout            time.Duration
+	AssessmentAuthRefresh  map[string]func(context.Context, []string) ([]string, error)
+	AssessmentSSHAliases   map[string]string
+	AssessmentGVMSSH       map[string]GVMSSHCredential
+	AssessmentSSHRequested map[string]bool
+	MaxOutputBytes         int64
+	NucleiTimeout          time.Duration
+	ZAPTimeout             time.Duration
+	OpenVASTimeout         time.Duration
+	TrivyTimeout           time.Duration
+	VulsTimeout            time.Duration
+	SubfinderTimeout       time.Duration
+	HttpxTimeout           time.Duration
+	NmapTimeout            time.Duration
+	MasscanTimeout         time.Duration
+	MasscanRate            int
+	NiktoTimeout           time.Duration
+	LynisTimeout           time.Duration
+	TestsslTimeout         time.Duration
+	SemgrepTimeout         time.Duration
+	GitleaksTimeout        time.Duration
+	OsvTimeout             time.Duration
+}
+
+type GVMSSHCredential struct {
+	ID   string
+	Port int
 }
 
 type EmitFunc func(Event)

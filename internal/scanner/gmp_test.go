@@ -198,6 +198,14 @@ func TestOpenVASRunAgainstFakeGvmd(t *testing.T) {
 	if strings.Contains(string(log), "<result id=") {
 		t.Error("full report XML was mirrored into the scanner log")
 	}
+	credentialed := openVASRunner{}.Run(t.Context(), Request{Target: "host.example.test", ScanDir: t.TempDir(), TypedAssessment: true, GVMSSHCredentialID: "58ff2793-2dc7-43fe-85f9-20bfac5a87e4", GVMSSHPort: 2222}, cfg, nil)
+	if credentialed.Status != "completed" || !fake.seen(`<ssh_credential id="58ff2793-2dc7-43fe-85f9-20bfac5a87e4"><port>2222</port></ssh_credential>`) {
+		t.Fatalf("target-bound Greenbone SSH credential was not attached: %+v", credentialed)
+	}
+	invalid := openVASRunner{}.Run(t.Context(), Request{Target: "host.example.test", ScanDir: t.TempDir(), TypedAssessment: true, GVMSSHCredentialID: `bad" id="injected`, GVMSSHPort: 22}, cfg, nil)
+	if invalid.Status != "failed" || !strings.Contains(invalid.Reason, "invalid target-bound") {
+		t.Fatalf("unsafe credential reference was accepted: %+v", invalid)
+	}
 }
 
 func TestOpenVASRunFailsOnGMPErrorStatus(t *testing.T) {

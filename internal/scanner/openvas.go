@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
 type openVASRunner struct{}
+
+var gvmSSHCredentialPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func (openVASRunner) Name() string { return "openvas" }
 
@@ -27,6 +30,9 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	}
 	if (cfg.GVMHost == "" && cfg.GVMSocket == "") || cfg.GVMUser == "" || cfg.GVMPass == "" {
 		return failedServiceRun("openvas", req, "Greenbone GMP endpoint or credentials are not configured", emit)
+	}
+	if req.GVMSSHCredentialID != "" && (!req.TypedAssessment || !gvmSSHCredentialPattern.MatchString(req.GVMSSHCredentialID) || req.GVMSSHPort < 1 || req.GVMSSHPort > 65535) {
+		return failedServiceRun("openvas", req, "invalid target-bound Greenbone SSH credential reference", emit)
 	}
 
 	base := filepath.Join(req.ScanDir, "scanner-output", "openvas")
@@ -165,7 +171,11 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	}
 
 	name := "xalgorix-" + filepath.Base(req.ScanDir)
-	targetData, err := call("create-target", fmt.Sprintf(`<create_target><name>%s</name><hosts>%s</hosts><port_list id="%s"/></create_target>`, xmlEscape(name), xmlEscape(host), portListID), 2*time.Minute)
+	sshCredential := ""
+	if req.GVMSSHCredentialID != "" {
+		sshCredential = fmt.Sprintf(`<ssh_credential id="%s"><port>%d</port></ssh_credential>`, req.GVMSSHCredentialID, req.GVMSSHPort)
+	}
+	targetData, err := call("create-target", fmt.Sprintf(`<create_target><name>%s</name><hosts>%s</hosts>%s<port_list id="%s"/></create_target>`, xmlEscape(name), xmlEscape(host), sshCredential, portListID), 2*time.Minute)
 	if err != nil {
 		return fail(err)
 	}

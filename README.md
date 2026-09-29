@@ -190,6 +190,12 @@ installed on the remote host. Its identified warnings and suggestions are
 reported as host findings; the complete native output remains available for
 review.
 
+For credentialed Greenbone scans, the same target-bound `SSH` record can include
+`gvm_credential_id` (a pre-provisioned Greenbone SSH credential UUID) and
+optional `gvm_ssh_port` (default `22`). A requested host credential without a
+valid Greenbone ID skips credentialed OpenVAS instead of falling back to an
+anonymous scan. Greenbone reports still need review to confirm login succeeded.
+
 Example request:
 
 ```json

@@ -123,6 +123,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				continue
 			}
 		}
+		if job.Scanner == "openvas" {
+			if credential, ok := p.Config.AssessmentGVMSSH[job.TargetID]; ok {
+				req.GVMSSHCredentialID, req.GVMSSHPort = credential.ID, credential.Port
+			} else if p.Config.AssessmentSSHRequested[job.TargetID] {
+				results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, "target-bound Greenbone SSH credential is unavailable; credentialed OpenVAS was not run", emit))
+				continue
+			}
+		}
 		if parsed, err := url.Parse(job.Target); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
 			req.ApplicationURL = job.Target
 		}

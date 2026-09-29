@@ -116,6 +116,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 			} else {
 				pipeline.Config.AssessmentAuthHeaders = authHeaders
 				sshAliases, sshErr := s.assessmentHostAliases(sess.assessmentPlan)
+				gvmCredentials, sshRequested := s.assessmentGVMSSHCredentials(sess.assessmentPlan)
 				refreshers, refreshErr := s.assessmentAuthRefreshers(sess.assessmentPlan, authHeaders)
 				if sshErr != nil {
 					sess.record.Status = "failed"
@@ -126,6 +127,8 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 				} else {
 					pipeline.Config.AssessmentAuthRefresh = refreshers
 					pipeline.Config.AssessmentSSHAliases = sshAliases
+					pipeline.Config.AssessmentGVMSSH = gvmCredentials
+					pipeline.Config.AssessmentSSHRequested = sshRequested
 				}
 				sess.record.AssessmentPlan = sess.assessmentPlan
 				if refreshErr == nil && sshErr == nil {

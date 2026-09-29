@@ -143,7 +143,7 @@ func TestAssessmentHostAliasesRequireBoundSafeCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := vault.Create(credentials.Record{Name: "host", Kind: assessment.AccessSSH, TargetIDs: []string{"host"}, Values: map[string]string{"ssh_alias": "audit-host"}})
+	meta, err := vault.Create(credentials.Record{Name: "host", Kind: assessment.AccessSSH, TargetIDs: []string{"host"}, Values: map[string]string{"ssh_alias": "audit-host", "gvm_credential_id": "58ff2793-2dc7-43fe-85f9-20bfac5a87e4", "gvm_ssh_port": "2222"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +152,17 @@ func TestAssessmentHostAliasesRequireBoundSafeCredential(t *testing.T) {
 	if err != nil || aliases["host"] != "audit-host" {
 		t.Fatalf("bound SSH alias not resolved: %v %v", aliases, err)
 	}
+	gvm, requested := s.assessmentGVMSSHCredentials(plan)
+	if !requested["host"] || gvm["host"].ID != "58ff2793-2dc7-43fe-85f9-20bfac5a87e4" || gvm["host"].Port != 2222 {
+		t.Fatalf("bound Greenbone SSH credential not resolved: %+v %+v", gvm, requested)
+	}
 	plan.Config.Access[0].TargetIDs = []string{"other"}
 	aliases, err = s.assessmentHostAliases(plan)
 	if err != nil || len(aliases) != 0 {
 		t.Fatalf("SSH alias crossed target boundary: %v %v", aliases, err)
+	}
+	gvm, _ = s.assessmentGVMSSHCredentials(plan)
+	if len(gvm) != 0 {
+		t.Fatalf("Greenbone credential crossed target boundary: %+v", gvm)
 	}
 }
