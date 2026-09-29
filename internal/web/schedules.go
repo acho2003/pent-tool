@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
@@ -39,13 +41,18 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if req.Assessment != nil {
-			http.Error(w, "typed assessment scheduling is not available until plan execution is enabled", http.StatusUnprocessableEntity)
-			return
-		}
-		if err := normalizeDeterministicSchedule(&req); err != nil {
+		if err := s.normalizeScheduleForExecution(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if req.Assessment != nil {
+			plan := s.buildAssessmentPlan(*req.Assessment)
+			if req.PlanFingerprint == "" || req.PlanFingerprint != plan.Fingerprint || len(plan.Errors) > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "scheduled assessment requires a current reviewed plan fingerprint", "plan": plan})
+				return
+			}
 		}
 		if req.Name == "" {
 			req.Name = "Scheduled Scan " + strings.Join(req.Targets, ", ")
@@ -109,28 +116,34 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if sch.Assessment != nil {
-			http.Error(w, "typed assessment scheduling is not available until plan execution is enabled", http.StatusUnprocessableEntity)
-			return
+			plan := s.buildAssessmentPlan(*sch.Assessment)
+			if sch.PlanFingerprint == "" || sch.PlanFingerprint != plan.Fingerprint || len(plan.Errors) > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "scheduled assessment plan changed; preview and save it again", "plan": plan})
+				return
+			}
 		}
 
 		// Manually trigger the scan
 		req := ScanRequest{
-			Assessment:     sch.Assessment,
-			Profile:        sch.Profile,
-			Targets:        sch.Targets,
-			Instruction:    sch.Instruction,
-			ScanMode:       sch.ScanMode,
-			SeverityFilter: sch.SeverityFilter,
-			Scanners:       append([]string(nil), sch.Scanners...),
-			Phases:         sch.Phases,
-			ReconMode:      sch.ReconMode,
-			ScanIntensity:  sch.ScanIntensity,
-			CompanyName:    sch.CompanyName,
-			LogoPath:       sch.LogoPath,
-			DiscordWebhook: sch.DiscordWebhook,
-			Name:           sch.Name + " (Scheduled)",
-			Artifact:       sch.Artifact,
-			VulsSSHHost:    sch.VulsSSHHost,
+			Assessment:      sch.Assessment,
+			PlanFingerprint: sch.PlanFingerprint,
+			Profile:         sch.Profile,
+			Targets:         sch.Targets,
+			Instruction:     sch.Instruction,
+			ScanMode:        sch.ScanMode,
+			SeverityFilter:  sch.SeverityFilter,
+			Scanners:        append([]string(nil), sch.Scanners...),
+			Phases:          sch.Phases,
+			ReconMode:       sch.ReconMode,
+			ScanIntensity:   sch.ScanIntensity,
+			CompanyName:     sch.CompanyName,
+			LogoPath:        sch.LogoPath,
+			DiscordWebhook:  sch.DiscordWebhook,
+			Name:            sch.Name + " (Scheduled)",
+			Artifact:        sch.Artifact,
+			VulsSSHHost:     sch.VulsSSHHost,
 		}
 
 		scanCfg := *s.cfg
@@ -161,13 +174,18 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if req.Assessment != nil {
-			http.Error(w, "typed assessment scheduling is not available until plan execution is enabled", http.StatusUnprocessableEntity)
-			return
-		}
-		if err := normalizeDeterministicSchedule(&req); err != nil {
+		if err := s.normalizeScheduleForExecution(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if req.Assessment != nil {
+			plan := s.buildAssessmentPlan(*req.Assessment)
+			if req.PlanFingerprint == "" || req.PlanFingerprint != plan.Fingerprint || len(plan.Errors) > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "scheduled assessment plan changed; preview and save it again", "plan": plan})
+				return
+			}
 		}
 		normalizeScheduleActivity(&req)
 		if err := normalizeScheduleTiming(&req); err != nil {
@@ -258,5 +276,43 @@ func normalizeDeterministicSchedule(sch *ScanSchedule) error {
 		return err
 	}
 	sch.Scanners = selected
+	return nil
+}
+
+func (s *Server) normalizeScheduleForExecution(sch *ScanSchedule) error {
+	if sch.Assessment == nil {
+		return normalizeDeterministicSchedule(sch)
+	}
+	config := assessment.Normalize(*sch.Assessment)
+	if sch.Profile != "" && config.Profile != "" && sch.Profile != config.Profile {
+		return fmt.Errorf("profile conflicts with assessment.profile")
+	}
+	if sch.Profile == "" {
+		sch.Profile = config.Profile
+	}
+	if sch.Profile == "" {
+		sch.Profile = scanner.ProfileGentle
+	}
+	if _, ok := scanner.ResolveWebProfile(sch.Profile); !ok {
+		return fmt.Errorf("profile must be web-gentle or web-thorough")
+	}
+	config.Profile = sch.Profile
+	for _, problem := range assessment.Validate(config) {
+		if problem.Blocking {
+			return fmt.Errorf("%s", problem.Message)
+		}
+	}
+	canonicalTargets := make([]string, 0, len(config.Targets))
+	for _, target := range config.Targets {
+		canonicalTargets = append(canonicalTargets, target.Value)
+	}
+	if len(sch.Targets) == 0 {
+		sch.Targets = canonicalTargets
+	} else if !slices.Equal(sch.Targets, canonicalTargets) {
+		return fmt.Errorf("schedule targets conflict with assessment_targets")
+	}
+	sch.Assessment = &config
+	sch.ScanMode = "single"
+	sch.PlanFingerprint = strings.TrimSpace(sch.PlanFingerprint)
 	return nil
 }

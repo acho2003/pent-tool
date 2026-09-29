@@ -1,11 +1,16 @@
 package web
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 func TestCalculateNextRun(t *testing.T) {
@@ -249,6 +254,44 @@ func TestSchedulesDiskIO(t *testing.T) {
 	// Verify file is gone
 	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
 		t.Errorf("schedule file still exists after deletion")
+	}
+}
+
+func TestTypedAssessmentScheduleRequiresAndPersistsReviewedPlan(t *testing.T) {
+	s := newTestServer(t, nil)
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication},
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+		Profile: "web-gentle",
+	}
+	plan := s.buildAssessmentPlan(cfg)
+	request := map[string]any{
+		"assessment": cfg, "profile": "web-gentle", "plan_fingerprint": plan.Fingerprint,
+		"interval": "daily", "name": "typed daily", "enabled": true,
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	s.handleSchedules(rr, httptest.NewRequest(http.MethodPost, "/api/schedules", strings.NewReader(string(body))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("typed schedule rejected: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var saved ScanSchedule
+	if err := json.Unmarshal(rr.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Assessment == nil || saved.PlanFingerprint != plan.Fingerprint || len(saved.Targets) != 1 || saved.Targets[0] != cfg.Targets[0].Value {
+		t.Fatalf("typed schedule lost normalized assessment: %+v", saved)
+	}
+
+	request["plan_fingerprint"] = "sha256:stale"
+	body, _ = json.Marshal(request)
+	rr = httptest.NewRecorder()
+	s.handleSchedules(rr, httptest.NewRequest(http.MethodPost, "/api/schedules", strings.NewReader(string(body))))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("stale plan accepted: status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

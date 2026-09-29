@@ -21,11 +21,12 @@ import (
 )
 
 type ScanSchedule struct {
-	Assessment *assessment.AssessmentConfig `json:"assessment,omitempty"`
-	Profile    string                       `json:"profile,omitempty"`
-	ID         string                       `json:"id"`
-	Name       string                       `json:"name"`
-	Interval   string                       `json:"interval"` // "hourly", "daily", "weekly", "monthly"
+	Assessment      *assessment.AssessmentConfig `json:"assessment,omitempty"`
+	Profile         string                       `json:"profile,omitempty"`
+	PlanFingerprint string                       `json:"plan_fingerprint,omitempty"`
+	ID              string                       `json:"id"`
+	Name            string                       `json:"name"`
+	Interval        string                       `json:"interval"` // "hourly", "daily", "weekly", "monthly"
 	// RunAt anchors the schedule to a wall-clock time of day, "HH:MM" in 24h
 	// form. Empty keeps the legacy behavior of firing one interval after the
 	// schedule was created or last ran. For "hourly" only the minutes apply.
@@ -323,30 +324,37 @@ func (s *Server) checkAndRunSchedules() {
 			if !sch.Enabled {
 				return
 			}
-			if sch.Assessment != nil {
-				log.Printf("[SCHEDULER] Skipping typed assessment %s because plan execution is not enabled", sch.Name)
-				return
-			}
 			if now.After(sch.NextRun) || now.Equal(sch.NextRun) {
+				if sch.Assessment != nil {
+					plan := s.buildAssessmentPlan(*sch.Assessment)
+					if len(plan.Errors) > 0 || sch.PlanFingerprint == "" || plan.Fingerprint != sch.PlanFingerprint {
+						log.Printf("[SCHEDULER] Typed assessment %s was not queued because its reviewed plan is invalid or stale", sch.Name)
+						sch.LastRun = now
+						sch.NextRun = calculateNextRun(sch, now)
+						_ = s.saveScheduleToDisk(sch)
+						return
+					}
+				}
 				log.Printf("[SCHEDULER] Triggering scheduled scan: %s (Targets: %v)", sch.Name, sch.Targets)
 
 				req := ScanRequest{
-					Assessment:     sch.Assessment,
-					Profile:        sch.Profile,
-					Targets:        sch.Targets,
-					Instruction:    sch.Instruction,
-					ScanMode:       sch.ScanMode,
-					SeverityFilter: sch.SeverityFilter,
-					Scanners:       append([]string(nil), sch.Scanners...),
-					Phases:         sch.Phases,
-					ReconMode:      sch.ReconMode,
-					ScanIntensity:  sch.ScanIntensity,
-					CompanyName:    sch.CompanyName,
-					LogoPath:       sch.LogoPath,
-					DiscordWebhook: sch.DiscordWebhook,
-					Name:           sch.Name + " (Scheduled)",
-					Artifact:       sch.Artifact,
-					VulsSSHHost:    sch.VulsSSHHost,
+					Assessment:      sch.Assessment,
+					PlanFingerprint: sch.PlanFingerprint,
+					Profile:         sch.Profile,
+					Targets:         sch.Targets,
+					Instruction:     sch.Instruction,
+					ScanMode:        sch.ScanMode,
+					SeverityFilter:  sch.SeverityFilter,
+					Scanners:        append([]string(nil), sch.Scanners...),
+					Phases:          sch.Phases,
+					ReconMode:       sch.ReconMode,
+					ScanIntensity:   sch.ScanIntensity,
+					CompanyName:     sch.CompanyName,
+					LogoPath:        sch.LogoPath,
+					DiscordWebhook:  sch.DiscordWebhook,
+					Name:            sch.Name + " (Scheduled)",
+					Artifact:        sch.Artifact,
+					VulsSSHHost:     sch.VulsSSHHost,
 				}
 
 				scanCfg := *s.cfg
