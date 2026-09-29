@@ -122,6 +122,39 @@ Complete list of the security tools included in Xalgorix - a deterministic, open
 | 14 | **httpx** | HTTP toolkit | `go install github.com/projectdiscovery/httpx/cmd/httpx@latest` |
 | 15 | **notify** | Webhook notifications | `go install github.com/projectdiscovery/notify/cmd/notify@latest` |
 
+## Integrated scanner registry (by group)
+
+These are the scanners the deterministic pipeline / assessment planner drives
+directly, organized into the groups shown in **New Assessment**. Each has a
+scoped adapter, tolerant result parsing, and explicit coverage/failure states.
+Optional scanners are off unless selected; availability reflects whether the
+tool binary (and any required credential) is present.
+
+| Group | Scanners |
+|---|---|
+| **Web & API** | subfinder, httpx, katana, nuclei, zap, testssl, nikto*, dalfox*, wapiti*, sqlmap* |
+| **Network & servers** | nmap, masscan*, openvas, vuls, lynis* |
+| **Cloud** | prowler*, scoutsuite* |
+| **Kubernetes** | kube-bench* |
+| **Source, dependencies & containers** | trivy, semgrep, gitleaks, osv |
+
+`*` = optional / opt-in.
+
+### Cloud & Kubernetes audit scanners (new)
+
+All three are **read-only** posture/compliance audits. Credentials are supplied
+per scan, passed to the tool via environment only (never argv), redacted from
+output, and never stored in scan records, logs, artifacts, or reports.
+
+| Scanner | Audits | Target | Operator setup |
+|---|---|---|---|
+| **prowler** | AWS security & configuration | Cloud account | Store a **read-only** AWS credential in the vault bound to the cloud target (env vars, e.g. `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, plus `provider=aws`). |
+| **scoutsuite** | AWS / GCP / Azure posture | Cloud account | Store a **read-only** cloud credential in the vault bound to the target; set `provider` to `aws`/`gcp`/`azure`. |
+| **kube-bench** | CIS Kubernetes benchmark | Kubernetes cluster | kube-bench is node-local: run Xalgorix where it can inspect the cluster (on a node) or deploy kube-bench in-cluster. |
+
+Tool paths are overridable via `XALGORIX_PROWLER_PATH`, `XALGORIX_SCOUTSUITE_PATH`,
+and `XALGORIX_KUBEBENCH_PATH`.
+
 ## Summary
 
 | Category | Count |
