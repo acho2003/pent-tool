@@ -153,6 +153,7 @@ type Config struct {
 	// It returns replacement header lines after at most one form re-login.
 	// Callbacks and returned secrets remain runtime-only.
 	AssessmentAuthRefresh map[string]func(context.Context, []string) ([]string, error)
+	AssessmentSSHAliases  map[string]string
 	MaxOutputBytes        int64
 	NucleiTimeout         time.Duration
 	ZAPTimeout            time.Duration

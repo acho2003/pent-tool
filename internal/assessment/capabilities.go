@@ -88,7 +88,10 @@ func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 			case AccessRepositoryCreds:
 				out = append(out, ev(CapGit, id, StateAvailable, "credential_ref", "repository credentials supplied"))
 			case AccessSSH:
-				out = append(out, ev(CapSSH, id, StateAvailable, "ssh", "SSH access reference bound to host"))
+				evidence := ev(CapSSH, id, StateDeclared, "credential_ref", "SSH alias reference requires target-bound credential resolution")
+				evidence.ReferenceID = strings.TrimSpace(ab.CredentialID)
+				evidence.AccessKind = ab.Kind
+				out = append(out, evidence)
 			case AccessWindows:
 				out = append(out, ev(CapWindows, id, StateUnavailable, "windows", "no Windows adapter is available in this release"))
 			case AccessCloud:

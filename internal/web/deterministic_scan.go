@@ -115,15 +115,20 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 				runs = nil
 			} else {
 				pipeline.Config.AssessmentAuthHeaders = authHeaders
+				sshAliases, sshErr := s.assessmentHostAliases(sess.assessmentPlan)
 				refreshers, refreshErr := s.assessmentAuthRefreshers(sess.assessmentPlan, authHeaders)
-				if refreshErr != nil {
+				if sshErr != nil {
+					sess.record.Status = "failed"
+					sess.record.StopReason = sshErr.Error()
+				} else if refreshErr != nil {
 					sess.record.Status = "failed"
 					sess.record.StopReason = refreshErr.Error()
 				} else {
 					pipeline.Config.AssessmentAuthRefresh = refreshers
+					pipeline.Config.AssessmentSSHAliases = sshAliases
 				}
 				sess.record.AssessmentPlan = sess.assessmentPlan
-				if refreshErr == nil {
+				if refreshErr == nil && sshErr == nil {
 					runs = pipeline.RunAssessmentJobs(ctx, *sess.assessmentPlan, sess.scanDir, sess.record.ScannerRuns, emit)
 				}
 			}

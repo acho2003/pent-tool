@@ -84,7 +84,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: "2"}
 	for i := range plan.Capabilities {
 		evidence := &plan.Capabilities[i]
-		if evidence.Capability != assessment.CapAuthWeb {
+		if evidence.Capability != assessment.CapAuthWeb && evidence.Capability != assessment.CapSSH {
 			continue
 		}
 		credentialID := evidence.ReferenceID
@@ -95,7 +95,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 		if input.CredentialAvailability[credentialAvailabilityKey(evidence.TargetID, evidence.AccessKind, credentialID)] {
 			evidence.State = assessment.StateAvailable
-			evidence.Reason = "encrypted credential exists and is bound to this target; verification is still pending"
+			evidence.Reason = "target-bound credential exists; access verification is still pending"
 		} else {
 			evidence.State = assessment.StateUnavailable
 			evidence.Reason = "credential is missing, unreadable, or not bound to this target"

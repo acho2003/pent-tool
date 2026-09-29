@@ -70,6 +70,9 @@ func (s *Server) buildAssessmentPlan(cfg assessment.AssessmentConfig) scanner.As
 				key := targetID + "\x00" + string(binding.Kind) + "\x00" + binding.CredentialID
 				record, lookupErr := vault.Get(binding.CredentialID, targetID)
 				credentialAvailability[key] = lookupErr == nil && record.Kind == binding.Kind
+				if binding.Kind == assessment.AccessSSH {
+					credentialAvailability[key] = credentialAvailability[key] && assessmentSSHAliasPattern.MatchString(strings.TrimSpace(record.Values["ssh_alias"]))
+				}
 			}
 		}
 	}

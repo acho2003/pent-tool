@@ -20,15 +20,24 @@ type assessmentJobRunner struct {
 	delay  time.Duration
 }
 
-type resourceJobRunner struct{ calls int }
+type resourceJobRunner struct {
+	calls       int
+	name, alias string
+}
 
-func (r *resourceJobRunner) Name() string { return "trivy" }
+func (r *resourceJobRunner) Name() string {
+	if r.name != "" {
+		return r.name
+	}
+	return "trivy"
+}
 func (r *resourceJobRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "trivy", Phase: PhaseSAST, Weight: WeightLight}
+	return Descriptor{Name: r.Name(), Phase: PhaseSAST, Weight: WeightLight}
 }
 func (r *resourceJobRunner) Run(_ context.Context, req Request, _ Config, _ EmitFunc) Run {
 	r.calls++
-	return Run{Scanner: "trivy", Target: req.Target, Status: "completed"}
+	r.alias = req.VulsSSHHost
+	return Run{Scanner: r.Name(), Target: req.Target, Status: "completed"}
 }
 
 func (r *assessmentJobRunner) Name() string { return "assessment-test" }
@@ -173,6 +182,21 @@ func TestConditionalWhiteBoxSourceRunsAfterLocalPreparation(t *testing.T) {
 	runs = pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
 	if runner.calls != 1 || len(runs) != 1 || runs[0].Status != "skipped" {
 		t.Fatalf("missing source was scanned: calls=%d runs=%+v", runner.calls, runs)
+	}
+}
+
+func TestTypedVulsRequiresTargetBoundSSHAlias(t *testing.T) {
+	runner := &resourceJobRunner{name: "vuls"}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox, Targets: []assessment.Target{{ID: "host", Kind: assessment.KindHost, Value: "host.example.test"}}}, Fingerprint: "sha256:ssh", Jobs: []PlanJob{{ID: "vuls:host", Scanner: "vuls", TargetID: "host", Target: "host.example.test", Variant: "vuls", State: PlanSelected}}}
+	pipeline := &Pipeline{Runners: []Runner{runner}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if runner.calls != 0 || runs[0].Status != "skipped" {
+		t.Fatalf("unbound host audit ran: %+v", runs)
+	}
+	pipeline.Config.AssessmentSSHAliases = map[string]string{"host": "audit-host"}
+	runs = pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if runner.calls != 1 || runner.alias != "audit-host" || runs[0].Status != "completed" {
+		t.Fatalf("bound host audit failed: %+v alias=%s", runs, runner.alias)
 	}
 }
 

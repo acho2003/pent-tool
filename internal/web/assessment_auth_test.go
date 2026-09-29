@@ -131,3 +131,30 @@ func TestVerificationErrorsDoNotIncludeCredentials(t *testing.T) {
 		t.Fatalf("unsafe verification error: %v", err)
 	}
 }
+
+func TestAssessmentHostAliasesRequireBoundSafeCredential(t *testing.T) {
+	s := newTestServer(t, nil)
+	keyPath := t.TempDir() + "/credential.key"
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	vault, err := s.credentialVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := vault.Create(credentials.Record{Name: "host", Kind: assessment.AccessSSH, TargetIDs: []string{"host"}, Values: map[string]string{"ssh_alias": "audit-host"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &scanner.AssessmentPlan{Config: assessment.AssessmentConfig{Access: []assessment.AccessBinding{{Kind: assessment.AccessSSH, CredentialID: meta.ID, TargetIDs: []string{"host"}}}}}
+	aliases, err := s.assessmentHostAliases(plan)
+	if err != nil || aliases["host"] != "audit-host" {
+		t.Fatalf("bound SSH alias not resolved: %v %v", aliases, err)
+	}
+	plan.Config.Access[0].TargetIDs = []string{"other"}
+	aliases, err = s.assessmentHostAliases(plan)
+	if err != nil || len(aliases) != 0 {
+		t.Fatalf("SSH alias crossed target boundary: %v %v", aliases, err)
+	}
+}

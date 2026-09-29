@@ -115,6 +115,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				req.Artifact = Artifact{Kind: "sbom", Ref: job.Target}
 			}
 		}
+		if job.Scanner == "vuls" {
+			req.VulsSSHHost = p.Config.AssessmentSSHAliases[job.TargetID]
+			if req.VulsSSHHost == "" {
+				results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, "target-bound SSH alias is unavailable; credentialed host audit was not run", emit))
+				continue
+			}
+		}
 		if parsed, err := url.Parse(job.Target); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
 			req.ApplicationURL = job.Target
 		}
