@@ -82,6 +82,9 @@ type Request struct {
 	// approved for SQL-injection detection. SQLMap runs only against these — never
 	// against auto-discovered URLs — enforcing the opt-in, approved-request policy.
 	SQLMapApprovedURLs []string `json:"-"`
+	// CloudCredential is the resolved, target-bound cloud credential for the cloud
+	// audit adapters (prowler/scoutsuite). Runtime-only; never serialized.
+	CloudCredential CloudCredential `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -180,35 +183,48 @@ type Config struct {
 	AssessmentSSHAliases   map[string]string
 	AssessmentGVMSSH       map[string]GVMSSHCredential
 	AssessmentSSHRequested map[string]bool
-	MaxOutputBytes         int64
-	NucleiTimeout          time.Duration
-	ZAPTimeout             time.Duration
-	OpenVASTimeout         time.Duration
-	TrivyTimeout           time.Duration
-	VulsTimeout            time.Duration
-	SubfinderTimeout       time.Duration
-	HttpxTimeout           time.Duration
-	NmapTimeout            time.Duration
-	MasscanTimeout         time.Duration
-	MasscanRate            int
-	NiktoTimeout           time.Duration
-	KatanaTimeout          time.Duration
-	DalfoxTimeout          time.Duration
-	WapitiTimeout          time.Duration
-	SqlmapTimeout          time.Duration
-	KubeBenchTimeout       time.Duration
-	ProwlerTimeout         time.Duration
-	ScoutSuiteTimeout      time.Duration
-	LynisTimeout           time.Duration
-	TestsslTimeout         time.Duration
-	SemgrepTimeout         time.Duration
-	GitleaksTimeout        time.Duration
-	OsvTimeout             time.Duration
+	// AssessmentCloudCreds holds runtime-only, target-bound cloud credentials
+	// (resolved from the vault) for prowler/scoutsuite, keyed by target ID. Passed
+	// to the runner via env, never persisted in scan records.
+	AssessmentCloudCreds map[string]CloudCredential
+	MaxOutputBytes       int64
+	NucleiTimeout        time.Duration
+	ZAPTimeout           time.Duration
+	OpenVASTimeout       time.Duration
+	TrivyTimeout         time.Duration
+	VulsTimeout          time.Duration
+	SubfinderTimeout     time.Duration
+	HttpxTimeout         time.Duration
+	NmapTimeout          time.Duration
+	MasscanTimeout       time.Duration
+	MasscanRate          int
+	NiktoTimeout         time.Duration
+	KatanaTimeout        time.Duration
+	DalfoxTimeout        time.Duration
+	WapitiTimeout        time.Duration
+	SqlmapTimeout        time.Duration
+	KubeBenchTimeout     time.Duration
+	ProwlerTimeout       time.Duration
+	ScoutSuiteTimeout    time.Duration
+	LynisTimeout         time.Duration
+	TestsslTimeout       time.Duration
+	SemgrepTimeout       time.Duration
+	GitleaksTimeout      time.Duration
+	OsvTimeout           time.Duration
 }
 
 type GVMSSHCredential struct {
 	ID   string
 	Port int
+}
+
+// CloudCredential is a runtime-only, target-bound cloud credential for the cloud
+// posture-audit adapters (prowler/scoutsuite). Provider is "aws"/"gcp"/"azure";
+// Env carries the credential environment variables (e.g. AWS_ACCESS_KEY_ID). It
+// is resolved from the vault at scan start and never written to scan records.
+type CloudCredential struct {
+	Provider string
+	Env      map[string]string
 }
 
 type EmitFunc func(Event)

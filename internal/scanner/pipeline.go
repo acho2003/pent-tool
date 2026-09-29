@@ -636,6 +636,9 @@ type commandSpec struct {
 	artifact string
 	timeout  time.Duration
 	notApp   string
+	// env is extra "KEY=value" entries appended to the child process environment
+	// (used to pass resolved cloud credentials to prowler/scoutsuite off-argv).
+	env []string
 	// outputSubdir nests this run's stdout/stderr logs under
 	// scanner-output/<name>/<outputSubdir> so several invocations that share a
 	// scanner name (e.g. per-host nmap) do not append to one another's sealed
@@ -759,6 +762,12 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	errW := newOutputWriter(stderr, "stderr", name, cfg.MaxOutputBytes, secrets, &seq, safeEmit)
 	cmd := exec.CommandContext(cmdCtx, spec.path, spec.args...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = req.ScanDir, outW, errW
+	// Extra environment (e.g. resolved cloud credentials for prowler/scoutsuite)
+	// is passed via env, never argv, so secrets don't land in the process table
+	// or logs. Their values are also in req.Secrets, so any echo is redacted.
+	if len(spec.env) > 0 {
+		cmd.Env = append(os.Environ(), spec.env...)
+	}
 	err = cmd.Run()
 	run.Truncated = outW.Truncated() || errW.Truncated()
 	run.ExitCode = 0

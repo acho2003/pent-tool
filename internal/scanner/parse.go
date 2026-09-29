@@ -186,6 +186,10 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseSqlmap(run.ArtifactPath)
 	case "kube-bench":
 		return parseKubeBench(run.ArtifactPath)
+	case "prowler":
+		return parseProwler(run.ArtifactPath)
+	case "scoutsuite":
+		return parseScoutSuite(run.ArtifactPath)
 	default:
 		return nil, fmt.Errorf("unsupported scanner %q", run.Scanner)
 	}

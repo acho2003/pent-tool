@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "sqlmap" || id == "kube-bench" {
+	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "sqlmap" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
 		return true
 	}
 	for _, runner := range NewPipeline(Config{}).Runners {
@@ -80,6 +80,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["sqlmap"] = sqlmapRunner{}
 	// kube-bench is opt-in CIS Kubernetes benchmark (read-only).
 	byName["kube-bench"] = kubeBenchRunner{}
+	// prowler / scoutsuite are opt-in, read-only cloud posture audits.
+	byName["prowler"] = prowlerRunner{}
+	byName["scoutsuite"] = scoutSuiteRunner{}
 	byName["lynis"] = lynisRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
@@ -227,6 +230,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			case assessment.KindSBOM:
 				req.Artifact = Artifact{Kind: "sbom", Ref: job.Target}
 			}
+		}
+		if job.Scanner == "prowler" || job.Scanner == "scoutsuite" {
+			cred, ok := p.Config.AssessmentCloudCreds[job.TargetID]
+			if !ok || len(cred.Env) == 0 {
+				results = append(results, plannedJobNotRun(job, req, plan.Fingerprint, "target-bound cloud credential is unavailable; read-only cloud audit was not run", emit))
+				continue
+			}
+			req.CloudCredential = cred
 		}
 		if job.Scanner == "vuls" || job.Scanner == "lynis" {
 			req.VulsSSHHost = p.Config.AssessmentSSHAliases[job.TargetID]

@@ -129,6 +129,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 					pipeline.Config.AssessmentSSHAliases = sshAliases
 					pipeline.Config.AssessmentGVMSSH = gvmCredentials
 					pipeline.Config.AssessmentSSHRequested = sshRequested
+					pipeline.Config.AssessmentCloudCreds = s.assessmentCloudCredentials(sess.assessmentPlan)
 				}
 				sess.record.AssessmentPlan = sess.assessmentPlan
 				if refreshErr == nil && sshErr == nil {
