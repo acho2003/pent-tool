@@ -14,8 +14,9 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-// prepareAssessmentAuthentication verifies target-bound static headers before
-// any typed scanner receives them. Secret values remain in runtime memory only.
+// prepareAssessmentAuthentication verifies target-bound headers or a form
+// session before any typed scanner receives them. Secret values remain in
+// runtime memory only.
 func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scanner.AssessmentPlan) (map[string][]string, error) {
 	headersByTarget := map[string][]string{}
 	if plan == nil || len(plan.Config.Access) == 0 {
@@ -34,6 +35,9 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 	vault, err := s.openCredentialVault()
 	if err != nil {
 		for _, binding := range plan.Config.Access {
+			if !webAuthenticationKind(binding.Kind) {
+				continue
+			}
 			for _, targetID := range binding.TargetIDs {
 				setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential vault is unavailable; authenticated scanning was skipped")
 			}
@@ -47,9 +51,12 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 		return headersByTarget, nil
 	}
 	for _, binding := range plan.Config.Access {
-		if binding.Kind != assessment.AccessApplicationHeaders && binding.Kind != assessment.AccessApplicationCookies && binding.Kind != assessment.AccessBearerToken && binding.Kind != assessment.AccessAPIKey {
+		if !webAuthenticationKind(binding.Kind) {
+			continue
+		}
+		if binding.Kind == assessment.AccessFormLogin && len(binding.TargetIDs) != 1 {
 			for _, targetID := range binding.TargetIDs {
-				setAuthCapability(plan, targetID, assessment.StateUnavailable, "this credential type is not yet supported by the execution adapter")
+				setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login requires one explicitly bound application target")
 			}
 			continue
 		}
@@ -67,18 +74,29 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 				setAuthCapability(plan, targetID, assessment.StateUnavailable, "bound credential could not be resolved")
 				continue
 			}
-			lines, convErr := credentialHeaderLines(binding.Kind, record.Values)
-			if convErr != nil {
-				setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential fields are not valid HTTP headers")
-				continue
-			}
 			if !urlWithinApplication(target.Value, binding.VerifyURL) {
 				setAuthCapability(plan, targetID, assessment.StateUnavailable, "verification URL is outside the application origin or path boundary")
 				continue
 			}
-			if verifyErr := verifyHeaderSession(ctx, binding.VerifyURL, binding.VerifyMarker, lines, target.Value); verifyErr != nil {
-				setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential verification failed; authenticated scanning was skipped")
-				continue
+			var lines []string
+			if binding.Kind == assessment.AccessFormLogin {
+				cookieHeader, loginErr := verifyFormSession(ctx, target.Value, binding.VerifyURL, binding.VerifyMarker, record.Values)
+				if loginErr != nil {
+					setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login or session verification failed; authenticated scanning was skipped")
+					continue
+				}
+				lines = []string{cookieHeader}
+			} else {
+				var convErr error
+				lines, convErr = credentialHeaderLines(binding.Kind, record.Values)
+				if convErr != nil {
+					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential fields are not valid HTTP headers")
+					continue
+				}
+				if verifyErr := verifyHeaderSession(ctx, binding.VerifyURL, binding.VerifyMarker, lines, target.Value); verifyErr != nil {
+					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential verification failed; authenticated scanning was skipped")
+					continue
+				}
 			}
 			headersByTarget[targetID] = append(headersByTarget[targetID], lines...)
 			setAuthCapability(plan, targetID, assessment.StateVerified, "target-bound credentials passed the configured verification check")
@@ -101,6 +119,14 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 		}
 	}
 	return headersByTarget, nil
+}
+
+func webAuthenticationKind(kind assessment.AccessKind) bool {
+	switch kind {
+	case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin:
+		return true
+	}
+	return false
 }
 
 func credentialHeaderLines(kind assessment.AccessKind, values map[string]string) ([]string, error) {

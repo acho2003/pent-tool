@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
@@ -115,5 +116,25 @@ func TestVaultKeyRotationPreservesBindingsAndReEncryptsRecords(t *testing.T) {
 	}
 	if _, err := oldVault.Get(meta.ID, "api-1"); err == nil {
 		t.Fatal("old key decrypted rotated record")
+	}
+}
+
+func TestVaultRequiresFormLoginFields(t *testing.T) {
+	vault, err := New(filepath.Join(t.TempDir(), "vault"), bytes.Repeat([]byte{0x11}, KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := Record{Name: "form", Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, Values: map[string]string{"login_url": "https://app.example.test/login", "username": "operator"}}
+	if _, err := vault.Create(base); err == nil || !strings.Contains(err.Error(), "password") {
+		t.Fatalf("missing password accepted: %v", err)
+	}
+	base.Values["password"] = "secret"
+	meta, err := vault.Create(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Values["login_url"] = "https://other.example.test/login#fragment"
+	if _, err := vault.Replace(meta.ID, base); err == nil {
+		t.Fatal("form login URL with a fragment was accepted")
 	}
 }

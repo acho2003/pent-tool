@@ -107,6 +107,22 @@ func TestValidate_APIdefinitionsRequireExplicitTargetAssociation(t *testing.T) {
 	}
 }
 
+func TestValidate_FormLoginRequiresVerificationAndOneURLTarget(t *testing.T) {
+	base := AssessmentConfig{Mode: ModeGrayBox, Types: []Type{TypeWebApplication}, Targets: []Target{{ID: "app", Kind: KindURL, Value: "https://app.example.test/Portal"}, {ID: "other", Kind: KindURL, Value: "https://other.example.test"}}, Access: []AccessBinding{{Kind: AccessFormLogin, TargetIDs: []string{"app"}, CredentialID: "credential"}}}
+	if !hasCode(Validate(Normalize(base)), "access.verification_required") {
+		t.Fatal("form login without a verification marker was accepted")
+	}
+	base.Access[0].VerifyURL = "https://app.example.test/Portal/account"
+	base.Access[0].VerifyMarker = "Account dashboard"
+	if problem := FirstBlocking(Validate(Normalize(base))); problem != nil {
+		t.Fatalf("valid form login was rejected: %+v", problem)
+	}
+	base.Access[0].TargetIDs = []string{"app", "other"}
+	if !hasCode(Validate(Normalize(base)), "access.form_login.single_target") {
+		t.Fatal("form login was bound to multiple applications")
+	}
+}
+
 func TestValidate_PreservesValidURLPathAndRejectsOutOfScopeURLForms(t *testing.T) {
 	valid := Normalize(AssessmentConfig{Mode: ModeBlackBox, Types: []Type{TypeWebApplication}, Targets: []Target{{ID: "app", Kind: KindURL, Value: "https://example.test:8443/Portal/Case?view=full"}}})
 	if problem := FirstBlocking(Validate(valid)); problem != nil {

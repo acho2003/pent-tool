@@ -172,8 +172,12 @@ Typed assessment starts must include the `fingerprint` returned by the latest
 `/api/scans/plan` response as `plan_fingerprint`. If runtime capabilities or
 configuration changed since preview, the server returns `409` with a refreshed
 plan. Scanner jobs without a direct typed adapter are shown as unavailable and
-are not queued. The current typed executor does not yet verify or apply stored
-target credentials; such jobs remain unauthenticated.
+are not queued. Typed ZAP jobs can use encrypted, target-bound HTTP headers or
+form login credentials. Before scanning, the server checks an in-scope URL for
+the configured authenticated response marker. Failed verification skips the
+authenticated job. Form login currently supports an HTML POST form with
+username/password fields and hidden CSRF fields; session expiry during a long
+scan is not yet refreshed automatically.
 
 Example request:
 

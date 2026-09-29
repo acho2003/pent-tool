@@ -155,10 +155,13 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if !ab.Kind.Valid() {
 			probs = append(probs, blocking("access.kind.invalid", fmt.Sprintf("unknown access kind %q", ab.Kind)))
 		}
+		if ab.Kind == AccessFormLogin && len(ab.TargetIDs) != 1 {
+			probs = append(probs, blocking("access.form_login.single_target", "form login must be bound to exactly one application target"))
+		}
 		if len(ab.TargetIDs) == 0 {
 			probs = append(probs, blocking("access.unbound", fmt.Sprintf("access binding %q lists no target_ids", ab.Kind)))
 		}
-		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey {
+		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin {
 			if strings.TrimSpace(ab.CredentialID) != "" {
 				if strings.TrimSpace(ab.VerifyURL) == "" || strings.TrimSpace(ab.VerifyMarker) == "" {
 					probs = append(probs, blocking("access.verification_required", "application credentials require an in-scope verify_url and expected verify_marker"))
@@ -175,7 +178,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 				probs = append(probs, blocking("access.target.unknown",
 					fmt.Sprintf("access binding %q references unknown target id %q", ab.Kind, id)))
 			}
-			if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey {
+			if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin {
 				for _, target := range cfg.Targets {
 					if target.ID == id && target.Kind != KindURL {
 						probs = append(probs, blocking("access.target_must_be_url", fmt.Sprintf("application credential target %q must be an explicit URL", id)))

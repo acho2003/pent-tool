@@ -41,9 +41,16 @@ export default function NewScanPage() {
   const [uploadingDefinition, setUploadingDefinition] = useState(false);
   const [credentialId, setCredentialId] = useState("");
   const [credentialTargetId, setCredentialTargetId] = useState("target-1");
-  const [credentialName, setCredentialName] = useState("Web scan headers");
+  const [credentialKind, setCredentialKind] = useState<"APPLICATION_HEADERS" | "FORM_LOGIN">("APPLICATION_HEADERS");
+  const [credentialName, setCredentialName] = useState("Web scan credential");
   const [headerName, setHeaderName] = useState("Authorization");
   const [headerValue, setHeaderValue] = useState("");
+  const [loginURL, setLoginURL] = useState("");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginUsernameField, setLoginUsernameField] = useState("username");
+  const [loginPasswordField, setLoginPasswordField] = useState("password");
+  const [loginCSRFField, setLoginCSRFField] = useState("");
   const [savingCredential, setSavingCredential] = useState(false);
   const [credentialSaved, setCredentialSaved] = useState(false);
   const [authVerifyURL, setAuthVerifyURL] = useState("");
@@ -82,7 +89,7 @@ export default function NewScanPage() {
         assessment_targets: targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
         profile: "web-gentle",
         subdomain_discovery: subdomainDiscovery,
-        access: credentialId ? [{ target_ids: [credentialTargetId], kind: "APPLICATION_HEADERS", credential_id: credentialId, verify_url: authVerifyURL, verify_marker: authVerifyMarker }] : undefined,
+        access: credentialId ? [{ target_ids: [credentialTargetId], kind: credentialKind, credential_id: credentialId, verify_url: authVerifyURL, verify_marker: authVerifyMarker }] : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
         scanner_selection: optionalAssessmentScanners.length > 0 || (picked !== null && picked.length !== selectable.length)
           ? { mode: "custom", variants: [...new Set([...(picked ?? selectable.map((tool) => tool.name)), ...optionalAssessmentScanners])] }
@@ -96,28 +103,31 @@ export default function NewScanPage() {
     }
   }
 
-  async function saveHeaderCredential() {
+  async function saveCredential() {
     setPlanError(null);
-    if (!targets.length || !headerName.trim() || !headerValue) {
-      setPlanError("Add a target, header name, and header value before saving the credential.");
+    if (!targets.length || (credentialKind === "APPLICATION_HEADERS" && (!headerName.trim() || !headerValue)) || (credentialKind === "FORM_LOGIN" && (!loginURL.trim() || !loginUsername || !loginPassword))) {
+      setPlanError(credentialKind === "FORM_LOGIN" ? "Add a target, login URL, username, and password before saving the credential." : "Add a target, header name, and header value before saving the credential.");
       return;
     }
     const credentialTargetIndex = Number(credentialTargetId.replace("target-", "")) - 1;
     if (!/^https?:\/\//i.test(targets[credentialTargetIndex] ?? "")) {
-      setPlanError("Application authentication headers must be bound to an explicit HTTP(S) URL target.");
+      setPlanError("Application credentials must be bound to an explicit HTTP(S) URL target.");
       return;
     }
     setSavingCredential(true);
     try {
       const credential = await api.createCredential({
-        name: credentialName.trim() || "Web scan headers",
-        kind: "APPLICATION_HEADERS",
+        name: credentialName.trim() || "Web scan credential",
+        kind: credentialKind,
         target_ids: [credentialTargetId],
-        values: { [headerName.trim()]: headerValue },
+        values: credentialKind === "FORM_LOGIN"
+          ? { login_url: loginURL.trim(), username: loginUsername, password: loginPassword, username_field: loginUsernameField.trim() || "username", password_field: loginPasswordField.trim() || "password", ...(loginCSRFField.trim() ? { csrf_field: loginCSRFField.trim() } : {}) }
+          : { [headerName.trim()]: headerValue },
       });
       setCredentialId(credential.id);
       setAuthVerifyURL(targets[credentialTargetIndex]);
       setHeaderValue("");
+      setLoginPassword("");
       setAssessmentPlan(null);
       setCredentialSaved(true);
     } catch (err) {
@@ -232,7 +242,40 @@ export default function NewScanPage() {
       {optionalDefinitions.length > 0 && <div className="space-y-3 rounded-md border p-3"><div><p className="text-sm font-medium">Advanced optional scanners</p><p className="mt-1 text-xs text-muted-foreground">These scanners are off unless you select them. Availability and target compatibility are checked by the backend planner.</p></div>{optionalDefinitions.map((definition) => <label key={definition.id} className={`flex items-start gap-2 rounded-md border p-3 text-xs ${definition.available ? "cursor-pointer" : "opacity-60"}`}><input type="checkbox" checked={optionalAssessmentScanners.includes(definition.id)} disabled={!definition.available} onChange={() => { setOptionalAssessmentScanners((current) => current.includes(definition.id) ? current.filter((id) => id !== definition.id) : [...current, definition.id]); setAssessmentPlan(null); }} className="mt-0.5" /><span><span className="font-medium">{definition.name} · {definition.risk} risk · {definition.available ? "available" : "unavailable"}</span><span className="mt-1 block text-muted-foreground">{definition.summary}</span></span></label>)}</div>}
       <label className="flex items-start gap-2 rounded-md border p-3 text-sm"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-0.5" /><span>Authorize subdomain discovery for domain targets<p className="mt-1 text-xs text-muted-foreground">Off by default. This adds Subfinder coverage to the plan when a domain target is supplied.</p></span></label>
       <div className="space-y-3 rounded-md border p-3"><div className="space-y-1"><Label htmlFor="api-definition">OpenAPI / Swagger definition</Label><Input id="api-definition" type="file" accept=".json,.yaml,.yml,application/json" onChange={(e) => void uploadAPIDefinition(e)} disabled={uploadingDefinition} /><p className="text-xs text-muted-foreground">Definitions are size-limited, external references are rejected, and spec server URLs do not change target scope.</p></div>{apiDefinitionId && <><p className="break-all font-mono text-xs text-muted-foreground">Uploaded {apiDefinitionInfo} · {apiDefinitionId}</p><div className="space-y-2"><Label>Map this definition to a target</Label><Select value={apiTargetId || "target-1"} onValueChange={(value) => { setAPITargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">The selected target must be an explicit HTTP(S) URL.</p></div></>}</div>
-      <div className="space-y-3 rounded-md border p-3"><div><p className="text-sm font-medium">Target-bound authentication headers</p><p className="mt-1 text-xs text-muted-foreground">Header values are encrypted and kept out of the assessment configuration. At scan start, Xalgorix checks the selected in-scope URL for the expected marker. Only after that check succeeds will the dedicated ZAP scan receive the headers.</p></div>{credentialSaved && <p className="text-xs text-emerald-400">Encrypted credential saved. Set the verification URL and a response marker before previewing the plan.</p>}{credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <><div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div></div><div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div><Button type="button" variant="outline" onClick={() => void saveHeaderCredential()} disabled={savingCredential || !headerValue}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button></>}{credentialId && <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="auth-verify-url">Authenticated verification URL</Label><Input id="auth-verify-url" value={authVerifyURL} onChange={(e) => { setAuthVerifyURL(e.target.value); setAssessmentPlan(null); }} placeholder="https://app.example.test/account" /></div><div className="space-y-2"><Label htmlFor="auth-verify-marker">Expected response marker</Label><Input id="auth-verify-marker" value={authVerifyMarker} onChange={(e) => { setAuthVerifyMarker(e.target.value); setAssessmentPlan(null); }} placeholder="A phrase present only when logged in" /></div></div>}</div>
+      <div className="space-y-3 rounded-md border p-3">
+        <div>
+          <p className="text-sm font-medium">Target-bound web authentication</p>
+          <p className="mt-1 text-xs text-muted-foreground">Credentials are encrypted. At scan start, Xalgorix verifies the selected account page before sharing the scoped header or session cookie with the dedicated ZAP scan.</p>
+        </div>
+        {credentialSaved && <p className="text-xs text-emerald-400">Encrypted credential saved. Set an authenticated verification URL and a response marker before previewing the plan.</p>}
+        {credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2"><Label>Credential type</Label><Select value={credentialKind} onValueChange={(value) => { setCredentialKind(value as "APPLICATION_HEADERS" | "FORM_LOGIN"); setCredentialId(""); setCredentialSaved(false); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="APPLICATION_HEADERS">HTTP headers</SelectItem><SelectItem value="FORM_LOGIN">Form login</SelectItem></SelectContent></Select></div>
+            <div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={"target-" + (i + 1)}>{target}</SelectItem>)}</SelectContent></Select></div>
+          </div>
+          <div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div>
+          {credentialKind === "APPLICATION_HEADERS" ? <>
+            <div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div>
+            <div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div>
+          </> : <>
+            <div className="space-y-2"><Label htmlFor="login-url">Login page URL</Label><Input id="login-url" value={loginURL} onChange={(e) => setLoginURL(e.target.value)} placeholder="https://app.example.test/login" /><p className="text-xs text-muted-foreground">Must stay within the selected application's origin and path boundary.</p></div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2"><Label htmlFor="login-username">Username</Label><Input id="login-username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} autoComplete="username" /></div>
+              <div className="space-y-2"><Label htmlFor="login-password">Password</Label><Input id="login-password" type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} /></div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-2"><Label htmlFor="username-field">Username field</Label><Input id="username-field" value={loginUsernameField} onChange={(e) => setLoginUsernameField(e.target.value)} /></div>
+              <div className="space-y-2"><Label htmlFor="password-field">Password field</Label><Input id="password-field" value={loginPasswordField} onChange={(e) => setLoginPasswordField(e.target.value)} /></div>
+              <div className="space-y-2"><Label htmlFor="csrf-field">CSRF field (optional)</Label><Input id="csrf-field" value={loginCSRFField} onChange={(e) => setLoginCSRFField(e.target.value)} placeholder="csrf" /></div>
+            </div>
+          </>}
+          <Button type="button" variant="outline" onClick={() => void saveCredential()} disabled={savingCredential || (credentialKind === "FORM_LOGIN" ? !loginURL || !loginUsername || !loginPassword : !headerValue)}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button>
+        </>}
+        {credentialId && <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2"><Label htmlFor="auth-verify-url">Authenticated verification URL</Label><Input id="auth-verify-url" value={authVerifyURL} onChange={(e) => { setAuthVerifyURL(e.target.value); setAssessmentPlan(null); }} placeholder="https://app.example.test/account" /></div>
+          <div className="space-y-2"><Label htmlFor="auth-verify-marker">Expected response marker</Label><Input id="auth-verify-marker" value={authVerifyMarker} onChange={(e) => { setAuthVerifyMarker(e.target.value); setAssessmentPlan(null); }} placeholder="A phrase present only when logged in" /></div>
+        </div>}
+      </div>
       <Button type="button" variant="outline" onClick={() => void previewAssessmentPlan()} disabled={planning}>{planning ? "Planning…" : "Preview plan"}</Button>
       {planError && <p className="text-sm text-destructive">{planError}</p>}
       {assessmentPlan && <div className="space-y-4 border-t pt-4">

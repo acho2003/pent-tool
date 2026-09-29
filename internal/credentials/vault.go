@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -124,6 +125,9 @@ func (v *Vault) Create(record Record) (Metadata, error) {
 			return Metadata{}, errors.New("credential keys and values must be non-empty")
 		}
 	}
+	if err := validateFormValues(record); err != nil {
+		return Metadata{}, err
+	}
 	id, err := randomID()
 	if err != nil {
 		return Metadata{}, err
@@ -190,10 +194,29 @@ func (v *Vault) Replace(id string, replacement Record) (Metadata, error) {
 			return Metadata{}, errors.New("credential keys and values must be non-empty")
 		}
 	}
+	if err := validateFormValues(replacement); err != nil {
+		return Metadata{}, err
+	}
 	if err := v.write(replacement); err != nil {
 		return Metadata{}, err
 	}
 	return metadata(replacement), nil
+}
+
+func validateFormValues(record Record) error {
+	if record.Kind != assessment.AccessFormLogin {
+		return nil
+	}
+	for _, field := range []string{"login_url", "username", "password"} {
+		if strings.TrimSpace(record.Values[field]) == "" {
+			return fmt.Errorf("form login credential requires %s", field)
+		}
+	}
+	login, err := url.Parse(record.Values["login_url"])
+	if err != nil || (login.Scheme != "http" && login.Scheme != "https") || login.Host == "" || login.User != nil || login.Fragment != "" || login.RawQuery != "" {
+		return errors.New("form login URL must be an absolute HTTP(S) URL without credentials, query, or fragment")
+	}
+	return nil
 }
 
 func (v *Vault) Delete(id string) error {
