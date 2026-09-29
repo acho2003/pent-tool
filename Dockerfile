@@ -204,6 +204,14 @@ RUN for p in scrapling semgrep bandit git-dumper arjun uro; do \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
     done
 
+# Staged web-pipeline scanners (Python): wapiti3 provides the `wapiti` binary,
+# and sqlmap provides `sqlmap` (used detection-only, opt-in, by the scanner).
+# Best-effort per tool so a flaky package never fails the image.
+RUN for p in wapiti3 sqlmap; do \
+      pipx install "$p" || pip3 install --break-system-packages "$p" \
+        || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
+    done
+
 # paramspider — the real tool is GitHub-only (PyPI `paramspider` is an empty
 # 1.3 kB stub with no CLI), so install straight from the repo.
 RUN pipx install "git+https://github.com/devanshbatham/paramspider.git" \
