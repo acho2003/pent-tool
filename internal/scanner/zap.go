@@ -389,6 +389,28 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 	}
 
+	// Seed katana-discovered URLs into the scan tree so the active scan covers
+	// endpoints ZAP's own spider may not reach (JS apps, unlinked routes). These
+	// URLs are already FQDN-scoped by the crawl. Bounded by the same web-endpoint
+	// budget and best-effort per URL — a seed failure is logged, not fatal.
+	if len(req.WebEndpoints) > 0 {
+		seeded := 0
+		for _, endpoint := range req.WebEndpoints {
+			if seeded >= maxChildren {
+				break
+			}
+			if err := checkAuth(); err != nil {
+				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+			}
+			if _, seedErr := call("/JSON/core/action/accessUrl/", url.Values{"url": {endpoint}, "followRedirects": {followRedirects}}); seedErr == nil {
+				seeded++
+			}
+		}
+		if seeded > 0 {
+			logLine(fmt.Sprintf("ZAP seeded %d katana-discovered URLs into the scan tree", seeded))
+		}
+	}
+
 	// Fixed pipeline: spider the target, drain the passive scanner, then active
 	// scan what was discovered. The stages and their parameters are constant —
 	// nothing about them is model-generated.
