@@ -26,6 +26,8 @@ func (s *Server) scannerAvailability() map[string]bool {
 		"lynis": s.cfg.SSHPath,
 		// Staged web-pipeline adapters: availability is genuine binary presence.
 		"katana": s.cfg.KatanaPath, "dalfox": s.cfg.DalfoxPath, "wapiti": s.cfg.WapitiPath, "sqlmap": s.cfg.SqlmapPath,
+		// Cloud / Kubernetes posture-audit adapters.
+		"kube-bench": s.cfg.KubeBenchPath, "prowler": s.cfg.ProwlerPath, "scoutsuite": s.cfg.ScoutSuitePath,
 	}
 	for id, path := range paths {
 		_, err := exec.LookPath(path)

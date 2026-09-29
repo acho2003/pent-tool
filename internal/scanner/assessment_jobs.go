@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "sqlmap" {
+	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "sqlmap" || id == "kube-bench" {
 		return true
 	}
 	for _, runner := range NewPipeline(Config{}).Runners {
@@ -78,6 +78,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["wapiti"] = wapitiRunner{}
 	// SQLMap is opt-in, detection-only, and runs only on approved URLs.
 	byName["sqlmap"] = sqlmapRunner{}
+	// kube-bench is opt-in CIS Kubernetes benchmark (read-only).
+	byName["kube-bench"] = kubeBenchRunner{}
 	byName["lynis"] = lynisRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {

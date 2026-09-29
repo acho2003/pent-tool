@@ -184,6 +184,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseWapiti(run.ArtifactPath)
 	case "sqlmap":
 		return parseSqlmap(run.ArtifactPath)
+	case "kube-bench":
+		return parseKubeBench(run.ArtifactPath)
 	default:
 		return nil, fmt.Errorf("unsupported scanner %q", run.Scanner)
 	}

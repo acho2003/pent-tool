@@ -106,6 +106,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.SqlmapPath == "" {
 		cfg.SqlmapPath = "sqlmap"
 	}
+	if cfg.KubeBenchPath == "" {
+		cfg.KubeBenchPath = "kube-bench"
+	}
+	if cfg.ProwlerPath == "" {
+		cfg.ProwlerPath = "prowler"
+	}
+	if cfg.ScoutSuitePath == "" {
+		cfg.ScoutSuitePath = "scout"
+	}
 	if cfg.SSHPath == "" {
 		cfg.SSHPath = "ssh"
 	}
@@ -132,6 +141,15 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.SqlmapTimeout <= 0 {
 		cfg.SqlmapTimeout = 20 * time.Minute
+	}
+	if cfg.KubeBenchTimeout <= 0 {
+		cfg.KubeBenchTimeout = 10 * time.Minute
+	}
+	if cfg.ProwlerTimeout <= 0 {
+		cfg.ProwlerTimeout = 30 * time.Minute
+	}
+	if cfg.ScoutSuiteTimeout <= 0 {
+		cfg.ScoutSuiteTimeout = 30 * time.Minute
 	}
 	if cfg.TestsslPath == "" {
 		cfg.TestsslPath = "testssl.sh"

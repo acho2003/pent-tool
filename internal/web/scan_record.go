@@ -184,9 +184,9 @@ func (s *Server) effectiveVulnCount(inst *ScanInstance, sess *scanSession) int {
 // across teardown because reporting.CleanupContext does not touch
 // ScanRecord.Vulns.
 func (s *Server) totalPersistedVulnCount() int {
-		seen := make(map[string]struct{})
-		for _, entry := range s.findAllScanSummaries() {
-			for _, v := range normalizedVulnsForEntry(entry) {
+	seen := make(map[string]struct{})
+	for _, entry := range s.findAllScanSummaries() {
+		for _, v := range normalizedVulnsForEntry(entry) {
 			key := dedupFindingKey(entry.rec.Target, v)
 			if _, dup := seen[key]; dup {
 				continue

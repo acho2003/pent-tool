@@ -37,6 +37,9 @@ type Config struct {
 	DalfoxPath            string
 	WapitiPath            string
 	SqlmapPath            string
+	KubeBenchPath         string
+	ProwlerPath           string
+	ScoutSuitePath        string
 	SSHPath               string
 	ZAPURL                string
 	ZAPAPIKey             string
@@ -261,6 +264,9 @@ func load() *Config {
 		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
 		SqlmapPath:            envOr("XALGORIX_SQLMAP_PATH", "sqlmap"),
+		KubeBenchPath:         envOr("XALGORIX_KUBEBENCH_PATH", "kube-bench"),
+		ProwlerPath:           envOr("XALGORIX_PROWLER_PATH", "prowler"),
+		ScoutSuitePath:        envOr("XALGORIX_SCOUTSUITE_PATH", "scout"),
 		SSHPath:               envOr("XALGORIX_SSH_PATH", "ssh"),
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),

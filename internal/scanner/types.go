@@ -145,6 +145,9 @@ type Config struct {
 	DalfoxPath        string
 	WapitiPath        string
 	SqlmapPath        string
+	KubeBenchPath     string
+	ProwlerPath       string
+	ScoutSuitePath    string
 	SSHPath           string
 	TestsslPath       string
 	SemgrepPath       string
@@ -193,6 +196,9 @@ type Config struct {
 	DalfoxTimeout          time.Duration
 	WapitiTimeout          time.Duration
 	SqlmapTimeout          time.Duration
+	KubeBenchTimeout       time.Duration
+	ProwlerTimeout         time.Duration
+	ScoutSuiteTimeout      time.Duration
 	LynisTimeout           time.Duration
 	TestsslTimeout         time.Duration
 	SemgrepTimeout         time.Duration
