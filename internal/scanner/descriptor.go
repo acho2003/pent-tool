@@ -5,11 +5,13 @@ import "github.com/xalgord/xalgorix/v4/internal/assessment"
 type Phase string
 
 const (
-	PhaseRecon    Phase = "recon"
-	PhaseWeb      Phase = "web"
-	PhaseServer   Phase = "server"
-	PhaseSAST     Phase = "sast"
-	PhaseFinalize Phase = "finalize"
+	PhaseRecon      Phase = "recon"
+	PhaseWeb        Phase = "web"
+	PhaseServer     Phase = "server"
+	PhaseSAST       Phase = "sast"
+	PhaseCloud      Phase = "cloud"
+	PhaseKubernetes Phase = "kubernetes"
+	PhaseFinalize   Phase = "finalize"
 )
 
 type Weight string
@@ -39,10 +41,22 @@ type ToolInfo struct {
 // ScannerDefinition is the registry entry used by planning and discovery UI.
 // Availability is supplied at planning time because installed tools and
 // configured services vary by deployment.
+// Scanner groups organize the catalog for the New Assessment UI. They are a
+// presentation dimension independent of Category (the execution phase): e.g.
+// nmap's Category is recon but its Group is network/servers.
+const (
+	GroupWebAPI     = "web_api"
+	GroupNetwork    = "network_servers"
+	GroupCloud      = "cloud"
+	GroupKubernetes = "kubernetes"
+	GroupCode       = "code" // source, dependencies, containers
+)
+
 type ScannerDefinition struct {
 	ID                     string                  `json:"id"`
 	Name                   string                  `json:"name"`
 	Category               Phase                   `json:"category"`
+	Group                  string                  `json:"group"`
 	AssessmentTypes        []assessment.Type       `json:"assessment_types"`
 	TargetKinds            []assessment.TargetKind `json:"target_types"`
 	RequiredCapabilities   []assessment.Capability `json:"required_capabilities,omitempty"`

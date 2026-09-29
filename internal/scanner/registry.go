@@ -33,11 +33,30 @@ func ScannerRegistry() []ScannerDefinition {
 		{ID: "wapiti", Name: "wapiti", Category: PhaseWeb, AssessmentTypes: web, TargetKinds: []assessment.TargetKind{assessment.KindURL}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, OptionalCapabilities: []assessment.Capability{assessment.CapAuthWeb}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "medium", Available: false, Summary: "Bounded web fuzzing seeded with discovered endpoints"},
 		{ID: "sqlmap", Name: "sqlmap", Category: PhaseWeb, AssessmentTypes: append(append([]assessment.Type{}, web...), api...), TargetKinds: []assessment.TargetKind{assessment.KindURL}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, OptionalCapabilities: []assessment.Capability{assessment.CapAuthWeb, assessment.CapAPI}, SupportsAuthentication: true, DefaultSelection: "explicit_opt_in", Risk: "high", Available: false, Summary: "Opt-in, detection-only SQL injection checks on approved parameters"},
 		{ID: "lynis", Name: "lynis", Category: PhaseServer, AssessmentTypes: []assessment.Type{assessment.TypeHost, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapSSH}, DefaultSelection: "automatic", Risk: "low", Available: false, Summary: "Run a bounded Lynis audit through a target-bound SSH alias"},
+		{ID: "prowler", Name: "prowler", Category: PhaseCloud, AssessmentTypes: []assessment.Type{assessment.TypeCloud, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindCloudAccount}, RequiredCapabilities: []assessment.Capability{assessment.CapCloud}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Read-only AWS security & configuration audit using a supplied read-only credential"},
+		{ID: "scoutsuite", Name: "scoutsuite", Category: PhaseCloud, AssessmentTypes: []assessment.Type{assessment.TypeCloud, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindCloudAccount}, RequiredCapabilities: []assessment.Capability{assessment.CapCloud}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Read-only multi-cloud security posture audit using a supplied read-only credential"},
+		{ID: "kube-bench", Name: "kube-bench", Category: PhaseKubernetes, AssessmentTypes: []assessment.Type{assessment.TypeKubernetes, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindKubernetesCluster}, RequiredCapabilities: []assessment.Capability{assessment.CapKubernetes}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "CIS Kubernetes benchmark checks against a supplied kubeconfig"},
 	}
 	for i := range defs {
 		defs[i].Selectable = slices.Contains(OrderedNames, defs[i].ID)
+		defs[i].Group = scannerGroups[defs[i].ID]
 	}
 	return defs
+}
+
+// scannerGroups assigns each scanner to a New-Assessment UI group. Recon/web
+// tools group under Web & API; nmap/masscan/openvas/vuls/lynis under Network &
+// servers; SAST/dependency/container tools under Code; and the cloud/k8s audit
+// adapters under their respective groups.
+var scannerGroups = map[string]string{
+	"subfinder": GroupWebAPI, "httpx": GroupWebAPI, "katana": GroupWebAPI,
+	"nuclei": GroupWebAPI, "zap": GroupWebAPI, "testssl": GroupWebAPI,
+	"nikto": GroupWebAPI, "dalfox": GroupWebAPI, "wapiti": GroupWebAPI, "sqlmap": GroupWebAPI,
+	"nmap": GroupNetwork, "masscan": GroupNetwork, "openvas": GroupNetwork,
+	"vuls": GroupNetwork, "lynis": GroupNetwork,
+	"trivy": GroupCode, "semgrep": GroupCode, "gitleaks": GroupCode, "osv": GroupCode,
+	"prowler": GroupCloud, "scoutsuite": GroupCloud,
+	"kube-bench": GroupKubernetes,
 }
 
 func RegistryEntry(id string) (ScannerDefinition, bool) {

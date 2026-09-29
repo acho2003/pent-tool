@@ -115,7 +115,9 @@ func TestPlanFingerprintStableAcrossCallsAndUnsupportedTypesExplainCoverage(t *t
 	if a.Fingerprint == "" || a.Fingerprint != b.Fingerprint {
 		t.Fatalf("unstable fingerprint %q %q", a.Fingerprint, b.Fingerprint)
 	}
-	if len(a.Coverage) != 1 || a.Coverage[0].State != "unavailable" || !strings.Contains(a.Coverage[0].Reason, "Kubernetes") {
+	// A named kube-bench adapter now exists but is Available=false until installed,
+	// so the Kubernetes type is covered-but-unavailable (was "no scanner exists").
+	if len(a.Coverage) != 1 || a.Coverage[0].State != "unavailable" || !strings.Contains(a.Coverage[0].Reason, "unavailable") {
 		t.Fatalf("unexpected coverage: %+v", a.Coverage)
 	}
 }
@@ -256,10 +258,18 @@ func TestUnsupportedCloudAndKubernetesTypesStayVisibleAsUnavailable(t *testing.T
 			t.Fatalf("coverage for %s = %+v", typ, plan.Coverage)
 		}
 	}
+	// Cloud is now covered by named adapters (prowler/scoutsuite) that are
+	// Available=false until installed, so the gap is explained as an unavailable
+	// scanner rather than a synthetic "no cloud scanner" decision.
 	if !slices.ContainsFunc(plan.Decisions, func(d PlanDecision) bool {
-		return d.Scanner == "adapter" && d.TargetID == "cloud" && d.State == PlanUnavailable && strings.Contains(d.Reason, "no cloud scanner")
+		return (d.Scanner == "prowler" || d.Scanner == "scoutsuite") && d.TargetID == "cloud" && d.State == PlanUnavailable
 	}) {
-		t.Fatalf("cloud adapter gap was not explained: %+v", plan.Decisions)
+		t.Fatalf("cloud adapter gap was not explained by a cloud scanner: %+v", plan.Decisions)
+	}
+	if !slices.ContainsFunc(plan.Decisions, func(d PlanDecision) bool {
+		return d.Scanner == "kube-bench" && d.TargetID == "cluster" && d.State == PlanUnavailable
+	}) {
+		t.Fatalf("kubernetes adapter gap was not explained: %+v", plan.Decisions)
 	}
 }
 
