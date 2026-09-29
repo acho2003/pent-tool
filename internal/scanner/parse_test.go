@@ -343,3 +343,12 @@ func TestParseRunsSourcePathsAndFileAwareMerge(t *testing.T) {
 		t.Fatalf("SourceID must be unchanged, got %q", api.SourceID)
 	}
 }
+
+func TestParseRunsRetainsBudgetLimitedNucleiFindings(t *testing.T) {
+	path := writeFixture(t, "partial-nuclei.jsonl", `{"template-id":"cve-test","matched-at":"https://app.example.test/a","host":"app.example.test","info":{"name":"Test","severity":"high"}}`+"\n")
+	run := Run{Scanner: "nuclei", Status: "failed", Reason: "scanner stage time budget reached; assessment coverage is partial", ArtifactPath: path}
+	findings, errs := ParseRuns([]Run{run})
+	if len(errs) != 0 || len(findings) != 1 || findings[0].Endpoint != "https://app.example.test/a" {
+		t.Fatalf("budget-limited findings = %+v, errors = %v", findings, errs)
+	}
+}

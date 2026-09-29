@@ -26,6 +26,18 @@ type resourceJobRunner struct {
 	gvmID       string
 }
 
+type budgetAwareJobRunner struct{ calls int }
+
+func (r *budgetAwareJobRunner) Name() string { return "budget-aware" }
+func (r *budgetAwareJobRunner) Descriptor() Descriptor {
+	return Descriptor{Name: r.Name(), Phase: PhaseWeb, Tracks: []Track{TrackWeb}}
+}
+func (r *budgetAwareJobRunner) Run(ctx context.Context, req Request, _ Config, _ EmitFunc) Run {
+	r.calls++
+	<-ctx.Done()
+	return Run{Scanner: r.Name(), Target: req.Target, Status: "cancelled", Reason: ctx.Err().Error()}
+}
+
 func (r *resourceJobRunner) Name() string {
 	if r.name != "" {
 		return r.name
@@ -228,6 +240,25 @@ func TestRunAssessmentJobsStopsPerTargetAtWebBudget(t *testing.T) {
 	runs := pipeline.RunAssessmentJobs(context.Background(), plan, t.TempDir(), nil, nil)
 	if len(runs) != 2 || runs[0].Reason != "web profile time budget exhausted; assessment coverage is partial" || runs[1].Status != "skipped" || !strings.Contains(runs[1].Reason, "budget exhausted") || runner.calls != 1 {
 		t.Fatalf("web budget was not enforced for the full target stage: runs=%+v calls=%d", runs, runner.calls)
+	}
+}
+
+func TestRunAssessmentJobsSharesWebBudgetAcrossPendingStages(t *testing.T) {
+	runner := &budgetAwareJobRunner{}
+	pipeline := &Pipeline{Config: Config{WebBudget: 180 * time.Millisecond}, Runners: []Runner{runner}}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{}, Fingerprint: "sha256:shared-budget", Jobs: []PlanJob{
+		{ID: "a", State: PlanSelected, Scanner: runner.Name(), TargetID: "app", Target: "https://app.example.test/", Variant: "a"},
+		{ID: "b", State: PlanSelected, Scanner: runner.Name(), TargetID: "app", Target: "https://app.example.test/", Variant: "b"},
+		{ID: "c", State: PlanSelected, Scanner: runner.Name(), TargetID: "app", Target: "https://app.example.test/", Variant: "c"},
+	}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if runner.calls != 3 || len(runs) != 3 {
+		t.Fatalf("pending stages were starved: calls=%d runs=%+v", runner.calls, runs)
+	}
+	for _, run := range runs[:2] {
+		if run.Status != "failed" || !strings.Contains(run.Reason, "scanner stage time budget reached") {
+			t.Fatalf("stage budget not recorded as partial: %+v", run)
+		}
 	}
 }
 

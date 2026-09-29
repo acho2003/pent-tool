@@ -73,8 +73,9 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 	var findings []Finding
 	var errs []error
 	for _, run := range runs {
-		partialNikto := run.Scanner == "nikto" && run.Status == "failed" && run.Reason == "scanner time budget reached; partial results may be available"
-		if (run.Status != "completed" && !partialNikto) || run.ArtifactPath == "" {
+		budgetPartial := run.Status == "failed" && (run.Scanner == "nikto" || run.Scanner == "nuclei") &&
+			(strings.Contains(run.Reason, "time budget reached") || strings.Contains(run.Reason, "time budget exhausted"))
+		if (run.Status != "completed" && !budgetPartial) || run.ArtifactPath == "" {
 			continue
 		}
 		parsed, err := ParseRun(run)

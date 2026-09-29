@@ -85,7 +85,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	for _, target := range plan.Config.Targets {
 		targetKinds[target.ID] = target.Kind
 	}
-	for _, job := range plan.Jobs {
+	for jobIndex, job := range plan.Jobs {
 		scope := assessmentJobScope(job)
 		key := assessmentJobRunKey(scope, job.Scanner, job.Variant, plan.Fingerprint)
 		if old, ok := completed[key]; ok && old.Status == "completed" && VerifyChecksum(old) == nil {
@@ -189,8 +189,24 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		jobCtx := ctx
 		jobCancel := func() {}
+		stageDeadline := time.Time{}
 		if req.ApplicationURL != "" && p.Config.WebBudget > 0 {
-			jobCtx, jobCancel = context.WithDeadline(ctx, webDeadlines[job.TargetID])
+			deadline := webDeadlines[job.TargetID]
+			pending := 1
+			for _, later := range plan.Jobs[jobIndex+1:] {
+				if later.TargetID != job.TargetID || (later.State != PlanSelected && later.State != PlanConditional) {
+					continue
+				}
+				if old, ok := completed[assessmentJobRunKey(assessmentJobScope(later), later.Scanner, later.Variant, plan.Fingerprint)]; ok && old.Status == "completed" && VerifyChecksum(old) == nil {
+					continue
+				}
+				pending++
+			}
+			if pending > 1 {
+				stageDeadline = time.Now().Add(time.Until(deadline) / time.Duration(pending))
+				deadline = stageDeadline
+			}
+			jobCtx, jobCancel = context.WithDeadline(ctx, deadline)
 		}
 		runEmit := emit
 		if emit != nil {
@@ -209,7 +225,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		budgetExpired := jobCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 		jobCancel()
 		if budgetExpired {
-			run.Reason = "web profile time budget exhausted; assessment coverage is partial"
+			run.Status = "failed"
+			if !stageDeadline.IsZero() && time.Now().Before(webDeadlines[job.TargetID]) {
+				run.Reason = "scanner stage time budget reached; assessment coverage is partial"
+			} else {
+				run.Reason = "web profile time budget exhausted; assessment coverage is partial"
+			}
 		}
 		run.Scope = scope
 		run.Variant = job.Variant
