@@ -139,6 +139,7 @@ type Config struct {
 	MasscanPath       string
 	NiktoPath         string
 	KatanaPath        string
+	KatanaChromePath  string
 	DalfoxPath        string
 	WapitiPath        string
 	SqlmapPath        string

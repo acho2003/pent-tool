@@ -94,6 +94,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.KatanaPath == "" {
 		cfg.KatanaPath = "katana"
 	}
+	if cfg.KatanaChromePath == "" {
+		cfg.KatanaChromePath = "/usr/bin/chromium"
+	}
 	if cfg.DalfoxPath == "" {
 		cfg.DalfoxPath = "dalfox"
 	}

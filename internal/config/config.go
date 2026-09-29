@@ -33,6 +33,7 @@ type Config struct {
 	OsvPath               string
 	NiktoPath             string
 	KatanaPath            string
+	BrowserPath           string
 	DalfoxPath            string
 	WapitiPath            string
 	SqlmapPath            string
@@ -256,6 +257,7 @@ func load() *Config {
 		OsvPath:               envOr("XALGORIX_OSV_PATH", "osv-scanner"),
 		NiktoPath:             envOr("XALGORIX_NIKTO_PATH", "nikto"),
 		KatanaPath:            envOr("XALGORIX_KATANA_PATH", "katana"),
+		BrowserPath:           envOr("XALGORIX_BROWSER_PATH", "/usr/bin/chromium"),
 		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
 		SqlmapPath:            envOr("XALGORIX_SQLMAP_PATH", "sqlmap"),

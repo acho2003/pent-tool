@@ -187,3 +187,23 @@ func TestKatanaAvailable(t *testing.T) {
 		t.Error("nonexistent absolute path should be unavailable")
 	}
 }
+
+func TestBuildKatana_UsesSystemChromePath(t *testing.T) {
+	// With a chrome path configured, katana must be told to use it (so its
+	// headless go-rod doesn't try to download a browser and yield 0 endpoints).
+	withChrome := buildKatana(Request{Target: "https://app.test/", ScanDir: t.TempDir()},
+		Config{KatanaPath: "katana", KatanaTimeout: 60000000000, KatanaChromePath: "/usr/bin/chromium"})
+	if !hasArg(withChrome.args, "-system-chrome") {
+		t.Errorf("expected -system-chrome; args=%v", withChrome.args)
+	}
+	if p, _ := argValue(withChrome.args, "-scp"); p != "/usr/bin/chromium" {
+		t.Errorf("-scp = %q, want /usr/bin/chromium", p)
+	}
+
+	// Without a configured path, katana is left to its own resolution (no -scp).
+	noChrome := buildKatana(Request{Target: "https://app.test/", ScanDir: t.TempDir()},
+		Config{KatanaPath: "katana", KatanaTimeout: 60000000000})
+	if hasArg(noChrome.args, "-scp") {
+		t.Errorf("no chrome path configured should not add -scp; args=%v", noChrome.args)
+	}
+}

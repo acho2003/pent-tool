@@ -80,6 +80,14 @@ func buildKatana(req Request, cfg Config) commandSpec {
 		"-f", "url",
 		"-o", artifact,
 	}
+	// Headless JS crawling needs a real Chromium. katana's bundled go-rod
+	// otherwise tries to DOWNLOAD one (which fails in an offline/arm64 container),
+	// so a JS app like an SPA yields zero endpoints. Point katana at the image's
+	// installed browser explicitly. Without a configured path, katana falls back
+	// to its own resolution.
+	if p := strings.TrimSpace(cfg.KatanaChromePath); p != "" {
+		args = append(args, "-system-chrome", "-scp", p)
+	}
 	if cfg.RateRPS > 0 {
 		args = append(args, "-rl", strconv.Itoa(cfg.RateRPS))
 	}

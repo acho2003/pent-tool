@@ -18,7 +18,7 @@ import (
 func ScannerConfig(cfg *config.Config) scanner.Config {
 	return scanner.Config{
 		NucleiPath: cfg.NucleiPath, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
-		SubfinderPath: cfg.SubfinderPath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, KatanaPath: cfg.KatanaPath, DalfoxPath: cfg.DalfoxPath, WapitiPath: cfg.WapitiPath, SqlmapPath: cfg.SqlmapPath, SSHPath: cfg.SSHPath, TestsslPath: cfg.TestsslPath,
+		SubfinderPath: cfg.SubfinderPath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, KatanaPath: cfg.KatanaPath, KatanaChromePath: cfg.BrowserPath, DalfoxPath: cfg.DalfoxPath, WapitiPath: cfg.WapitiPath, SqlmapPath: cfg.SqlmapPath, SSHPath: cfg.SSHPath, TestsslPath: cfg.TestsslPath,
 		SemgrepPath: cfg.SemgrepPath, GitleaksPath: cfg.GitleaksPath, OsvPath: cfg.OsvPath,
 		ZAPURL: cfg.ZAPURL, ZAPAPIKey: cfg.ZAPAPIKey, ZAPDedicated: cfg.ZAPDedicated, GVMHost: cfg.GVMHost, GVMPort: cfg.GVMPort, GVMSocket: cfg.GVMSocket, GVMUser: cfg.GVMUsername, GVMPass: cfg.GVMPassword,
 		RateRPS: int(cfg.RateLimitRPS), MaxWorkers: cfg.MaxWorkers, ScanHeaders: append([]string(nil), cfg.ScanHeaders...), MaxOutputBytes: cfg.ScannerMaxOutputBytes,
