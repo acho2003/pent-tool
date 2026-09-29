@@ -63,7 +63,7 @@ func buildKatana(req Request, cfg Config) commandSpec {
 
 	host := hostFromTarget(target)
 	artifact := katanaArtifactPath(req.ScanDir, host)
-	// -jc  : crawl JS files for endpoints; -kf robotstxt,sitemapxml known files.
+	// -jc  : crawl JS files for endpoints; -kf all crawls known files (robots.txt, sitemap.xml).
 	// -fs fqdn : field-scope the crawl to the target's FQDN (stay on host).
 	// -d   : bounded depth. -c concurrency. -rl rate limit. -silent quiet output.
 	// -headless -no-sandbox : render JS/XHR so SPA and API routes are discovered.
@@ -73,7 +73,7 @@ func buildKatana(req Request, cfg Config) commandSpec {
 		"-d", strconv.Itoa(katanaDefaultDepth),
 		"-fs", "fqdn",
 		"-jc",
-		"-kf", "robotstxt,sitemapxml",
+		"-kf", "all",
 		"-c", "10",
 		"-silent",
 		"-headless", "-no-sandbox",
