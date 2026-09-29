@@ -27,9 +27,44 @@ func TestParseAssessmentPlanFlags(t *testing.T) {
 }
 
 func TestParseTypedAssessmentExecutionFlag(t *testing.T) {
-	got := parseCLIArgs([]string{"--run-assessment", "--assessment-config=assessment.json"})
-	if !got.runAssessment || got.assessmentConfig != "assessment.json" {
+	got := parseCLIArgs([]string{"--run-assessment", "--assessment-config=assessment.json", "--api-definition", "app=api.yaml", "--api-definition=other=more.json"})
+	if !got.runAssessment || got.assessmentConfig != "assessment.json" || len(got.apiDefinitionFiles) != 2 || got.apiDefinitionFiles[0] != "app=api.yaml" || got.apiDefinitionFiles[1] != "other=more.json" {
 		t.Fatalf("unexpected typed execution flags: %+v", got)
+	}
+}
+
+func TestCLIAssessmentPlanImportsTargetBoundLocalOpenAPI(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "assessment.json")
+	if err := os.WriteFile(configPath, []byte(`{"assessment_mode":"BLACK_BOX","assessment_types":["API"],"assessment_targets":[{"id":"app","type":"URL","value":"https://192.0.2.1/Portal"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(dir, "api.yaml")
+	if err := os.WriteFile(specPath, []byte("openapi: 3.1.0\npaths:\n  /health:\n    get: {}\n  /users:\n    post: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := cliArgs{assessmentConfig: configPath, apiDefinitionFiles: []string{"app=" + specPath}}
+	plan, err := cliAssessmentPlan(args, &config.Config{})
+	if err != nil || len(plan.Errors) != 0 {
+		t.Fatalf("CLI plan = %+v, err %v", plan.Errors, err)
+	}
+	if len(plan.APIEndpoints) != 2 || plan.APIEndpoints[0].TargetID != "app" || plan.APIEndpoints[0].Path != "/health" || !plan.APIEndpoints[0].Eligible || plan.APIEndpoints[1].Eligible {
+		t.Fatalf("local OpenAPI operation inventory = %+v", plan.APIEndpoints)
+	}
+	if len(plan.Config.APIDefinitions) != 1 || plan.Config.APIDefinitions[0].DefinitionID == "" || plan.Fingerprint == "" {
+		t.Fatalf("local definition did not enter plan identity: %+v", plan)
+	}
+	if _, err := cliAssessmentPlan(cliArgs{assessmentConfig: configPath, apiDefinitionFiles: []string{"missing=" + specPath}}, &config.Config{}); err == nil {
+		t.Fatal("unmapped API definition target was accepted")
+	}
+	if _, err := cliAssessmentPlan(cliArgs{assessmentConfig: configPath, apiDefinitionFiles: []string{"app=" + specPath, "app=" + specPath}}, &config.Config{}); err == nil {
+		t.Fatal("duplicate API definition was accepted")
+	}
+	if err := os.WriteFile(specPath, []byte("openapi: 3.1.0\npaths: {}\ncomponents:\n  schemas:\n    X:\n      $ref: https://other.test/schema\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cliAssessmentPlan(args, &config.Config{}); err == nil {
+		t.Fatal("external OpenAPI reference was accepted")
 	}
 }
 

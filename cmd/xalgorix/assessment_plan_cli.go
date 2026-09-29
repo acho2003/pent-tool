@@ -13,18 +13,15 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
-	"github.com/xalgord/xalgorix/v4/internal/web"
 )
 
 const maxAssessmentConfigBytes = 1 << 20
 
 func runAssessmentPlanCLI(args cliArgs) error {
-	cfg, err := assessmentConfigFromCLI(args)
+	plan, err := cliAssessmentPlan(args, config.Get())
 	if err != nil {
 		return err
 	}
-	appConfig := config.Get()
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: cliAssessmentAvailability(web.ScannerConfig(appConfig))})
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(plan); err != nil {

@@ -48,9 +48,6 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 	if len(assessmentConfig.Access) > 0 {
 		return errors.New("typed CLI execution cannot resolve credential references; remove access bindings and use the authenticated web UI")
 	}
-	if len(assessmentConfig.APIDefinitions) > 0 || len(assessmentConfig.APIDefinitionIDs) > 0 {
-		return errors.New("typed CLI execution cannot resolve uploaded API definitions; import and map them in the web UI")
-	}
 	for _, target := range assessmentConfig.Targets {
 		switch target.Kind {
 		case assessment.KindDomain, assessment.KindURL, assessment.KindIP, assessment.KindCIDR, assessment.KindHost:
@@ -62,8 +59,10 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 
 	scanConfig := web.ScannerConfig(appConfig)
 	scanConfig.WebProfile = assessmentConfig.Profile
-	availability := cliAssessmentAvailability(scanConfig)
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: assessmentConfig, Availability: availability})
+	plan, err := cliAssessmentPlanFromConfig(args, assessmentConfig, appConfig)
+	if err != nil {
+		return err
+	}
 	if len(plan.Errors) > 0 {
 		return fmt.Errorf("assessment plan has %d blocking validation error(s)", len(plan.Errors))
 	}

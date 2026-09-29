@@ -96,15 +96,18 @@ plan and print a JSON result containing the plan, per-scanner runs, findings,
 and parse diagnostics. The CLI applies the same plan builder, profile limits,
 artifact isolation, and local-listener protection as the web application.
 
-The first CLI execution path does not resolve credential references or
-uploaded OpenAPI definitions. Configurations containing either are rejected;
-use the web application for verified target authentication and imported API
-definitions. Each run's raw artifacts are retained under
+The CLI accepts local OpenAPI 3.0/3.1 or Swagger 2.0 files using repeatable
+`--api-definition target-id=file` options. Target IDs must match explicit
+HTTP(S) URL targets in the assessment, and the file content hash is included
+in the reviewed plan. Only safe, resolved GET routes are currently seeded into
+ZAP; other operations remain visible as untested. The CLI does not resolve
+credential references or server-uploaded definition IDs; use the web
+application for those resources. Each run's raw artifacts are retained under
 `$XALGORIX_DATA_DIR/assessments/` for review.
 
 ```sh
 xalgorix --plan --assessment-config assessment.json
-xalgorix --run-assessment --assessment-config assessment.json
+xalgorix --run-assessment --assessment-config assessment.json --api-definition app=api.yaml
 ```
 
 ## Native and container configuration

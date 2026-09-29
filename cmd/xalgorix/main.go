@@ -83,7 +83,7 @@ func main() {
 		}
 		return
 	}
-	if args.assessmentMode != "" || len(args.assessmentTypes) > 0 || args.assessmentConfig != "" {
+	if args.assessmentMode != "" || len(args.assessmentTypes) > 0 || args.assessmentConfig != "" || len(args.apiDefinitionFiles) > 0 {
 		fmt.Fprintln(os.Stderr, "Use --plan to preview or --run-assessment to execute a typed assessment.")
 		os.Exit(1)
 	}
@@ -310,27 +310,28 @@ func main() {
 }
 
 type cliArgs struct {
-	targets          []string
-	headers          []string
-	source           string // --source: Trivy repository/filesystem input
-	artifactKind     string
-	vulsSSHHost      string
-	scanners         []string
-	assessmentMode   string
-	assessmentTypes  []string
-	assessmentConfig string
-	plan             bool
-	runAssessment    bool
-	bind             string
-	version          bool
-	update           bool
-	webUI            bool
-	port             int
-	start            bool
-	stop             bool
-	restart          bool
-	restartIdle      bool
-	uninstall        bool
+	targets            []string
+	headers            []string
+	source             string // --source: Trivy repository/filesystem input
+	artifactKind       string
+	vulsSSHHost        string
+	scanners           []string
+	assessmentMode     string
+	assessmentTypes    []string
+	assessmentConfig   string
+	apiDefinitionFiles []string
+	plan               bool
+	runAssessment      bool
+	bind               string
+	version            bool
+	update             bool
+	webUI              bool
+	port               int
+	start              bool
+	stop               bool
+	restart            bool
+	restartIdle        bool
+	uninstall          bool
 }
 
 func parseArgs() cliArgs {
@@ -385,6 +386,11 @@ func parseCLIArgs(osArgs []string) cliArgs {
 			if i+1 < len(osArgs) {
 				i++
 				args.assessmentConfig = osArgs[i]
+			}
+		case "--api-definition":
+			if i+1 < len(osArgs) {
+				i++
+				args.apiDefinitionFiles = append(args.apiDefinitionFiles, osArgs[i])
 			}
 		case "--plan":
 			args.plan = true
@@ -443,8 +449,8 @@ func parseCLIArgs(osArgs []string) cliArgs {
 				args.assessmentTypes = append(args.assessmentTypes, strings.Split(strings.TrimPrefix(osArgs[i], "--assessment-type="), ",")...)
 			} else if strings.HasPrefix(osArgs[i], "--assessment-config=") {
 				args.assessmentConfig = strings.TrimPrefix(osArgs[i], "--assessment-config=")
-			} else if osArgs[i] == "--run-assessment" {
-				args.runAssessment = true
+			} else if strings.HasPrefix(osArgs[i], "--api-definition=") {
+				args.apiDefinitionFiles = append(args.apiDefinitionFiles, strings.TrimPrefix(osArgs[i], "--api-definition="))
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				_, _ = fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
 			} else if strings.HasPrefix(osArgs[i], "--bind=") {
@@ -487,6 +493,7 @@ func printUsage() {
 	fmt.Println("      --vuls-ssh-host <alias> Operator-managed SSH config alias")
 	fmt.Println("      --scanners <list>     Comma-separated subset of " + strings.Join(scanner.OrderedNames, ",") + " (default: all)")
 	fmt.Println("      --assessment-config <file>  Typed assessment JSON used with --plan or --run-assessment")
+	fmt.Println("      --api-definition <target-id=file>  Repeatable local OpenAPI file for typed assessments")
 	fmt.Println("      --assessment-mode <mode>    BLACK_BOX, GRAY_BOX, or WHITE_BOX")
 	fmt.Println("      --assessment-type <type>    Repeatable assessment coverage type")
 	fmt.Println("      --plan                      Print a deterministic plan without scanning")
