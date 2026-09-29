@@ -1002,6 +1002,9 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	if len(scan.ReportScopes) > 0 {
 		drawScanCoverage(pdf, palette, summarizeReportRecon(scan.ReportScopes), scan.ReportScopes)
 	}
+	if scan.ReportAssessmentCoverage != nil {
+		drawAssessmentCoverage(pdf, palette, *scan.ReportAssessmentCoverage)
+	}
 
 	// ─── BLUE TEAM TIMESTAMPS ─────────────────────────────
 	pdf.Ln(10)

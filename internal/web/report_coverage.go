@@ -115,3 +115,63 @@ func drawScanCoverage(pdf *fpdf.Fpdf, pal reportPalette, recon reportReconSummar
 		pdf.Ln(4)
 	}
 }
+
+// assessmentCoverageLines uses the same recorded coverage snapshot as the API
+// and JSON report. A completed scanner job is not evidence that every API
+// operation or requested assessment type was tested.
+func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
+	lines := []string{
+		"Assessment state: " + coverage.State,
+		"Mode: " + string(coverage.Mode),
+		"Profile: " + coverage.Profile,
+		"Plan fingerprint: " + coverage.PlanFingerprint,
+	}
+	for _, typ := range coverage.TypeCoverage {
+		lines = append(lines, fmt.Sprintf("Type %s: %s - %s", typ.Type, typ.State, typ.Reason))
+	}
+	for _, job := range coverage.Jobs {
+		line := fmt.Sprintf("Job %s (%s): %s", job.Scanner, job.TargetID, job.Status)
+		if job.Reason != "" {
+			line += " - " + job.Reason
+		}
+		lines = append(lines, line)
+	}
+	for _, operation := range coverage.Operations {
+		line := fmt.Sprintf("API %s %s: %s", operation.Method, operation.Path, operation.Status)
+		if operation.Reason != "" {
+			line += " - " + operation.Reason
+		}
+		lines = append(lines, line)
+	}
+	for _, gap := range coverage.Gaps {
+		lines = append(lines, fmt.Sprintf("Gap %s: %s - %s", gap.Scanner, gap.State, gap.Reason))
+	}
+	return lines
+}
+
+func drawAssessmentCoverage(pdf *fpdf.Fpdf, pal reportPalette, coverage assessmentCoverageResponse) {
+	newPage := func() {
+		pdf.AddPage()
+		pdf.SetFillColor(pal.bg[0], pal.bg[1], pal.bg[2])
+		pdf.Rect(0, 0, 210, 297, "F")
+		pdf.SetFillColor(pal.accent[0], pal.accent[1], pal.accent[2])
+		pdf.Rect(0, 0, 210, 1.5, "F")
+		pdf.SetY(15)
+	}
+	newPage()
+	pdf.SetFont("Helvetica", "B", 22)
+	pdf.SetTextColor(pal.accent[0], pal.accent[1], pal.accent[2])
+	pdf.CellFormat(190, 12, "Assessment Coverage", "", 1, "L", false, 0, "")
+	pdf.Ln(5)
+	pdf.SetFont("Helvetica", "", 8)
+	pdf.SetTextColor(pal.fg[0], pal.fg[1], pal.fg[2])
+	for _, line := range assessmentCoverageLines(coverage) {
+		if pdf.GetY() > 265 {
+			newPage()
+			pdf.SetFont("Helvetica", "", 8)
+			pdf.SetTextColor(pal.fg[0], pal.fg[1], pal.fg[2])
+		}
+		pdf.SetX(10)
+		pdf.MultiCell(190, 4.5, line, "", "L", false)
+	}
+}

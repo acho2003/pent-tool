@@ -488,7 +488,8 @@ type ScanRecord struct {
 	// ReportScopes feeds the scanner report's coverage section and scope grouping.
 	// It is derived at report time from ScannerRuns + recon-scopes.json and is
 	// never persisted.
-	ReportScopes []reportScope `json:"-"`
+	ReportScopes             []reportScope               `json:"-"`
+	ReportAssessmentCoverage *assessmentCoverageResponse `json:"-"`
 }
 
 // QueueState persists scan queue state for recovery after restart

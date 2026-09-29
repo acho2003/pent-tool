@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
@@ -102,6 +104,47 @@ func TestScannerReportFallsBackWithoutAI(t *testing.T) {
 	}
 	if len(manifest.SourceRuns) != len(runs) || manifest.SourceRuns[0].Checksum == "" {
 		t.Fatalf("source runs = %#v", manifest.SourceRuns)
+	}
+}
+
+func TestTypedScannerReportIncludesCoverageWithoutCredentialReferences(t *testing.T) {
+	s := newTestServer(t, nil)
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "nuclei.jsonl")
+	if err := os.WriteFile(artifact, []byte(`{"template-id":"test","matched-at":"https://app.example.test/health","host":"app.example.test","info":{"name":"Scanner issue","severity":"high"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := &scanner.AssessmentPlan{
+		Config:       assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeAPI}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test"}}},
+		Capabilities: []assessment.CapabilityEvidence{{Capability: assessment.CapAuthWeb, TargetID: "app", ReferenceID: "opaque-secret-reference", State: assessment.StateAvailable, Reason: "verification required"}},
+		Jobs:         []scanner.PlanJob{{ID: "nuclei:app", State: scanner.PlanSelected, Scanner: "nuclei", Variant: "nuclei", TargetID: "app", Target: "https://app.example.test", AssessmentTypes: []assessment.Type{assessment.TypeAPI}}},
+		Coverage:     []scanner.TypeCoverage{{Type: assessment.TypeAPI, State: "planned"}},
+		APIEndpoints: []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/health", Resolved: true, Eligible: true}},
+		Fingerprint:  "sha256:typed-report",
+	}
+	run := scanner.Run{Scanner: "nuclei", Variant: "nuclei", Target: "https://app.example.test", PlanFingerprint: plan.Fingerprint, Status: "completed", ArtifactPath: artifact}
+	run.Checksum = scanner.CalculateChecksum(run)
+	record := &ScanRecord{SchemaVersion: 3, ID: "typed-report", Target: "https://app.example.test", Status: "finished", Profile: "web-gentle", AssessmentPlan: plan, PlanFingerprint: plan.Fingerprint, ScannerRuns: []scanner.Run{run}}
+	if path := s.generateScannerReport(record, dir, ""); path == "" {
+		t.Fatal("typed report PDF was not generated")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest reportManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SchemaVersion != 3 || manifest.Assessment == nil || manifest.Assessment.State != "partial" || len(manifest.Assessment.Operations) != 1 {
+		t.Fatalf("typed coverage missing from report: %+v", manifest.Assessment)
+	}
+	if strings.Contains(string(data), "opaque-secret-reference") {
+		t.Fatal("report exposed a credential reference")
+	}
+	lines := assessmentCoverageLines(*manifest.Assessment)
+	if !slices.ContainsFunc(lines, func(line string) bool { return strings.Contains(line, "API GET /health: inventoried_not_executed") }) {
+		t.Fatalf("PDF coverage lines omit untested API operation: %v", lines)
 	}
 }
 

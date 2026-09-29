@@ -101,7 +101,12 @@ func (s *Server) generateReportAt(scan *ScanRecord, scanDir string) (string, err
 	s.currentScanDir = scanDir
 	s.mu.Unlock()
 
-	reportPath, err := s.generateReport(scan)
+	reportScan := *scan
+	if scan.AssessmentPlan != nil {
+		coverage := buildAssessmentCoverage(scan.ID, scan, scanDir)
+		reportScan.ReportAssessmentCoverage = &coverage
+	}
+	reportPath, err := s.generateReport(&reportScan)
 
 	s.mu.Lock()
 	s.currentScanDir = prevDir

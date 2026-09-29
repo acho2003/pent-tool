@@ -17,17 +17,18 @@ import (
 const reportPromptVersion = "scanner-report-v2"
 
 type reportManifest struct {
-	SchemaVersion int                 `json:"schema_version"`
-	Mode          string              `json:"mode"`
-	PromptVersion string              `json:"prompt_version"`
-	GeneratedAt   string              `json:"generated_at"`
-	Model         string              `json:"model,omitempty"`
-	Provider      string              `json:"provider,omitempty"`
-	SourceRuns    []scanner.Run       `json:"source_runs"`
-	ParseErrors   []string            `json:"parse_errors,omitempty"`
-	Scopes        []reportScope       `json:"scopes,omitempty"`
-	Recon         *reportReconSummary `json:"recon,omitempty"`
-	Findings      []reportFinding     `json:"findings"`
+	SchemaVersion int                         `json:"schema_version"`
+	Mode          string                      `json:"mode"`
+	PromptVersion string                      `json:"prompt_version"`
+	GeneratedAt   string                      `json:"generated_at"`
+	Model         string                      `json:"model,omitempty"`
+	Provider      string                      `json:"provider,omitempty"`
+	SourceRuns    []scanner.Run               `json:"source_runs"`
+	ParseErrors   []string                    `json:"parse_errors,omitempty"`
+	Scopes        []reportScope               `json:"scopes,omitempty"`
+	Recon         *reportReconSummary         `json:"recon,omitempty"`
+	Assessment    *assessmentCoverageResponse `json:"assessment_coverage,omitempty"`
+	Findings      []reportFinding             `json:"findings"`
 }
 
 type reportFinding struct {
@@ -98,6 +99,11 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	s.broadcastToInstance(instanceID, startedEvent)
 	parsed, parseErrs := scanner.ParseRuns(rec.ScannerRuns)
 	manifest := reportManifest{SchemaVersion: 2, Mode: "deterministic_fallback", PromptVersion: reportPromptVersion, GeneratedAt: time.Now().Format(time.RFC3339Nano), SourceRuns: append([]scanner.Run(nil), rec.ScannerRuns...), Findings: fallbackReportFindings(parsed)}
+	if rec.AssessmentPlan != nil {
+		coverage := buildAssessmentCoverage(rec.ID, rec, scanDir)
+		manifest.SchemaVersion = 3
+		manifest.Assessment = &coverage
+	}
 	for _, err := range parseErrs {
 		manifest.ParseErrors = append(manifest.ParseErrors, err.Error())
 	}
