@@ -39,6 +39,8 @@ type reportFinding struct {
 	SeverityUnrated      bool                    `json:"severity_unrated,omitempty"` // placeholder severity the scanner did not rate
 	Target               string                  `json:"target,omitempty"`
 	Endpoint             string                  `json:"endpoint,omitempty"`
+	Method               string                  `json:"method,omitempty"`
+	Parameter            string                  `json:"parameter,omitempty"`
 	Explanation          string                  `json:"explanation"`
 	Evidence             string                  `json:"evidence,omitempty"`
 	EvidenceRef          string                  `json:"evidence_reference"`
@@ -125,7 +127,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 func fallbackReportFindings(in []scanner.Finding) []reportFinding {
 	out := make([]reportFinding, 0, len(in))
 	for _, f := range in {
-		out = append(out, reportFinding{SourceID: f.SourceID, Fingerprint: f.Fingerprint, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: f.Endpoint, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: "Review the scanner evidence and apply the vendor or project remediation guidance.", Scope: f.Scope, Sources: f.Sources, Confidence: f.Confidence, EvidenceCompleteness: f.EvidenceCompleteness})
+		out = append(out, reportFinding{SourceID: f.SourceID, Fingerprint: f.Fingerprint, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Remediation: firstNonBlank(f.Remediation, "Review the scanner evidence and apply the vendor or project remediation guidance."), Scope: f.Scope, Sources: f.Sources, Confidence: f.Confidence, EvidenceCompleteness: f.EvidenceCompleteness})
 	}
 	return out
 }
@@ -135,7 +137,7 @@ func reportFindingsToVulns(in []reportFinding) []VulnSummary {
 	for i, f := range in {
 		scanners := reportScanners(f)
 		tags := append([]string{"scanner-reported"}, scanners...)
-		out = append(out, VulnSummary{ID: fmt.Sprintf("SCAN-%04d", i+1), Fingerprint: f.Fingerprint, Title: f.Title, Severity: f.Severity, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, CVSS: f.CVSS, Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: f.Evidence + "\n" + reportEvidenceRefs(f), Remediation: f.Remediation, ExploitationProof: "Scanner-reported evidence; no independent exploitation was performed.", VerificationMethod: strings.Join(scanners, ", "), Verified: false, Tags: tags})
+		out = append(out, VulnSummary{ID: fmt.Sprintf("SCAN-%04d", i+1), Fingerprint: f.Fingerprint, Title: f.Title, Severity: f.Severity, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: f.Evidence + "\n" + reportEvidenceRefs(f), Remediation: f.Remediation, ExploitationProof: "Scanner-reported evidence; no independent exploitation was performed.", VerificationMethod: strings.Join(scanners, ", "), Verified: false, Tags: tags})
 	}
 	return out
 }

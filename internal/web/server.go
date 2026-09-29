@@ -412,6 +412,7 @@ type VulnSummary struct {
 	Description          string   `json:"description,omitempty"`
 	Impact               string   `json:"impact,omitempty"`
 	Method               string   `json:"method,omitempty"`
+	Parameter            string   `json:"parameter,omitempty"`
 	CVE                  string   `json:"cve,omitempty"`
 	CWE                  string   `json:"cwe_id,omitempty"`
 	Confidence           string   `json:"confidence,omitempty"`

@@ -187,22 +187,22 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	if manifest.Recon == nil || manifest.Recon.Hosts != 2 || manifest.Recon.OpenPorts != 2 {
 		t.Fatalf("recon = %#v", manifest.Recon)
 	}
-	// 4 = merged CVE (nuclei+openvas) + nmap open port on host a, HSTS on host
-	// b, trivy on source.
-	if len(manifest.Findings) != 4 {
-		t.Fatalf("want 4 findings (CVE merged), got %d: %#v", len(manifest.Findings), manifest.Findings)
+	// The CVE observations use different, partly ambiguous locations (URL vs
+	// service port), so they remain separate instead of implying correlation.
+	if len(manifest.Findings) != 5 {
+		t.Fatalf("want 5 findings (location-ambiguous CVE observations separate), got %d: %#v", len(manifest.Findings), manifest.Findings)
 	}
 	var order []string
 	for _, f := range manifest.Findings {
 		order = append(order, f.Scope)
 	}
-	if want := []string{"host:a.example.test", "host:a.example.test", "host:b.example.test", "source:main"}; !slices.Equal(order, want) {
+	if want := []string{"host:a.example.test", "host:a.example.test", "host:a.example.test", "host:b.example.test", "source:main"}; !slices.Equal(order, want) {
 		t.Fatalf("finding scope order = %v, want %v", order, want)
 	}
-	if merged := manifest.Findings[0]; len(merged.Sources) != 2 || merged.Severity != "critical" {
-		t.Fatalf("merged finding = %#v", merged)
+	if first, second := manifest.Findings[0], manifest.Findings[1]; len(first.Sources) != 0 || first.CVE == "" || len(second.Sources) != 0 || second.CVE == "" {
+		t.Fatalf("ambiguous same-CVE locations must remain separate: %#v, %#v", first, second)
 	}
-	if nm := manifest.Findings[1]; nm.Scanner != "nmap" || nm.Scope != "host:a.example.test" {
+	if nm := manifest.Findings[2]; nm.Scanner != "nmap" || nm.Scope != "host:a.example.test" {
 		t.Fatalf("nmap finding = %#v, want scanner nmap in host:a.example.test", nm)
 	}
 }

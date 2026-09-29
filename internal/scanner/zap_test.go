@@ -16,6 +16,23 @@ import (
 	"time"
 )
 
+func TestParseZAPPreservesEveryAffectedInstance(t *testing.T) {
+	path := writeFixture(t, "zap-instances.json", `{"alerts":[{"pluginId":"10021","name":"XSS","risk":"High","confidence":"Medium","cweid":"79","solution":"Encode output","instances":[{"uri":"https://app.test/Case","method":"GET","param":"q","evidence":"<x>"},{"uri":"https://app.test/Case","method":"POST","param":"body.name","evidence":"<y>"}]}]}`)
+	findings, err := parseZAP(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected both alert instances, got %+v", findings)
+	}
+	if findings[0].Method != "GET" || findings[0].Parameter != "q" || findings[0].Remediation != "Encode output" || findings[0].Confidence != "Medium" {
+		t.Fatalf("first instance evidence missing: %+v", findings[0])
+	}
+	if findings[1].Method != "POST" || findings[1].Parameter != "body.name" || findings[0].SourceID == findings[1].SourceID {
+		t.Fatalf("second instance identity missing: %+v", findings[1])
+	}
+}
+
 // fakeZAP answers the exact JSON API calls the runner makes, so the whole
 // spider → passive → active scan → report sequence is exercised without a ZAP
 // daemon or a shared filesystem.

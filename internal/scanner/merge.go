@@ -65,7 +65,7 @@ func mergeLocation(f Finding) string {
 	// Endpoint is scanner-native but is already normalized by each parser where
 	// possible. Requiring an explicit exact location avoids collapsing a CVE
 	// reported on two paths, ports, or protocols on the same host.
-	return "endpoint:" + strings.TrimSpace(f.Endpoint)
+	return strings.Join([]string{"endpoint:" + strings.TrimSpace(f.Endpoint), strings.ToUpper(strings.TrimSpace(f.Method)), strings.TrimSpace(f.Parameter)}, "\x00")
 }
 
 // mergeCrossScanner collapses findings that report the same CVE on the same

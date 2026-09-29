@@ -13,6 +13,7 @@ export interface VulnSummary {
   description?: string;
   impact?: string;
   method?: string;
+  parameter?: string;
   cve?: string;
   cwe_id?: string;
   confidence?: string;

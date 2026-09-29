@@ -40,11 +40,9 @@ export function severityRank(sev: string): number {
 export function dedupFindings(findings: FlatFinding[]): FlatFinding[] {
   const map = new Map<string, FlatFinding>();
   for (const f of findings) {
-    const key =
-      `${(f.scan_target ?? "").toLowerCase()}|` +
-      `${(f.endpoint ?? "").toLowerCase()}|` +
-      `${(f.title ?? "").toLowerCase()}|` +
-      `${normalizeSeverity(f.severity)}`;
+    const key = f.fingerprint
+      ? `${(f.scan_target ?? "").toLowerCase()}|${f.fingerprint}`
+      : legacyFindingKey(f);
     const existing = map.get(key);
     if (!existing || (f.scan_started_at ?? "") > (existing.scan_started_at ?? "")) {
       map.set(key, f);
@@ -57,4 +55,23 @@ export function dedupFindings(findings: FlatFinding[]): FlatFinding[] {
     return (b.scan_started_at ?? "").localeCompare(a.scan_started_at ?? "");
   });
   return out;
+}
+
+function legacyFindingKey(f: FlatFinding): string {
+  let endpoint = f.endpoint ?? "";
+  try {
+    const parsed = new URL(endpoint);
+    // URL host and scheme are case-insensitive; pathname is case-sensitive.
+    endpoint = `${parsed.protocol.toLowerCase()}//${parsed.host.toLowerCase()}${parsed.pathname}${parsed.search}`;
+  } catch {
+    // Older records may contain a path or a scanner-native service label.
+  }
+  return [
+    (f.scan_target ?? "").toLowerCase(),
+    endpoint,
+    (f.method ?? "").toUpperCase(),
+    f.parameter ?? "",
+    (f.title ?? "").toLowerCase(),
+    normalizeSeverity(f.severity),
+  ].join("|");
 }

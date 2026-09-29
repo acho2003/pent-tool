@@ -855,6 +855,7 @@ function FindingsTab({
                       {f.target && <span className="mono">{f.target}</span>}
                       {f.endpoint && <span className="mono">{f.endpoint}</span>}
                       {f.method && <span className="mono">{f.method}</span>}
+                      {f.parameter && <span className="mono">Parameter: {f.parameter}</span>}
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -1033,6 +1034,10 @@ function FindingDetailsDialog({
               <DetailRow label="Target" value={finding.target} mono />
               <DetailRow label="Endpoint" value={finding.endpoint} mono />
               <DetailRow label="Method" value={finding.method} mono />
+              <DetailRow label="Parameter" value={finding.parameter} mono />
+              <DetailRow label="Confidence" value={finding.confidence} />
+              <DetailRow label="Evidence quality" value={finding.evidence_completeness} />
+              <DetailRow label="Fingerprint" value={finding.fingerprint} mono />
               <DetailRow label="CVSS vector" value={finding.cvss_vector} mono />
               <DetailRow label="CWE" value={finding.cwe_id} mono />
               <DetailRow label="OWASP" value={finding.owasp} mono />

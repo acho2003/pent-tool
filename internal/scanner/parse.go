@@ -25,8 +25,11 @@ type Finding struct {
 	Severity    string  `json:"severity"`
 	Target      string  `json:"target,omitempty"`
 	Endpoint    string  `json:"endpoint,omitempty"`
+	Method      string  `json:"method,omitempty"`
+	Parameter   string  `json:"parameter,omitempty"`
 	Description string  `json:"description,omitempty"`
 	Evidence    string  `json:"evidence,omitempty"`
+	Remediation string  `json:"remediation,omitempty"`
 	EvidenceRef string  `json:"evidence_reference"`
 	CVE         string  `json:"cve,omitempty"`
 	CWE         string  `json:"cwe,omitempty"`
@@ -331,7 +334,7 @@ func parseZAP(path string) ([]Finding, error) {
 				}
 			}
 			id := firstNonEmpty(str(m["pluginId"]), str(m["pluginid"]), strconv.Itoa(i))
-			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, CWE: str(m["cweid"]), Confidence: firstNonEmpty(str(m["confidence"]), str(m["confidencecode"]))})
+			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Method: str(im["method"]), Parameter: str(im["param"]), Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, Remediation: firstNonEmpty(str(m["solution"]), str(m["remediation"])), CWE: str(m["cweid"]), Confidence: firstNonEmpty(str(m["confidence"]), str(m["confidencecode"]))})
 		}
 	}
 	return out, nil
