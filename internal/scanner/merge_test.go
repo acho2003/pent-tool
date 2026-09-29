@@ -86,3 +86,29 @@ func TestMergeIgnoresUnratedSeverity(t *testing.T) {
 		t.Fatalf("a rated contributor must replace an unrated primary's placeholder, got %#v", out)
 	}
 }
+
+func TestFindingFingerprintUsesVulnerabilityAndExactLocation(t *testing.T) {
+	base := Finding{Scanner: "zap", SourceID: "zap:alert-1", CVE: "cve-2025-1234", Scope: "app:one", Target: "https://app.example.test:8443/", Endpoint: "https://app.example.test:8443/Portal/Case"}
+	fingerprint := FindingFingerprint(base)
+	changedPresentation := base
+	changedPresentation.Scanner = "nuclei"
+	changedPresentation.SourceID = "nuclei:other-template"
+	changedPresentation.Title = "Different display text"
+	changedPresentation.Severity = "critical"
+	if got := FindingFingerprint(changedPresentation); got != fingerprint {
+		t.Fatalf("presentation/scanner changes altered identifier: %s != %s", got, fingerprint)
+	}
+	for name, mutate := range map[string]func(*Finding){
+		"path case": func(f *Finding) { f.Endpoint = "https://app.example.test:8443/portal/Case" },
+		"port":      func(f *Finding) { f.Endpoint = "https://app.example.test:9443/Portal/Case" },
+		"endpoint":  func(f *Finding) { f.Endpoint = "https://app.example.test:8443/Portal/Other" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := base
+			mutate(&changed)
+			if got := FindingFingerprint(changed); got == fingerprint {
+				t.Fatalf("distinct location shared fingerprint %s", got)
+			}
+		})
+	}
+}

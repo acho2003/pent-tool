@@ -48,8 +48,21 @@ type Finding struct {
 }
 
 func FindingFingerprint(f Finding) string {
-	key := strings.Join([]string{strings.ToLower(f.CVE), strings.ToLower(f.CWE), f.Scanner, f.Scope, f.Target, f.Endpoint, f.Title}, "\x00")
-	return fmt.Sprintf("v1:%x", sha256.Sum256([]byte(key)))
+	identity := strings.ToUpper(strings.TrimSpace(f.CVE))
+	if identity == "" {
+		identity = strings.ToUpper(strings.TrimSpace(f.CWE))
+	}
+	if identity == "" {
+		// Without a vulnerability identifier, the native record key is the most
+		// stable available identity. Titles and severity are presentation data.
+		identity = strings.ToLower(f.Scanner) + ":" + f.SourceID
+	}
+	target := f.Target
+	if strings.HasPrefix(f.Scope, "source:") {
+		target = filepath.ToSlash(filepath.Clean(target))
+	}
+	key := strings.Join([]string{identity, f.Scope, target, f.Endpoint}, "\x00")
+	return fmt.Sprintf("v2:%x", sha256.Sum256([]byte(key)))
 }
 
 func ParseRuns(runs []Run) ([]Finding, []error) {
@@ -73,7 +86,6 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 		for i := range parsed {
 			parsed[i].EvidenceRef = run.ArtifactPath + "#" + parsed[i].SourceID
 			parsed[i].Scope = scope
-			parsed[i].Fingerprint = FindingFingerprint(parsed[i])
 			if parsed[i].Confidence == "" {
 				parsed[i].Confidence = "scanner-reported"
 			}
@@ -84,6 +96,7 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 				parsed[i].Target = relativeToRoot(parsed[i].Target, sourceRoot)
 				parsed[i].Endpoint = relativeToRoot(parsed[i].Endpoint, sourceRoot)
 			}
+			parsed[i].Fingerprint = FindingFingerprint(parsed[i])
 		}
 		findings = append(findings, parsed...)
 	}
