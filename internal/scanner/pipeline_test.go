@@ -219,6 +219,14 @@ func TestApplicabilityAndArguments(t *testing.T) {
 			t.Errorf("typed Nuclei args %q missing scope-safety flag %q", typedNuclei, want)
 		}
 	}
+	thoroughNuclei := strings.Join(buildNuclei(Request{Target: "https://example.com/Portal/", TypedAssessment: true, Profile: ProfileThorough}, cfg).args, " ")
+	if strings.Contains(thoroughNuclei, "-rl ") {
+		t.Errorf("thorough Nuclei args %q must use Nuclei's default rate", thoroughNuclei)
+	}
+	gentleNuclei := strings.Join(buildNuclei(Request{Target: "https://example.com/Portal/", TypedAssessment: true, Profile: ProfileGentle}, cfg).args, " ")
+	if !strings.Contains(gentleNuclei, "-rl 17") {
+		t.Errorf("gentle Nuclei args %q must retain the configured rate", gentleNuclei)
+	}
 	if got := buildTrivy(Request{}, cfg).notApp; got == "" {
 		t.Error("missing Trivy artifact must be not applicable")
 	}

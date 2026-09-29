@@ -882,7 +882,11 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 		return commandSpec{notApp: "Nuclei requires a submitted host or URL", timeout: cfg.NucleiTimeout}
 	}
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "nuclei", "results.jsonl")
-	args := []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut", "-rl", strconv.Itoa(cfg.RateRPS), "-ot"}
+	args := []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut"}
+	if !(req.TypedAssessment && req.Profile == ProfileThorough) {
+		args = append(args, "-rl", strconv.Itoa(cfg.RateRPS))
+	}
+	args = append(args, "-ot")
 	if req.TypedAssessment {
 		// Typed targets retain strict URL scope; do not let a redirect change
 		// the destination or hand template callbacks to an external service.

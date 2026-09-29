@@ -8,7 +8,7 @@ func TestResolveWebProfileDefaultsAndRejectsUnknown(t *testing.T) {
 		t.Fatalf("unexpected gentle profile: %#v", p)
 	}
 	p, ok = ResolveWebProfile(ProfileThorough)
-	if !ok || p.RateRPS != 5 || p.MaxEndpoints != 2000 {
+	if !ok || p.RateRPS != 150 || p.MaxEndpoints != 2000 {
 		t.Fatalf("unexpected thorough profile: %#v", p)
 	}
 	if _, ok := ResolveWebProfile("unsafe"); ok {
