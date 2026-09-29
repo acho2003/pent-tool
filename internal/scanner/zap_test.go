@@ -458,20 +458,32 @@ func TestZAPTypedSessionRefreshUpdatesScopedRuleOrStops(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
-	req := Request{Target: "https://example.test/app/", ScanDir: t.TempDir(), Scope: "app:one", TypedAssessment: true, TargetAuth: "Cookie: old-secret", AuthRefresh: func(ctx context.Context, current []string) ([]string, error) {
+	req := Request{Target: "https://example.test/app/", ScanDir: t.TempDir(), Scope: "app:one", TypedAssessment: true, TargetAuth: "Cookie: old-secret", AuthKind: "form login", AuthRefresh: func(ctx context.Context, current []string) ([]string, error) {
 		return []string{"Cookie: new-secret"}, nil
 	}}
-	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	run := runAttempt(t.Context(), zapRunner{}, req, cfg, nil)
 	if run.Status != "completed" || !slices.Equal(replacements, []string{"old-secret", "new-secret"}) {
 		t.Fatalf("renewed ZAP session was not installed: status=%s replacements=%v reason=%s", run.Status, replacements, run.Reason)
+	}
+	log, err := os.ReadFile(run.StdoutPath)
+	if err != nil || !strings.Contains(string(log), "Authentication verified: form login") || !strings.Contains(string(log), "form session renewed after re-login") || strings.Contains(string(log), "old-secret") || strings.Contains(string(log), "new-secret") {
+		t.Fatalf("form login status was not safely recorded: %q, err=%v", log, err)
+	}
+	terminal, err := os.ReadFile(run.TranscriptPath)
+	if err != nil || !strings.Contains(string(terminal), "Authentication verified: form login") || strings.Contains(string(terminal), "new-secret") {
+		t.Fatalf("form login terminal transcript is missing or unsafe: %q, err=%v", terminal, err)
 	}
 	req.ScanDir = t.TempDir()
 	req.AuthRefresh = func(ctx context.Context, current []string) ([]string, error) {
 		return nil, fmt.Errorf("private-password")
 	}
-	failed := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	failed := runAttempt(t.Context(), zapRunner{}, req, cfg, nil)
 	if failed.Status != "failed" || !strings.Contains(failed.Reason, "authenticated session") || strings.Contains(failed.Reason, "private-password") {
 		t.Fatalf("failed session check was not safe: %+v", failed)
+	}
+	failedLog, err := os.ReadFile(failed.StdoutPath)
+	if err != nil || !strings.Contains(string(failedLog), "Authentication error:") || strings.Contains(string(failedLog), "private-password") {
+		t.Fatalf("form login error was not safely recorded: %q, err=%v", failedLog, err)
 	}
 }
 

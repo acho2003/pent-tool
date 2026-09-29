@@ -23,6 +23,7 @@ type assessmentJobRunner struct {
 type resourceJobRunner struct {
 	calls       int
 	name, alias string
+	authKind    string
 	gvmID       string
 }
 
@@ -50,8 +51,22 @@ func (r *resourceJobRunner) Descriptor() Descriptor {
 func (r *resourceJobRunner) Run(_ context.Context, req Request, _ Config, _ EmitFunc) Run {
 	r.calls++
 	r.alias = req.VulsSSHHost
+	r.authKind = req.AuthKind
 	r.gvmID = req.GVMSSHCredentialID
 	return Run{Scanner: r.Name(), Target: req.Target, Status: "completed"}
+}
+
+func TestRunAssessmentJobsLabelsVerifiedFormSessionForZAP(t *testing.T) {
+	runner := &resourceJobRunner{name: "zap"}
+	pipeline := &Pipeline{Config: Config{
+		AssessmentAuthHeaders: map[string][]string{"app": {"Cookie: session=secret"}},
+		AssessmentAuthRefresh: map[string]func(context.Context, []string) ([]string, error){"app": func(_ context.Context, current []string) ([]string, error) { return current, nil }},
+	}, Runners: []Runner{runner}}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{Profile: ProfileThorough, Access: []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}}}}, Fingerprint: "sha256:form-kind", Jobs: []PlanJob{{Scanner: "zap", TargetID: "app", Target: "https://app.example.test/", Variant: "zap", State: PlanSelected}}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if len(runs) != 1 || runs[0].Status != "completed" || runner.authKind != "form login" {
+		t.Fatalf("verified form session was not labeled for ZAP: runs=%+v kind=%q", runs, runner.authKind)
+	}
 }
 
 func (r *assessmentJobRunner) Name() string { return "assessment-test" }

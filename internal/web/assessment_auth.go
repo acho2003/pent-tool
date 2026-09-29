@@ -115,7 +115,7 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 	for i := range plan.Jobs {
 		if plan.Jobs[i].Scanner == "zap" && plan.Jobs[i].ExecutionMode != "authenticated" && hasUnavailableAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
 			plan.Jobs[i].State = scanner.PlanSkipped
-			plan.Jobs[i].Reason = "authenticated scan skipped because credential verification failed or is unsupported"
+			plan.Jobs[i].Reason = "authenticated scan skipped: " + unavailableAuthReason(plan.Capabilities, plan.Jobs[i].TargetID)
 		}
 	}
 	return headersByTarget, nil
@@ -316,4 +316,13 @@ func hasUnavailableAuth(all []assessment.CapabilityEvidence, target string) bool
 		}
 	}
 	return false
+}
+
+func unavailableAuthReason(all []assessment.CapabilityEvidence, target string) string {
+	for _, evidence := range all {
+		if evidence.Capability == assessment.CapAuthWeb && evidence.TargetID == target && evidence.State == assessment.StateUnavailable {
+			return evidence.Reason
+		}
+	}
+	return "credential verification failed or is unsupported"
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -107,6 +108,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && job.Scanner == "zap" {
 			req.TargetAuth = strings.Join(headers, "\n")
 			req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
+			req.AuthKind = "HTTP headers"
+			for _, binding := range plan.Config.Access {
+				if binding.Kind == assessment.AccessFormLogin && slices.Contains(binding.TargetIDs, job.TargetID) {
+					req.AuthKind = "form login"
+					break
+				}
+			}
 		}
 		if job.Scanner == "trivy" {
 			switch targetKinds[job.TargetID] {
@@ -322,6 +330,19 @@ func newAssessmentAttemptID() (string, error) {
 func plannedJobNotRun(job PlanJob, req Request, fingerprint, reason string, emit EmitFunc) Run {
 	now := time.Now().Format(time.RFC3339Nano)
 	run := Run{Scanner: job.Scanner, Variant: job.Variant, AssessmentTypes: jobAssessmentTypes(job), PlanFingerprint: fingerprint, Scope: req.Scope, Target: req.Target, Status: "skipped", Reason: reason, StartedAt: now, FinishedAt: now}
+	if job.Scanner == "zap" && strings.Contains(reason, "auth") {
+		base := filepath.Join(req.ScanDir, "scanner-output", "zap")
+		if err := os.MkdirAll(base, 0o700); err == nil {
+			line := "Authentication failed: " + reason + "\n"
+			run.StdoutPath = filepath.Join(base, "stdout.log")
+			run.TranscriptPath = filepath.Join(base, "combined.log")
+			if os.WriteFile(run.StdoutPath, []byte(line), 0o600) == nil && os.WriteFile(run.TranscriptPath, []byte(line), 0o600) == nil {
+				run = finalizeRun(run)
+			} else {
+				run.StdoutPath, run.TranscriptPath = "", ""
+			}
+		}
+	}
 	if emit != nil {
 		emit(Event{Type: "scanner_skipped", Scanner: job.Scanner, Run: run, Output: reason})
 	}

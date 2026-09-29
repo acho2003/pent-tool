@@ -96,6 +96,17 @@ func TestPrepareAssessmentAuthenticationVerifiesAndScopesHeaders(t *testing.T) {
 	if len(failed["app"]) != 0 || plan.Jobs[0].State != scanner.PlanSkipped || plan.Capabilities[0].State != assessment.StateUnavailable {
 		t.Fatalf("failed verification did not block authenticated job: headers=%v plan=%+v", failed, plan)
 	}
+	plan.Fingerprint = "sha256:failed-auth"
+	plan.Jobs[0].Target = server.URL + "/app/"
+	plan.Jobs[0].Variant = "zap"
+	runs := scanner.NewPipeline(scanner.Config{}).RunAssessmentJobs(context.Background(), *plan, t.TempDir(), nil, nil)
+	if len(runs) != 1 || runs[0].Status != "skipped" || runs[0].TranscriptPath == "" {
+		t.Fatalf("failed login has no ZAP terminal transcript: %+v", runs)
+	}
+	terminal, err := os.ReadFile(runs[0].TranscriptPath)
+	if err != nil || !strings.Contains(string(terminal), "Authentication failed:") || strings.Contains(string(terminal), secret) {
+		t.Fatalf("failed login terminal output is missing or unsafe: %q, err=%v", terminal, err)
+	}
 }
 
 func TestCredentialHeaderConversionAndApplicationURLBoundaries(t *testing.T) {

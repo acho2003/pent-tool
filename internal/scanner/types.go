@@ -66,6 +66,7 @@ type Request struct {
 	GVMSSHCredentialID string                                            `json:"-"`
 	GVMSSHPort         int                                               `json:"-"`
 	TargetAuth         string                                            `json:"-"`
+	AuthKind           string                                            `json:"-"`
 	AuthRefresh        func(context.Context, []string) ([]string, error) `json:"-"`
 	Profile            string                                            `json:"-"`
 	ApplicationURL     string                                            `json:"-"`

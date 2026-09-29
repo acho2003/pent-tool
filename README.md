@@ -189,7 +189,9 @@ username/password fields and hidden CSRF fields. During typed ZAP scans, the
 session is checked at stage boundaries and approximately once per minute while
 waiting for crawl or active-scan progress. An expired form session gets one
 re-login attempt; another expiry or a failed re-login ends authenticated work
-and records failed coverage.
+and records failed coverage. The ZAP terminal transcript shows credential-safe
+verification, recheck, renewal, and error messages. A login rejected before ZAP
+starts also leaves a terminal transcript explaining why the job was skipped.
 
 White Box host audits can use a target-bound `SSH` credential whose encrypted
 `ssh_alias` value names an operator-managed SSH config entry. Vuls uses that

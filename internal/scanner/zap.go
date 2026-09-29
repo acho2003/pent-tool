@@ -283,7 +283,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// jobs. A refreshed cookie replaces its scoped daemon rule in this lease.
 	authMonitor := &zapAuthMonitor{current: headers, refresh: req.AuthRefresh, interval: time.Minute}
 	checkAuth := func() error {
-		return authMonitor.check(cctx, func(next []string) error {
+		initialCheck := authMonitor.next.IsZero()
+		verificationDue := req.AuthRefresh != nil && (initialCheck || !time.Now().Before(authMonitor.next))
+		err := authMonitor.check(cctx, func(next []string) error {
 			for i, raw := range next {
 				if i >= len(headers) || raw == headers[i] {
 					continue
@@ -302,9 +304,31 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				secrets = append(secrets, strings.TrimSpace(value))
 			}
 			headers = append([]string(nil), next...)
-			logLine("authenticated session renewed")
+			if req.AuthKind == "form login" {
+				logLine("Authentication: form session renewed after re-login")
+			} else {
+				logLine("Authentication: scoped credential refreshed")
+			}
 			return nil
 		})
+		if err != nil {
+			if req.AuthRefresh != nil {
+				logLine("Authentication error: session verification failed; authenticated ZAP scan stopped")
+			}
+			return err
+		}
+		if verificationDue {
+			if initialCheck {
+				method := "HTTP headers"
+				if req.AuthKind == "form login" {
+					method = "form login"
+				}
+				logLine("Authentication verified: " + method + " session active for scoped ZAP scan")
+			} else {
+				logLine("Authentication reverified: scoped session still active")
+			}
+		}
+		return nil
 	}
 	if err := checkAuth(); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
