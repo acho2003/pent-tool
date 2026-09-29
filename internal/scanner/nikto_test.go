@@ -74,6 +74,19 @@ func TestBuildNiktoRejectsTargetsOutsideRootHTTPOrigin(t *testing.T) {
 	}
 }
 
+func TestBuildNiktoThoroughUsesBoundedFasterPause(t *testing.T) {
+	spec := buildNikto(Request{Target: "http://example.test/", ScanDir: t.TempDir(), Profile: ProfileThorough}, Config{NiktoPath: "nikto"})
+	for i, arg := range spec.args {
+		if arg == "-Pause" {
+			if i+1 >= len(spec.args) || spec.args[i+1] != "0.2" {
+				t.Fatalf("thorough Nikto pause = %v", spec.args)
+			}
+			return
+		}
+	}
+	t.Fatal("Nikto pause missing")
+}
+
 func TestParseNiktoSupportsNestedAndSingleFindingJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nikto.json")
 	input := `[{"host":"example.test","port":"8443","ssl":true,"vulnerabilities":[{"id":"123","method":"GET","url":"/backup.zip","msg":"Backup archive exposed CVE-2024-12345","refs":"CVE-2024-12345"}]},{"host":"other.test","port":"80","id":"456","method":"GET","uri":"/server-info","message":"Server information disclosure"}]`

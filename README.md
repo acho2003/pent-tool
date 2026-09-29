@@ -96,6 +96,14 @@ plan and print a JSON result containing the plan, per-scanner runs, findings,
 and parse diagnostics. The CLI applies the same plan builder, profile limits,
 artifact isolation, and local-listener protection as the web application.
 
+New web assessments and schedules default to `web-gentle` (a 2-request/second
+Nuclei limit and a 30-minute per-application budget). For lab or staging targets,
+select `web-thorough` in the web UI or assessment JSON for a 5-request/second
+Nuclei limit and a 120-minute budget. Nikto uses a 1-second pause in gentle mode and
+a 0.2-second pause in thorough mode. Thorough scans may still take longer in
+total because they can test more endpoints; skipped or timed-out work is
+reported as partial coverage.
+
 The CLI accepts local OpenAPI 3.0/3.1 or Swagger 2.0 files using repeatable
 `--api-definition target-id=file` options. Target IDs must match explicit
 HTTP(S) URL targets in the assessment, and the file content hash is included

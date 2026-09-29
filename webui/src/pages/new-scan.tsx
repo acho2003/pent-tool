@@ -29,6 +29,7 @@ export default function NewScanPage() {
   const [logoPath, setLogoPath] = useState("");
   const [severities, setSeverities] = useState<string[]>([]);
   const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("BLACK_BOX");
+  const [profile, setProfile] = useState<"web-gentle" | "web-thorough">("web-gentle");
   const [assessmentTypes, setAssessmentTypes] = useState<AssessmentType[]>(["WEB_APPLICATION"]);
   const [optionalAssessmentScanners, setOptionalAssessmentScanners] = useState<string[]>([]);
   const [subdomainDiscovery, setSubdomainDiscovery] = useState(false);
@@ -87,7 +88,7 @@ export default function NewScanPage() {
         assessment_mode: assessmentMode,
         assessment_types: assessmentTypes,
         assessment_targets: targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
-        profile: "web-gentle",
+        profile,
         subdomain_discovery: subdomainDiscovery,
         access: credentialId ? [{ target_ids: [credentialTargetId], kind: credentialKind, credential_id: credentialId, verify_url: authVerifyURL, verify_marker: authVerifyMarker }] : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
@@ -206,7 +207,7 @@ export default function NewScanPage() {
         targets,
         assessment: assessmentPlan.config,
         plan_fingerprint: assessmentPlan.fingerprint,
-        profile: "web-gentle",
+        profile,
         name: name.trim() || undefined,
         scan_mode: mode,
         artifact: artifactKind !== "none" && artifactRef.trim() ? { kind: artifactKind, ref: artifactRef.trim() } : undefined,
@@ -236,7 +237,7 @@ export default function NewScanPage() {
       <p className="text-sm text-muted-foreground">Review mode, requested coverage, scanner choices, and gaps. Preview does not contact targets or start a scan. The accepted plan fingerprint is checked again when execution is queued.</p>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2"><Label>Assessment mode</Label><Select value={assessmentMode} onValueChange={(value) => { setAssessmentMode(value as AssessmentMode); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="BLACK_BOX">Black Box</SelectItem><SelectItem value="GRAY_BOX">Gray Box</SelectItem><SelectItem value="WHITE_BOX">White Box</SelectItem></SelectContent></Select></div>
-        <div className="space-y-2"><Label>Profile</Label><Input value="web-gentle" disabled /><p className="text-xs text-muted-foreground">Production-safe default for web coverage.</p></div>
+        <div className="space-y-2"><Label>Profile</Label><Select value={profile} onValueChange={(value) => { setProfile(value as typeof profile); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="web-gentle">Gentle · production</SelectItem><SelectItem value="web-thorough">Thorough · lab or staging</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Gentle: Nuclei 2 requests/sec, Nikto 1-second pause, 30-minute web budget. Thorough: Nuclei 5 requests/sec, Nikto 0.2-second pause, 120-minute web budget and more endpoints.</p></div>
       </div>
       <div className="space-y-2"><Label>Assessment types</Label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ASSESSMENT_TYPES.map((type) => <label key={type} className="flex items-center gap-2 rounded-md border p-2 text-xs"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} />{type.replaceAll("_", " ")}</label>)}</div></div>
       {optionalDefinitions.length > 0 && <div className="space-y-3 rounded-md border p-3"><div><p className="text-sm font-medium">Advanced optional scanners</p><p className="mt-1 text-xs text-muted-foreground">These scanners are off unless you select them. Availability and target compatibility are checked by the backend planner.</p></div>{optionalDefinitions.map((definition) => <label key={definition.id} className={`flex items-start gap-2 rounded-md border p-3 text-xs ${definition.available ? "cursor-pointer" : "opacity-60"}`}><input type="checkbox" checked={optionalAssessmentScanners.includes(definition.id)} disabled={!definition.available} onChange={() => { setOptionalAssessmentScanners((current) => current.includes(definition.id) ? current.filter((id) => id !== definition.id) : [...current, definition.id]); setAssessmentPlan(null); }} className="mt-0.5" /><span><span className="font-medium">{definition.name} · {definition.risk} risk · {definition.available ? "available" : "unavailable"}</span><span className="mt-1 block text-muted-foreground">{definition.summary}</span></span></label>)}</div>}

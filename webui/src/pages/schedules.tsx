@@ -31,6 +31,7 @@ export default function SchedulesPage() {
   const [error, setError] = useState<string | null>(null);
   const [typedAssessment, setTypedAssessment] = useState(false);
   const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("BLACK_BOX");
+  const [profile, setProfile] = useState<"web-gentle" | "web-thorough">("web-gentle");
   const [assessmentTypes, setAssessmentTypes] = useState<AssessmentType[]>(["WEB_APPLICATION"]);
   const [plan, setPlan] = useState<AssessmentPlan | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -40,7 +41,7 @@ export default function SchedulesPage() {
       assessment_mode: assessmentMode,
       assessment_types: assessmentTypes,
       assessment_targets: [{ id: "scheduled-app", type: /^https?:\/\//i.test(target) ? "URL" : "DOMAIN", value: target }],
-      profile: "web-gentle",
+      profile,
     };
   }
 
@@ -70,7 +71,7 @@ export default function SchedulesPage() {
       await create.mutateAsync({
         name: name.trim() || "Scheduled scan", interval, enabled: true, targets: targetList,
         assessment: typedAssessment && targets.trim() ? buildAssessment(targets.trim()) : undefined,
-        profile: typedAssessment ? "web-gentle" : undefined,
+        profile: typedAssessment ? profile : undefined,
         plan_fingerprint: typedAssessment ? plan?.fingerprint : undefined,
         scan_mode: mode,
         run_at: runAt.trim() || undefined,
@@ -93,6 +94,7 @@ export default function SchedulesPage() {
     <Card><CardHeader><CardTitle className="flex items-center gap-2"><Plus className="h-4 w-4" /> New schedule</CardTitle></CardHeader><CardContent><form onSubmit={submit} className="space-y-4">
       <label className="flex items-start gap-2 rounded-md border p-3 text-sm"><input type="checkbox" checked={typedAssessment} onChange={(e) => { setTypedAssessment(e.target.checked); setPlan(null); setError(null); }} className="mt-0.5" /><span>Use capability-planned web assessment<p className="mt-1 text-xs text-muted-foreground">Uses a reviewed backend plan and rechecks its fingerprint when the schedule runs. One URL or domain is supported in this form.</p></span></label>
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="space-y-2"><Label>{typedAssessment ? "Application URL or domain" : "Targets"}</Label><Input value={targets} onChange={(e) => { setTargets(e.target.value); setPlan(null); }} placeholder={typedAssessment ? "https://example.com/app/" : "https://example.com, api.example.com"} /></div></div>
+      {typedAssessment && <div className="space-y-2"><Label>Web profile</Label><Select value={profile} onValueChange={(value) => { setProfile(value as typeof profile); setPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="web-gentle">Gentle · production</SelectItem><SelectItem value="web-thorough">Thorough · lab or staging</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Thorough raises Nuclei from 2 to 5 requests/sec and Nikto from 1 to 5 requests/sec. It uses a 120-minute budget and may test more endpoints.</p></div>}
       {typedAssessment && <div className="space-y-3 rounded-md border p-3"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Assessment mode</Label><Select value={assessmentMode} onValueChange={(value) => { setAssessmentMode(value as AssessmentMode); setPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="BLACK_BOX">Black Box</SelectItem><SelectItem value="GRAY_BOX">Gray Box</SelectItem><SelectItem value="WHITE_BOX">White Box</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Coverage</Label><div className="flex gap-3 pt-2 text-xs">{(["WEB_APPLICATION", "API"] as AssessmentType[]).map((type) => <label key={type} className="flex items-center gap-1"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => { setAssessmentTypes((old) => old.includes(type) ? old.filter((item) => item !== type) : [...old, type]); setPlan(null); }} />{type.replaceAll("_", " ")}</label>)}</div></div></div><Button type="button" variant="outline" onClick={() => void previewAssessment()} disabled={planning || assessmentTypes.length === 0}>{planning ? "Planning…" : "Preview schedule plan"}</Button>{plan && <div className="space-y-2 text-xs"><p className="font-mono">Plan {plan.fingerprint} · {plan.jobs.length} job(s)</p>{plan.coverage.map((item) => <p key={item.type} className="text-muted-foreground">{item.type}: {item.state} — {item.reason}</p>)}{plan.decisions.filter((item) => item.state !== "selected" && item.state !== "conditional").map((item, i) => <p key={`${item.scanner}-${item.target_id}-${i}`} className="text-muted-foreground">{item.scanner}: {item.state} — {item.reason}</p>)}</div>}</div>}
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Interval</Label><Select value={interval} onValueChange={setInterval}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hourly">Hourly</SelectItem><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single</SelectItem><SelectItem value="wildcard">Wildcard</SelectItem></SelectContent></Select></div></div>
       <div className="grid gap-3 sm:grid-cols-3">
