@@ -139,3 +139,40 @@ func TestInferAssessmentTargetKindPreservesApplicationURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestTypedCLIMapsLegacyScannerAndArtifactFlags(t *testing.T) {
+	cfg, err := assessmentConfigFromCLI(cliArgs{assessmentMode: "BLACK_BOX", assessmentTypes: []string{"WEB_APPLICATION"}, targets: []string{"https://192.0.2.1"}, scanners: []string{"Nikto", "nuclei", "NIKTO"}})
+	if err != nil || cfg.ScannerSelection.Mode != "custom" || len(cfg.ScannerSelection.Variants) != 2 {
+		t.Fatalf("scanner selection was not mapped: %+v err=%v", cfg.ScannerSelection, err)
+	}
+	if _, err := assessmentConfigFromCLI(cliArgs{assessmentMode: "BLACK_BOX", assessmentTypes: []string{"WEB_APPLICATION"}, targets: []string{"https://192.0.2.1"}, scanners: []string{"unknown"}}); err == nil {
+		t.Fatal("unknown typed scanner was accepted")
+	}
+	selectionConfig := filepath.Join(t.TempDir(), "selection.json")
+	if err := os.WriteFile(selectionConfig, []byte(`{"scanner_selection":{"mode":"custom","variants":["nuclei"]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assessmentConfigFromCLI(cliArgs{assessmentConfig: selectionConfig, scanners: []string{"nikto"}}); err == nil {
+		t.Fatal("conflicting scanner selections were accepted")
+	}
+	for _, item := range []struct {
+		kind string
+		want assessment.TargetKind
+		typ  assessment.Type
+	}{
+		{kind: "image", want: assessment.KindDockerImage, typ: assessment.TypeContainer},
+		{kind: "sbom", want: assessment.KindSBOM, typ: assessment.TypeDependencies},
+		{kind: "filesystem", want: assessment.KindLocalSourcePath, typ: assessment.TypeSourceCode},
+	} {
+		got, err := assessmentConfigFromCLI(cliArgs{assessmentMode: "WHITE_BOX", source: "resource", artifactKind: item.kind})
+		if err != nil || len(got.Targets) != 1 || got.Targets[0].Kind != item.want || len(got.Types) == 0 || got.Types[0] != item.typ {
+			t.Errorf("artifact kind %s mapped to %+v, error %v", item.kind, got, err)
+		}
+	}
+	if _, err := assessmentConfigFromCLI(cliArgs{assessmentMode: "WHITE_BOX", artifactKind: "image"}); err == nil {
+		t.Fatal("artifact kind without source was accepted")
+	}
+	if _, err := assessmentConfigFromCLI(cliArgs{assessmentMode: "WHITE_BOX", vulsSSHHost: "remote"}); err == nil {
+		t.Fatal("unsupported typed SSH alias was silently ignored")
+	}
+}

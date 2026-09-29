@@ -55,6 +55,34 @@ func assessmentConfigFromCLI(args cliArgs) (assessment.AssessmentConfig, error) 
 	if args.assessmentMode != "" {
 		cfg.Mode = assessment.Mode(args.assessmentMode)
 	}
+	if args.vulsSSHHost != "" {
+		return cfg, errors.New("--vuls-ssh-host is not supported by typed assessment execution; use a target-bound access resource when the remote host adapter is available")
+	}
+	if len(args.scanners) > 0 {
+		if cfg.ScannerSelection.Mode != "" || len(cfg.ScannerSelection.Variants) > 0 {
+			return cfg, errors.New("--scanners conflicts with scanner_selection in the assessment config")
+		}
+		selected := map[string]bool{}
+		for _, raw := range args.scanners {
+			id := strings.ToLower(strings.TrimSpace(raw))
+			if id == "" {
+				continue
+			}
+			if _, ok := scanner.RegistryEntry(id); !ok {
+				return cfg, fmt.Errorf("unknown typed scanner variant %q", raw)
+			}
+			selected[id] = true
+		}
+		if len(selected) == 0 {
+			return cfg, errors.New("--scanners requires at least one scanner variant")
+		}
+		cfg.ScannerSelection.Mode = "custom"
+		for _, def := range scanner.ScannerRegistry() {
+			if selected[def.ID] {
+				cfg.ScannerSelection.Variants = append(cfg.ScannerSelection.Variants, def.ID)
+			}
+		}
+	}
 	for _, typ := range args.assessmentTypes {
 		for _, value := range strings.Split(typ, ",") {
 			cfg.Types = append(cfg.Types, assessment.Type(value))
@@ -73,13 +101,35 @@ func assessmentConfigFromCLI(args cliArgs) (assessment.AssessmentConfig, error) 
 			return cfg, errors.New("--source conflicts with assessment_targets in the config file")
 		}
 		kind := assessment.KindLocalSourcePath
-		if strings.Contains(args.source, "://") {
+		switch strings.ToLower(strings.TrimSpace(args.artifactKind)) {
+		case "", "none":
+			if strings.Contains(args.source, "://") {
+				kind = assessment.KindRepository
+			}
+		case "filesystem":
+			kind = assessment.KindLocalSourcePath
+		case "repository":
 			kind = assessment.KindRepository
+		case "image":
+			kind = assessment.KindDockerImage
+		case "sbom":
+			kind = assessment.KindSBOM
+		default:
+			return cfg, fmt.Errorf("unsupported typed artifact kind %q", args.artifactKind)
 		}
 		cfg.Targets = append(cfg.Targets, assessment.Target{ID: "source", Kind: kind, Value: args.source})
 		if len(cfg.Types) == 0 {
-			cfg.Types = []assessment.Type{assessment.TypeSourceCode, assessment.TypeDependencies}
+			switch kind {
+			case assessment.KindDockerImage:
+				cfg.Types = []assessment.Type{assessment.TypeContainer}
+			case assessment.KindSBOM:
+				cfg.Types = []assessment.Type{assessment.TypeDependencies}
+			default:
+				cfg.Types = []assessment.Type{assessment.TypeSourceCode, assessment.TypeDependencies}
+			}
 		}
+	} else if args.artifactKind != "" && args.artifactKind != "none" {
+		return cfg, errors.New("--artifact-kind requires --source for typed assessments")
 	}
 	if cfg.Profile == "" {
 		cfg.Profile = scanner.ProfileGentle

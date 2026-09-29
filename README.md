@@ -104,6 +104,10 @@ ZAP; other operations remain visible as untested. The CLI does not resolve
 credential references or server-uploaded definition IDs; use the web
 application for those resources. Each run's raw artifacts are retained under
 `$XALGORIX_DATA_DIR/assessments/` for review.
+`--scanners` maps to a typed custom selection; `--source` with
+`--artifact-kind` maps filesystem, repository, image, or SBOM inputs. Typed
+execution rejects `--vuls-ssh-host` until a remote host access adapter is
+available.
 
 ```sh
 xalgorix --plan --assessment-config assessment.json
