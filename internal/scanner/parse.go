@@ -65,7 +65,7 @@ func FindingFingerprint(f Finding) string {
 	if strings.HasPrefix(f.Scope, "source:") {
 		target = filepath.ToSlash(filepath.Clean(target))
 	}
-	key := strings.Join([]string{identity, f.Scope, target, f.Endpoint}, "\x00")
+	key := strings.Join([]string{identity, f.Scope, target, f.Endpoint, strings.ToUpper(strings.TrimSpace(f.Method)), strings.TrimSpace(f.Parameter)}, "\x00")
 	return fmt.Sprintf("v2:%x", sha256.Sum256([]byte(key)))
 }
 

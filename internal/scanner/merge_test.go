@@ -113,6 +113,8 @@ func TestFindingFingerprintUsesVulnerabilityAndExactLocation(t *testing.T) {
 		"path case": func(f *Finding) { f.Endpoint = "https://app.example.test:8443/portal/Case" },
 		"port":      func(f *Finding) { f.Endpoint = "https://app.example.test:9443/Portal/Case" },
 		"endpoint":  func(f *Finding) { f.Endpoint = "https://app.example.test:8443/Portal/Other" },
+		"method":    func(f *Finding) { f.Method = "POST" },
+		"parameter": func(f *Finding) { f.Parameter = "name" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := base
