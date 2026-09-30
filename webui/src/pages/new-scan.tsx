@@ -1,5 +1,5 @@
 import { useMemo, useState, type ChangeEvent, type FormEvent } from "react";
-import { ChevronLeft, Play, Save, Upload } from "lucide-react";
+import { ChevronLeft, Check, Play, Save, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useStartScan } from "@/api/queries";
@@ -12,21 +12,16 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
-const ASSESSMENT_TYPES: AssessmentType[] = ["NETWORK", "WEB_APPLICATION", "API", "SOURCE_CODE", "DEPENDENCIES", "CONTAINER", "HOST", "CLOUD", "KUBERNETES", "INFRASTRUCTURE_AS_CODE", "COMPLIANCE"];
+const MODE_STEPS = ["Mode & target", "Coverage", "Access & inputs", "Review & start"] as const;
 
 // Scanner groups (mirrors the backend registry Group field) for the New
 // Assessment catalog. Order is the display order; the fallback label handles any
 // future group the backend adds before this map is updated.
-const SCANNER_GROUP_ORDER = ["web_api", "network_servers", "cloud", "kubernetes", "code"];
-const SCANNER_GROUP_LABELS: Record<string, string> = {
-  web_api: "Web & API",
-  network_servers: "Network & servers",
-  cloud: "Cloud",
-  kubernetes: "Kubernetes",
-  code: "Source, dependencies & containers",
+const TYPE_LABELS: Record<AssessmentType, string> = {
+  NETWORK: "Network services", WEB_APPLICATION: "Web application", API: "API",
+  SOURCE_CODE: "Source code", DEPENDENCIES: "Dependencies", CONTAINER: "Container image",
+  HOST: "Host configuration", CLOUD: "Cloud account", KUBERNETES: "Kubernetes", INFRASTRUCTURE_AS_CODE: "Infrastructure as code", COMPLIANCE: "Compliance",
 };
-const scannerGroupLabel = (g: string) => SCANNER_GROUP_LABELS[g] ?? (g || "Other");
 
 export default function NewScanPage() {
   const nav = useNavigate();
@@ -37,11 +32,11 @@ export default function NewScanPage() {
   const [artifactKind, setArtifactKind] = useState("none");
   const [artifactRef, setArtifactRef] = useState("");
   const [vulsHost, setVulsHost] = useState("");
-  const [targetAuth, setTargetAuth] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [logoPath, setLogoPath] = useState("");
   const [severities, setSeverities] = useState<string[]>([]);
   const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>("BLACK_BOX");
+  const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<"web-gentle" | "web-thorough">("web-gentle");
   const [assessmentTypes, setAssessmentTypes] = useState<AssessmentType[]>(["WEB_APPLICATION"]);
   const [optionalAssessmentScanners, setOptionalAssessmentScanners] = useState<string[]>([]);
@@ -72,20 +67,68 @@ export default function NewScanPage() {
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
   const registryQuery = useQuery({ queryKey: ["assessment-scanner-registry"], queryFn: api.scannerRegistry, refetchInterval: 30000 });
   const registry: AssessmentScannerDefinition[] = registryQuery.data?.scanners ?? [];
-  const optionalDefinitions = registry.filter((definition) => ["optional", "explicit_opt_in"].includes(definition.default_selection) && definition.assessment_types.some((type) => assessmentTypes.includes(type)));
+  const optionalDefinitions = registry.filter((definition) => ["optional", "explicit_opt_in"].includes(definition.default_selection) && definition.assessment_types.some((type) => assessmentTypes.includes(type)) && definition.target_types.some((kind) => [...targets.map(inferTargetKind), ...(artifactKind !== "none" && artifactRef ? [artifactTargetKind(artifactKind)] : [])].includes(kind)));
   const tools: ToolInfo[] = health.data?.scanners ?? [];
   const selectable = useMemo(() => tools.filter((t) => t.selectable), [tools]);
-  const recon = useMemo(() => tools.filter((t) => !t.selectable), [tools]);
-  // null = default (every selectable tool); a list once the operator changes it.
-  const [picked, setPicked] = useState<string[] | null>(null);
-  const scanners = picked ?? selectable.map((t) => t.name);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const targets = useMemo(() => targetsText.split(/[\n,]/).map((v) => v.trim()).filter(Boolean), [targetsText]);
+  const webTargets = useMemo(() => targets.map((value, index) => ({ value, id: `target-${index + 1}` })).filter((target) => inferTargetKind(target.value) === "URL"), [targets]);
+
+  const coverageOptions = useMemo(() => {
+    const kinds = targets.map(inferTargetKind);
+    const options = new Set<AssessmentType>();
+    if (kinds.some((kind) => ["URL", "DOMAIN", "HOST"].includes(kind))) {
+      options.add("WEB_APPLICATION"); options.add("API");
+    }
+    if (kinds.some((kind) => ["IP", "CIDR", "HOST", "DOMAIN", "URL"].includes(kind))) options.add("NETWORK");
+    if (kinds.includes("DOMAIN")) options.add("HOST");
+    if (assessmentMode === "WHITE_BOX" && artifactKind !== "none" && artifactRef.trim()) {
+      const resourceKind = artifactTargetKind(artifactKind);
+      for (const definition of registry) if (definition.target_types.includes(resourceKind)) definition.assessment_types.forEach((type) => options.add(type));
+      if (artifactKind === "filesystem" || artifactKind === "repository") options.add("SOURCE_CODE");
+      if (artifactKind === "repository" || artifactKind === "sbom") options.add("DEPENDENCIES");
+      if (artifactKind === "image") { options.add("CONTAINER"); options.add("DEPENDENCIES"); }
+      if (artifactKind === "filesystem" || artifactKind === "repository") options.add("INFRASTRUCTURE_AS_CODE");
+    }
+    const rank: AssessmentType[] = ["WEB_APPLICATION", "API", "NETWORK", "HOST", "SOURCE_CODE", "DEPENDENCIES", "CONTAINER", "INFRASTRUCTURE_AS_CODE", "COMPLIANCE", "CLOUD", "KUBERNETES"];
+    return rank.filter((type) => options.has(type));
+  }, [targets, assessmentMode, artifactKind, artifactRef, registry]);
+
+  const assessmentTargets = useMemo(() => [
+    ...targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
+    ...(assessmentMode === "WHITE_BOX" && artifactKind !== "none" && artifactRef.trim()
+      ? [{ id: "artifact-1", type: artifactTargetKind(artifactKind), value: artifactRef.trim() }]
+      : []),
+  ], [targets, assessmentMode, artifactKind, artifactRef]);
+
+  function onAssessmentModeChange(next: AssessmentMode) {
+    setAssessmentMode(next);
+    setAssessmentPlan(null);
+    setOptionalAssessmentScanners([]);
+    if (next !== "WHITE_BOX") { setArtifactKind("none"); setArtifactRef(""); }
+    if (next === "BLACK_BOX") { setAPIDefinitionId(""); setAPIDefinitionInfo(""); setAPITargetId(""); }
+    if (next === "BLACK_BOX") {
+      setCredentialId(""); setCredentialSaved(false); setHeaderValue(""); setLoginPassword("");
+      setAuthVerifyURL(""); setAuthVerifyMarker(""); setVulsHost("");
+    }
+    setAssessmentTypes((current) => current.filter((type) => next === "WHITE_BOX" || !["SOURCE_CODE", "DEPENDENCIES", "CONTAINER", "INFRASTRUCTURE_AS_CODE", "CLOUD", "KUBERNETES", "COMPLIANCE"].includes(type)));
+  }
+
+  function onTargetsChange(value: string) {
+    setTargetsText(value);
+    setAssessmentPlan(null);
+    setCredentialId(""); setCredentialSaved(false); setCredentialTargetId("target-1");
+    setAPIDefinitionId(""); setAPIDefinitionInfo(""); setAPITargetId("");
+  }
 
   function toggleAssessmentType(type: AssessmentType) {
     setAssessmentTypes((prev) => prev.includes(type) ? prev.filter((item) => item !== type) : [...prev, type]);
     setAssessmentPlan(null);
+  }
+
+  function toggleSeverity(severity: string) {
+    setSeverities((current) => current.includes(severity) ? current.filter((item) => item !== severity) : [...current, severity]);
   }
 
   function authenticationSetupError(): string | null {
@@ -101,8 +144,8 @@ export default function NewScanPage() {
   async function previewAssessmentPlan() {
     setPlanError(null);
     setAssessmentPlan(null);
-    if (!targets.length || !assessmentTypes.length) {
-      setPlanError("Add at least one URL or host and select an assessment type.");
+    if (!assessmentTargets.length || !assessmentTypes.length) {
+      setPlanError("Add a target or supported artifact and select a coverage type.");
       return;
     }
 	const authError = authenticationSetupError();
@@ -114,14 +157,14 @@ export default function NewScanPage() {
     try {
       const plan = await api.planAssessment({
         assessment_mode: assessmentMode,
-        assessment_types: assessmentTypes,
-        assessment_targets: targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
+        assessment_types: assessmentTypes.filter((type) => coverageOptions.includes(type)),
+        assessment_targets: assessmentTargets,
         profile,
         subdomain_discovery: subdomainDiscovery,
         access: credentialId ? [{ target_ids: [credentialTargetId], kind: credentialKind, credential_id: credentialId, verify_url: authVerifyURL, verify_marker: authVerifyMarker }] : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
-        scanner_selection: optionalAssessmentScanners.length > 0 || (picked !== null && picked.length !== selectable.length)
-          ? { mode: "custom", variants: [...new Set([...(picked ?? selectable.map((tool) => tool.name)), ...optionalAssessmentScanners])] }
+        scanner_selection: optionalAssessmentScanners.length > 0
+          ? { mode: "custom", variants: [...new Set([...selectable.map((tool) => tool.name), ...optionalAssessmentScanners])] }
           : { mode: "auto" },
       });
       setAssessmentPlan(plan);
@@ -181,23 +224,12 @@ export default function NewScanPage() {
       const result = await api.uploadAPIDefinition(file);
       setAPIDefinitionId(result.id);
       setAPIDefinitionInfo(`${result.operation_count} operations · ${result.format} · ${result.size_bytes} bytes`);
-      setAPITargetId("target-1");
+      setAPITargetId(webTargets[0]?.id || "target-1");
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : "API definition upload failed");
     } finally {
       setUploadingDefinition(false);
     }
-  }
-
-  function toggleSeverity(sev: string) {
-    setSeverities((prev) => (prev.includes(sev) ? prev.filter((s) => s !== sev) : [...prev, sev]));
-  }
-
-  function toggleScanner(name: string) {
-    setPicked((prev) => {
-      const cur = prev ?? selectable.map((t) => t.name);
-      return cur.includes(name) ? cur.filter((s) => s !== name) : [...cur, name];
-    });
   }
 
   async function onLogoFile(e: ChangeEvent<HTMLInputElement>) {
@@ -235,13 +267,9 @@ export default function NewScanPage() {
       setError("Add at least one target or a source artifact.");
       return;
     }
-    if (picked !== null && !picked.length) {
-      setError("Select at least one scanner.");
-      return;
-    }
     try {
       const res = await start.mutateAsync({
-        targets,
+        targets: assessmentPlan.config.assessment_targets.map((target) => target.value),
         assessment: assessmentPlan.config,
         plan_fingerprint: assessmentPlan.fingerprint,
         profile,
@@ -249,13 +277,10 @@ export default function NewScanPage() {
         scan_mode: mode,
         artifact: artifactKind !== "none" && artifactRef.trim() ? { kind: artifactKind, ref: artifactRef.trim() } : undefined,
         vuls_ssh_host: vulsHost.trim() || undefined,
-        target_auth: targetAuth.trim() || undefined,
         company_name: companyName.trim() || undefined,
         logo_path: logoPath.trim() || undefined,
         severity_filter: severities.length ? severities : undefined,
-        // Every selectable tool (or an unchanged default) sends nothing, so the
-        // scan is not pinned to today's pipeline membership.
-        scanners: picked === null || picked.length === selectable.length ? undefined : picked,
+        scanners: undefined,
         save_only: saveOnly || undefined,
       });
       const id = (res as { instance_id?: string; id?: string }).instance_id || (res as { id?: string }).id;
@@ -264,105 +289,55 @@ export default function NewScanPage() {
   }
 
   function onSubmit(e: FormEvent) { e.preventDefault(); void submit(false); }
-  return <div className="mx-auto max-w-3xl space-y-5">
-    <div>
-      <Button variant="ghost" size="sm" onClick={() => nav(-1)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-      <h1 className="mt-2 text-2xl font-semibold">New Assessment</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Set the scope, choose coverage, verify access, then review the plan before starting.</p>
-    </div>
-    <nav aria-label="Assessment setup" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {[['01', 'Target', 'Scope and mode'], ['02', 'Coverage', 'Scanners and inputs'], ['03', 'Access', 'Authentication'], ['04', 'Review', 'Plan and start']].map(([number, title, detail], index) => <div key={title} className={`rounded-lg border p-3 ${index === 0 ? 'border-primary/60 bg-primary/5' : 'bg-card/50'}`}><p className="text-[10px] font-mono text-muted-foreground">{number}</p><p className="mt-1 text-sm font-medium">{title}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{detail}</p></div>)}
-    </nav>
-    <Card><CardHeader><CardTitle>Assessment plan preview</CardTitle></CardHeader><CardContent className="space-y-4">
-      <p className="text-sm text-muted-foreground">Review mode, requested coverage, scanner choices, and gaps. Preview does not contact targets or start a scan. The accepted plan fingerprint is checked again when execution is queued.</p>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2"><Label>Assessment mode</Label><Select value={assessmentMode} onValueChange={(value) => { setAssessmentMode(value as AssessmentMode); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="BLACK_BOX">Black Box</SelectItem><SelectItem value="GRAY_BOX">Gray Box</SelectItem><SelectItem value="WHITE_BOX">White Box</SelectItem></SelectContent></Select></div>
-        <div className="space-y-2"><Label>Profile</Label><Select value={profile} onValueChange={(value) => { setProfile(value as typeof profile); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="web-gentle">Gentle · production</SelectItem><SelectItem value="web-thorough">Thorough · lab or staging</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Gentle: Nuclei 2 requests/sec, Nikto 1-second pause, 30-minute web budget. Thorough: Nuclei default rate (up to 150 requests/sec), no Nikto pause or overall web scan time limit; up to 2,000 endpoints.</p></div>
-      </div>
-      <div className="space-y-2"><Label>Assessment types</Label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ASSESSMENT_TYPES.map((type) => <label key={type} className="flex items-center gap-2 rounded-md border p-2 text-xs"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} />{type.replaceAll("_", " ")}</label>)}</div></div>
-      {optionalDefinitions.length > 0 && <div className="space-y-3 rounded-md border p-3"><div><p className="text-sm font-medium">Advanced optional scanners</p><p className="mt-1 text-xs text-muted-foreground">Grouped by area. These scanners are off unless you select them; availability and target compatibility are checked by the backend planner.</p></div>{[...SCANNER_GROUP_ORDER, ...[...new Set(optionalDefinitions.map((d) => d.group))].filter((g) => !SCANNER_GROUP_ORDER.includes(g))].filter((group) => optionalDefinitions.some((d) => d.group === group)).map((group) => <div key={group} className="space-y-2"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{scannerGroupLabel(group)}</p>{optionalDefinitions.filter((d) => d.group === group).map((definition) => <label key={definition.id} className={`flex items-start gap-2 rounded-md border p-3 text-xs ${definition.available ? "cursor-pointer" : "opacity-60"}`}><input type="checkbox" checked={optionalAssessmentScanners.includes(definition.id)} disabled={!definition.available} onChange={() => { setOptionalAssessmentScanners((current) => current.includes(definition.id) ? current.filter((id) => id !== definition.id) : [...current, definition.id]); setAssessmentPlan(null); }} className="mt-0.5" /><span><span className="font-medium">{definition.name} · {definition.risk} risk · {definition.available ? "available" : "unavailable"}</span><span className="mt-1 block text-muted-foreground">{definition.summary}</span>{!definition.available && <span className="mt-0.5 block text-muted-foreground">Unavailable: the tool binary or a required credential is not configured.</span>}</span></label>)}</div>)}</div>}
-      <label className="flex items-start gap-2 rounded-md border p-3 text-sm"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-0.5" /><span>Authorize subdomain discovery for domain targets<p className="mt-1 text-xs text-muted-foreground">Off by default. This adds Subfinder coverage to the plan when a domain target is supplied.</p></span></label>
-      <div className="space-y-3 rounded-md border p-3"><div className="space-y-1"><Label htmlFor="api-definition">OpenAPI / Swagger definition</Label><Input id="api-definition" type="file" accept=".json,.yaml,.yml,application/json" onChange={(e) => void uploadAPIDefinition(e)} disabled={uploadingDefinition} /><p className="text-xs text-muted-foreground">Definitions are size-limited, external references are rejected, and spec server URLs do not change target scope.</p></div>{apiDefinitionId && <><p className="break-all font-mono text-xs text-muted-foreground">Uploaded {apiDefinitionInfo} · {apiDefinitionId}</p><div className="space-y-2"><Label>Map this definition to a target</Label><Select value={apiTargetId || "target-1"} onValueChange={(value) => { setAPITargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">The selected target must be an explicit HTTP(S) URL.</p></div></>}</div>
-      <div className="space-y-3 rounded-md border p-3">
-        <div>
-          <p className="text-sm font-medium">Target-bound web authentication</p>
-		  <p className="mt-1 text-xs text-muted-foreground">Save the credential, set a protected verification URL and marker, then preview the plan. At scan start, Xalgorix verifies the session before Katana, Nuclei, and ZAP use it.</p>
-        </div>
-        {credentialSaved && <p className="text-xs text-emerald-400">Encrypted credential saved. Set an authenticated verification URL and a response marker before previewing the plan.</p>}
-        {credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-2"><Label>Credential type</Label><Select value={credentialKind} onValueChange={(value) => { setCredentialKind(value as "APPLICATION_HEADERS" | "FORM_LOGIN"); setCredentialId(""); setCredentialSaved(false); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="APPLICATION_HEADERS">HTTP headers</SelectItem><SelectItem value="FORM_LOGIN">Form login</SelectItem></SelectContent></Select></div>
-            <div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={"target-" + (i + 1)}>{target}</SelectItem>)}</SelectContent></Select></div>
-          </div>
-          <div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div>
-          {credentialKind === "APPLICATION_HEADERS" ? <>
-            <div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div>
-            <div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div>
-          </> : <>
-            <div className="space-y-2"><Label htmlFor="login-url">Login page URL</Label><Input id="login-url" value={loginURL} onChange={(e) => setLoginURL(e.target.value)} placeholder="https://app.example.test/login" /><p className="text-xs text-muted-foreground">Must stay within the selected application's origin and path boundary.</p></div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-2"><Label htmlFor="login-username">Username</Label><Input id="login-username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} autoComplete="username" /></div>
-              <div className="space-y-2"><Label htmlFor="login-password">Password</Label><Input id="login-password" type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} /></div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-2"><Label htmlFor="username-field">Username field</Label><Input id="username-field" value={loginUsernameField} onChange={(e) => setLoginUsernameField(e.target.value)} /></div>
-              <div className="space-y-2"><Label htmlFor="password-field">Password field</Label><Input id="password-field" value={loginPasswordField} onChange={(e) => setLoginPasswordField(e.target.value)} /></div>
-              <div className="space-y-2"><Label htmlFor="csrf-field">CSRF field (optional)</Label><Input id="csrf-field" value={loginCSRFField} onChange={(e) => setLoginCSRFField(e.target.value)} placeholder="csrf" /></div>
-            </div>
-          </>}
-          <Button type="button" variant="outline" onClick={() => void saveCredential()} disabled={savingCredential || (credentialKind === "FORM_LOGIN" ? !loginURL || !loginUsername || !loginPassword : !headerValue)}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button>
-        </>}
-        {credentialId && <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2"><Label htmlFor="auth-verify-url">Authenticated verification URL</Label><Input id="auth-verify-url" value={authVerifyURL} onChange={(e) => { setAuthVerifyURL(e.target.value); setAssessmentPlan(null); }} placeholder="https://app.example.test/account" /></div>
-          <div className="space-y-2"><Label htmlFor="auth-verify-marker">Expected response marker</Label><Input id="auth-verify-marker" value={authVerifyMarker} onChange={(e) => { setAuthVerifyMarker(e.target.value); setAssessmentPlan(null); }} placeholder="A phrase present only when logged in" /></div>
-        </div>}
-      </div>
-      <Button type="button" variant="outline" onClick={() => void previewAssessmentPlan()} disabled={planning}>{planning ? "Planning…" : "Preview plan"}</Button>
-      {planError && <p className="text-sm text-destructive">{planError}</p>}
-      {assessmentPlan && <div className="space-y-4 border-t pt-4">
-        <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">Coverage preview · registry {assessmentPlan.registry_version}</p><p className="font-mono text-xs text-muted-foreground">{assessmentPlan.fingerprint.slice(0, 24)}…</p></div>
-        <div className="grid gap-2 sm:grid-cols-2">{assessmentPlan.coverage.map((item) => <div key={item.type} className="rounded-md border p-3"><p className="text-xs font-medium">{item.type.replaceAll("_", " ")} · {item.state}</p><p className="mt-1 text-xs text-muted-foreground">{item.reason}</p></div>)}</div>
-        {assessmentPlan.capabilities.filter((item) => item.capability === "authenticated_web").length > 0 && <div><p className="mb-2 text-sm font-medium">Authentication readiness</p><ul className="space-y-1 text-xs">{assessmentPlan.capabilities.filter((item) => item.capability === "authenticated_web").map((item, i) => <li key={`${item.target_id}-${i}`} className="font-mono">{item.target_id} · {item.state}: {item.reason}</li>)}</ul></div>}
-        <div><p className="mb-2 text-sm font-medium">Planned jobs ({assessmentPlan.jobs.length})</p>{assessmentPlan.jobs.length ? <ul className="space-y-1 text-xs">{assessmentPlan.jobs.map((job) => <li key={job.id} className="font-mono">{job.scanner} · {(job.assessment_types ?? [job.assessment_type]).join(" + ")} · {job.state} · {job.target}</li>)}</ul> : <p className="text-xs text-muted-foreground">No runnable jobs are available for these inputs.</p>}</div>
-        {assessmentPlan.api_endpoints?.length ? <div><p className="mb-2 text-sm font-medium">API operations in the definition ({assessmentPlan.api_endpoints.length})</p><p className="mb-2 text-xs text-muted-foreground">Only resolved GET and HEAD routes are seeded into the scoped ZAP scan. Mutating operations and routes needing values remain untested with a reason.</p><ul className="space-y-1 text-xs">{assessmentPlan.api_endpoints.map((endpoint, i) => <li key={`${endpoint.target_id}-${endpoint.method}-${endpoint.path}-${i}`} className="font-mono">{endpoint.method} {endpoint.path} · {endpoint.eligible ? "eligible" : "untested"}{endpoint.reason ? ` · ${endpoint.reason}` : ""}</li>)}</ul></div> : null}
-        <details><summary className="cursor-pointer text-xs font-medium">Scanner decisions ({assessmentPlan.decisions.length})</summary><ul className="mt-2 space-y-2">{assessmentPlan.decisions.map((decision, i) => <li key={`${decision.scanner}-${decision.target_id ?? "all"}-${i}`} className="border-l-2 pl-3 text-xs"><span className="font-medium">{decision.scanner} · {decision.state}</span><p className="text-muted-foreground">{decision.reason}</p></li>)}</ul></details>
-      </div>}
-    </CardContent></Card>
+  const modeText: Record<AssessmentMode, string> = {
+    BLACK_BOX: "External testing with no application credentials or internal source inputs.",
+    GRAY_BOX: "External testing with target bound access, API definitions, or supported host access.",
+    WHITE_BOX: "Testing with internal source, dependency, container, and supported infrastructure inputs.",
+  };
+  const selectedTypes = assessmentTypes.filter((type) => coverageOptions.includes(type));
+  function nextStep() {
+    if (step === 0 && !assessmentTargets.length) { setError("Add an in-scope URL, host, or supported artifact first."); return; }
+    setError(null);
+    setAssessmentTypes((current) => current.filter((type) => coverageOptions.includes(type)));
+    setStep((current) => Math.min(current + 1, MODE_STEPS.length - 1));
+  }
+  const previewJobs = assessmentPlan?.jobs ?? [];
+  const workflowGroups = [
+    { title: "Discovery and preparation", jobs: [] as typeof previewJobs },
+    { title: "Security testing", jobs: [] as typeof previewJobs },
+    { title: "Results", jobs: [] as typeof previewJobs },
+  ];
+  previewJobs.forEach((job) => {
+    const definition = registry.find((item) => item.id === job.scanner);
+    if (["recon"].includes(definition?.category ?? "")) workflowGroups[0].jobs.push(job);
+    else workflowGroups[1].jobs.push(job);
+  });
+  return <div className="mx-auto max-w-4xl space-y-6">
+    <header><Button variant="ghost" size="sm" onClick={() => nav(-1)}><ChevronLeft className="h-4 w-4" /> Back</Button><p className="mt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Assessment setup</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">New assessment</h1><p className="mt-2 text-sm text-muted-foreground">Choose a testing mode. Xalgorix will show the inputs and tools that apply to your scope.</p></header>
+    <nav aria-label="Assessment setup steps" className="grid grid-cols-2 gap-2 sm:grid-cols-4">{MODE_STEPS.map((title, index) => <button type="button" key={title} onClick={() => { setError(null); setStep(index); }} aria-current={step === index ? "step" : undefined} className={`rounded-lg border p-3 text-left transition-colors ${step === index ? "border-primary/60 bg-primary/5" : "bg-card/50 hover:bg-muted/20"}`}><p className="flex items-center gap-2 text-sm font-medium">{index < step ? <Check className="h-4 w-4 text-emerald-400" /> : <span className="font-mono text-xs text-muted-foreground">0{index + 1}</span>}{title}</p></button>)}</nav>
+
     <form onSubmit={onSubmit} className="space-y-5">
-      <Card><CardHeader><CardTitle>Target and mode</CardTitle></CardHeader><CardContent className="space-y-4">
-        <div className="space-y-2"><Label htmlFor="name">Scan name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Quarterly external scan" /></div>
-        <div className="space-y-2"><Label htmlFor="targets">Hosts or URLs</Label><Textarea id="targets" value={targetsText} onChange={(e) => { setTargetsText(e.target.value); setAssessmentPlan(null); setCredentialId(""); setCredentialTargetId("target-1"); setCredentialSaved(false); }} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One explicit target per line. The selected scanners receive the exact supplied application URL or host scope.</p></div>
-        <div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single target</SelectItem><SelectItem value="wildcard">Wildcard discovery</SelectItem></SelectContent></Select></div>
-        <div className="space-y-2"><Label>Report severity filter</Label><div className="flex flex-wrap gap-3">{SEVERITIES.map((sev) => (<label key={sev} className="flex items-center gap-1.5 text-sm capitalize"><input type="checkbox" checked={severities.includes(sev)} onChange={() => toggleSeverity(sev)} className="h-3.5 w-3.5 rounded border-border" />{sev}</label>))}</div><p className="text-xs text-muted-foreground">Leave all unchecked to report every severity.</p></div>
-      </CardContent></Card>
-      <Card><CardHeader><CardTitle>Scanners</CardTitle></CardHeader><CardContent className="space-y-4">
-        {health.isLoading && <p className="text-xs text-muted-foreground">Loading scanners…</p>}
-        {health.isError && !health.data && <p className="text-xs text-destructive">Could not load the scanner list. The scan will run every scanner.</p>}
-        {recon.length > 0 && <p className="text-xs text-muted-foreground">Always runs: {recon.map((t) => t.name).join(", ")} (recon).</p>}
-        {([["web", "Web"], ["server", "Server"], ["sast", "Source code"]] as const).map(([phase, label]) => {
-          const group = selectable.filter((t) => t.phase === phase);
-          if (!group.length) return null;
-          return <div key={phase} className="space-y-2">
-            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
-            <div className="grid gap-2 sm:grid-cols-2">{group.map((t) => <label key={t.name} className="flex items-start gap-2 rounded-lg border p-3 text-sm">
-              <input type="checkbox" checked={scanners.includes(t.name)} onChange={() => toggleScanner(t.name)} className="mt-0.5 h-3.5 w-3.5 rounded border-border" />
-              <span className="min-w-0">
-                <span className="flex items-center gap-2"><span className="font-medium capitalize">{t.name}</span>{t.available ? <span className="text-xs text-emerald-400">installed</span> : <span className="text-xs text-red-400">not found</span>}</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">{t.summary}</span>
-              </span>
-            </label>)}</div>
-          </div>;
-        })}
-        <p className="text-xs text-muted-foreground">Deselected scanners are recorded as <span className="font-mono">skipped</span> on every scope, so the report still shows what was not attempted. Scanners that do not apply to a scope are recorded <span className="font-mono">not applicable</span>.</p>
-      </CardContent></Card>
-      <Card><CardHeader><CardTitle>Optional scanner inputs</CardTitle></CardHeader><CardContent className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Source / artifact kind</Label><Select value={artifactKind} onValueChange={setArtifactKind}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No artifact</SelectItem><SelectItem value="filesystem">Filesystem</SelectItem><SelectItem value="repository">Repository</SelectItem><SelectItem value="image">Image</SelectItem><SelectItem value="sbom">SBOM</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="artifact">Artifact reference</Label><Input id="artifact" value={artifactRef} onChange={(e) => setArtifactRef(e.target.value)} placeholder="./repo or alpine:3.20" /></div></div>
-        <div className="space-y-2"><Label htmlFor="vuls">Vuls SSH host alias</Label><Input id="vuls" value={vulsHost} onChange={(e) => setVulsHost(e.target.value)} placeholder="prod-web" /><p className="text-xs text-muted-foreground">Must reference an operator-managed SSH configuration. Private key material is never stored in scan records.</p></div>
-        <div className="space-y-2"><Label htmlFor="auth">Web authentication headers</Label><Textarea id="auth" value={targetAuth} onChange={(e) => setTargetAuth(e.target.value)} placeholder="Authorization: Bearer …" rows={3} /></div>
-      </CardContent></Card>
-      <Card><CardHeader><CardTitle>Report branding</CardTitle></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="company">Company</Label><Input id="company" value={companyName} onChange={(e) => setCompanyName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="logo">Logo</Label><div className="flex gap-2"><Input id="logo" value={logoPath} onChange={(e) => setLogoPath(e.target.value)} placeholder="Upload or paste a path" /><Button type="button" variant="outline" size="sm" asChild disabled={uploadingLogo}><label className="cursor-pointer"><Upload className="h-4 w-4" /> {uploadingLogo ? "Uploading…" : "Upload"}<input type="file" accept="image/*" className="hidden" onChange={onLogoFile} /></label></Button></div></div></CardContent></Card>
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => void submit(true)} disabled={start.isPending}><Save className="h-4 w-4" /> Save</Button><Button type="submit" disabled={start.isPending}><Play className="h-4 w-4" /> Start scan</Button></div>
+      {step === 0 && <>
+        <Card><CardHeader><CardTitle>Choose an assessment mode</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-3">{(["BLACK_BOX", "GRAY_BOX", "WHITE_BOX"] as AssessmentMode[]).map((value) => <button type="button" key={value} onClick={() => onAssessmentModeChange(value)} aria-pressed={assessmentMode === value} className={`rounded-lg border p-4 text-left transition-colors ${assessmentMode === value ? "border-primary bg-primary/5" : "hover:bg-muted/20"}`}><span className="text-sm font-semibold">{value.replace("_", " ")}</span><span className="mt-2 block text-xs leading-relaxed text-muted-foreground">{modeText[value]}</span></button>)}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Target and scope</CardTitle></CardHeader><CardContent className="space-y-4"><div className="space-y-2"><Label htmlFor="name">Assessment name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Quarterly external assessment" /></div><div className="space-y-2"><Label htmlFor="targets">URLs or hosts</Label><Textarea id="targets" value={targetsText} onChange={(e) => onTargetsChange(e.target.value)} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One approved target per line. Wildcard discovery requires explicit authorization in the next step.</p></div>{assessmentMode === "WHITE_BOX" && <div className="grid gap-4 rounded-lg border p-3 sm:grid-cols-2"><div className="space-y-2"><Label>Internal resource type</Label><Select value={artifactKind} onValueChange={(value) => { setArtifactKind(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No internal resource</SelectItem><SelectItem value="filesystem">Local source directory</SelectItem><SelectItem value="repository">Repository</SelectItem><SelectItem value="image">Container image</SelectItem><SelectItem value="sbom">SBOM file</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="artifact">Resource reference</Label><Input id="artifact" value={artifactRef} onChange={(e) => { setArtifactRef(e.target.value); setAssessmentPlan(null); }} placeholder="./source, owner/repo, image:tag, or ./bom.json" /></div></div>}<div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Scope mode</Label><Select value={mode} onValueChange={(value) => setMode(value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Supplied targets only</SelectItem><SelectItem value="wildcard">Authorized wildcard discovery</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Web profile</Label><Select value={profile} onValueChange={(value) => { setProfile(value as typeof profile); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="web-gentle">Gentle · production</SelectItem><SelectItem value="web-thorough">Thorough · lab or staging</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Thorough profile allows higher request rates and larger endpoint budgets.</p></div></div></CardContent></Card>
+      </>}
+
+      {step === 1 && <Card><CardHeader><CardTitle>Choose coverage</CardTitle><p className="text-sm text-muted-foreground">Options reflect your mode and target. The planner will confirm which scanners can provide each type.</p></CardHeader><CardContent className="space-y-4">{coverageOptions.length ? <div className="grid gap-2 sm:grid-cols-2">{coverageOptions.map((type) => <label key={type} className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-muted/20"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => toggleAssessmentType(type)} className="mt-1" /><span><span className="text-sm font-medium">{TYPE_LABELS[type]}</span><span className="mt-1 block text-xs text-muted-foreground">{coverageDescription(type)}</span></span></label>)}</div> : <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No coverage options match yet. Add an applicable target first, or <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => setStep(2)}>configure a White Box resource input</button>, then return here.</div>}
+        {coverageOptions.some((type) => ["WEB_APPLICATION", "API"].includes(type)) && <label className="flex items-start gap-3 rounded-lg border p-3"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-1" /><span className="text-sm">Authorize subdomain discovery<p className="mt-1 text-xs text-muted-foreground">Adds Subfinder for domain targets. Leave off unless you have permission to enumerate subdomains.</p></span></label>}
+        <details className="rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">Customize optional tools <span className="font-normal text-muted-foreground">({optionalDefinitions.length} applicable)</span></summary><p className="mt-2 text-xs text-muted-foreground">Automatic selection includes the required tools. Select an optional tool only when you want that additional test.</p><div className="mt-3 space-y-2">{optionalDefinitions.map((definition) => <label key={definition.id} className={`flex items-start gap-3 rounded-md border p-3 ${definition.available ? "cursor-pointer" : "opacity-60"}`}><input type="checkbox" checked={optionalAssessmentScanners.includes(definition.id)} disabled={!definition.available} onChange={() => { setOptionalAssessmentScanners((current) => current.includes(definition.id) ? current.filter((id) => id !== definition.id) : [...current, definition.id]); setAssessmentPlan(null); }} className="mt-1" /><span><span className="text-sm font-medium">{definition.name} · {definition.risk} risk · {definition.available ? "available" : "unavailable"}</span><span className="mt-1 block text-xs text-muted-foreground">{definition.summary}</span>{definition.default_selection === "explicit_opt_in" && <span className="mt-1 block text-xs text-amber-300">Explicit opt in required. Selecting this tool records that choice in the plan.</span>}{!definition.available && <span className="mt-1 block text-xs text-muted-foreground">Unavailable: required tool or service is not configured.</span>}</span></label>)}{!optionalDefinitions.length && <p className="text-xs text-muted-foreground">No optional tools apply to the selected coverage and target.</p>}</div></details>
+      </CardContent></Card>}
+
+      {step === 2 && <div className="space-y-4">
+        {(assessmentMode === "GRAY_BOX" || assessmentMode === "WHITE_BOX") && <Card><CardHeader><CardTitle>Target access</CardTitle><p className="text-sm text-muted-foreground">Saving credentials configures access. Xalgorix reports them as verified only after the protected URL and response marker are checked at scan start.</p></CardHeader><CardContent className="space-y-4">{credentialSaved && <p className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-300">Credential saved and bound to target. Verification is still pending.</p>}{credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Credential type</Label><Select value={credentialKind} onValueChange={(value) => { setCredentialKind(value as "APPLICATION_HEADERS" | "FORM_LOGIN"); setCredentialId(""); setCredentialSaved(false); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="APPLICATION_HEADERS">HTTP header or token</SelectItem><SelectItem value="FORM_LOGIN">Form login</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select></div></div><div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div>{credentialKind === "APPLICATION_HEADERS" ? <><div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div></> : <><div className="space-y-2"><Label htmlFor="login-url">Login page URL</Label><Input id="login-url" value={loginURL} onChange={(e) => setLoginURL(e.target.value)} placeholder="https://app.example.test/login" /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="login-username">Username</Label><Input id="login-username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} autoComplete="username" /></div><div className="space-y-2"><Label htmlFor="login-password">Password</Label><Input id="login-password" type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} /></div></div><div className="grid gap-3 sm:grid-cols-3"><div className="space-y-2"><Label htmlFor="username-field">Username field</Label><Input id="username-field" value={loginUsernameField} onChange={(e) => setLoginUsernameField(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="password-field">Password field</Label><Input id="password-field" value={loginPasswordField} onChange={(e) => setLoginPasswordField(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="csrf-field">CSRF field (optional)</Label><Input id="csrf-field" value={loginCSRFField} onChange={(e) => setLoginCSRFField(e.target.value)} placeholder="csrf" /></div></div></>}<Button type="button" variant="outline" onClick={() => void saveCredential()} disabled={savingCredential || (credentialKind === "FORM_LOGIN" ? !loginURL || !loginUsername || !loginPassword : !headerValue)}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button></>}{credentialId && <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="auth-verify-url">Protected verification URL</Label><Input id="auth-verify-url" value={authVerifyURL} onChange={(e) => { setAuthVerifyURL(e.target.value); setAssessmentPlan(null); }} placeholder="https://app.example.test/account" /></div><div className="space-y-2"><Label htmlFor="auth-verify-marker">Expected response marker</Label><Input id="auth-verify-marker" value={authVerifyMarker} onChange={(e) => { setAuthVerifyMarker(e.target.value); setAssessmentPlan(null); }} placeholder="Text only visible after login" /></div></div>}</CardContent></Card>}
+        {assessmentMode === "GRAY_BOX" && <Card><CardHeader><CardTitle>Supported host access</CardTitle><p className="text-xs text-muted-foreground">Optional. Uses an operator managed SSH alias where a selected host scanner supports it.</p></CardHeader><CardContent><Label htmlFor="vuls">SSH host alias</Label><Input id="vuls" className="mt-2" value={vulsHost} onChange={(e) => setVulsHost(e.target.value)} placeholder="prod-web" /></CardContent></Card>}
+        {(assessmentMode === "GRAY_BOX" || assessmentMode === "WHITE_BOX") && <Card><CardHeader><CardTitle>API definition</CardTitle><p className="text-xs text-muted-foreground">Optional OpenAPI or Swagger file. Its server URLs do not expand assessment scope.</p></CardHeader><CardContent className="space-y-3"><Input id="api-definition" type="file" accept=".json,.yaml,.yml,application/json" onChange={(e) => void uploadAPIDefinition(e)} disabled={uploadingDefinition} />{apiDefinitionId && <><p className="break-all font-mono text-xs text-muted-foreground">{apiDefinitionInfo} · {apiDefinitionId}</p><div className="space-y-2"><Label>Map definition to target</Label><Select value={apiTargetId || "target-1"} onValueChange={(value) => { setAPITargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select></div></>}</CardContent></Card>}
+      </div>}
+
+      {step === 3 && <div className="space-y-4"><Card><CardHeader><CardTitle>Review assessment workflow</CardTitle><p className="text-sm text-muted-foreground">Preview checks the configuration only. It does not contact the target or verify credentials. Some scanner jobs may run in parallel.</p></CardHeader><CardContent className="space-y-4">{planError && <p role="alert" className="text-sm text-destructive">{planError}</p>}<Button type="button" variant="outline" onClick={() => void previewAssessmentPlan()} disabled={planning || !selectedTypes.length}>{planning ? "Building workflow…" : assessmentPlan ? "Refresh workflow preview" : "Preview workflow"}</Button>{assessmentPlan && <div className="space-y-5 border-t pt-4"><p className="font-mono text-xs text-muted-foreground">Plan {assessmentPlan.fingerprint.slice(0, 24)}… · registry {assessmentPlan.registry_version}</p>{assessmentPlan.errors?.map((item) => <p key={item.code} role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{item.message}</p>)}<div className="grid gap-2 sm:grid-cols-2">{assessmentPlan.coverage.map((item) => <div key={item.type} className="rounded-md border p-3"><p className="text-sm font-medium">{TYPE_LABELS[item.type] ?? item.type} · {item.state}</p><p className="mt-1 text-xs text-muted-foreground">{item.reason}</p></div>)}</div>{assessmentPlan.capabilities.filter((item) => item.capability === "authenticated_web" || item.capability === "ssh").map((item, index) => <div key={`${item.target_id}-${item.capability}-${index}`} className="flex items-start gap-2 rounded-md border p-3 text-xs"><span className={`rounded border px-2 py-0.5 ${item.state === "verified" ? "text-emerald-300" : item.state === "available" || item.state === "declared" ? "text-amber-300" : "text-red-300"}`}>{item.state === "verified" ? "verified" : item.state === "available" || item.state === "declared" ? "configured" : "failed"}</span><span><strong>{item.target_id} · {item.capability}</strong><span className="mt-1 block text-muted-foreground">{item.reason}</span></span></div>)}<div className="space-y-3">{workflowGroups.map((group) => <section key={group.title} className="rounded-lg border p-3"><h3 className="text-sm font-semibold">{group.title}</h3>{group.title === "Discovery and preparation" && assessmentTargets.some((target) => ["URL", "DOMAIN", "HOST"].includes(target.type)) && <div className="mt-3 grid gap-2 sm:grid-cols-2"><WorkflowStep title="HTTP reachability" description="Checks which supplied web targets respond." status="pipeline" /><WorkflowStep title="Katana crawl" description="Discovers in-scope pages and API routes for later tests." status="pipeline" /></div>}{group.jobs.length ? <div className="mt-3 space-y-2">{group.jobs.map((job) => { const definition = registry.find((item) => item.id === job.scanner); return <WorkflowStep key={job.id} title={job.scanner} description={`${definition?.summary ?? "Selected scanner"} · ${job.target} · ${(job.assessment_types ?? [job.assessment_type]).map((type) => TYPE_LABELS[type] ?? type).join(", ")}`} status={job.state} />; })}</div> : group.title === "Results" ? <div className="mt-3"><WorkflowStep title="Correlate findings and prepare report" description="The completed scan results are normalized for the assessment report." status="pipeline" /></div> : !assessmentTargets.some((target) => ["URL", "DOMAIN", "HOST"].includes(target.type)) && <p className="mt-2 text-xs text-muted-foreground">No separate web discovery step applies to these resources.</p>}</section>)}</div><details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">Coverage gaps and scanner decisions ({assessmentPlan.decisions.filter((decision) => !["selected", "conditional"].includes(decision.state)).length})</summary><div className="mt-3 space-y-2">{assessmentPlan.decisions.filter((decision) => !["selected", "conditional"].includes(decision.state)).map((decision, index) => <p key={`${decision.scanner}-${decision.target_id ?? "all"}-${index}`} className="border-l-2 pl-3 text-xs"><span className="font-medium">{decision.scanner} · {decision.target_id ?? "assessment"} · {decision.state}</span><span className="mt-1 block text-muted-foreground">{decision.reason}</span></p>)}</div></details>{assessmentPlan.warnings?.map((warning) => <p key={warning.code} className="text-xs text-amber-300">{warning.message}</p>)}{assessmentPlan.api_endpoints?.length ? <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">API operations ({assessmentPlan.api_endpoints.length})</summary><p className="my-2 text-xs text-muted-foreground">Only safe resolved routes are eligible. Mutating operations remain untested with a reason.</p>{assessmentPlan.api_endpoints.map((endpoint, index) => <p key={`${endpoint.method}-${endpoint.path}-${index}`} className="font-mono text-xs">{endpoint.method} {endpoint.path} · {endpoint.eligible ? "eligible" : endpoint.reason || "not eligible"}</p>)}</details> : null}</div>}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Report options</CardTitle></CardHeader><CardContent className="space-y-4"><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="company">Company name</Label><Input id="company" value={companyName} onChange={(e) => setCompanyName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="logo">Report logo</Label><div className="flex gap-2"><Input id="logo" value={logoPath} onChange={(e) => setLogoPath(e.target.value)} placeholder="Upload or paste a path" /><Button type="button" variant="outline" size="sm" asChild disabled={uploadingLogo}><label className="cursor-pointer"><Upload className="h-4 w-4" />{uploadingLogo ? "Uploading…" : "Upload"}<input type="file" accept="image/*" className="hidden" onChange={onLogoFile} /></label></Button></div></div></div><fieldset><legend className="text-sm font-medium">Report severity filter</legend><div className="mt-2 flex flex-wrap gap-4">{["critical", "high", "medium", "low", "info"].map((severity) => <label key={severity} className="flex items-center gap-2 text-xs capitalize"><input type="checkbox" checked={severities.includes(severity)} onChange={() => toggleSeverity(severity)} />{severity}</label>)}</div><p className="mt-2 text-xs text-muted-foreground">Leave all unchecked to include every severity.</p></fieldset></CardContent></Card>
+      </div>}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <div className="flex items-center justify-between border-t pt-4"><Button type="button" variant="outline" onClick={() => { setError(null); setStep((current) => Math.max(0, current - 1)); }} disabled={step === 0}><ChevronLeft className="h-4 w-4" /> Back</Button>{step < MODE_STEPS.length - 1 ? <Button type="button" onClick={nextStep}>Continue</Button> : <div className="flex gap-2"><Button type="button" variant="outline" onClick={() => void submit(true)} disabled={start.isPending}><Save className="h-4 w-4" /> Save</Button><Button type="submit" disabled={start.isPending || !assessmentPlan || !!assessmentPlan.errors?.some((item) => item.blocking)}><Play className="h-4 w-4" /> Start assessment</Button></div>}</div>
     </form>
   </div>;
 }
@@ -372,4 +347,34 @@ function inferTargetKind(value: string): string {
   if (value.includes("/")) return "CIDR";
   if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) || (/^[0-9a-fA-F:]+$/.test(value) && value.includes(":"))) return "IP";
   return "DOMAIN";
+}
+
+function artifactTargetKind(kind: string): string {
+  switch (kind) {
+    case "filesystem": return "LOCAL_SOURCE_PATH";
+    case "repository": return "REPOSITORY";
+    case "image": return "DOCKER_IMAGE";
+    case "sbom": return "SBOM";
+    default: return "";
+  }
+}
+
+function coverageDescription(type: AssessmentType): string {
+  switch (type) {
+    case "WEB_APPLICATION": return "Crawl and test in-scope web pages.";
+    case "API": return "Test API routes and optionally seed operations from a schema.";
+    case "NETWORK": return "Discover exposed services and check network vulnerabilities.";
+    case "HOST": return "Review supported host configuration and packages.";
+    case "SOURCE_CODE": return "Inspect source files for code security issues.";
+    case "DEPENDENCIES": return "Check dependency manifests or an SBOM for known vulnerabilities.";
+    case "CONTAINER": return "Inspect a container image and its packages.";
+    case "INFRASTRUCTURE_AS_CODE": return "Check supported infrastructure configuration files.";
+    default: return "The planner will report whether a scanner is available for this coverage.";
+  }
+}
+
+function WorkflowStep({ title, description, status }: { title: string; description: string; status: string }) {
+  const pipeline = status === "pipeline";
+  const complete = status === "selected" || status === "conditional" || status === "completed";
+  return <div className="flex items-start gap-3 rounded-md border bg-background/40 p-3"><span className={`mt-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded-full border px-1 text-[10px] font-medium ${complete ? "border-emerald-500/40 text-emerald-300" : status === "unavailable" || status === "failed" ? "border-red-500/40 text-red-300" : "text-muted-foreground"}`}>{pipeline ? "•" : complete ? "✓" : "·"}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-medium">{title}</p><span className="rounded border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">{pipeline ? "pipeline stage" : status}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">{description}</p></div></div>;
 }
