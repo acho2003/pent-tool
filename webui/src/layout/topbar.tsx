@@ -30,7 +30,7 @@ export function Topbar({ onMenuToggle }: { onMenuToggle?: () => void }) {
       <button
         type="button"
         onClick={() => palette.setOpen(true)}
-        className="group inline-flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-card px-2.5 text-xs text-muted-foreground hover:text-foreground transition-colors md:flex-none md:w-72 md:max-w-72"
+        className="group inline-flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-card px-2.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors md:flex-none md:w-72 md:max-w-72"
         aria-label="Open command palette"
       >
         <Search className="h-3.5 w-3.5 shrink-0" />
@@ -75,7 +75,7 @@ export function Topbar({ onMenuToggle }: { onMenuToggle?: () => void }) {
           </Button>
         )}
         <Button asChild size="sm" className="shrink-0">
-          <Link to="/scans/new">
+          <Link to="/scans/new" aria-label="New scan">
             <Plus className="h-3.5 w-3.5" /> <span className="hidden md:inline">New Scan</span>
           </Link>
         </Button>

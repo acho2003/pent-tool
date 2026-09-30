@@ -84,7 +84,7 @@ export default function LoginPage() {
     <div className="grid min-h-screen w-full bg-background lg:grid-cols-2">
       <div className="hidden flex-col justify-between border-r border-border bg-muted/30 p-12 lg:flex">
         <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="Xalgorix" className="h-8 w-8 rounded-md" />
+          <img src="/logo.svg" alt="Xalgorix" className="h-8 w-8" />
           <span className="font-mono text-sm font-semibold tracking-tight">XALGORIX</span>
         </div>
         <div className="space-y-6">
@@ -110,7 +110,7 @@ export default function LoginPage() {
       <div className="flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-sm">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <img src="/logo.png" alt="Xalgorix" className="h-8 w-8 rounded-md" />
+            <img src="/logo.svg" alt="Xalgorix" className="h-8 w-8" />
             <span className="font-mono text-sm font-semibold tracking-tight">XALGORIX</span>
           </div>
           <Card>

@@ -88,7 +88,7 @@ function TerminalStream({ scanId, scanner, scope, stream, running, onMissing }: 
       {!following && <Button size="sm" variant="outline" onClick={() => void show(Math.max(0, page.total - PAGE_BYTES), true)}>Follow latest</Button>}
     </div>
     {error && <p className="text-xs text-destructive">{error}</p>}
-    <pre className="max-h-[32rem] min-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black p-4 font-mono text-xs text-neutral-200">{loading ? "Loading…" : displayText(page.text) || "No output recorded."}</pre>
+    <pre className="max-h-[32rem] min-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-4 font-mono text-xs text-foreground">{loading ? "Loading…" : displayText(page.text) || "No output recorded."}</pre>
   </div>;
 }
 

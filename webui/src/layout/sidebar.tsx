@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import {
   Activity,
-  AlertOctagon,
+  CircleAlert,
   Clock,
   FileText,
   LayoutGrid,
@@ -19,7 +19,7 @@ const NAV = [
   { label: "Workspace", items: [
     { to: "/", label: "Overview", icon: LayoutGrid, end: true },
     { to: "/scans", label: "Assessments", icon: Target },
-    { to: "/findings", label: "Findings", icon: AlertOctagon },
+    { to: "/findings", label: "Findings", icon: CircleAlert },
     { to: "/reports", label: "Reports", icon: FileText },
   ]},
   { label: "Operations", items: [
@@ -39,8 +39,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-card">
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
-        <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-md border border-border bg-background">
-          <img src="/logo.png" alt="" className="h-full w-full object-cover" aria-hidden />
+        <div className="flex h-8 w-8 items-center justify-center overflow-hidden">
+          <img src="/logo.svg" alt="" className="h-full w-full object-contain p-0.5" aria-hidden />
         </div>
         <div className="flex flex-col">
           <span className="text-sm font-semibold tracking-tight">Xalgorix</span>
@@ -63,7 +63,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                     cn(
                       "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors",
                       isActive
-                        ? "bg-accent text-accent-foreground"
+                        ? "border border-primary/45 bg-primary/10 text-primary"
                         : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
                     )
                   }
@@ -82,7 +82,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <span>Local scanner</span>
         </div>
         <div className="mt-1 flex items-center gap-1.5 opacity-70">
-          <AlertOctagon className="h-3 w-3" aria-hidden />
+          <CircleAlert className="h-3 w-3" aria-hidden />
           <span>Ctrl+K for actions</span>
         </div>
       </div>
