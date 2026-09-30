@@ -1304,6 +1304,19 @@ func (s *Server) initDataDir() {
 	}
 }
 
+// planHasRunnableJobs reports whether starting the plan would attempt any job.
+// Conditional jobs (a repository clone, a local path or image check) are
+// prepared at run time and record a reason if preparation fails, so a
+// source-only assessment made only of conditional jobs is runnable.
+func planHasRunnableJobs(plan scanner.AssessmentPlan) bool {
+	for _, job := range plan.Jobs {
+		if job.State == scanner.PlanSelected || job.State == scanner.PlanConditional {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -1382,15 +1395,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": "assessment plan changed; review the refreshed plan", "plan": plan})
 			return
 		}
-		selected := false
-		for _, job := range plan.Jobs {
-			if job.State == scanner.PlanSelected {
-				selected = true
-				break
-			}
-		}
-		if !req.SaveOnly && !selected {
-			http.Error(w, "assessment has no runnable selected jobs; resolve the plan gaps before starting", http.StatusUnprocessableEntity)
+		if !req.SaveOnly && !planHasRunnableJobs(plan) {
+			http.Error(w, "assessment has no runnable jobs; resolve the plan gaps before starting", http.StatusUnprocessableEntity)
 			return
 		}
 		req.PlanFingerprint = plan.Fingerprint

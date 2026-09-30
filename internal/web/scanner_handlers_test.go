@@ -350,6 +350,10 @@ func TestTypedSourceOnlyStartDoesNotApplyNetworkSelfScanBlock(t *testing.T) {
 	s := newTestServer(t, nil)
 	s.cfg.SemgrepPath = "xalgorix-test-missing-semgrep"
 	s.cfg.GitleaksPath = "xalgorix-test-missing-gitleaks"
+	// Every source scanner is missing so no job is planned, independent of the
+	// tools installed on the test machine.
+	s.cfg.TrivyPath = "xalgorix-test-missing-trivy"
+	s.cfg.OsvPath = "xalgorix-test-missing-osv"
 	source := t.TempDir()
 	cfg := assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox, Types: []assessment.Type{assessment.TypeSourceCode}, Targets: []assessment.Target{{ID: "source", Kind: assessment.KindLocalSourcePath, Value: source}}, Profile: "web-gentle"}
 	plan := s.buildAssessmentPlan(cfg)
@@ -361,6 +365,23 @@ func TestTypedSourceOnlyStartDoesNotApplyNetworkSelfScanBlock(t *testing.T) {
 	s.handleScan(rr, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(string(request))))
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("source-only target should reach capability planning; status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestPlanHasRunnableJobsCountsConditionalSourceJobs(t *testing.T) {
+	// A source-only repository assessment plans its scanners as conditional
+	// (the clone happens at run time); it must be startable.
+	conditional := scanner.AssessmentPlan{Jobs: []scanner.PlanJob{{Scanner: "trivy", TargetID: "artifact-1", State: scanner.PlanConditional}}}
+	if !planHasRunnableJobs(conditional) {
+		t.Fatal("a plan of conditional source jobs should be runnable")
+	}
+	selected := scanner.AssessmentPlan{Jobs: []scanner.PlanJob{{Scanner: "nuclei", TargetID: "app", State: scanner.PlanSelected}}}
+	if !planHasRunnableJobs(selected) {
+		t.Fatal("a plan with a selected job should be runnable")
+	}
+	gaps := scanner.AssessmentPlan{Jobs: []scanner.PlanJob{{Scanner: "zap", State: scanner.PlanUnavailable}, {Scanner: "sqlmap", State: scanner.PlanSkipped}}}
+	if planHasRunnableJobs(gaps) {
+		t.Fatal("a plan of only unavailable or skipped jobs must not start")
 	}
 }
 
