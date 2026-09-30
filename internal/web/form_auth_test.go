@@ -148,6 +148,130 @@ func TestFormLoginNeverPostsCredentialsOutsideApplication(t *testing.T) {
 	}
 }
 
+// spaLoginServer mimics a React/Next sign-in: the page's form is submitted by
+// script as JSON to an API route, which sets the session cookie.
+func spaLoginServer(t *testing.T, foreignHits *atomic.Int32) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/sign-in":
+			_, _ = w.Write([]byte(`<form class="space-y-5"><input name="cidNo"><input name="password" type="password"></form>`))
+		case "/app/api/auth/login":
+			var body map[string]string
+			if r.Method != http.MethodPost || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") || json.NewDecoder(r.Body).Decode(&body) != nil {
+				http.Error(w, "json required", http.StatusBadRequest)
+				return
+			}
+			if body["cidNo"] != "11111111111" || body["password"] != "spa-secret" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"message":"Invalid credentials"}`))
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "app_access_token", Value: "jwt-value", Path: "/", HttpOnly: true})
+			_, _ = w.Write([]byte(`{"message":"Logged in"}`))
+		case "/app/dashboard":
+			if c, err := r.Cookie("app_access_token"); err != nil || c.Value != "jwt-value" {
+				http.Redirect(w, r, "/app/sign-in", http.StatusTemporaryRedirect)
+				return
+			}
+			_, _ = w.Write([]byte("<button>Sign out</button>"))
+		case "/outside":
+			if foreignHits != nil {
+				foreignHits.Add(1)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func TestVerifyFormSessionSubmitsJSONForScriptDrivenLogin(t *testing.T) {
+	server := spaLoginServer(t, nil)
+	defer server.Close()
+	values := map[string]string{
+		"login_url": server.URL + "/app/sign-in", "submit_url": server.URL + "/app/api/auth/login", "submit_format": "json",
+		"username": "11111111111", "password": "spa-secret", "username_field": "cidNo", "password_field": "password",
+	}
+	got, err := verifyFormSession(context.Background(), server.URL+"/app", server.URL+"/app/dashboard", "Sign out", values)
+	if err != nil || got != "Cookie: app_access_token=jwt-value" {
+		t.Fatalf("json form session = %q, err %v", got, err)
+	}
+	values["password"] = "wrong-secret"
+	_, err = verifyFormSession(context.Background(), server.URL+"/app", server.URL+"/app/dashboard", "Sign out", values)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 401") || strings.Contains(err.Error(), "wrong-secret") {
+		t.Fatalf("rejected json login should report the status without the secret: %v", err)
+	}
+	// The same app submitted as an HTML form never logs in; the reason names
+	// where verification ended up instead of a generic failure.
+	delete(values, "submit_format")
+	delete(values, "submit_url")
+	values["password"] = "spa-secret"
+	_, err = verifyFormSession(context.Background(), server.URL+"/app", server.URL+"/app/dashboard", "Sign out", values)
+	if err == nil || !strings.Contains(err.Error(), "/app/sign-in") {
+		t.Fatalf("html submission against a json-only login should fail at the sign-in bounce: %v", err)
+	}
+}
+
+func TestVerifyFormSessionJSONSubmitStaysInScope(t *testing.T) {
+	var foreignHits atomic.Int32
+	server := spaLoginServer(t, &foreignHits)
+	defer server.Close()
+	base := map[string]string{"login_url": server.URL + "/app/sign-in", "submit_format": "json", "username": "11111111111", "password": "spa-secret", "username_field": "cidNo"}
+	cases := map[string]map[string]string{
+		"outside submit url": {"submit_url": server.URL + "/outside"},
+		"unknown format":     {"submit_format": "xml", "submit_url": server.URL + "/app/api/auth/login"},
+		"csrf with json":     {"csrf_field": "csrf", "submit_url": server.URL + "/app/api/auth/login"},
+	}
+	for name, extra := range cases {
+		values := map[string]string{}
+		for k, v := range base {
+			values[k] = v
+		}
+		for k, v := range extra {
+			values[k] = v
+		}
+		if _, err := verifyFormSession(context.Background(), server.URL+"/app", server.URL+"/app/dashboard", "Sign out", values); err == nil {
+			t.Fatalf("%s: expected rejection", name)
+		}
+	}
+	if foreignHits.Load() != 0 {
+		t.Fatalf("credentials were sent outside the application: %d requests", foreignHits.Load())
+	}
+}
+
+func TestPrepareAssessmentAuthenticationReportsFormLoginReason(t *testing.T) {
+	server := spaLoginServer(t, nil)
+	defer server.Close()
+	s := newTestServer(t, nil)
+	keyPath := t.TempDir() + "/credential.key"
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	vault, err := s.credentialVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := vault.Create(credentials.Record{Name: "spa", Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, Values: map[string]string{
+		"login_url": server.URL + "/app/sign-in", "submit_url": server.URL + "/app/api/auth/login", "submit_format": "json",
+		"username": "11111111111", "password": "not-the-password", "username_field": "cidNo",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &scanner.AssessmentPlan{
+		Config:       assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: server.URL + "/app"}}, Access: []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, CredentialID: meta.ID, VerifyURL: server.URL + "/app/dashboard", VerifyMarker: "Sign out"}}},
+		Capabilities: []assessment.CapabilityEvidence{{Capability: assessment.CapAuthWeb, TargetID: "app", State: assessment.StateAvailable}},
+	}
+	if _, err := s.prepareAssessmentAuthentication(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	reason := plan.Capabilities[0].Reason
+	if plan.Capabilities[0].State != assessment.StateUnavailable || !strings.Contains(reason, "form login was rejected (HTTP 401)") || strings.Contains(reason, "not-the-password") {
+		t.Fatalf("capability reason should explain the rejection without secrets: %q", reason)
+	}
+}
+
 func TestFormSessionRenewsOnceAndStopsOnSecondExpiry(t *testing.T) {
 	var generation atomic.Int32
 	var logins atomic.Int32

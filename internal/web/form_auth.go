@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,17 +25,30 @@ func verifyFormSession(ctx context.Context, appURL, verifyURL, marker string, va
 	usernameField := strings.TrimSpace(values["username_field"])
 	passwordField := strings.TrimSpace(values["password_field"])
 	csrfField := strings.TrimSpace(values["csrf_field"])
+	// submit_format "json" covers SPA logins (React/Next/Vue) whose page script
+	// POSTs a JSON body to an API route instead of submitting the HTML form.
+	submitFormat := strings.ToLower(strings.TrimSpace(values["submit_format"]))
+	submitURL := strings.TrimSpace(values["submit_url"])
 	if usernameField == "" {
 		usernameField = "username"
 	}
 	if passwordField == "" {
 		passwordField = "password"
 	}
+	if submitFormat == "" {
+		submitFormat = "form"
+	}
 	if loginURL == "" || username == "" || password == "" || marker == "" || len(marker) > 256 || strings.ContainsAny(marker, "\r\n\x00") || !validHTTPHeaderName(usernameField) || !validHTTPHeaderName(passwordField) || (csrfField != "" && !validHTTPHeaderName(csrfField)) {
 		return "", fmt.Errorf("form login configuration is incomplete or invalid")
 	}
-	if !urlWithinApplication(appURL, loginURL) || !urlWithinApplication(appURL, verifyURL) {
-		return "", fmt.Errorf("form login or verification URL is outside the application boundary")
+	if submitFormat != "form" && submitFormat != "json" {
+		return "", fmt.Errorf("form login submit format must be form or json")
+	}
+	if submitFormat == "json" && csrfField != "" {
+		return "", fmt.Errorf("a CSRF field is only supported for HTML form submission")
+	}
+	if !urlWithinApplication(appURL, loginURL) || !urlWithinApplication(appURL, verifyURL) || (submitURL != "" && !urlWithinApplication(appURL, submitURL)) {
+		return "", fmt.Errorf("form login, submit, or verification URL is outside the application boundary")
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -55,20 +70,42 @@ func verifyFormSession(ctx context.Context, appURL, verifyURL, marker string, va
 	}
 	page, readErr := io.ReadAll(io.LimitReader(loginResponse.Body, 1<<20))
 	loginResponse.Body.Close()
-	if readErr != nil || loginResponse.StatusCode < 200 || loginResponse.StatusCode >= 300 {
-		return "", fmt.Errorf("form login page could not be read")
+	var postRequest *http.Request
+	if submitFormat == "json" {
+		// The page load only primes cookies; a script-rendered form has no
+		// markup worth parsing, so its status and body are not required.
+		if submitURL == "" {
+			submitURL = loginURL
+		}
+		body, marshalErr := json.Marshal(map[string]string{usernameField: username, passwordField: password})
+		if marshalErr != nil {
+			return "", fmt.Errorf("form login body could not be encoded")
+		}
+		postRequest, err = http.NewRequestWithContext(ctx, http.MethodPost, submitURL, bytes.NewReader(body))
+		if err != nil {
+			return "", fmt.Errorf("invalid form login submit URL")
+		}
+		postRequest.Header.Set("Content-Type", "application/json")
+		postRequest.Header.Set("Accept", "application/json")
+	} else {
+		if readErr != nil || loginResponse.StatusCode < 200 || loginResponse.StatusCode >= 300 {
+			return "", fmt.Errorf("form login page could not be read")
+		}
+		action, fields, formErr := loginForm(page, loginURL, appURL, usernameField, passwordField, csrfField)
+		if formErr != nil {
+			return "", formErr
+		}
+		if submitURL != "" {
+			action = submitURL
+		}
+		fields.Set(usernameField, username)
+		fields.Set(passwordField, password)
+		postRequest, err = http.NewRequestWithContext(ctx, http.MethodPost, action, strings.NewReader(fields.Encode()))
+		if err != nil {
+			return "", fmt.Errorf("invalid form action")
+		}
+		postRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	action, fields, err := loginForm(page, loginURL, appURL, usernameField, passwordField, csrfField)
-	if err != nil {
-		return "", err
-	}
-	fields.Set(usernameField, username)
-	fields.Set(passwordField, password)
-	postRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, action, strings.NewReader(fields.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("invalid form action")
-	}
-	postRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	postResponse, err := client.Do(postRequest)
 	if err != nil {
 		return "", fmt.Errorf("form login request failed")
@@ -76,7 +113,7 @@ func verifyFormSession(ctx context.Context, appURL, verifyURL, marker string, va
 	_, _ = io.Copy(io.Discard, io.LimitReader(postResponse.Body, 1<<20))
 	postResponse.Body.Close()
 	if postResponse.StatusCode < 200 || postResponse.StatusCode >= 300 {
-		return "", fmt.Errorf("form login was rejected")
+		return "", fmt.Errorf("form login was rejected (HTTP %d)", postResponse.StatusCode)
 	}
 	verifyRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, verifyURL, nil)
 	if err != nil {
@@ -89,7 +126,8 @@ func verifyFormSession(ctx context.Context, appURL, verifyURL, marker string, va
 	verificationBody, readErr := io.ReadAll(io.LimitReader(verifyResponse.Body, 1<<20))
 	verifyResponse.Body.Close()
 	if readErr != nil || verifyResponse.StatusCode < 200 || verifyResponse.StatusCode >= 300 || !strings.Contains(string(verificationBody), marker) {
-		return "", fmt.Errorf("form session verification marker was not found")
+		// The final in-scope path shows e.g. a bounce back to the sign-in page.
+		return "", fmt.Errorf("form session verification marker was not found (HTTP %d at %s)", verifyResponse.StatusCode, verifyResponse.Request.URL.Path)
 	}
 	verifyParsed, _ := url.Parse(verifyURL)
 	cookies := jar.Cookies(verifyParsed)

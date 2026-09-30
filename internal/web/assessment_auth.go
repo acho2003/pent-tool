@@ -82,7 +82,8 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 			if binding.Kind == assessment.AccessFormLogin {
 				cookieHeader, loginErr := verifyFormSession(ctx, target.Value, binding.VerifyURL, binding.VerifyMarker, record.Values)
 				if loginErr != nil {
-					setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login or session verification failed; authenticated scanning was skipped")
+					// verifyFormSession errors are fixed, secret-free phrases.
+					setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login or session verification failed ("+loginErr.Error()+"); authenticated scanning was skipped")
 					continue
 				}
 				lines = []string{cookieHeader}
@@ -94,7 +95,7 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 					continue
 				}
 				if verifyErr := verifyHeaderSession(ctx, binding.VerifyURL, binding.VerifyMarker, lines, target.Value); verifyErr != nil {
-					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential verification failed; authenticated scanning was skipped")
+					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
 					continue
 				}
 			}
