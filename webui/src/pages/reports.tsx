@@ -81,9 +81,6 @@ export default function ReportsPage() {
                 </div>
                 <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                   <span className="mono">{s.vuln_count ?? 0} findings</span>
-                  <span className="mono">
-                    {Math.round((s.total_tokens ?? 0) / 1000)}k tokens
-                  </span>
                 </div>
                 <div className="flex items-center gap-1">
                   <Button asChild size="sm" variant="outline">

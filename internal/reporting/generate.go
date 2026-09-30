@@ -462,7 +462,6 @@ func Generate(scan *Scan, opts Options) (string, error) {
 		{"Duration", duration},
 		{"Iterations", fmt.Sprintf("%d", scan.Iterations)},
 		{"Tool Calls", fmt.Sprintf("%d", scan.ToolCalls)},
-		{"Total Tokens", fmt.Sprintf("%d", scan.TotalTokens)},
 		{"Started", FormatTimestamp(startTime)},
 		{"Finished", FormatTimestamp(endTime)},
 	}
