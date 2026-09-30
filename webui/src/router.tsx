@@ -14,6 +14,7 @@ import SettingsPage from "@/pages/settings"
 import LoginPage from "@/pages/login"
 import NotFoundPage from "@/pages/not-found"
 import SchedulesPage from "@/pages/schedules"
+import MonitoringPage from "@/pages/monitoring"
 
 function Root({ children }: { children: ReactNode }) {
   return <AuthBootstrap>{children}</AuthBootstrap>
@@ -48,6 +49,7 @@ const routes: RouteObject[] = [
       { path: "integrations", element: <IntegrationsPage /> },
       { path: "live", element: <LivePage /> },
       { path: "instances", element: <InstancesPage /> },
+      { path: "monitoring", element: <MonitoringPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "404", element: <NotFoundPage /> },
       { path: "*", element: <Navigate to="/404" replace /> },

@@ -25,6 +25,7 @@ const NAV = [
   { label: "Operations", items: [
     { to: "/scans/new", label: "New assessment", icon: Plus },
     { to: "/live", label: "Live feed", icon: Radio },
+    { to: "/monitoring", label: "Monitoring", icon: Activity },
     { to: "/instances", label: "Instances", icon: Server },
     { to: "/schedules", label: "Schedules", icon: Clock },
   ]},

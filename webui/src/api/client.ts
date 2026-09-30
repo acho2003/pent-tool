@@ -204,6 +204,18 @@ function listQuery(params: ListParams): string {
 const scopeQuery = (scope?: string) => (scope ? `?scope=${encodeURIComponent(scope)}` : "");
 
 export const api = {
+	monitoringConnection: () => http<import("@/types/api").MonitoringConnection>("/api/monitoring/connection"),
+	saveMonitoringConnection: (value: import("@/types/api").MonitoringConnectionInput) => http<{status:string}>("/api/monitoring/connection", {method:"PUT", json:value}),
+	monitoringHealth: () => http<import("@/types/api").MonitoringHealth>("/api/monitoring/health"),
+	monitoringAgents: (page=1, limit=25, q="") => http<import("@/types/api").WazuhList<import("@/types/api").WazuhAgent>>(`/api/monitoring/agents?page=${page}&limit=${limit}&q=${encodeURIComponent(q)}`),
+	monitoringAgent: (id:string) => http<import("@/types/api").WazuhList<import("@/types/api").WazuhAgent>>(`/api/monitoring/agents/${encodeURIComponent(id)}`),
+	monitoringSCA: (id:string) => http<import("@/types/api").WazuhList<Record<string, unknown>>>(`/api/monitoring/agents/${encodeURIComponent(id)}/sca`),
+	monitoringFIM: (id:string) => http<import("@/types/api").WazuhList<Record<string, unknown>>>(`/api/monitoring/agents/${encodeURIComponent(id)}/fim`),
+	monitoringSearch: (kind:"alerts"|"vulnerabilities", page=1, limit=25, q="", agentId="") => http<import("@/types/api").WazuhSearch>(`/api/monitoring/${agentId ? `agents/${encodeURIComponent(agentId)}/` : ""}${kind}?page=${page}&limit=${limit}&q=${encodeURIComponent(q)}`),
+	monitoringAudit: () => http<import("@/types/api").MonitoringAction[]>("/api/monitoring/audit"),
+	monitoringEnrollments: () => http<import("@/types/api").MonitoringEnrollment[]>("/api/monitoring/enrollments"),
+	addMonitoringEnrollment: (name:string, os:"Linux"|"Windows"|"macOS") => http<import("@/types/api").MonitoringEnrollment>("/api/monitoring/enrollments", {method:"POST",json:{name,os}}),
+	monitoringResponse: (id:string, command:string) => http<import("@/types/api").MonitoringAction>(`/api/monitoring/agents/${encodeURIComponent(id)}/active-response`, {method:"POST", json:{command,confirm_agent:id}}),
   authStatus: () => http<AuthStatus>("/api/auth/status"),
   login: (username: string, password: string) =>
     http<{ status: string }>("/api/auth/login", {

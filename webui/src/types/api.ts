@@ -545,3 +545,19 @@ export interface FindingsSummaryResponse {
   as_of: string;
   etag: string;
 }
+export interface MonitoringConnection {
+  manager_url: string; indexer_url: string; manager_user: string; indexer_user: string;
+  agent_host: string; has_manager_password: boolean; has_indexer_password: boolean;
+  has_ca: boolean; allowed_commands: string[];
+}
+export interface MonitoringConnectionInput {
+  manager_url: string; indexer_url: string; manager_user: string; manager_password: string;
+  indexer_user: string; indexer_password: string; ca_pem: string; agent_host: string;
+  allowed_commands: string[];
+}
+export interface MonitoringHealth { manager: boolean; indexer: boolean; agent_host: string }
+export interface WazuhAgent { id: string; name: string; ip?: string; status?: string; os?: { name?: string; version?: string }; lastKeepAlive?: string; version?: string }
+export interface WazuhList<T> { data?: { affected_items?: T[]; total_affected_items?: number }; error?: number; message?: string }
+export interface WazuhSearch { hits?: { total?: { value?: number }; hits?: Array<{_id:string; _source:Record<string, unknown>}> } }
+export interface MonitoringAction { time: string; actor: string; agent_id: string; command: string; status: string; result?: string }
+export interface MonitoringEnrollment { name: string; os: "Linux"|"Windows"|"macOS"; created_at: string }

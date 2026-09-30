@@ -656,6 +656,7 @@ var dashboardRoutes = []string{
 	"/api/version",
 	"/api/instances",
 	"/api/instances/",
+	"/api/monitoring/",
 
 	// Dashboard auth (login/logout/status).
 	"/api/auth/login",
@@ -970,6 +971,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/version", s.handleVersion)
 	mux.HandleFunc("/api/instances", s.handleInstances)
 	mux.HandleFunc("/api/instances/", s.handleInstanceAction)
+	mux.HandleFunc("/api/monitoring/", s.handleMonitoring)
 
 	// Auth routes (these are public — authMiddleware skips them)
 	mux.HandleFunc("/api/auth/login", s.handleLogin)
