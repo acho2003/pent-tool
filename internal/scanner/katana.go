@@ -80,19 +80,26 @@ func buildKatana(req Request, cfg Config) commandSpec {
 		"-kf", "all",
 		"-c", "10",
 		"-silent",
-		"-headless", "-no-sandbox",
 		"-jsonl",
 		"-or",
 		"-ob",
 		"-o", artifact,
 	}
-	// Headless JS crawling needs a real Chromium. katana's bundled go-rod
-	// otherwise tries to DOWNLOAD one (which fails in an offline/arm64 container),
-	// so a JS app like an SPA yields zero endpoints. Point katana at the image's
-	// installed browser explicitly. Without a configured path, katana falls back
-	// to its own resolution.
-	if p := strings.TrimSpace(cfg.KatanaChromePath); p != "" {
-		args = append(args, "-system-chrome", "-scp", p)
+	// katana's headless engine silently drops every -H header (verified on
+	// v1.7.0: neither Cookie nor custom headers reach the server), so an
+	// authenticated crawl would run logged out while claiming to be logged in.
+	// With a session attached, use the standard engine, which sends headers on
+	// every crawl request; -jc still mines JS bundles for SPA routes.
+	if strings.TrimSpace(req.TargetAuth) == "" {
+		args = append(args, "-headless", "-no-sandbox")
+		// Headless JS crawling needs a real Chromium. katana's bundled go-rod
+		// otherwise tries to DOWNLOAD one (which fails in an offline/arm64
+		// container), so a JS app like an SPA yields zero endpoints. Point katana
+		// at the image's installed browser explicitly. Without a configured path,
+		// katana falls back to its own resolution.
+		if p := strings.TrimSpace(cfg.KatanaChromePath); p != "" {
+			args = append(args, "-system-chrome", "-scp", p)
+		}
 	}
 	if cfg.RateRPS > 0 {
 		args = append(args, "-rl", strconv.Itoa(cfg.RateRPS))

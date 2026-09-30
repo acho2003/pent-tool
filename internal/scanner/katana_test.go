@@ -212,3 +212,23 @@ func TestBuildKatana_UsesSystemChromePath(t *testing.T) {
 		t.Errorf("no chrome path configured should not add -scp; args=%v", noChrome.args)
 	}
 }
+
+func TestBuildKatana_AuthenticatedCrawlUsesStandardEngine(t *testing.T) {
+	cfg := Config{KatanaPath: "katana", KatanaTimeout: 60000000000, KatanaChromePath: "/usr/bin/chromium"}
+	// katana's headless engine drops -H headers, so a session must switch the
+	// crawl to the standard engine or the crawl silently runs logged out.
+	authed := buildKatana(Request{Target: "https://app.test/", ScanDir: t.TempDir(), TargetAuth: "Cookie: session=opaque"}, cfg)
+	if hasArg(authed.args, "-headless") || hasArg(authed.args, "-system-chrome") {
+		t.Errorf("authenticated crawl must not use headless mode; args=%v", authed.args)
+	}
+	if h, _ := argValue(authed.args, "-H"); h != "Cookie: session=opaque" {
+		t.Errorf("session header not attached: -H %q; args=%v", h, authed.args)
+	}
+	if !hasArg(authed.args, "-jc") {
+		t.Errorf("authenticated crawl should still mine JS for routes; args=%v", authed.args)
+	}
+	public := buildKatana(Request{Target: "https://app.test/", ScanDir: t.TempDir()}, cfg)
+	if !hasArg(public.args, "-headless") {
+		t.Errorf("unauthenticated crawl should keep headless rendering; args=%v", public.args)
+	}
+}
