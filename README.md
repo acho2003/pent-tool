@@ -42,8 +42,17 @@ To start the full local scanner stack (including internal ZAP and Greenbone),
 build the checked-out source for your Docker architecture:
 
 ```bash
+# One-time: the key that encrypts saved target credentials (form login,
+# tokens, cloud keys). Compose refuses to start until this file exists.
+mkdir -p secrets && openssl rand -out secrets/xalgorix-credential.key 32
+
 docker compose up -d --build
 ```
+
+Back up `secrets/xalgorix-credential.key` separately from the data volume.
+Losing it makes every saved credential unrecoverable. It is git-ignored and
+mounted read-only as a Compose secret; see
+[docs/security/target-credentials.md](docs/security/target-credentials.md).
 
 On Apple Silicon this avoids the older `xalgord/xalgorix:latest` release image,
 which does not provide an arm64 manifest. The first Greenbone startup downloads
@@ -156,6 +165,7 @@ Key environment variables:
 | `XALGORIX_GVM_SOCKET` | empty | Greenbone GMP UNIX socket; takes precedence over host/port |
 | `XALGORIX_GVM_USERNAME` | empty | GMP username |
 | `XALGORIX_GVM_PASSWORD` | empty | GMP password |
+| `XALGORIX_CREDENTIAL_KEY_FILE` | empty | Path to a 32-byte raw key that encrypts saved target credentials; without it, saving credentials fails |
 | `XALGORIX_SCANNER_MAX_OUTPUT_BYTES` | `104857600` | Per-scanner raw output limit |
 | `XALGORIX_<TOOL>_TIMEOUT_SECONDS` | per tool | Per-tool timeout, e.g. `XALGORIX_NMAP_TIMEOUT_SECONDS` (1800), `XALGORIX_SEMGREP_TIMEOUT_SECONDS` (1800), `XALGORIX_GITLEAKS_TIMEOUT_SECONDS` (900), `XALGORIX_OSV_TIMEOUT_SECONDS` (900) |
 

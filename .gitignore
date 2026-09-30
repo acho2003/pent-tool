@@ -68,3 +68,6 @@ research/
 
 # Cover-snapshot failure dump written by internal/reporting tests on drift.
 internal/reporting/testdata/cover.actual.pdf
+
+# Credential-vault key (docker-compose secret). Never commit it.
+secrets/

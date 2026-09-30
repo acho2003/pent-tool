@@ -52,4 +52,14 @@ if [ "$is_loopback" = false ] && [ "$has_auth" = false ]; then
   echo "============================================================"
 fi
 
+# Saved target credentials need a 32-byte vault key. Warn (never generate one
+# into /data) so a missing key explains why "Save credential" fails.
+key_file="${XALGORIX_CREDENTIAL_KEY_FILE:-}"
+if [ -z "$key_file" ]; then
+  echo "WARN: credential vault disabled: XALGORIX_CREDENTIAL_KEY_FILE is not set." >&2
+elif [ ! -r "$key_file" ] || [ "$(wc -c <"$key_file" | tr -d ' ')" != "32" ]; then
+  echo "WARN: credential vault disabled: $key_file must be a readable 32-byte key" \
+    "(create with: openssl rand -out secrets/xalgorix-credential.key 32)." >&2
+fi
+
 exec xalgorix "$@"

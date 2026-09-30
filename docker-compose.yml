@@ -18,6 +18,12 @@ services:
       - xalgorix-data:/data
       - ${HOME}/.codex/auth.json:/root/.codex/auth.json:ro
       - gvmd_socket_vol:/run/gvmd:ro
+    # 32-byte key that encrypts saved target credentials. Mounted read-only at
+    # /run/secrets/xalgorix_credential_key; it never lives in /data or the image.
+    # Create it once with:
+    #   mkdir -p secrets && openssl rand -out secrets/xalgorix-credential.key 32
+    secrets:
+      - xalgorix_credential_key
     # Let containers resolve the host machine so a dev site running on the
     # host (e.g. http://host.docker.internal:3000) is reachable from the
     # scanners. host-gateway maps to the Docker bridge/VM gateway.
@@ -30,6 +36,7 @@ services:
       XALGORIX_GVM_SOCKET: /run/gvmd/gvmd.sock
       XALGORIX_GVM_USERNAME: ${XALGORIX_GVM_USERNAME:-admin}
       XALGORIX_GVM_PASSWORD: ${XALGORIX_GVM_PASSWORD:-admin}
+      XALGORIX_CREDENTIAL_KEY_FILE: /run/secrets/xalgorix_credential_key
       # Self-hosted opt-in: allow scanning locally-hosted apps. The
       # dashboard's own listener stays protected. Leave OFF on shared hosts.
       XALGORIX_ALLOW_LOCAL_TARGETS: "true"
@@ -94,3 +101,7 @@ services:
 
 volumes:
   xalgorix-data:
+
+secrets:
+  xalgorix_credential_key:
+    file: ./secrets/xalgorix-credential.key
