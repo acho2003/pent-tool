@@ -78,6 +78,11 @@
     border-color: var(--color-border);
   }
 
+  :focus-visible {
+    outline: 2px solid #a1a1aa;
+    outline-offset: 2px;
+  }
+
   ::selection {
     background: #ffffff;
     color: #000000;
@@ -110,6 +115,12 @@
 .card-hover:hover {
   background-color: #0d0d0d;
   border-color: #2f2f2f;
+}
+
+/* Keep dense analyst screens readable without changing the component API. */
+@utility tabular-nums { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  body { font-size: 14px; }
 }
 
 /* Animated connection dot */

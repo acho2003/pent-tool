@@ -15,17 +15,23 @@ import {
 import { cn } from "@/lib/utils";
 import { useVersion } from "@/api/queries";
 
-const NAV: { to: string; label: string; icon: typeof LayoutGrid; end?: boolean }[] = [
-  { to: "/", label: "Overview", icon: LayoutGrid, end: true },
-  { to: "/scans/new", label: "New Scan", icon: Plus },
-  { to: "/scans", label: "Scans", icon: Target },
-  { to: "/findings", label: "Findings", icon: AlertOctagon },
-  { to: "/schedules", label: "Schedules", icon: Clock },
-  { to: "/instances", label: "Instances", icon: Server },
-	{ to: "/live", label: "Live Feed", icon: Radio },
-  { to: "/reports", label: "Reports", icon: FileText },
-  { to: "/integrations", label: "Integrations", icon: Plug },
-  { to: "/settings", label: "Settings", icon: Settings },
+const NAV = [
+  { label: "Workspace", items: [
+    { to: "/", label: "Overview", icon: LayoutGrid, end: true },
+    { to: "/scans", label: "Assessments", icon: Target },
+    { to: "/findings", label: "Findings", icon: AlertOctagon },
+    { to: "/reports", label: "Reports", icon: FileText },
+  ]},
+  { label: "Operations", items: [
+    { to: "/scans/new", label: "New assessment", icon: Plus },
+    { to: "/live", label: "Live feed", icon: Radio },
+    { to: "/instances", label: "Instances", icon: Server },
+    { to: "/schedules", label: "Schedules", icon: Clock },
+  ]},
+  { label: "Configure", items: [
+    { to: "/integrations", label: "Integrations", icon: Plug },
+    { to: "/settings", label: "Settings", icon: Settings },
+  ]},
 ];
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
@@ -45,13 +51,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </div>
       <nav className="flex-1 overflow-y-auto py-3" aria-label="Primary">
         <ul className="space-y-0.5 px-2">
-          {NAV.map((item) => {
-            const Icon = item.icon;
-            return (
-              <li key={item.to}>
-                <NavLink
-                  to={item.to}
-                  end={item.end}
+          {NAV.map((section) => <li key={section.label} className="mb-4">
+            <p className="px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">{section.label}</p>
+            <ul className="space-y-0.5">
+            {section.items.map((item) => {
+              const Icon = item.icon;
+              return <li key={item.to}>
+                <NavLink to={item.to} end={item.end}
                   onClick={onNavigate}
                   className={({ isActive }) =>
                     cn(
@@ -64,10 +70,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 >
                   <Icon className="h-3.5 w-3.5" aria-hidden />
                   <span>{item.label}</span>
-                </NavLink>
-              </li>
-            );
-          })}
+                </NavLink></li>;
+            })}
+            </ul>
+          </li>)}
         </ul>
       </nav>
       <div className="border-t border-border px-4 py-3 text-[10px] text-muted-foreground mono">

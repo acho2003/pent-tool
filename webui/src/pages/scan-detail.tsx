@@ -329,7 +329,7 @@ export default function ScanDetailPage() {
           </TabsTrigger>
           <TabsTrigger value="events">
             <Terminal className="mr-1.5 h-3.5 w-3.5" />
-            Events
+            Activity & logs
           </TabsTrigger>
           {!!scan.sub_scan_total && (
             <TabsTrigger value="subdomains">
@@ -339,7 +339,7 @@ export default function ScanDetailPage() {
           )}
           <TabsTrigger value="config">
             <ListChecks className="mr-1.5 h-3.5 w-3.5" />
-            Config
+            Configuration
           </TabsTrigger>
         </TabsList>
 

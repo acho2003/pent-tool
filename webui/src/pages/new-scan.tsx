@@ -268,8 +268,11 @@ export default function NewScanPage() {
     <div>
       <Button variant="ghost" size="sm" onClick={() => nav(-1)}><ChevronLeft className="h-4 w-4" /> Back</Button>
       <h1 className="mt-2 text-2xl font-semibold">New Assessment</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Choose a mode and coverage, review the server-generated scanner plan, then start the accepted assessment.</p>
+      <p className="mt-1 text-sm text-muted-foreground">Set the scope, choose coverage, verify access, then review the plan before starting.</p>
     </div>
+    <nav aria-label="Assessment setup" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {[['01', 'Target', 'Scope and mode'], ['02', 'Coverage', 'Scanners and inputs'], ['03', 'Access', 'Authentication'], ['04', 'Review', 'Plan and start']].map(([number, title, detail], index) => <div key={title} className={`rounded-lg border p-3 ${index === 0 ? 'border-primary/60 bg-primary/5' : 'bg-card/50'}`}><p className="text-[10px] font-mono text-muted-foreground">{number}</p><p className="mt-1 text-sm font-medium">{title}</p><p className="mt-0.5 text-[11px] text-muted-foreground">{detail}</p></div>)}
+    </nav>
     <Card><CardHeader><CardTitle>Assessment plan preview</CardTitle></CardHeader><CardContent className="space-y-4">
       <p className="text-sm text-muted-foreground">Review mode, requested coverage, scanner choices, and gaps. Preview does not contact targets or start a scan. The accepted plan fingerprint is checked again when execution is queued.</p>
       <div className="grid gap-4 sm:grid-cols-2">
