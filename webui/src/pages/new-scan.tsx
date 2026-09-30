@@ -67,12 +67,12 @@ export default function NewScanPage() {
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
   const registryQuery = useQuery({ queryKey: ["assessment-scanner-registry"], queryFn: api.scannerRegistry, refetchInterval: 30000 });
   const registry: AssessmentScannerDefinition[] = registryQuery.data?.scanners ?? [];
-  const optionalDefinitions = registry.filter((definition) => ["optional", "explicit_opt_in"].includes(definition.default_selection) && definition.assessment_types.some((type) => assessmentTypes.includes(type)) && definition.target_types.some((kind) => [...targets.map(inferTargetKind), ...(artifactKind !== "none" && artifactRef ? [artifactTargetKind(artifactKind)] : [])].includes(kind)));
   const tools: ToolInfo[] = health.data?.scanners ?? [];
   const selectable = useMemo(() => tools.filter((t) => t.selectable), [tools]);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const targets = useMemo(() => targetsText.split(/[\n,]/).map((v) => v.trim()).filter(Boolean), [targetsText]);
+  const optionalDefinitions = registry.filter((definition) => ["optional", "explicit_opt_in"].includes(definition.default_selection) && definition.assessment_types.some((type) => assessmentTypes.includes(type)) && definition.target_types.some((kind) => [...targets.map(inferTargetKind), ...(artifactKind !== "none" && artifactRef ? [artifactTargetKind(artifactKind)] : [])].includes(kind)));
   const webTargets = useMemo(() => targets.map((value, index) => ({ value, id: `target-${index + 1}` })).filter((target) => inferTargetKind(target.value) === "URL"), [targets]);
 
   const coverageOptions = useMemo(() => {
