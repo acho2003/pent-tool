@@ -47,6 +47,12 @@ export default function NewScanPage() {
   const [mode, setMode] = useState("single");
   const [artifactKind, setArtifactKind] = useState("none");
   const [artifactRef, setArtifactRef] = useState("");
+  // Read-only token for private repositories, saved to the encrypted vault and
+  // bound to every repository artifact target.
+  const [repoToken, setRepoToken] = useState("");
+  const [repoCredentialId, setRepoCredentialId] = useState("");
+  const [repoCredentialError, setRepoCredentialError] = useState<string | null>(null);
+  const [savingRepoToken, setSavingRepoToken] = useState(false);
   const [vulsHost, setVulsHost] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [logoPath, setLogoPath] = useState("");
@@ -114,18 +120,26 @@ export default function NewScanPage() {
     return rank.filter((type) => options.has(type));
   }, [targets, assessmentMode, artifactKind, artifactRef, registry]);
 
+  const artifactRefs = useMemo(() => {
+    const raw = artifactRef.trim();
+    if (!raw) return [];
+    // Repository URLs never contain spaces; local paths might, so they split on commas/new lines only.
+    const separator = artifactKind === "repository" ? /[\s,]+/ : artifactKind === "filesystem" ? /[\n,]+/ : null;
+    return separator ? [...new Set(raw.split(separator).map((ref) => ref.trim()).filter(Boolean))] : [raw];
+  }, [artifactKind, artifactRef]);
+
   const assessmentTargets = useMemo(() => [
     ...targets.map((value, i) => ({ id: `target-${i + 1}`, type: inferTargetKind(value), value })),
-    ...(assessmentMode === "WHITE_BOX" && artifactKind !== "none" && artifactRef.trim()
-      ? [{ id: "artifact-1", type: artifactTargetKind(artifactKind), value: artifactRef.trim() }]
+    ...(assessmentMode === "WHITE_BOX" && artifactKind !== "none"
+      ? artifactRefs.map((ref, i) => ({ id: `artifact-${i + 1}`, type: artifactTargetKind(artifactKind), value: ref }))
       : []),
-  ], [targets, assessmentMode, artifactKind, artifactRef]);
+  ], [targets, assessmentMode, artifactKind, artifactRefs]);
 
   function onAssessmentModeChange(next: AssessmentMode) {
     setAssessmentMode(next);
     setAssessmentPlan(null);
     setOptionalAssessmentScanners([]);
-    if (next !== "WHITE_BOX") { setArtifactKind("none"); setArtifactRef(""); }
+    if (next !== "WHITE_BOX") { setArtifactKind("none"); setArtifactRef(""); setRepoToken(""); setRepoCredentialId(""); setRepoCredentialError(null); }
     if (next === "BLACK_BOX") { setAPIDefinitionId(""); setAPIDefinitionInfo(""); setAPITargetId(""); }
     if (next === "BLACK_BOX") {
       setSavedAccess([]); setCredentialError(null); setHeaderValue(""); setLoginPassword("");
@@ -166,6 +180,9 @@ export default function NewScanPage() {
   }
 
   function authenticationSetupError(): string | null {
+    if (repoToken.trim() && !repoCredentialId) {
+      return "Save the repository access token before previewing the assessment.";
+    }
     if (credentialError && !savedAccess.some((access) => access.targetId === credentialTargetId)) {
       return `Credential was not saved: ${credentialError}`;
     }
@@ -194,6 +211,11 @@ export default function NewScanPage() {
 	  setPlanError(authError);
 	  return;
 	}
+    const repoTargetIds = assessmentTargets.filter((target) => target.id.startsWith("artifact-")).map((target) => target.id);
+    const planAccess = [
+      ...savedAccess.map((access) => ({ target_ids: [access.targetId], kind: access.kind, credential_id: access.credentialId, verify_url: access.verifyURL.trim(), verify_marker: access.verifyMarker })),
+      ...(repoCredentialId && artifactKind === "repository" && repoTargetIds.length ? [{ target_ids: repoTargetIds, kind: "REPOSITORY_CREDENTIALS", credential_id: repoCredentialId }] : []),
+    ];
     setPlanning(true);
     try {
       const plan = await api.planAssessment({
@@ -202,7 +224,7 @@ export default function NewScanPage() {
         assessment_targets: assessmentTargets,
         profile,
         subdomain_discovery: subdomainDiscovery,
-        access: savedAccess.length ? savedAccess.map((access) => ({ target_ids: [access.targetId], kind: access.kind, credential_id: access.credentialId, verify_url: access.verifyURL.trim(), verify_marker: access.verifyMarker })) : undefined,
+        access: planAccess.length ? planAccess : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
         scanner_selection: optionalAssessmentScanners.length > 0
           ? { mode: "custom", variants: [...new Set([...selectable.map((tool) => tool.name), ...optionalAssessmentScanners])] }
@@ -250,6 +272,26 @@ export default function NewScanPage() {
       setCredentialError(err instanceof Error ? err.message : "Could not save credential");
     } finally {
       setSavingCredential(false);
+    }
+  }
+
+  async function saveRepoToken() {
+    setRepoCredentialError(null);
+    const repoTargetIds = assessmentTargets.filter((target) => target.id.startsWith("artifact-")).map((target) => target.id);
+    if (artifactKind !== "repository" || !repoTargetIds.length || !repoToken.trim()) {
+      setRepoCredentialError("Add the repository URL(s) and a token before saving.");
+      return;
+    }
+    setSavingRepoToken(true);
+    try {
+      const credential = await api.createCredential({ name: "Repository access token", kind: "REPOSITORY_CREDENTIALS", target_ids: repoTargetIds, values: { token: repoToken.trim() } });
+      setRepoCredentialId(credential.id);
+      setRepoToken("");
+      setAssessmentPlan(null);
+    } catch (err) {
+      setRepoCredentialError(err instanceof Error ? err.message : "Could not save repository token");
+    } finally {
+      setSavingRepoToken(false);
     }
   }
 
@@ -319,7 +361,7 @@ export default function NewScanPage() {
         profile,
         name: name.trim() || undefined,
         scan_mode: mode,
-        artifact: artifactKind !== "none" && artifactRef.trim() ? { kind: artifactKind, ref: artifactRef.trim() } : undefined,
+        artifact: artifactKind !== "none" && artifactRefs.length ? { kind: artifactKind, ref: artifactRefs[0] } : undefined,
         vuls_ssh_host: vulsHost.trim() || undefined,
         company_name: companyName.trim() || undefined,
         logo_path: logoPath.trim() || undefined,
@@ -363,7 +405,7 @@ export default function NewScanPage() {
     <form onSubmit={onSubmit} className="space-y-5">
       {step === 0 && <>
         <Card><CardHeader><CardTitle>Choose an assessment mode</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-3">{(["BLACK_BOX", "GRAY_BOX", "WHITE_BOX"] as AssessmentMode[]).map((value) => <button type="button" key={value} onClick={() => onAssessmentModeChange(value)} aria-pressed={assessmentMode === value} className={`rounded-lg border p-4 text-left transition-colors ${assessmentMode === value ? "border-primary bg-primary/5" : "hover:bg-muted/20"}`}><span className="text-sm font-semibold">{value.replace("_", " ")}</span><span className="mt-2 block text-xs leading-relaxed text-muted-foreground">{modeText[value]}</span></button>)}</CardContent></Card>
-        <Card><CardHeader><CardTitle>Target and scope</CardTitle></CardHeader><CardContent className="space-y-4"><div className="space-y-2"><Label htmlFor="name">Assessment name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Quarterly external assessment" /></div><div className="space-y-2"><Label htmlFor="targets">URLs or hosts</Label><Textarea id="targets" value={targetsText} onChange={(e) => onTargetsChange(e.target.value)} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One approved target per line. Wildcard discovery requires explicit authorization in the next step.</p></div>{assessmentMode === "WHITE_BOX" && <div className="grid gap-4 rounded-lg border p-3 sm:grid-cols-2"><div className="space-y-2"><Label>Internal resource type</Label><Select value={artifactKind} onValueChange={(value) => { setArtifactKind(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No internal resource</SelectItem><SelectItem value="filesystem">Local source directory</SelectItem><SelectItem value="repository">Repository</SelectItem><SelectItem value="image">Container image</SelectItem><SelectItem value="sbom">SBOM file</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="artifact">Resource reference</Label><Input id="artifact" value={artifactRef} onChange={(e) => { setArtifactRef(e.target.value); setAssessmentPlan(null); }} placeholder="./source, owner/repo, image:tag, or ./bom.json" /></div></div>}<div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Scope mode</Label><Select value={mode} onValueChange={(value) => setMode(value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Supplied targets only</SelectItem><SelectItem value="wildcard">Authorized wildcard discovery</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Web profile</Label><Select value={profile} onValueChange={(value) => { setProfile(value as typeof profile); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="web-gentle">Gentle · production</SelectItem><SelectItem value="web-thorough">Thorough · lab or staging</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Thorough profile allows higher request rates and larger endpoint budgets.</p></div></div></CardContent></Card>
+        <Card><CardHeader><CardTitle>Target and scope</CardTitle></CardHeader><CardContent className="space-y-4"><div className="space-y-2"><Label htmlFor="name">Assessment name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Quarterly external assessment" /></div><div className="space-y-2"><Label htmlFor="targets">URLs or hosts</Label><Textarea id="targets" value={targetsText} onChange={(e) => onTargetsChange(e.target.value)} placeholder={"https://example.com\napi.example.com"} rows={4} /><p className="text-xs text-muted-foreground">One approved target per line. Wildcard discovery requires explicit authorization in the next step.</p></div>{assessmentMode === "WHITE_BOX" && <div className="grid gap-4 rounded-lg border p-3 sm:grid-cols-2"><div className="space-y-2"><Label>Internal resource type</Label><Select value={artifactKind} onValueChange={(value) => { setArtifactKind(value); setRepoCredentialId(""); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No internal resource</SelectItem><SelectItem value="filesystem">Local source directory</SelectItem><SelectItem value="repository">Repository</SelectItem><SelectItem value="image">Container image</SelectItem><SelectItem value="sbom">SBOM file</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="artifact">Resource reference</Label><Input id="artifact" value={artifactRef} onChange={(e) => { setArtifactRef(e.target.value); setRepoCredentialId(""); setAssessmentPlan(null); }} placeholder={artifactKind === "repository" ? "https://github.com/org/api.git, https://github.com/org/web.git" : "/src/project, image@sha256:…, or /src/bom.json"} />{(artifactKind === "repository" || artifactKind === "filesystem") && <p className="text-xs text-muted-foreground">Separate multiple {artifactKind === "repository" ? "repositories" : "directories"} with commas{artifactKind === "repository" ? ", spaces," : ""} or new lines; each is scanned as its own target.{artifactRefs.length > 1 ? ` ${artifactRefs.length} detected.` : ""}</p>}</div>{artifactKind === "repository" && <div className="space-y-2 sm:col-span-2"><Label htmlFor="repo-token">Access token for private repositories (optional)</Label>{repoCredentialId ? <p className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-300">Token saved (encrypted) and bound to {artifactRefs.length === 1 ? "the repository" : `all ${artifactRefs.length} repositories`}. <span className="break-all font-mono text-xs">{repoCredentialId}</span></p> : <div className="flex flex-wrap gap-2"><Input id="repo-token" className="min-w-0 flex-1" type="password" autoComplete="new-password" value={repoToken} onChange={(e) => setRepoToken(e.target.value)} placeholder="Read-only token, e.g. a GitHub fine-grained token with Contents: read" /><Button type="button" variant="outline" onClick={() => void saveRepoToken()} disabled={savingRepoToken || !repoToken.trim() || !artifactRefs.length}>{savingRepoToken ? "Encrypting…" : "Save token"}</Button></div>}{repoCredentialError && <p role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{repoCredentialError}</p>}<p className="text-xs text-muted-foreground">Used only to clone; passed to git as a header, never stored in the checkout, logs, or reports.</p></div>}</div>}<div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Scope mode</Label><Select value={mode} onValueChange={(value) => setMode(value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Supplied targets only</SelectItem><SelectItem value="wildcard">Authorized wildcard discovery</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Web profile</Label><Select value={profile} onValueChange={(value) => { setProfile(value as typeof profile); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="web-gentle">Gentle · production</SelectItem><SelectItem value="web-thorough">Thorough · lab or staging</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Thorough profile allows higher request rates and larger endpoint budgets.</p></div></div></CardContent></Card>
       </>}
 
       {step === 1 && <Card><CardHeader><CardTitle>Choose coverage</CardTitle><p className="text-sm text-muted-foreground">Options reflect your mode and target. The planner will confirm which scanners can provide each type.</p></CardHeader><CardContent className="space-y-4">{coverageOptions.length ? <div className="grid gap-2 sm:grid-cols-2">{coverageOptions.map((type) => { const Icon = TYPE_ICONS[type]; const checked = assessmentTypes.includes(type); return <label key={type} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-muted/20 ${checked ? "border-primary/60 bg-primary/5" : ""}`}><input type="checkbox" checked={checked} onChange={() => toggleAssessmentType(type)} className="mt-1" /><Icon className={`mt-0.5 h-4 w-4 shrink-0 ${checked ? "text-primary" : "text-muted-foreground"}`} aria-hidden /><span><span className="text-sm font-medium">{TYPE_LABELS[type]}</span><span className="mt-1 block text-xs text-muted-foreground">{coverageDescription(type)}</span></span></label>; })}</div> : <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No coverage options match yet. Add an applicable target first, or <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => setStep(2)}>configure a White Box resource input</button>, then return here.</div>}
