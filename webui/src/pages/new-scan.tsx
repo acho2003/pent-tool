@@ -30,6 +30,15 @@ const TYPE_ICONS: Record<AssessmentType, LucideIcon> = {
   INFRASTRUCTURE_AS_CODE: FileText, COMPLIANCE: ShieldCheck,
 };
 
+type SavedAccess = {
+  targetId: string;
+  kind: "APPLICATION_HEADERS" | "FORM_LOGIN";
+  credentialId: string;
+  name: string;
+  verifyURL: string;
+  verifyMarker: string;
+};
+
 export default function NewScanPage() {
   const nav = useNavigate();
   const start = useStartScan();
@@ -55,7 +64,8 @@ export default function NewScanPage() {
   const [apiDefinitionInfo, setAPIDefinitionInfo] = useState("");
   const [apiTargetId, setAPITargetId] = useState("");
   const [uploadingDefinition, setUploadingDefinition] = useState(false);
-  const [credentialId, setCredentialId] = useState("");
+  // One saved, target-bound credential per target (e.g. a frontend and its API).
+  const [savedAccess, setSavedAccess] = useState<SavedAccess[]>([]);
   const [credentialTargetId, setCredentialTargetId] = useState("target-1");
   const [credentialKind, setCredentialKind] = useState<"APPLICATION_HEADERS" | "FORM_LOGIN">("APPLICATION_HEADERS");
   const [credentialName, setCredentialName] = useState("Web scan credential");
@@ -71,11 +81,8 @@ export default function NewScanPage() {
   const [loginSubmitFormat, setLoginSubmitFormat] = useState<"form" | "json">("form");
   const [loginSubmitURL, setLoginSubmitURL] = useState("");
   const [savingCredential, setSavingCredential] = useState(false);
-  const [credentialSaved, setCredentialSaved] = useState(false);
   // Kept apart from planError so Preview can't overwrite why a save failed.
   const [credentialError, setCredentialError] = useState<string | null>(null);
-  const [authVerifyURL, setAuthVerifyURL] = useState("");
-  const [authVerifyMarker, setAuthVerifyMarker] = useState("");
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
   const registryQuery = useQuery({ queryKey: ["assessment-scanner-registry"], queryFn: api.scannerRegistry, refetchInterval: 30000 });
   const registry: AssessmentScannerDefinition[] = registryQuery.data?.scanners ?? [];
@@ -121,8 +128,8 @@ export default function NewScanPage() {
     if (next !== "WHITE_BOX") { setArtifactKind("none"); setArtifactRef(""); }
     if (next === "BLACK_BOX") { setAPIDefinitionId(""); setAPIDefinitionInfo(""); setAPITargetId(""); }
     if (next === "BLACK_BOX") {
-      setCredentialId(""); setCredentialSaved(false); setCredentialError(null); setHeaderValue(""); setLoginPassword("");
-      setAuthVerifyURL(""); setAuthVerifyMarker(""); setVulsHost("");
+      setSavedAccess([]); setCredentialError(null); setHeaderValue(""); setLoginPassword("");
+      setVulsHost("");
     }
     setAssessmentTypes((current) => current.filter((type) => next === "WHITE_BOX" || !["SOURCE_CODE", "DEPENDENCIES", "CONTAINER", "INFRASTRUCTURE_AS_CODE", "CLOUD", "KUBERNETES", "COMPLIANCE"].includes(type)));
   }
@@ -130,7 +137,7 @@ export default function NewScanPage() {
   function onTargetsChange(value: string) {
     setTargetsText(value);
     setAssessmentPlan(null);
-    setCredentialId(""); setCredentialSaved(false); setCredentialError(null); setCredentialTargetId("target-1");
+    setSavedAccess([]); setCredentialError(null); setCredentialTargetId("target-1");
     setAPIDefinitionId(""); setAPIDefinitionInfo(""); setAPITargetId("");
   }
 
@@ -143,15 +150,34 @@ export default function NewScanPage() {
     setSeverities((current) => current.includes(severity) ? current.filter((item) => item !== severity) : [...current, severity]);
   }
 
+  function targetLabel(targetId: string): string {
+    return targets[Number(targetId.replace("target-", "")) - 1] ?? targetId;
+  }
+
+  function updateSavedAccess(targetId: string, patch: Partial<SavedAccess>) {
+    setSavedAccess((current) => current.map((access) => access.targetId === targetId ? { ...access, ...patch } : access));
+    setAssessmentPlan(null);
+  }
+
+  function removeSavedAccess(targetId: string) {
+    setSavedAccess((current) => current.filter((access) => access.targetId !== targetId));
+    setCredentialTargetId(targetId);
+    setAssessmentPlan(null);
+  }
+
   function authenticationSetupError(): string | null {
-    if (!credentialId && credentialError) {
+    if (credentialError && !savedAccess.some((access) => access.targetId === credentialTargetId)) {
       return `Credential was not saved: ${credentialError}`;
     }
-    if (credentialKind === "FORM_LOGIN" && !credentialId) {
+    if (loginPassword || headerValue) {
+      return "Save the credential you entered (Save encrypted credential) before previewing an authenticated assessment.";
+    }
+    if (credentialKind === "FORM_LOGIN" && !savedAccess.length) {
       return "Save the form-login credential before previewing an authenticated assessment.";
     }
-    if (credentialId && (!authVerifyURL.trim() || !authVerifyMarker.trim())) {
-      return "Add a protected verification URL and a response marker that appears only after login.";
+    const unverified = savedAccess.find((access) => !access.verifyURL.trim() || !access.verifyMarker.trim());
+    if (unverified) {
+      return `Add a protected verification URL and a response marker that appears only after login for ${targetLabel(unverified.targetId)}.`;
     }
     return null;
   }
@@ -176,7 +202,7 @@ export default function NewScanPage() {
         assessment_targets: assessmentTargets,
         profile,
         subdomain_discovery: subdomainDiscovery,
-        access: credentialId ? [{ target_ids: [credentialTargetId], kind: credentialKind, credential_id: credentialId, verify_url: authVerifyURL, verify_marker: authVerifyMarker }] : undefined,
+        access: savedAccess.length ? savedAccess.map((access) => ({ target_ids: [access.targetId], kind: access.kind, credential_id: access.credentialId, verify_url: access.verifyURL.trim(), verify_marker: access.verifyMarker })) : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
         scanner_selection: optionalAssessmentScanners.length > 0
           ? { mode: "custom", variants: [...new Set([...selectable.map((tool) => tool.name), ...optionalAssessmentScanners])] }
@@ -212,12 +238,14 @@ export default function NewScanPage() {
           ? { login_url: loginURL.trim(), username: loginUsername, password: loginPassword, username_field: loginUsernameField.trim() || "username", password_field: loginPasswordField.trim() || "password", ...(loginSubmitFormat === "json" ? { submit_format: "json" } : {}), ...(loginSubmitURL.trim() ? { submit_url: loginSubmitURL.trim() } : {}), ...(loginSubmitFormat === "form" && loginCSRFField.trim() ? { csrf_field: loginCSRFField.trim() } : {}) }
           : { [headerName.trim()]: headerValue },
       });
-      setCredentialId(credential.id);
-      setAuthVerifyURL(targets[credentialTargetIndex]);
+      const saved: SavedAccess = { targetId: credentialTargetId, kind: credentialKind, credentialId: credential.id, name: credential.name, verifyURL: "", verifyMarker: "" };
+      const nextAccess = [...savedAccess.filter((access) => access.targetId !== credentialTargetId), saved];
+      setSavedAccess(nextAccess);
+      const nextIndex = targets.findIndex((_, i) => !nextAccess.some((access) => access.targetId === `target-${i + 1}`));
+      if (nextIndex >= 0) setCredentialTargetId(`target-${nextIndex + 1}`);
       setHeaderValue("");
       setLoginPassword("");
       setAssessmentPlan(null);
-      setCredentialSaved(true);
     } catch (err) {
       setCredentialError(err instanceof Error ? err.message : "Could not save credential");
     } finally {
@@ -275,7 +303,7 @@ export default function NewScanPage() {
       setError("Preview the assessment plan after your last configuration change before saving or starting.");
       return;
     }
-	if (credentialId && !assessmentPlan.config.access?.some((binding) => binding.credential_id === credentialId && binding.target_ids.includes(credentialTargetId))) {
+	if (savedAccess.some((access) => !assessmentPlan.config.access?.some((binding) => binding.credential_id === access.credentialId && binding.target_ids.includes(access.targetId)))) {
 	  setError("The previewed plan does not include this login credential. Preview the plan again before starting.");
 	  return;
 	}
@@ -344,7 +372,7 @@ export default function NewScanPage() {
       </CardContent></Card>}
 
       {step === 2 && <div className="space-y-4">
-        {(assessmentMode === "GRAY_BOX" || assessmentMode === "WHITE_BOX") && <Card><CardHeader><CardTitle>Target access</CardTitle><p className="text-sm text-muted-foreground">Saving credentials configures access. Xalgorix reports them as verified only after the protected URL and response marker are checked at scan start.</p></CardHeader><CardContent className="space-y-4">{credentialSaved && <p className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-300">Credential saved and bound to target. Verification is still pending.</p>}{credentialId ? <p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {credentialId}</p> : <><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Credential type</Label><Select value={credentialKind} onValueChange={(value) => { setCredentialKind(value as "APPLICATION_HEADERS" | "FORM_LOGIN"); setCredentialId(""); setCredentialSaved(false); setCredentialError(null); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="APPLICATION_HEADERS">HTTP header or token</SelectItem><SelectItem value="FORM_LOGIN">Form login</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select></div></div><div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div>{credentialKind === "APPLICATION_HEADERS" ? <><div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div></> : <><div className="space-y-2"><Label htmlFor="login-url">Login page URL</Label><Input id="login-url" value={loginURL} onChange={(e) => setLoginURL(e.target.value)} placeholder="https://app.example.test/login" /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Login is submitted as</Label><Select value={loginSubmitFormat} onValueChange={(value) => setLoginSubmitFormat(value as "form" | "json")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="form">HTML form post</SelectItem><SelectItem value="json">JSON API (page script calls an API)</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="login-submit-url">{loginSubmitFormat === "json" ? "Login API URL" : "Submit URL (optional)"}</Label><Input id="login-submit-url" value={loginSubmitURL} onChange={(e) => setLoginSubmitURL(e.target.value)} placeholder={loginSubmitFormat === "json" ? "https://app.example.test/api/auth/login" : "Defaults to the form action"} /></div></div>{loginSubmitFormat === "json" && <p className="text-xs text-muted-foreground">Use this when the sign-in page logs in with JavaScript (DevTools → Network shows a JSON POST). Xalgorix sends {"{"}username field: username, password field: password{"}"} to the API URL and keeps the session cookie it returns.</p>}<div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="login-username">Username</Label><Input id="login-username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} autoComplete="username" /></div><div className="space-y-2"><Label htmlFor="login-password">Password</Label><Input id="login-password" type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} /></div></div><div className={loginSubmitFormat === "json" ? "grid gap-3 sm:grid-cols-2" : "grid gap-3 sm:grid-cols-3"}><div className="space-y-2"><Label htmlFor="username-field">Username field</Label><Input id="username-field" value={loginUsernameField} onChange={(e) => setLoginUsernameField(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="password-field">Password field</Label><Input id="password-field" value={loginPasswordField} onChange={(e) => setLoginPasswordField(e.target.value)} /></div>{loginSubmitFormat === "form" && <div className="space-y-2"><Label htmlFor="csrf-field">CSRF field (optional)</Label><Input id="csrf-field" value={loginCSRFField} onChange={(e) => setLoginCSRFField(e.target.value)} placeholder="csrf" /></div>}</div></>}<Button type="button" variant="outline" onClick={() => void saveCredential()} disabled={savingCredential || (credentialKind === "FORM_LOGIN" ? !loginURL || !loginUsername || !loginPassword : !headerValue)}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button>{credentialError && <p role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{credentialError}</p>}</>}{credentialId && <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="auth-verify-url">Protected verification URL</Label><Input id="auth-verify-url" value={authVerifyURL} onChange={(e) => { setAuthVerifyURL(e.target.value); setAssessmentPlan(null); }} placeholder="https://app.example.test/account" /></div><div className="space-y-2"><Label htmlFor="auth-verify-marker">Expected response marker</Label><Input id="auth-verify-marker" value={authVerifyMarker} onChange={(e) => { setAuthVerifyMarker(e.target.value); setAssessmentPlan(null); }} placeholder="Text only visible after login" /></div></div>}</CardContent></Card>}
+        {(assessmentMode === "GRAY_BOX" || assessmentMode === "WHITE_BOX") && <Card><CardHeader><CardTitle>Target access</CardTitle><p className="text-sm text-muted-foreground">Saving credentials configures access. Xalgorix reports them as verified only after the protected URL and response marker are checked at scan start.</p></CardHeader><CardContent className="space-y-4">{savedAccess.map((access) => <div key={access.targetId} className="space-y-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-emerald-300">{access.kind === "FORM_LOGIN" ? "Form login" : "HTTP header"} saved and bound to <span className="font-mono">{targetLabel(access.targetId)}</span>. Verification is still pending.</p><Button type="button" size="sm" variant="outline" onClick={() => removeSavedAccess(access.targetId)}>Remove</Button></div><p className="break-all font-mono text-xs text-muted-foreground">Credential reference: {access.credentialId}</p><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor={`auth-verify-url-${access.targetId}`}>Protected verification URL</Label><Input id={`auth-verify-url-${access.targetId}`} value={access.verifyURL} onChange={(e) => updateSavedAccess(access.targetId, { verifyURL: e.target.value })} placeholder={`${targetLabel(access.targetId).replace(/\/+$/, "")}/a-page-that-needs-login`} /></div><div className="space-y-2"><Label htmlFor={`auth-verify-marker-${access.targetId}`}>Expected response marker</Label><Input id={`auth-verify-marker-${access.targetId}`} value={access.verifyMarker} onChange={(e) => updateSavedAccess(access.targetId, { verifyMarker: e.target.value })} placeholder="Text only visible after login" /></div></div></div>)}{savedAccess.length < targets.length && <>{savedAccess.length > 0 && <p className="text-sm font-medium">Add a credential for another target</p>}<div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Credential type</Label><Select value={credentialKind} onValueChange={(value) => { setCredentialKind(value as "APPLICATION_HEADERS" | "FORM_LOGIN"); setCredentialError(null); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="APPLICATION_HEADERS">HTTP header or token</SelectItem><SelectItem value="FORM_LOGIN">Form login</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Bind to target</Label><Select value={credentialTargetId} onValueChange={(value) => { setCredentialTargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => ({ target, id: `target-${i + 1}` })).filter(({ id }) => !savedAccess.some((access) => access.targetId === id)).map(({ target, id }) => <SelectItem key={id} value={id}>{target}</SelectItem>)}</SelectContent></Select></div></div><div className="space-y-2"><Label htmlFor="credential-name">Credential name</Label><Input id="credential-name" value={credentialName} onChange={(e) => setCredentialName(e.target.value)} /></div>{credentialKind === "APPLICATION_HEADERS" ? <><div className="space-y-2"><Label htmlFor="auth-header-name">Header name</Label><Input id="auth-header-name" value={headerName} onChange={(e) => setHeaderName(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="auth-header-value">Header value</Label><Input id="auth-header-value" type="password" autoComplete="new-password" value={headerValue} onChange={(e) => setHeaderValue(e.target.value)} placeholder="Bearer token or cookie value" /></div></> : <><div className="space-y-2"><Label htmlFor="login-url">Login page URL</Label><Input id="login-url" value={loginURL} onChange={(e) => setLoginURL(e.target.value)} placeholder="https://app.example.test/login" /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Login is submitted as</Label><Select value={loginSubmitFormat} onValueChange={(value) => setLoginSubmitFormat(value as "form" | "json")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="form">HTML form post</SelectItem><SelectItem value="json">JSON API (page script calls an API)</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="login-submit-url">{loginSubmitFormat === "json" ? "Login API URL" : "Submit URL (optional)"}</Label><Input id="login-submit-url" value={loginSubmitURL} onChange={(e) => setLoginSubmitURL(e.target.value)} placeholder={loginSubmitFormat === "json" ? "https://app.example.test/api/auth/login" : "Defaults to the form action"} /></div></div>{loginSubmitFormat === "json" && <p className="text-xs text-muted-foreground">Use this when the sign-in page logs in with JavaScript (DevTools → Network shows a JSON POST). Xalgorix sends {"{"}username field: username, password field: password{"}"} to the API URL and keeps the session cookie it returns.</p>}<div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="login-username">Username</Label><Input id="login-username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} autoComplete="username" /></div><div className="space-y-2"><Label htmlFor="login-password">Password</Label><Input id="login-password" type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} /></div></div><div className={loginSubmitFormat === "json" ? "grid gap-3 sm:grid-cols-2" : "grid gap-3 sm:grid-cols-3"}><div className="space-y-2"><Label htmlFor="username-field">Username field</Label><Input id="username-field" value={loginUsernameField} onChange={(e) => setLoginUsernameField(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="password-field">Password field</Label><Input id="password-field" value={loginPasswordField} onChange={(e) => setLoginPasswordField(e.target.value)} /></div>{loginSubmitFormat === "form" && <div className="space-y-2"><Label htmlFor="csrf-field">CSRF field (optional)</Label><Input id="csrf-field" value={loginCSRFField} onChange={(e) => setLoginCSRFField(e.target.value)} placeholder="csrf" /></div>}</div></>}<Button type="button" variant="outline" onClick={() => void saveCredential()} disabled={savingCredential || (credentialKind === "FORM_LOGIN" ? !loginURL || !loginUsername || !loginPassword : !headerValue)}>{savingCredential ? "Encrypting…" : "Save encrypted credential"}</Button>{credentialError && <p role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{credentialError}</p>}</>}</CardContent></Card>}
         {assessmentMode === "GRAY_BOX" && <Card><CardHeader><CardTitle>Supported host access</CardTitle><p className="text-xs text-muted-foreground">Optional. Uses an operator managed SSH alias where a selected host scanner supports it.</p></CardHeader><CardContent><Label htmlFor="vuls">SSH host alias</Label><Input id="vuls" className="mt-2" value={vulsHost} onChange={(e) => setVulsHost(e.target.value)} placeholder="prod-web" /></CardContent></Card>}
         {(assessmentMode === "GRAY_BOX" || assessmentMode === "WHITE_BOX") && <Card><CardHeader><CardTitle>API definition</CardTitle><p className="text-xs text-muted-foreground">Optional OpenAPI or Swagger file. Its server URLs do not expand assessment scope.</p></CardHeader><CardContent className="space-y-3"><Input id="api-definition" type="file" accept=".json,.yaml,.yml,application/json" onChange={(e) => void uploadAPIDefinition(e)} disabled={uploadingDefinition} />{apiDefinitionId && <><p className="break-all font-mono text-xs text-muted-foreground">{apiDefinitionInfo} · {apiDefinitionId}</p><div className="space-y-2"><Label>Map definition to target</Label><Select value={apiTargetId || "target-1"} onValueChange={(value) => { setAPITargetId(value); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{targets.map((target, i) => <SelectItem key={i} value={`target-${i + 1}`}>{target}</SelectItem>)}</SelectContent></Select></div></>}</CardContent></Card>}
       </div>}
