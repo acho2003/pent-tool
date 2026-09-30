@@ -187,30 +187,33 @@ type Config struct {
 	// (resolved from the vault) for prowler/scoutsuite, keyed by target ID. Passed
 	// to the runner via env, never persisted in scan records.
 	AssessmentCloudCreds map[string]CloudCredential
-	MaxOutputBytes       int64
-	NucleiTimeout        time.Duration
-	ZAPTimeout           time.Duration
-	OpenVASTimeout       time.Duration
-	TrivyTimeout         time.Duration
-	VulsTimeout          time.Duration
-	SubfinderTimeout     time.Duration
-	HttpxTimeout         time.Duration
-	NmapTimeout          time.Duration
-	MasscanTimeout       time.Duration
-	MasscanRate          int
-	NiktoTimeout         time.Duration
-	KatanaTimeout        time.Duration
-	DalfoxTimeout        time.Duration
-	WapitiTimeout        time.Duration
-	SqlmapTimeout        time.Duration
-	KubeBenchTimeout     time.Duration
-	ProwlerTimeout       time.Duration
-	ScoutSuiteTimeout    time.Duration
-	LynisTimeout         time.Duration
-	TestsslTimeout       time.Duration
-	SemgrepTimeout       time.Duration
-	GitleaksTimeout      time.Duration
-	OsvTimeout           time.Duration
+	// AssessmentRepoCreds holds runtime-only, target-bound tokens for cloning
+	// private repositories, keyed by target ID. Handed to git via env only.
+	AssessmentRepoCreds map[string]RepoCredential
+	MaxOutputBytes      int64
+	NucleiTimeout       time.Duration
+	ZAPTimeout          time.Duration
+	OpenVASTimeout      time.Duration
+	TrivyTimeout        time.Duration
+	VulsTimeout         time.Duration
+	SubfinderTimeout    time.Duration
+	HttpxTimeout        time.Duration
+	NmapTimeout         time.Duration
+	MasscanTimeout      time.Duration
+	MasscanRate         int
+	NiktoTimeout        time.Duration
+	KatanaTimeout       time.Duration
+	DalfoxTimeout       time.Duration
+	WapitiTimeout       time.Duration
+	SqlmapTimeout       time.Duration
+	KubeBenchTimeout    time.Duration
+	ProwlerTimeout      time.Duration
+	ScoutSuiteTimeout   time.Duration
+	LynisTimeout        time.Duration
+	TestsslTimeout      time.Duration
+	SemgrepTimeout      time.Duration
+	GitleaksTimeout     time.Duration
+	OsvTimeout          time.Duration
 }
 
 type GVMSSHCredential struct {
@@ -225,6 +228,13 @@ type GVMSSHCredential struct {
 type CloudCredential struct {
 	Provider string
 	Env      map[string]string
+}
+
+// RepoCredential authenticates a repository clone. Username defaults to
+// "x-access-token", which GitHub accepts for personal access tokens.
+type RepoCredential struct {
+	Username string
+	Token    string
 }
 
 type EmitFunc func(Event)

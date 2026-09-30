@@ -53,6 +53,24 @@ func TestValidate_BlackBoxRejectsCredentialsAndInternalResources(t *testing.T) {
 	}
 }
 
+func TestValidate_RepositoryTargetMustBeOneHTTPSCloneURL(t *testing.T) {
+	for _, value := range []string{
+		"https://github.com/a/one.git, https://github.com/a/two.git",
+		"https://github.com/a/one.git https://github.com/a/two.git",
+		"https://user:token@github.com/a/one.git",
+		"git@github.com:a/one.git",
+	} {
+		cfg := Normalize(AssessmentConfig{Mode: ModeWhiteBox, Types: []Type{TypeSourceCode}, Targets: []Target{{ID: "repo", Kind: KindRepository, Value: value}}})
+		if !hasCode(Validate(cfg), "target.value.invalid") {
+			t.Errorf("repository value %q should be rejected", value)
+		}
+	}
+	cfg := Normalize(AssessmentConfig{Mode: ModeWhiteBox, Types: []Type{TypeSourceCode}, Targets: []Target{{ID: "repo", Kind: KindRepository, Value: "https://github.com/a/one.git"}}})
+	if hasCode(Validate(cfg), "target.value.invalid") {
+		t.Error("a single HTTPS clone URL should be accepted")
+	}
+}
+
 func TestValidate_GrayBoxRequiresWhiteBoxForSource(t *testing.T) {
 	cfg := Normalize(AssessmentConfig{
 		Mode:    ModeGrayBox,

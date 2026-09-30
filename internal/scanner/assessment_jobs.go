@@ -93,6 +93,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 
 	results := make([]Run, 0, len(plan.Jobs))
 	webDeadlines := map[string]time.Time{}
+	repoCheckouts := map[string]repoCheckout{}
 	targetKinds := map[string]assessment.TargetKind{}
 	for _, target := range plan.Config.Targets {
 		targetKinds[target.ID] = target.Kind
@@ -260,7 +261,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 
 		if job.State == PlanConditional {
 			reason := ""
-			if job.Scanner != "vuls" && job.Scanner != "lynis" {
+			switch {
+			case targetKinds[job.TargetID] == assessment.KindRepository:
+				// Source scanners read a local checkout; the run keeps reporting
+				// the repository URL so coverage still matches the planned job.
+				var dir string
+				dir, reason = prepareRepositoryCheckout(ctx, scanDir, job.TargetID, job.Target, p.Config.AssessmentRepoCreds[job.TargetID], repoCheckouts)
+				if reason == "" {
+					req.Target = dir
+				}
+			case job.Scanner != "vuls" && job.Scanner != "lynis":
 				reason = prepareLocalAssessmentResource(plan.Config.Mode, targetKinds[job.TargetID], job.Target, job.Scanner)
 			}
 			if reason != "" {
@@ -329,6 +339,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if emit != nil {
 			runEmit = func(event Event) {
 				if event.Run.Scanner != "" {
+					event.Run.Target = job.Target
 					event.Run.Scope = scope
 					event.Run.Variant = job.Variant
 					event.Run.AssessmentTypes = jobAssessmentTypes(job)
@@ -350,6 +361,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		run.Authenticated = req.TargetAuth != "" && run.Status == "completed" && (job.Scanner == "zap" || job.Scanner == "nuclei")
+		run.Target = job.Target
 		run.Scope = scope
 		run.Variant = job.Variant
 		run.AssessmentTypes = jobAssessmentTypes(job)

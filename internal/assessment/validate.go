@@ -254,6 +254,16 @@ func validateTargetValue(target Target) error {
 		if _, err := netip.ParsePrefix(value); err != nil {
 			return fmt.Errorf("CIDR targets must contain a valid network prefix")
 		}
+	case KindRepository:
+		// One clone URL per target: a comma- or space-joined list would be
+		// handed to git as a single nonexistent URL.
+		if strings.ContainsAny(value, " \t\r\n,") {
+			return fmt.Errorf("repository targets must be a single repository URL; add each repository separately")
+		}
+		u, err := url.Parse(value)
+		if err != nil || strings.ToLower(u.Scheme) != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("repository targets must be HTTPS clone URLs without embedded credentials, query, or fragment")
+		}
 	case KindDomain:
 		if strings.ContainsAny(value, "/:? #") || value == "" {
 			return fmt.Errorf("domain targets must be hostnames without a scheme, port, path, query, or fragment")
