@@ -7,12 +7,15 @@ import type {
 	CredentialMetadata,
   AuthStatus,
   EnvironmentSettings,
+  FindingObservation,
+  FindingsProject,
   InstancesResponse,
   ListParams,
   Paginated,
   QueueStatus,
   RateLimitSettings,
   ScanInstance,
+  ScanFinding,
   ScanListItem,
   ScanRecord,
   ScanRequest,
@@ -191,6 +194,8 @@ function listQuery(params: ListParams): string {
   if (params.size) sp.set("size", String(params.size));
   if (params.q && params.q.trim()) sp.set("q", params.q.trim());
   if (params.status && params.status !== "all") sp.set("status", params.status);
+  if (params.severity && params.severity !== "all") sp.set("severity", params.severity);
+  if (params.scanner && params.scanner !== "all") sp.set("scanner", params.scanner);
   if (params.mode && params.mode !== "all") sp.set("mode", params.mode);
   const qs = sp.toString();
   return qs ? `?${qs}` : "";
@@ -219,16 +224,17 @@ export const api = {
   // Flattened + deduped findings across all scans, computed server-side in a
   // single walk. Replaces the previous per-scan getScan() fan-out.
   listFindings: () => http<FlatFinding[] | null>("/api/findings"),
+  listFindingProjects: () => http<{ projects: FindingsProject[] }>("/api/findings/projects"),
   listScanFindings: (scanId: string, params: ListParams = { page: 1, size: 50 }) =>
-    http<Paginated<VulnSummary>>(`/api/scans/${scanId}/findings${listQuery(params)}`),
+    http<Paginated<ScanFinding>>(`/api/scans/${encodeURIComponent(scanId)}/findings${listQuery(params)}`),
   rebuildScanFindings: (scanId: string) =>
     http<{ status: string; summary: unknown }>(`/api/scans/${scanId}/findings/rebuild`, { method: "POST" }),
   updateFindingStatus: (scanId: string, findingId: string, status: string, reason: string) =>
-    http<VulnSummary>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}`, { method: "PATCH", body: JSON.stringify({ status, reason }) }),
+    http<ScanFinding>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}`, { method: "PATCH", body: JSON.stringify({ status, reason }) }),
   findingEndpoints: (scanId: string, findingId: string, params: ListParams = { page: 1, size: 50 }) =>
-    http<Paginated<VulnSummary["affected_endpoints"] extends Array<infer T> ? T : never>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/endpoints${listQuery(params)}`),
+    http<Paginated<NonNullable<ScanFinding["endpoints"]>[number]>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/endpoints${listQuery(params)}`),
   findingObservations: (scanId: string, findingId: string, params: ListParams = { page: 1, size: 50 }) =>
-    http<Paginated<Record<string, unknown>>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/observations${listQuery(params)}`),
+    http<Paginated<FindingObservation>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/observations${listQuery(params)}`),
   deleteScan: (id: string) =>
     http<{ status: string }>(`/api/scans/${id}`, { method: "DELETE" }),
   deleteVuln: (scanId: string, vulnId: string) =>

@@ -148,6 +148,39 @@ function allFindings() {
   return out;
 }
 
+function mockScanFindings(scan) {
+  const vulns = state.instances.find((inst) => inst.targets === scan.target)?.vulns || scan.vulns || [];
+  return vulns.map((vuln) => ({
+    id: vuln.id, fingerprint: `${scan.id}:${vuln.id}`, normalized_type: vuln.title.toLowerCase().replaceAll(" ", "_"),
+    title: vuln.title, dedupe_scope: "ENDPOINT", target: scan.target, severity: vuln.severity,
+    status: vuln.severity === "info" ? "OBSERVATION" : "POTENTIAL", cvss: vuln.cvss,
+    cve: vuln.cve ? [vuln.cve] : [], cwe: [], scanners: ["mock scanner"],
+    observation_ids: [`${vuln.id}-observation`], observation_count: 1,
+    affected_endpoint_count: 1, affected_instance_count: 1,
+    endpoints: [{ endpoint: vuln.endpoint, canonical_endpoint: vuln.endpoint, method: "GET", scanner: "mock scanner" }],
+  }));
+}
+
+function mockFindingProjects() {
+  const byID = new Map();
+  for (const scan of state.scans) {
+    const label = (scan.parent_target || scan.target).toLowerCase();
+    const id = `host:${label}`;
+    const findings = mockScanFindings(scan);
+    const severity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+    for (const finding of findings) if (finding.status !== "OBSERVATION") severity[finding.severity]++;
+    const active = findings.filter((finding) => finding.status !== "OBSERVATION").length;
+    const item = { id: scan.id, name: scan.name, target: scan.target, parent_target: scan.parent_target, started_at: scan.started_at, status: scan.status, finding_count: findings.length, active_count: active, observation_count: findings.length, severity };
+    let project = byID.get(id);
+    if (!project) { project = { id, label, latest_at: scan.started_at, scan_count: 0, finding_count: 0, active_count: 0, observation_count: 0, severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, scans: [] }; byID.set(id, project); }
+    project.scans.push(item); project.scan_count++; project.finding_count += item.finding_count;
+    project.active_count += item.active_count; project.observation_count += item.observation_count;
+    for (const key of Object.keys(severity)) project.severity[key] += severity[key];
+    if (scan.started_at > project.latest_at) project.latest_at = scan.started_at;
+  }
+  return { projects: [...byID.values()].sort((a, b) => b.latest_at.localeCompare(a.latest_at)) };
+}
+
 function findingsSummary() {
   const totals = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of allFindings()) {
@@ -285,6 +318,29 @@ const server = http.createServer(async (req, res) => {
   // -------- Scans (records) -------------------------------------------------
   if (method === "GET" && url === "/api/scans") {
     return send(res, state.scans);
+  }
+  const scanFindings = url.match(/^\/api\/scans\/([^/]+)\/findings$/);
+  if (scanFindings && method === "GET") {
+    const scan = state.scans.find((item) => item.id === scanFindings[1]);
+    if (!scan) return send(res, { error: "not found" }, 404);
+    const params = new URL(req.url, "http://localhost").searchParams;
+    const q = (params.get("q") || "").toLowerCase();
+    const severity = params.get("severity") || "";
+    const status = params.get("status") || "";
+    const scanner = (params.get("scanner") || "").toLowerCase();
+    const findings = mockScanFindings(scan).filter((item) =>
+      (!q || `${item.title} ${item.target} ${item.endpoints[0]?.endpoint || ""} ${item.cve.join(" ")}`.toLowerCase().includes(q)) &&
+      (!severity || item.severity === severity) && (!status || item.status === status) &&
+      (!scanner || item.scanners.some((name) => name.toLowerCase() === scanner)));
+    const page = Math.max(1, Number(params.get("page")) || 1);
+    const size = Math.max(1, Number(params.get("size")) || 50);
+    return send(res, { items: findings.slice((page - 1) * size, page * size), total: findings.length, page, size });
+  }
+  const findingObservations = url.match(/^\/api\/scans\/([^/]+)\/findings\/([^/]+)\/observations$/);
+  if (findingObservations && method === "GET") {
+    const scan = state.scans.find((item) => item.id === findingObservations[1]);
+    const finding = scan && mockScanFindings(scan).find((item) => item.id === findingObservations[2]);
+    return finding ? send(res, { items: [{ id: `${finding.id}-observation`, scanner: "mock scanner", title: finding.title, endpoint: finding.endpoints[0]?.endpoint, evidence: "Sample scanner evidence" }], total: 1, page: 1, size: 10 }) : send(res, { error: "not found" }, 404);
   }
   const scanOne = url.match(/^\/api\/scans\/([^/]+)$/);
   if (scanOne) {
@@ -438,6 +494,9 @@ const server = http.createServer(async (req, res) => {
   // -------- Findings list + on-disk summary --------------------------------
   if (method === "GET" && url === "/api/findings") {
     return send(res, allFindings());
+  }
+  if (method === "GET" && url === "/api/findings/projects") {
+    return send(res, mockFindingProjects());
   }
   if (method === "GET" && url === "/api/findings/summary") {
     return send(res, findingsSummary());

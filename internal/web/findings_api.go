@@ -175,7 +175,11 @@ func filterSecurityFindings(in []scanner.SecurityFinding, r *http.Request) []sca
 				continue
 			}
 		}
-		if q != "" && !strings.Contains(strings.ToLower(strings.Join([]string{f.Title, f.NormalizedType, f.Target, f.Fingerprint}, " ")), q) {
+		searchable := []string{f.Title, f.NormalizedType, f.Target, f.Fingerprint, strings.Join(f.CVE, " "), strings.Join(f.CWE, " ")}
+		for _, endpoint := range f.Endpoints {
+			searchable = append(searchable, endpoint.Endpoint, endpoint.CanonicalEndpoint, endpoint.Parameter)
+		}
+		if q != "" && !strings.Contains(strings.ToLower(strings.Join(searchable, " ")), q) {
 			continue
 		}
 		out = append(out, f)

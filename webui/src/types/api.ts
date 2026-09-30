@@ -299,12 +299,71 @@ export interface Paginated<T> {
   size: number;
 }
 
+export interface ScanFinding {
+  id: string;
+  fingerprint: string;
+  normalized_type: string;
+  title: string;
+  dedupe_scope: string;
+  target?: string;
+  severity: string;
+  cvss?: number;
+  cve?: string[];
+  cwe?: string[];
+  scanners?: string[];
+  status: string;
+  status_reason?: string;
+  observation_ids?: string[];
+  endpoints?: Array<{ endpoint?: string; canonical_endpoint?: string; method?: string; parameter?: string; parameter_location?: string; scanner?: string; observation_ids?: string[] }>;
+  affected_endpoint_count: number;
+  affected_instance_count: number;
+  observation_count: number;
+  validation_reason?: string;
+}
+
+export interface FindingObservation {
+  id: string;
+  scanner: string;
+  title: string;
+  evidence_reference?: string;
+  endpoint?: string;
+  evidence?: string;
+  observed_at?: string;
+}
+
+export interface FindingsProjectScan {
+  id: string;
+  name?: string;
+  target: string;
+  parent_target?: string;
+  started_at: string;
+  status: string;
+  finding_count: number;
+  active_count: number;
+  observation_count: number;
+  severity: Record<string, number>;
+}
+
+export interface FindingsProject {
+  id: string;
+  label: string;
+  latest_at: string;
+  scan_count: number;
+  finding_count: number;
+  active_count: number;
+  observation_count: number;
+  severity: Record<string, number>;
+  scans: FindingsProjectScan[];
+}
+
 /** Query params accepted by the paginated list endpoints. */
 export interface ListParams {
   page: number;
   size: number;
   q?: string;
   status?: string;
+  severity?: string;
+  scanner?: string;
   mode?: string;
 }
 

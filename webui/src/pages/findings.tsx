@@ -1,503 +1,134 @@
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import {
-  keepPreviousData,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
-import {
-  ExternalLink,
-  Filter,
-  MoreHorizontal,
-  RefreshCw,
-  Search,
-  ShieldAlert,
-  Trash2,
-} from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronRight, ExternalLink, FolderOpen, RefreshCw, Search, ShieldAlert } from "lucide-react";
+import { api, HttpError } from "@/api/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SeverityBadge } from "@/components/severity-badge";
-import { VerificationBadge } from "@/components/verification-badge";
+import { ScanStatusPill } from "@/components/scan-status-pill";
 import { EmptyState } from "@/components/states";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  DEFAULT_PAGE_SIZE,
-  PAGE_SIZE_OPTIONS,
-  Pagination,
-} from "@/components/Pagination";
-import { useDeleteVuln, useScansList, useFindingsList, qk } from "@/api/queries";
-import type { FindingsSummaryResponse } from "@/types/api";
-import { dedupFindings, type FlatFinding } from "@/lib/findings";
-import {
-  cn,
-  normalizeSeverity,
-  timeAgo,
-  menuContentClass,
-  menuItemClass,
-} from "@/lib/utils";
+import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, Pagination } from "@/components/Pagination";
+import type { FindingsProject, FindingsProjectScan, ScanFinding } from "@/types/api";
+import { timeAgo } from "@/lib/utils";
 
-interface SeverityCounts {
-  critical: number;
-  high: number;
-  medium: number;
-  low: number;
-  info: number;
+const activeStatuses = new Set(["POTENTIAL", "CONFIRMED", "ACCEPTED_RISK"]);
+const severityOrder = ["critical", "high", "medium", "low", "info"] as const;
+
+function SeverityTotals({ totals }: { totals: Record<string, number> }) {
+  return <div className="flex flex-wrap gap-1.5" aria-label="Active findings by severity">{severityOrder.map((severity) => <span key={severity} className="rounded-md border bg-muted/10 px-2 py-1 text-[11px] text-muted-foreground"><span className="font-semibold text-foreground">{totals[severity] ?? 0}</span> {severity}</span>)}</div>;
+}
+
+function useFindingProjects() {
+  return useQuery({ queryKey: ["findings", "projects"], queryFn: api.listFindingProjects, refetchInterval: 15_000 });
 }
 
 export default function FindingsPage() {
   const qc = useQueryClient();
-  const { data: scans } = useScansList();
-  const del = useDeleteVuln();
-  // Scan ids are kept only for the "across N scans" header label and as the
-  // refresh-target count. The findings themselves no longer fan out one
-  // getScan() request per scan; they come from a single server-side walk.
-  const ids = useMemo(() => (scans ?? []).map((s) => s.id), [scans]);
-
-  const findingsQuery = useFindingsList();
-  const isLoading = findingsQuery.isLoading;
-
-  const findings = useMemo<FlatFinding[]>(
-    // The server already dedups + sorts, but dedupFindings is idempotent and
-    // keeps the client resilient if the payload shape ever changes.
-    () => dedupFindings(findingsQuery.data ?? []),
-    [findingsQuery.data],
-  );
-
-  // Stable on-disk totals from /api/findings/summary. Polled every 10s
-  // and used both for the totals row and for the "updated Xs ago"
-  // indicator (sourced from the response's `as_of` field). The shared
-  // qk.findingsSummary key means /overview reads the same cache entry.
-  const summary = useQuery<FindingsSummaryResponse>({
-    queryKey: qk.findingsSummary,
-    queryFn: async () => {
-      const res = await fetch("/api/findings/summary", {
-        credentials: "same-origin",
-        headers: { Accept: "application/json" },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return (await res.json()) as FindingsSummaryResponse;
-    },
-    refetchInterval: 10_000,
-    staleTime: 5_000,
-    placeholderData: keepPreviousData,
-  });
-
+  const [params, setParams] = useSearchParams();
+  const projectID = params.get("project") ?? "";
+  const scanID = params.get("scan") ?? "";
+  const projectsQuery = useFindingProjects();
+  const projects = projectsQuery.data?.projects ?? [];
+  const project = projects.find((item) => item.id === projectID);
+  const scan = project?.scans.find((item) => item.id === scanID);
+  const [projectSearch, setProjectSearch] = useState("");
+  const [scanSearch, setScanSearch] = useState("");
   const [query, setQuery] = useState("");
-  const [severity, setSeverity] = useState<string>("all");
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  const [severity, setSeverity] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [scanner, setScanner] = useState("");
+  const [page, setPage] = useState(() => Math.max(1, Number(params.get("page")) || 1));
+  const [pageSize, setPageSize] = useState(() => {
+    const size = Number(params.get("size"));
+    return (PAGE_SIZE_OPTIONS as readonly number[]).includes(size) ? size : DEFAULT_PAGE_SIZE;
+  });
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [actionError, setActionError] = useState("");
 
-  const filtered = useMemo(() => {
-    return findings.filter((f) => {
-      if (severity !== "all" && normalizeSeverity(f.severity) !== severity) return false;
-      if (!query) return true;
-      const q = query.toLowerCase();
-      return (
-        (f.title || "").toLowerCase().includes(q) ||
-        (f.endpoint || "").toLowerCase().includes(q) ||
-        (f.scan_target || "").toLowerCase().includes(q) ||
-        (f.cve || "").toLowerCase().includes(q) ||
-        (f.cwe_id || "").toLowerCase().includes(q) ||
-        (f.owasp || "").toLowerCase().includes(q)
-      );
-    });
-  }, [findings, query, severity]);
+  const findingsQuery = useQuery({
+    queryKey: ["findings", "scan", scan?.id, page, pageSize, query, severity, status, scanner],
+    queryFn: () => api.listScanFindings(scan!.id, { page, size: pageSize, q: query, severity, status, scanner }),
+    enabled: !!scan,
+    refetchInterval: scan?.status === "running" ? 10_000 : false,
+  });
+  const findings = findingsQuery.data?.items ?? [];
+  const total = findingsQuery.data?.total ?? 0;
 
-  // Reset to first page when filters or page size changes so we never
-  // strand the user past the new last page. (Page-size changes from
-  // the URL hydrator path also pass through here.)
+  useEffect(() => { setSelected(new Set()); setActionError(""); }, [scanID]);
   useEffect(() => {
+    if (findingsQuery.data) setPage((current) => Math.min(current, Math.max(1, Math.ceil(total / pageSize))));
+  }, [findingsQuery.data, total, pageSize]);
+
+  function choose(nextProject?: FindingsProject, nextScan?: FindingsProjectScan) {
+    const next = new URLSearchParams(params);
+    if (nextProject) next.set("project", nextProject.id); else next.delete("project");
+    if (nextScan) next.set("scan", nextScan.id); else next.delete("scan");
+    next.delete("page");
     setPage(1);
-  }, [query, severity, pageSize]);
-
-  // Clamp current page when the underlying list shrinks (e.g. after a
-  // delete). Without this, the slice below would silently render empty.
-  const totalPages = Math.max(1, Math.ceil(filtered.length / Math.max(1, pageSize)));
-  const safePage = Math.min(Math.max(1, page), totalPages);
-  useEffect(() => {
-    if (safePage !== page) setPage(safePage);
-  }, [safePage, page]);
-
-  const paged = useMemo(() => {
-    const start = (safePage - 1) * pageSize;
-    return filtered.slice(start, start + pageSize);
-  }, [filtered, safePage, pageSize]);
-
-  const visibleKeys = useMemo(() => paged.map((f) => `${f.scan_id}:${f.id}`), [paged]);
-  const selectedVisibleCount = visibleKeys.filter((k) => selectedIds.has(k)).length;
-  const allVisibleSelected = visibleKeys.length > 0 && selectedVisibleCount === visibleKeys.length;
-
-  useEffect(() => {
-    const allKeys = new Set(findings.map((f) => `${f.scan_id}:${f.id}`));
-    setSelectedIds((current) => {
-      const next = new Set([...current].filter((k) => allKeys.has(k)));
-      return next.size === current.size ? current : next;
-    });
-  }, [findings]);
-
-  function setSelected(key: string, checked: boolean) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (checked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
+    setSelected(new Set());
+    setActionError("");
+    setParams(next);
   }
 
-  function selectAllVisible() {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      for (const k of visibleKeys) next.add(k);
-      return next;
-    });
-  }
-
-  function clearSelection() {
-    setSelectedIds(new Set());
-  }
-
-  async function deleteFindings(keys: string[]) {
-    const unique = [...new Set(keys)].filter(Boolean);
-    if (!unique.length) return;
-    const label =
-      unique.length === 1
-        ? "Permanently delete this finding?"
-        : `Permanently delete ${unique.length} selected findings?`;
-    if (!window.confirm(label)) return;
-    for (const key of unique) {
-      const [scanId, vulnId] = key.split(":");
-      if (scanId && vulnId) {
-        await del.mutateAsync({ scanId, vulnId });
-      }
+  async function deleteSelected() {
+    if (!scan || selected.size === 0 || !window.confirm(`Permanently delete ${selected.size} selected finding${selected.size === 1 ? "" : "s"}?`)) return;
+    setActionError("");
+    try {
+      for (const id of selected) await api.deleteVuln(scan.id, id);
+      setSelected(new Set());
+      await Promise.all([qc.invalidateQueries({ queryKey: ["findings", "scan", scan.id] }), qc.invalidateQueries({ queryKey: ["findings", "projects"] })]);
+    } catch (error) {
+      setActionError(error instanceof HttpError && error.status === 409 ? "Scanner-backed findings cannot be deleted. Change their analyst status in Scan Detail." : error instanceof Error ? error.message : "Could not delete finding.");
     }
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      for (const k of unique) next.delete(k);
-      return next;
-    });
   }
 
-  // Manual refresh: invalidate the findings list plus the summary query so
-  // the totals row and the list re-fetch in lockstep.
-  function refreshAll() {
-    qc.invalidateQueries({ queryKey: qk.findingsList });
-    qc.invalidateQueries({ queryKey: qk.findingsSummary });
-  }
+  const filteredProjects = useMemo(() => projects.filter((item) => !projectSearch || [item.label, ...item.scans.map((scan) => scan.name || scan.target)].some((value) => value.toLowerCase().includes(projectSearch.toLowerCase()))), [projects, projectSearch]);
+  const filteredScans = useMemo(() => (project?.scans ?? []).filter((item) => !scanSearch || [item.name, item.target, item.id].some((value) => (value ?? "").toLowerCase().includes(scanSearch.toLowerCase()))), [project, scanSearch]);
 
-  // Prefer the stable on-disk totals from /api/findings/summary. Fall
-  // back to the in-page tally only on initial load before the summary
-  // request resolves, so the totals row is never blank.
-  const counts = useMemo<SeverityCounts>(() => {
-    if (summary.data?.totals) return summary.data.totals;
-    const out: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-    findings.forEach((f) => {
-      const sev = normalizeSeverity(f.severity);
-      if (sev in out) out[sev as keyof SeverityCounts] += 1;
-    });
-    return out;
-  }, [findings, summary.data]);
-
-  const updatedLabel = summary.data?.as_of ? timeAgo(summary.data.as_of) : "—";
-  const isRefreshing = summary.isFetching || findingsQuery.isFetching;
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Findings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Unique findings across {ids.length} scan{ids.length === 1 ? "" : "s"}, ranked by
-            active severity.
-          </p>
-        </div>
-        <div className="flex flex-col items-stretch gap-2 sm:items-end">
-          <div className="grid grid-cols-5 gap-1.5 sm:flex sm:gap-2">
-            {(["critical", "high", "medium", "low", "info"] as const).map((s) => {
-              const dot =
-                s === "critical"
-                  ? "bg-red-500"
-                  : s === "high"
-                    ? "bg-orange-500"
-                    : s === "medium"
-                      ? "bg-amber-400"
-                      : s === "low"
-                        ? "bg-blue-400"
-                        : "bg-neutral-500";
-              return (
-                <div
-                  key={s}
-                  className="rounded-md border border-border bg-card px-3 py-2 text-center min-w-[64px]"
-                >
-                  <p className="mono text-lg font-semibold leading-none tabular-nums">
-                    {counts[s] ?? 0}
-                  </p>
-                  <p className="mt-1 flex items-center justify-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
-                    {s}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex items-center justify-end gap-2 text-[11px] text-muted-foreground">
-            {summary.data && <span className="mono">{summary.data.unique_findings ?? findings.length} unique · {summary.data.raw_observations ?? 0} observations</span>}
-            <span className="mono">updated {updatedLabel}</span>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={refreshAll}
-              disabled={isRefreshing}
-              aria-label="Refresh findings"
-            >
-              <RefreshCw
-                className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")}
-              />
-              Refresh
-            </Button>
-          </div>
-        </div>
+  return <div className="space-y-5">
+    <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0">
+        {(projectID || scanID) && <div className="mb-2 flex flex-wrap items-center gap-1 text-xs text-muted-foreground"><button type="button" onClick={() => choose()} className="hover:text-primary">Projects</button>{projectID && <><ChevronRight className="h-3 w-3" /><button type="button" onClick={() => choose(project)} className="max-w-[24ch] truncate hover:text-primary">{project?.label ?? projectID}</button></>}{scanID && <><ChevronRight className="h-3 w-3" /><span className="font-medium text-foreground">{scan?.name || scan?.target || scanID}</span></>}</div>}
+        <h1 className="text-2xl font-semibold tracking-tight">{scan ? scan.name || scan.target : project ? project.label : "Findings"}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{scan ? `Findings from this scan · ${timeAgo(scan.started_at)}` : project ? `${project.scan_count} scan${project.scan_count === 1 ? "" : "s"} for this target` : "Select a project, then a scan, to review its findings."}</p>
       </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {scan && <Button variant="outline" size="sm" asChild><Link to={`/scans/${scan.id}`}><ExternalLink className="h-3.5 w-3.5" /> Open scan</Link></Button>}
+        <Button variant="outline" size="sm" onClick={() => { void qc.invalidateQueries({ queryKey: ["findings", "projects"] }); if (scan) void qc.invalidateQueries({ queryKey: ["findings", "scan", scan.id] }); }} disabled={projectsQuery.isFetching || findingsQuery.isFetching}><RefreshCw className={`h-3.5 w-3.5 ${(projectsQuery.isFetching || findingsQuery.isFetching) ? "animate-spin" : ""}`} /> Refresh</Button>
+      </div>
+    </header>
 
-      <Card>
-        <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by title, endpoint, host, or CVE…"
-              className="pl-8"
-            />
-          </div>
-          <Select value={severity} onValueChange={setSeverity}>
-            <SelectTrigger className="w-full sm:w-44">
-              <Filter className="h-3.5 w-3.5" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All severities</SelectItem>
-              <SelectItem value="critical">Critical</SelectItem>
-              <SelectItem value="high">High</SelectItem>
-              <SelectItem value="medium">Medium</SelectItem>
-              <SelectItem value="low">Low</SelectItem>
-              <SelectItem value="info">Info</SelectItem>
-            </SelectContent>
-          </Select>
-        </CardContent>
-        {filtered.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={allVisibleSelected ? clearSelection : selectAllVisible}
-            >
-              {allVisibleSelected ? "Clear selection" : "Select all"}
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              {selectedIds.size} selected
-            </span>
-            <BulkActionMenu
-              disabled={selectedIds.size === 0 || del.isPending}
-              selectedCount={selectedIds.size}
-              onDelete={() => void deleteFindings([...selectedIds])}
-            />
-          </div>
-        )}
-      </Card>
+    {(scan || project) && <div className="flex flex-col gap-2 rounded-lg border bg-card p-3 sm:flex-row sm:items-center sm:justify-between"><div className="text-sm"><span className="font-semibold">{scan ? scan.active_count : project?.active_count} active</span><span className="ml-2 text-muted-foreground">· {scan ? scan.finding_count : project?.finding_count} unique in {scan ? "this scan" : "these scans"} · {scan ? scan.observation_count : project?.observation_count} observations</span></div><SeverityTotals totals={(scan ?? project)!.severity} /></div>}
 
-      <Card className="overflow-hidden">
-        {isLoading && findings.length === 0 ? (
-          <div className="space-y-2 p-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-12 w-full" />
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={<ShieldAlert className="h-6 w-6" />}
-            title="No matching findings"
-            description="Try widening your filters or run a new scan."
-          />
-        ) : (
-          <>
-            <ul className="divide-y divide-border">
-              {paged.map((f) => {
-                const key = `${f.scan_id}:${f.id}`;
-                return (
-                  <li
-                    key={key}
-                    className={cn(
-                      "group flex items-start gap-3 px-4 py-3 text-sm transition-colors hover:bg-muted/30",
-                      selectedIds.has(key) && "bg-muted/20",
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(key)}
-                      aria-label={`Select finding ${f.title}`}
-                      onChange={(e) => setSelected(key, e.currentTarget.checked)}
-                      className="mt-1 h-4 w-4 shrink-0 rounded border-border bg-input accent-primary focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
-                    <Link to={`/scans/${f.scan_id}`} className="block flex-1 min-w-0">
-                      <div className="flex flex-wrap items-start gap-2">
-                        <SeverityBadge severity={f.severity} />
-                        <p className="flex-1 font-medium text-foreground truncate">
-                          {f.title}
-                          {f.status && <Badge variant="outline" className="ml-2 text-[10px]">{f.status.replaceAll("_", " ")}</Badge>}
-                        </p>
-                        <span className="mono text-[11px] text-muted-foreground">
-                          {timeAgo(f.scan_started_at)}
-                        </span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                        <span className="mono truncate max-w-[36ch]">{f.endpoint || f.scan_target}</span>
-                        {f.cve && (
-                          <Badge variant="outline" className="mono text-[10px]">
-                            {f.cve}
-                          </Badge>
-                        )}
-                        {f.cwe_id && (
-                          <Badge variant="outline" className="mono text-[10px] text-emerald-400 border-emerald-400/30">
-                            {f.cwe_id}
-                          </Badge>
-                        )}
-                        {f.owasp && (
-                          <Badge variant="outline" className="mono text-[10px] text-amber-400 border-amber-400/30">
-                            {f.owasp}
-                          </Badge>
-                        )}
-                        <VerificationBadge verified={f.verified} tags={f.tags} />
-                        {typeof f.cvss === "number" && f.cvss > 0 && (
-                          <span className="mono">CVSS {f.cvss.toFixed(1)}</span>
-                        )}
-                        <span className="ml-auto truncate">→ {f.scan_target}</span>
-                      </div>
-                    </Link>
-                    <RowActionMenu
-                      finding={f}
-                      deleting={del.isPending}
-                      onDelete={() => void deleteFindings([key])}
-                    />
-                  </li>
-                );
-              })}
-            </ul>
-            <Pagination
-              totalItems={filtered.length}
-              page={safePage}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={(size) => {
-                if ((PAGE_SIZE_OPTIONS as readonly number[]).includes(size)) {
-                  setPageSize(size);
-                }
-              }}
-            />
-          </>
-        )}
-      </Card>
-    </div>
-  );
+    {projectsQuery.isLoading && <Card><CardContent className="space-y-2 p-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-16 w-full" />)}</CardContent></Card>}
+    {projectsQuery.isError && <Card><CardContent className="p-5 text-sm text-destructive">Could not load finding projects. <button type="button" onClick={() => void projectsQuery.refetch()} className="underline">Retry</button></CardContent></Card>}
+    {!projectsQuery.isLoading && !projectsQuery.isError && !projectID && <>
+      <div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input aria-label="Search projects" placeholder="Search projects by target or scan name…" value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} className="pl-9" /></div>
+      {filteredProjects.length ? <div className="grid gap-3 sm:grid-cols-2">{filteredProjects.map((item) => <button key={item.id} type="button" onClick={() => choose(item)} className="rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring"><div className="flex items-start justify-between gap-2"><div className="flex min-w-0 items-center gap-2"><FolderOpen className="h-4 w-4 shrink-0 text-primary" /><span className="truncate font-semibold">{item.label}</span></div><ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" /></div><p className="mt-2 text-xs text-muted-foreground">{item.scan_count} scan{item.scan_count === 1 ? "" : "s"} · {item.active_count} active findings · {item.observation_count} observations</p><div className="mt-3"><SeverityTotals totals={item.severity} /></div><p className="mt-3 text-[11px] text-muted-foreground">Latest scan {timeAgo(item.latest_at)}</p></button>)}</div> : <EmptyState icon={<ShieldAlert className="h-6 w-6" />} title={projects.length ? "No matching projects" : "No scan projects yet"} description={projects.length ? "Try a different project search." : "Run an assessment to create a project history."} />}
+    </>}
+
+    {!projectsQuery.isLoading && projectID && !project && <EmptyState icon={<ShieldAlert className="h-6 w-6" />} title="Project not found" description="This project may have been removed or its target changed." />}
+    {project && !scanID && <>
+      <div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input aria-label="Search scans" placeholder="Search scans in this project…" value={scanSearch} onChange={(event) => setScanSearch(event.target.value)} className="pl-9" /></div>
+      {filteredScans.length ? <Card><ul className="divide-y">{filteredScans.map((item) => <li key={item.id}><button type="button" onClick={() => choose(project, item)} className="flex w-full flex-col gap-2 p-4 text-left hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{item.name || item.target}</span><ScanStatusPill status={item.status} /></div><p className="mt-1 break-all text-xs text-muted-foreground">{item.target} · {item.id} · {timeAgo(item.started_at)}{item.parent_target && item.parent_target !== item.target ? ` · child of ${item.parent_target}` : ""}</p></div><div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><span>{item.active_count} active · {item.finding_count} findings · {item.observation_count} observations</span><ChevronRight className="h-4 w-4" /></div></button></li>)}</ul></Card> : <EmptyState icon={<ShieldAlert className="h-6 w-6" />} title="No matching scans" description="Try a different scan search." />}
+    </>}
+
+    {project && scanID && !scan && <EmptyState icon={<ShieldAlert className="h-6 w-6" />} title="Scan not found in this project" description="Choose a scan from this project's history." />}
+    {scan && <>
+      <Card><CardContent className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-4"><div className="relative sm:col-span-2"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input aria-label="Search findings" placeholder="Search title, endpoint, CVE, or parameter…" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); setSelected(new Set()); }} className="pl-9" /></div><Select value={severity} onValueChange={(value) => { setSeverity(value); setPage(1); setSelected(new Set()); }}><SelectTrigger aria-label="Filter by severity"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All severities</SelectItem>{severityOrder.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><Select value={status} onValueChange={(value) => { setStatus(value); setPage(1); setSelected(new Set()); }}><SelectTrigger aria-label="Filter by status"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem>{["POTENTIAL", "CONFIRMED", "ACCEPTED_RISK", "OBSERVATION", "LIKELY_FALSE_POSITIVE", "FALSE_POSITIVE", "REMEDIATED"].map((value) => <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>)}</SelectContent></Select><Input aria-label="Filter by scanner" placeholder="Scanner name…" value={scanner} onChange={(event) => { setScanner(event.target.value); setPage(1); setSelected(new Set()); }} className="sm:col-span-2 lg:col-span-4" /></CardContent>{findings.length > 0 && <div className="flex items-center gap-2 border-t px-3 py-2"><Button size="sm" variant="outline" onClick={() => setSelected((current) => { const next = new Set(current); const allVisible = findings.every((item) => next.has(item.id)); for (const item of findings) { if (allVisible) next.delete(item.id); else next.add(item.id); } return next; })}>{findings.every((item) => selected.has(item.id)) ? "Clear page" : "Select page"}</Button><span className="text-xs text-muted-foreground">{selected.size} selected in this scan</span><Button size="sm" variant="outline" disabled={selected.size === 0} onClick={() => void deleteSelected()}>Delete selected</Button></div>}</Card>
+      {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
+      <Card>{findingsQuery.isLoading ? <CardContent className="space-y-2 p-4">{Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16 w-full" />)}</CardContent> : findingsQuery.isError ? <CardContent className="p-5 text-sm text-destructive">Could not load this scan's findings. <button type="button" onClick={() => void findingsQuery.refetch()} className="underline">Retry</button></CardContent> : findings.length ? <><ul className="divide-y">{findings.map((finding) => <FindingRow key={finding.id} scanID={scan.id} finding={finding} selected={selected.has(finding.id)} onSelect={(checked) => setSelected((current) => { const next = new Set(current); if (checked) next.add(finding.id); else next.delete(finding.id); return next; })} />)}</ul><Pagination totalItems={total} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} /></> : <EmptyState icon={<ShieldAlert className="h-6 w-6" />} title="No matching findings in this scan" description="Try widening the filters, or review another scan." />}</Card>
+    </>}
+  </div>;
 }
 
-function BulkActionMenu({
-  disabled,
-  selectedCount,
-  onDelete,
-}: {
-  disabled: boolean;
-  selectedCount: number;
-  onDelete: () => void;
-}) {
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <Button size="sm" variant="secondary" disabled={disabled}>
-          Actions
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </Button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content align="start" className={menuContentClass}>
-          <DropdownMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">
-            {selectedCount} selected
-          </DropdownMenu.Label>
-          <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-          <DropdownMenu.Item
-            className={cn(menuItemClass, "text-red-400 focus:text-red-300")}
-            onSelect={(event) => {
-              event.preventDefault();
-              onDelete();
-            }}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete selected
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  );
-}
-
-function RowActionMenu({
-  finding,
-  deleting,
-  onDelete,
-}: {
-  finding: FlatFinding;
-  deleting: boolean;
-  onDelete: () => void;
-}) {
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label={`Actions for ${finding.title}`}
-          className="shrink-0"
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </Button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" className={menuContentClass}>
-          <DropdownMenu.Item asChild className={menuItemClass}>
-            <Link to={`/scans/${finding.scan_id}`}>
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open scan
-            </Link>
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator className="-mx-1 my-1 h-px bg-border" />
-          <DropdownMenu.Item
-            disabled={deleting}
-            className={cn(
-              menuItemClass,
-              "text-red-400 focus:text-red-300 data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-            )}
-            onSelect={(event) => {
-              event.preventDefault();
-              onDelete();
-            }}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete finding
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  );
+function FindingRow({ scanID, finding, selected, onSelect }: { scanID: string; finding: ScanFinding; selected: boolean; onSelect: (checked: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  const observations = useQuery({ queryKey: ["findings", "observations", scanID, finding.id], queryFn: () => api.findingObservations(scanID, finding.id, { page: 1, size: 10 }), enabled: open });
+  const endpoint = finding.endpoints?.[0]?.endpoint || finding.target || "No endpoint recorded";
+  return <li className="p-4"><div className="flex items-start gap-3"><input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} aria-label={`Select finding ${finding.title}`} className="mt-1 h-4 w-4 shrink-0 accent-primary" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><SeverityBadge severity={finding.severity} /><span className="font-medium">{finding.title}</span><span className={`rounded border px-2 py-0.5 text-[10px] ${activeStatuses.has(finding.status) ? "text-primary" : "text-muted-foreground"}`}>{finding.status.replaceAll("_", " ")}</span></div><p className="mt-1 truncate text-xs text-muted-foreground" title={endpoint}>{endpoint}</p><p className="mt-1 text-[11px] text-muted-foreground">{finding.affected_endpoint_count} affected endpoints · {finding.affected_instance_count} instances · {finding.observation_count} observations · {(finding.scanners ?? []).join(", ") || "Unknown scanner"}</p></div><Link to={`/scans/${scanID}`} aria-label={`Open scan for ${finding.title}`} className="rounded-md p-1 text-muted-foreground hover:text-primary"><ExternalLink className="h-4 w-4" /></Link></div><button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="mt-3 flex items-center gap-1 text-xs text-primary hover:underline">{open ? "Hide evidence" : "View endpoints and evidence"}<ChevronRight className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-90" : ""}`} /></button>{open && <div className="mt-3 space-y-3 rounded-md border bg-muted/10 p-3 text-xs"><div><p className="font-medium">Affected endpoints</p>{finding.endpoints?.length ? finding.endpoints.slice(0, 5).map((item, index) => <p key={`${item.canonical_endpoint || item.endpoint}-${index}`} className="mt-1 break-all font-mono text-muted-foreground">{item.method || "GET"} {item.endpoint || item.canonical_endpoint}{item.parameter ? ` · ${item.parameter_location || "parameter"}: ${item.parameter}` : ""}</p>) : <p className="mt-1 text-muted-foreground">No endpoint details recorded.</p>}{finding.affected_endpoint_count > 5 && <p className="mt-1 text-muted-foreground">Showing 5 of {finding.affected_endpoint_count} endpoints.</p>}</div><div><p className="font-medium">Scanner observations</p>{observations.isLoading && <p className="mt-1 text-muted-foreground">Loading evidence…</p>}{observations.isError && <p className="mt-1 text-destructive">Could not load observations.</p>}{observations.data?.items.map((item) => <div key={item.id} className="mt-2 border-l-2 border-primary/30 pl-2"><p>{item.scanner} · {item.title}</p>{item.evidence_reference && <p className="break-all text-muted-foreground">Artifact: {item.evidence_reference}</p>}{item.evidence && <p className="mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono text-muted-foreground">{item.evidence}</p>}</div>)}{observations.data && observations.data.total > observations.data.items.length && <p className="mt-2 text-muted-foreground">Showing {observations.data.items.length} of {observations.data.total} observations. Open the scan for the full record.</p>}</div></div>}</li>;
 }

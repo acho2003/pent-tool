@@ -216,6 +216,7 @@ func isDashboardReadPath(method, path string) bool {
 		"/api/version",
 		"/api/scans",
 		"/api/findings",
+		"/api/findings/projects",
 		"/api/findings/summary",
 		"/api/instances",
 		"/api/queue/status",
@@ -636,6 +637,7 @@ var dashboardRoutes = []string{
 	"/api/upload-logo",
 	"/api/upload-context",
 	"/api/findings",
+	"/api/findings/projects",
 	"/api/findings/summary",
 	"/uploads/logos/",
 	"/api/report/",
@@ -947,6 +949,7 @@ func (s *Server) Start() error {
 	// findings table + severity summary resolve to real JSON instead of
 	// falling through to the static catch-all.
 	mux.HandleFunc("/api/findings", s.handleFindingsList)
+	mux.HandleFunc("/api/findings/projects", s.handleFindingsProjects)
 	mux.HandleFunc("/api/findings/summary", s.handleFindingsSummary)
 	// Serve uploaded logos
 	logosDir := filepath.Join(s.dataDir, "logos")
