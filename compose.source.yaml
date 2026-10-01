@@ -1,0 +1,69 @@
+name: xalgorix-source
+
+services:
+  xalgorix:
+    image: xalgorix:local
+    pull_policy: never
+    ports:
+      - "127.0.0.1:9138:9137"
+    volumes:
+      - source-scan-data:/data
+      - type: bind
+        source: ${XALGORIX_SOURCE_DIR:?Set an absolute source directory}
+        target: /workspace/source
+        read_only: true
+    secrets:
+      - xalgorix_credential_key
+    environment:
+      XALGORIX_DATA_DIR: /data
+      XALGORIX_CREDENTIAL_KEY_FILE: /run/secrets/xalgorix_credential_key
+      XALGORIX_ZAP_URL: http://zap:8080
+      XALGORIX_ZAP_API_KEY: ${XALGORIX_ZAP_API_KEY:-xalgorix-source-zap}
+      XALGORIX_ZAP_DEDICATED: "true"
+      XALGORIX_ALLOW_LOCAL_TARGETS: "true"
+      XALGORIX_USERNAME: ${XALGORIX_USERNAME:-admin}
+      XALGORIX_PASSWORD_HASH: ${XALGORIX_PASSWORD_HASH:-}
+      XALGORIX_PASSWORD: ${XALGORIX_PASSWORD:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      zap:
+        condition: service_healthy
+
+  zap:
+    image: ghcr.io/zaproxy/zaproxy@sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2
+    pull_policy: never
+    command:
+      - zap.sh
+      - -Xmx2g
+      - -daemon
+      - -host
+      - 0.0.0.0
+      - -port
+      - "8080"
+      - -config
+      - api.addrs.addr.name=.*
+      - -config
+      - api.addrs.addr.regex=true
+      - -config
+      - api.key=${XALGORIX_ZAP_API_KEY:-xalgorix-source-zap}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 3g
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/JSON/core/view/version/?apikey=${XALGORIX_ZAP_API_KEY:-xalgorix-source-zap}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  source-scan-data:
+
+secrets:
+  xalgorix_credential_key:
+    file: ./secrets/xalgorix-credential.key

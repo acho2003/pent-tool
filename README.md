@@ -104,6 +104,9 @@ nothing to work with (no URL, no source, no SSH alias, or a scope outside the to
 
 Supported Trivy artifact kinds are `filesystem`, `repository`, `image`, and `sbom`. Vuls aliases refer to the operator's SSH configuration. SSH private material is never returned by the API or written to scan records.
 
+For read-only Dockerfile/source scans with an already-cached image and without
+Greenbone, use the [source container workflow](docs/source-container-scans.md).
+
 Wildcard mode uses deterministic subdomain discovery and normalization before running the full pipeline for each discovered target.
 
 ### Typed assessments from the CLI
