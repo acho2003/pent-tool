@@ -153,6 +153,16 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if emit != nil {
 		emit(Event{Type: "scanner_started", Scanner: "zap", Run: run})
 	}
+	// reportProgress publishes ZAP's own spider/active-scan percentage on the
+	// run so the WebUI can show live completion for the current stage.
+	reportProgress := func(stage string) func(int) {
+		return func(pct int) {
+			run.Progress, run.ProgressStage = pct, stage
+			if emit != nil {
+				emit(Event{Type: "scanner_progress", Scanner: "zap", Run: run})
+			}
+		}
+	}
 	zapTimeout := cfg.ZAPTimeout
 	if req.Profile == ProfileThorough {
 		zapTimeout = 0
@@ -445,7 +455,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			return finishServiceFailure(run, fmt.Errorf("ZAP did not return a spider scan id"), secrets, cfg.MaxOutputBytes, emit)
 		}
 		logLine("ZAP spider started: " + spiderID)
-		if err := zapWaitScanChecked(cctx, call, "/JSON/spider/view/status/", spiderID, "spider", logLine, checkAuth); err != nil {
+		if err := zapWaitScanChecked(cctx, call, "/JSON/spider/view/status/", spiderID, "spider", logLine, checkAuth, reportProgress("spider")); err != nil {
 			zapStopScan(cfg, "/JSON/spider/action/stop/", spiderID)
 			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 		}
@@ -516,7 +526,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return finishServiceFailure(run, fmt.Errorf("ZAP did not return an active scan id"), secrets, cfg.MaxOutputBytes, emit)
 	}
 	logLine("ZAP active scan started: " + activeID)
-	if err := zapWaitScanChecked(cctx, call, "/JSON/ascan/view/status/", activeID, "active scan", logLine, checkAuth); err != nil {
+	if err := zapWaitScanChecked(cctx, call, "/JSON/ascan/view/status/", activeID, "active scan", logLine, checkAuth, reportProgress("active scan")); err != nil {
 		zapStopScan(cfg, "/JSON/ascan/action/stop/", activeID)
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
@@ -547,6 +557,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		run.Reason = fmt.Sprintf("artifact truncated at configured %d-byte limit", cfg.MaxOutputBytes)
 	}
 	run.Status, run.ExitCode, run.FinishedAt = "completed", 0, time.Now().Format(time.RFC3339Nano)
+	run.Progress, run.ProgressStage = 0, ""
 	run = finalizeRun(run)
 	if emit != nil {
 		emit(Event{Type: "scanner_completed", Scanner: "zap", Run: run})
@@ -608,10 +619,11 @@ func (m *zapAuthMonitor) check(ctx context.Context, replace func([]string) error
 
 // zapWaitScan polls a spider or active-scan job until ZAP reports 100%.
 func zapWaitScan(ctx context.Context, call zapCallFunc, statusPath, scanID, label string, log func(string)) error {
-	return zapWaitScanChecked(ctx, call, statusPath, scanID, label, log, nil)
+	return zapWaitScanChecked(ctx, call, statusPath, scanID, label, log, nil, nil)
 }
 
-func zapWaitScanChecked(ctx context.Context, call zapCallFunc, statusPath, scanID, label string, log func(string), check func() error) error {
+// progress, when set, receives each new 0–100 value ZAP reports.
+func zapWaitScanChecked(ctx context.Context, call zapCallFunc, statusPath, scanID, label string, log func(string), check func() error, progress func(int)) error {
 	last := ""
 	for {
 		if check != nil {
@@ -630,6 +642,9 @@ func zapWaitScanChecked(ctx context.Context, call zapCallFunc, statusPath, scanI
 		if status != last {
 			log("ZAP " + label + " progress: " + status + "%")
 			last = status
+			if pct, convErr := strconv.Atoi(status); progress != nil && convErr == nil && pct >= 0 && pct <= 100 {
+				progress(pct)
+			}
 		}
 		if status == "100" {
 			return nil

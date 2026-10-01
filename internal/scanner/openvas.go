@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -197,12 +198,21 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	}
 	reportID := firstXMLText(startData, "report_id")
 
+	lastProgress := -1
 	for {
 		pollData, pollErr := call("poll-task", fmt.Sprintf(`<get_tasks task_id="%s" details="1"/>`, taskID), 2*time.Minute)
 		if pollErr != nil {
 			return fail(pollErr)
 		}
 		status := strings.ToLower(firstXMLText(pollData, "status"))
+		// gvmd reports the task's completion as <progress>; -1 means not started.
+		if pct, convErr := strconv.Atoi(strings.TrimSpace(firstXMLText(pollData, "progress"))); convErr == nil && pct >= 0 && pct <= 100 && pct != lastProgress {
+			lastProgress = pct
+			run.Progress, run.ProgressStage = pct, "scan"
+			if emit != nil {
+				emit(Event{Type: "scanner_progress", Scanner: run.Scanner, Run: run})
+			}
+		}
 		if reportID == "" {
 			reportID = firstXMLAttr(pollData, "report", "id")
 		}
@@ -237,6 +247,7 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 		run.Reason = fmt.Sprintf("artifact truncated at configured %d-byte limit", cfg.MaxOutputBytes)
 	}
 	run.ExitCode, run.Status, run.FinishedAt = 0, "completed", time.Now().Format(time.RFC3339Nano)
+	run.Progress, run.ProgressStage = 0, ""
 	run = finalizeRun(run)
 	if emit != nil {
 		emit(Event{Type: "scanner_completed", Scanner: run.Scanner, Run: run})

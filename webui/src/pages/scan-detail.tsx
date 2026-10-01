@@ -370,6 +370,48 @@ type RunKey = { scanner: string; scope: string };
 const sameKey = (a: RunKey | null, b: RunKey) => !!a && a.scanner === b.scanner && a.scope === b.scope;
 const keyOf = (r: ScopeRun, fallbackScope: string): RunKey => ({ scanner: r.scanner, scope: r.scope || fallbackScope });
 const ATTENTION = new Set(["failed", "running", "cancelled"]);
+const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "not_applicable", "skipped"]);
+
+type ScanProgress = { percent: number; done: number; running: number; total: number };
+
+// Overall completion: finished jobs plus each running job's own reported
+// progress, over the planned (selected/conditional) jobs. Running jobs with no
+// native progress signal count only once they finish, so this never overstates.
+function computeScanProgress(scan: ScanRecord): ScanProgress | null {
+	const runs = scan.scanner_runs ?? [];
+	const jobs = (scan.assessment_plan?.jobs ?? []).filter((job) => job.state === "selected" || job.state === "conditional");
+	const units = jobs.length
+		? jobs.map((job) => runs.find((run) => run.scanner === job.scanner && (run.target === job.target || run.scope === job.target) && (!run.variant || !job.variant || run.variant === job.variant)))
+		: runs;
+	if (!units.length) return null;
+	let done = 0, running = 0, partial = 0;
+	for (const run of units) {
+		if (run && TERMINAL_RUN.has(run.status)) done++;
+		else if (run?.status === "running") {
+			running++;
+			partial += Math.min(Math.max(run.progress ?? 0, 0), 99) / 100;
+		}
+	}
+	const finished = scan.status === "completed" || scan.status === "finished";
+	const percent = finished ? 100 : Math.min(99, Math.floor(((done + partial) / units.length) * 100));
+	return { percent, done, running, total: units.length };
+}
+
+function liveRunProgress(run?: { status?: string; progress?: number; progress_stage?: string }): { percent: number; stage: string } | null {
+	if (!run || run.status !== "running" || run.progress == null) return null;
+	return { percent: Math.min(Math.max(run.progress, 0), 100), stage: run.progress_stage || "progress" };
+}
+
+function ScanProgressBar({ progress }: { progress: ScanProgress }) {
+	return <div className="space-y-2 rounded-lg border p-4" role="progressbar" aria-label="Scan progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent}>
+		<div className="flex flex-wrap items-baseline justify-between gap-2"><p className="text-sm font-medium">Progress <span className="font-mono">{progress.percent}%</span></p><p className="text-xs text-muted-foreground">{progress.done} of {progress.total} scanner job{progress.total === 1 ? "" : "s"} done{progress.running ? ` · ${progress.running} running` : ""}</p></div>
+		<div className="h-2 overflow-hidden rounded-sm bg-muted"><div className="h-full bg-success transition-[width] duration-500" style={{ width: `${progress.percent}%` }} /></div>
+	</div>;
+}
+
+function RunProgress({ live }: { live: { percent: number; stage: string } }) {
+	return <div className="mt-2 space-y-1"><p className="text-[11px] text-muted-foreground">{live.stage} <span className="font-mono text-foreground">{live.percent}%</span></p><div className="h-1 overflow-hidden rounded-sm bg-muted"><div className="h-full bg-warning transition-[width] duration-500" style={{ width: `${live.percent}%` }} /></div></div>;
+}
 
 function scopeHeading(sc: ReportScope): string {
 	if (sc.kind === "source") return `SOURCE CODE  ${sc.origin || sc.target || "none provided"}`;
@@ -445,9 +487,13 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [scopes, hostCount]);
 	const isOpen = (sc: ReportScope) => openState[sc.id] ?? defaultOpen(sc);
+	const scanProgress = useMemo(() => computeScanProgress(scan), [scan]);
+	// Scope runs refetch only on status changes; live progress comes from the
+	// scan record, which polls every few seconds while running.
+	const liveRun = (scanner: string, scope: string) => (scan.scanner_runs ?? []).find((run) => run.scanner === scanner && (run.scope ?? "") === scope);
 	const cards = (runs: ScopeRun[], fallbackScope: string) => <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{runs.map((r) => {
 		const k = keyOf(r, fallbackScope);
-		return <ScannerStatusCard key={`${k.scope}|${k.scanner}`} name={r.scanner} run={r} active={sameKey(selected, k)} onClick={() => setPicked(k)} />;
+		return <ScannerStatusCard key={`${k.scope}|${k.scanner}`} name={r.scanner} run={r} live={liveRunProgress(liveRun(k.scanner, k.scope))} active={sameKey(selected, k)} onClick={() => setPicked(k)} />;
 	})}</div>;
 	// Render a scope's runs grouped by scanner group (web/network/cloud/k8s/code),
 	// each under a small subheader. A single group falls back to a flat grid.
@@ -459,6 +505,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	return <div className="space-y-6">
 		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>
 		<header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h1 className="font-mono text-2xl font-semibold">{scan.target}</h1><div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{scan.id}</span><span>·</span><span>{formatDuration(scan.started_at, scan.finished_at)}</span><Badge variant="outline">schema v{scan.schema_version ?? 2}</Badge>{scan.assessment && <><Badge variant="outline">{scan.assessment.assessment_mode.replaceAll("_", " ")}</Badge><Badge variant="outline">{scan.profile || scan.assessment.profile || "web-gentle"}</Badge></>}</div></div><div className="flex gap-2"><ScanStatusPill status={scan.status} /><Button variant="outline" size="sm" asChild><a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer"><Download className="mr-1 h-4 w-4" /> Report</a></Button></div></header>
+		{scanProgress && !["completed", "finished", "failed", "cancelled", "stopped"].includes(scan.status) && <ScanProgressBar progress={scanProgress} />}
 		{scan.assessment && coverageQuery.data && <Card><CardHeader><CardTitle className="text-sm">Assessment coverage · {coverageQuery.data.state}</CardTitle><CardDescription>Requested types, scanner job outcomes, and remaining coverage gaps.</CardDescription></CardHeader><CardContent className="space-y-4">
 			{coverageQuery.data.reason && <p className="text-xs text-muted-foreground">{coverageQuery.data.reason}</p>}
 			<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{(coverageQuery.data.type_coverage ?? []).map((item) => <div key={item.type} className="rounded-md border p-3"><p className="text-xs font-medium">{item.type.replaceAll("_", " ")} · {item.state}</p><p className="mt-1 text-xs text-muted-foreground">{item.reason}</p></div>)}</div>
@@ -501,7 +548,8 @@ function AssessmentWorkflowCard({ scan, coverage, onOpen }: { scan: ScanRecord; 
 		const run = runs.find((item) => item.scanner === job.scanner && (item.target === job.target || item.scope === job.target)) ?? runs.find((item) => item.scanner === job.scanner);
 		const status = planned?.status || run?.status || job.state;
 		const definition = job.scanner;
-		return <div key={job.id} className="flex flex-col gap-2 rounded-md border bg-background/40 p-3 sm:flex-row sm:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">{definition}</span><Badge variant="outline" className="text-[10px]">{status.replaceAll("_", " ")}</Badge><Badge variant="outline" className="text-[10px]">{job.target}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{(job.assessment_types ?? [job.assessment_type]).map((type) => type.replaceAll("_", " ")).join(", ")}{run?.started_at ? ` · started ${formatTime(run.started_at)}` : ""}{run?.finished_at ? ` · finished ${formatTime(run.finished_at)}` : ""}</p>{(planned?.reason || run?.reason || job.reason) && <p className="mt-1 text-xs text-muted-foreground">{planned?.reason || run?.reason || job.reason}</p>}</div>{run && <Button size="sm" variant="outline" onClick={() => onOpen(run.scanner, run.scope || job.target)}><Terminal className="mr-1 h-3.5 w-3.5" />View output</Button>}</div>;
+		const live = liveRunProgress(run);
+		return <div key={job.id} className="flex flex-col gap-2 rounded-md border bg-background/40 p-3 sm:flex-row sm:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">{definition}</span><Badge variant="outline" className="text-[10px]">{status.replaceAll("_", " ")}</Badge><Badge variant="outline" className="text-[10px]">{job.target}</Badge>{live && <Badge variant="outline" className="text-[10px] text-amber-300">{live.stage} {live.percent}%</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">{(job.assessment_types ?? [job.assessment_type]).map((type) => type.replaceAll("_", " ")).join(", ")}{run?.started_at ? ` · started ${formatTime(run.started_at)}` : ""}{run?.finished_at ? ` · finished ${formatTime(run.finished_at)}` : ""}</p>{(planned?.reason || run?.reason || job.reason) && <p className="mt-1 text-xs text-muted-foreground">{planned?.reason || run?.reason || job.reason}</p>}</div>{run && <Button size="sm" variant="outline" onClick={() => onOpen(run.scanner, run.scope || job.target)}><Terminal className="mr-1 h-3.5 w-3.5" />View output</Button>}</div>;
 	};
 	return <Card><CardHeader><CardTitle className="text-sm">Assessment workflow</CardTitle><CardDescription>Planned tools and their current execution state. Scanner jobs can run concurrently.</CardDescription></CardHeader><CardContent className="space-y-4">
 		{authRequested && <div className="rounded-lg border p-3"><p className="text-xs font-medium">Access verification</p><div className="mt-2 flex flex-wrap gap-2">{authEvidence.length ? authEvidence.map((item, index) => { const state = item.state === "verified" ? "verified" : item.state === "available" || item.state === "declared" ? "configured" : "failed"; return <Badge key={`${item.capability}-${item.target_id}-${index}`} variant="outline" className={state === "verified" ? "text-emerald-300" : state === "failed" ? "text-red-300" : "text-amber-300"}>{item.target_id || "target"} · {state}</Badge>; }) : <Badge variant="outline" className="text-amber-300">configured · verification pending</Badge>}</div>{authEvidence.some((item) => item.state === "unavailable" || item.state === "failed") && <p className="mt-2 text-xs text-red-300">{authEvidence.find((item) => item.state === "unavailable" || item.state === "failed")?.reason}</p>}</div>}
@@ -551,9 +599,9 @@ function AttackSurfaceCard({ scanId, runsSignature }: { scanId: string; runsSign
 	</Card>;
 }
 
-function ScannerStatusCard({ name, run, active, onClick }: { name: string; run?: { status: string; reason?: string; truncated?: boolean; authenticated?: boolean }; active: boolean; onClick: () => void }) {
+function ScannerStatusCard({ name, run, live, active, onClick }: { name: string; run?: { status: string; reason?: string; truncated?: boolean; authenticated?: boolean }; live?: { percent: number; stage: string } | null; active: boolean; onClick: () => void }) {
 	const status = run?.status ?? "pending";
-	return <button type="button" onClick={onClick} className={cn("rounded-lg border p-4 text-left transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{run?.authenticated && <Badge variant="outline" className="mt-2">Authenticated session</Badge>}{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>;
+	return <button type="button" onClick={onClick} className={cn("rounded-lg border p-4 text-left transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{live && <RunProgress live={live} />}{run?.authenticated && <Badge variant="outline" className="mt-2">Authenticated session</Badge>}{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>;
 }
 
 function currentPhaseLabel(p?: number): string {

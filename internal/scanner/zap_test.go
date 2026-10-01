@@ -53,6 +53,23 @@ func TestSessionCookieValuesAreRedacted(t *testing.T) {
 	}
 }
 
+func TestZAPWaitScanReportsNumericProgress(t *testing.T) {
+	var got []int
+	call := func(string, url.Values) (map[string]any, error) {
+		return map[string]any{"status": "100"}, nil
+	}
+	if err := zapWaitScanChecked(context.Background(), call, "/JSON/ascan/view/status/", "1", "active scan", func(string) {}, nil, func(pct int) { got = append(got, pct) }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []int{100}) {
+		t.Fatalf("progress callback received %v, want [100]", got)
+	}
+	// A nil progress callback stays valid for callers that only log.
+	if err := zapWaitScanChecked(context.Background(), call, "/JSON/spider/view/status/", "1", "spider", func(string) {}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParseZAPPreservesEveryAffectedInstance(t *testing.T) {
 	path := writeFixture(t, "zap-instances.json", `{"alerts":[{"pluginId":"10021","name":"XSS","risk":"High","confidence":"Medium","cweid":"79","solution":"Encode output","instances":[{"uri":"https://app.test/Case","method":"GET","param":"q","evidence":"<x>"},{"uri":"https://app.test/Case","method":"POST","param":"body.name","evidence":"<y>"}]}]}`)
 	findings, err := parseZAP(path)

@@ -131,7 +131,7 @@ func (f *fakeGvmd) respond(command string) string {
 	case "start_task":
 		return `<start_task_response status="202" status_text="OK"><report_id>rep-1</report_id></start_task_response>`
 	case "get_tasks":
-		return `<get_tasks_response status="200"><task id="task-1"><name>t</name><status>Done</status><progress>-1</progress></task></get_tasks_response>`
+		return `<get_tasks_response status="200"><task id="task-1"><name>t</name><status>Done</status><progress>100</progress></task></get_tasks_response>`
 	case "get_reports":
 		return `<get_reports_response status="200"><report id="rep-1"><results>` +
 			`<result id="res-1"><name>Deprecated TLS</name><host>example.test</host><port>443/tcp</port>` +
@@ -167,10 +167,22 @@ func TestOpenVASRunAgainstFakeGvmd(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := Config{GVMSocket: socket, GVMUser: "admin", GVMPass: "gvm-secret", OpenVASTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
-	run := openVASRunner{}.Run(t.Context(), Request{Target: "https://example.test/app", ScanDir: dir}, cfg, nil)
+	var progressEvents []Event
+	run := openVASRunner{}.Run(t.Context(), Request{Target: "https://example.test/app", ScanDir: dir}, cfg, func(e Event) {
+		if e.Type == "scanner_progress" {
+			progressEvents = append(progressEvents, e)
+		}
+	})
 
 	if run.Status != "completed" {
 		t.Fatalf("status = %q reason = %q", run.Status, run.Reason)
+	}
+	// gvmd's <progress> is published while the task runs and cleared once done.
+	if len(progressEvents) != 1 || progressEvents[0].Run.Progress != 100 || progressEvents[0].Run.ProgressStage != "scan" {
+		t.Fatalf("progress events = %+v", progressEvents)
+	}
+	if run.Progress != 0 || run.ProgressStage != "" {
+		t.Fatalf("completed run kept stale progress: %d %q", run.Progress, run.ProgressStage)
 	}
 	if !fake.seen(`<config id="cfg-fast"/>`) {
 		t.Error("task was not created with the exact-match Full and fast config")

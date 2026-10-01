@@ -109,6 +109,11 @@ type Run struct {
 	Checksum           string              `json:"checksum,omitempty"`
 	Truncated          bool                `json:"truncated,omitempty"`
 	APIEndpointResults []APIEndpointResult `json:"api_endpoint_results,omitempty"`
+	// Progress is a scanner-reported 0–100 completion of ProgressStage while
+	// the run is in flight (OpenVAS task progress, ZAP spider/active scan).
+	// Only scanners with a native progress signal set it.
+	Progress      int    `json:"progress,omitempty"`
+	ProgressStage string `json:"progress_stage,omitempty"`
 }
 
 func (r Run) Terminal() bool {

@@ -72,12 +72,15 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 	pipeline := scanner.NewPipeline(ScannerConfig(sess.cfg))
 	emit := func(evt scanner.Event) {
 		ws := WSEvent{Type: evt.Type, Scanner: evt.Scanner, Stream: evt.Stream, Sequence: evt.Sequence, Output: evt.Output, Content: evt.Output, Target: sess.target, AgentID: sess.id, Timestamp: time.Now().Format(time.RFC3339Nano)}
-		if evt.Type != "scanner_output" {
+		if evt.Type == "scanner_progress" {
+			ws.Content = fmt.Sprintf("%s %s: %d%%", evt.Scanner, firstNonBlank(evt.Run.ProgressStage, "progress"), evt.Run.Progress)
+		} else if evt.Type != "scanner_output" {
 			ws.Content = firstNonBlank(evt.Run.Reason, fmt.Sprintf("%s: %s", evt.Scanner, evt.Run.Status))
 		}
 		// Raw chunks are append-only files and WebSocket messages. Do not embed
-		// them in scan.json; only persist the small lifecycle events.
-		if evt.Type != "scanner_output" {
+		// them in scan.json; only persist the small lifecycle events. Progress
+		// updates live on the run itself, not in the capped event history.
+		if evt.Type != "scanner_output" && evt.Type != "scanner_progress" {
 			sess.record.Events = append(sess.record.Events, ws)
 			if len(sess.record.Events) > 200 {
 				sess.record.Events = append([]WSEvent(nil), sess.record.Events[len(sess.record.Events)-200:]...)
