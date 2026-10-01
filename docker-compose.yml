@@ -11,7 +11,6 @@ services:
       dockerfile: Dockerfile
     image: xalgorix:local
     pull_policy: build
-    privileged: true
     ports:
       - "127.0.0.1:9137:9137"
     volumes:

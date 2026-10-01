@@ -57,6 +57,9 @@ type PlanInput struct {
 	// Availability is an execution capability snapshot, keyed by registry ID.
 	// Missing entries use the build's registry default.
 	Availability map[string]bool `json:"-"`
+	// UnavailabilityReasons explains runtime capability failures separately
+	// from an absent scanner binary.
+	UnavailabilityReasons map[string]string `json:"-"`
 	// CredentialAvailability is keyed by targetID + NUL + accessKind + NUL + credentialID. A
 	// declared ID alone is not evidence that a secret exists or is target-bound.
 	CredentialAvailability map[string]bool `json:"-"`
@@ -163,7 +166,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 				if !targetSupportsType(target, typ) {
 					continue
 				}
-				state, code, reason := eligibility(def, target, plan.Capabilities, input.Availability)
+				state, code, reason := eligibility(def, target, plan.Capabilities, input.Availability, input.UnavailabilityReasons)
 				if def.ID == "subfinder" && target.Kind == assessment.KindDomain && state != PlanUnavailable {
 					if cfg.SubdomainDiscovery {
 						state, code, reason = PlanConditional, "discovery.subdomain_opt_in", "Subdomain discovery was explicitly authorized and will be attempted during preparation."
@@ -261,12 +264,15 @@ func credentialAvailabilityKey(targetID string, accessKind assessment.AccessKind
 	return targetID + "\x00" + string(accessKind) + "\x00" + credentialID
 }
 
-func eligibility(def ScannerDefinition, target assessment.Target, evidence []assessment.CapabilityEvidence, availability map[string]bool) (PlanState, string, string) {
+func eligibility(def ScannerDefinition, target assessment.Target, evidence []assessment.CapabilityEvidence, availability map[string]bool, unavailableReasons map[string]string) (PlanState, string, string) {
 	available := def.Available
 	if v, ok := availability[def.ID]; ok {
 		available = v
 	}
 	if !available {
+		if reason := unavailableReasons[def.ID]; reason != "" {
+			return PlanUnavailable, "scanner.capability_unavailable", reason
+		}
 		return PlanUnavailable, "scanner.unavailable", fmt.Sprintf("%s is relevant but its scanner or service is unavailable.", def.Name)
 	}
 	conditional := false

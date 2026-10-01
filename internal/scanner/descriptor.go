@@ -66,6 +66,7 @@ type ScannerDefinition struct {
 	Risk                   string                  `json:"risk"`
 	Selectable             bool                    `json:"selectable"`
 	Available              bool                    `json:"available"`
+	AvailabilityReason     string                  `json:"availability_reason,omitempty"`
 	Summary                string                  `json:"summary"`
 }
 

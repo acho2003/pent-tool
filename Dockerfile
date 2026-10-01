@@ -5,30 +5,17 @@
 # Nuclei, Trivy, and Vuls are baked into the image. Scanner execution never
 # installs software at runtime.
 #
-# It runs as ROOT on purpose: the engine only enables package auto-install for
-# uid 0 (internal/config: AllowAutoInstall defaults to os.Getuid()==0), and
-# apt/go/cargo installs need write access to system paths. The container is the
-# isolation boundary — treat it as a disposable, network-isolated scanning
-# sandbox and never expose the dashboard without auth.
+# The runtime runs as root but disables scanner auto-install. The default
+# Compose service is unprivileged; raw-packet tools require an explicit
+# capability override. Treat it as a disposable scanning container and never
+# expose the dashboard without authentication.
 #
 # This is a large image (many GB — the full Kali toolset + wordlists + Go/Rust
 # toolchains). That is intentional; size is traded for a complete toolbox.
 #
 # Build:  docker build -t xalgorix .
-# Run:    docker run --rm -p 9137:9137 \
-#           --privileged \
-#           -v xalgorix-data:/data \
-#           ghcr.io/xalgord/xalgorix:latest
-#
-# --privileged gives the toolset the same host-like access it has when run
-# natively as root. Docker's DEFAULT sandbox drops capabilities (NET_ADMIN, …)
-# and applies a seccomp/AppArmor filter that breaks low-level tools (iptables,
-# route/interface changes, ARP-spoof/MITM, tun/tap VPNs, ptrace debuggers,
-# masscan interface tuning). An image CANNOT grant itself capabilities — they
-# are set at run time — so pass --privileged (or the narrower
-# --cap-add=NET_ADMIN --cap-add=NET_RAW --cap-add=SYS_PTRACE
-# --security-opt seccomp=unconfined), or just use docker-compose.yml which
-# sets privileged mode for you.
+# Run the default web/source stack with compose.source.yaml. For raw-packet
+# network checks, explicitly add compose.network-capabilities.yaml.
 #
 # Then open http://127.0.0.1:9137
 #

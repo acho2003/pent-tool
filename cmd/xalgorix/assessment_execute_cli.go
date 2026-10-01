@@ -123,6 +123,9 @@ func cliAssessmentAvailability(cfg scanner.Config) map[string]bool {
 		}
 		available[id] = path != "" && commandExists(path)
 	}
+	if scanner.MasscanCapabilityReason() != "" {
+		available["masscan"] = false
+	}
 	return available
 }
 

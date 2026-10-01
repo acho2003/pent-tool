@@ -49,6 +49,19 @@ mkdir -p secrets && openssl rand -out secrets/xalgorix-credential.key 32
 docker compose up -d --build
 ```
 
+The default Xalgorix service now runs without `privileged: true`. Typed Nmap
+uses TCP connect mode. Masscan's raw-packet adapter requires `NET_ADMIN` and
+`NET_RAW`; preflight marks it unavailable with a capability reason unless the
+operator explicitly starts the full stack with the narrower override:
+
+```sh
+docker compose -f docker-compose.yml -f compose.network-capabilities.yaml up -d --no-build --pull never
+```
+
+That override is for approved network scans. The [source/web workflow](docs/source-container-scans.md)
+does not need it. An already-running service is unaffected until it is
+recreated; no container recreation is part of this change.
+
 Back up `secrets/xalgorix-credential.key` separately from the data volume.
 Losing it makes every saved credential unrecoverable. It is git-ignored and
 mounted read-only as a Compose secret; see

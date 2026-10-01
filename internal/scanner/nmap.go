@@ -32,11 +32,12 @@ func buildNmap(req Request, cfg Config) commandSpec {
 		return commandSpec{notApp: "nmap requires one IP address, CIDR range, hostname, or domain without a scheme, port, or path", timeout: cfg.NmapTimeout}
 	}
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "nmap", "nmap.xml")
-	// -sV detects service/version on open ports; -oX writes the parsed XML.
+	// -sT uses TCP connect scanning without raw sockets; -sV detects
+	// service/version on open ports and -oX writes the parsed XML.
 	// "--" stops option parsing so a target can never be read as a flag.
 	return commandSpec{
 		path:     cfg.NmapPath,
-		args:     []string{"-sV", "-oX", artifact, "--", host},
+		args:     []string{"-sT", "-sV", "-oX", artifact, "--", host},
 		artifact: artifact,
 		timeout:  cfg.NmapTimeout,
 		prepare:  func() error { return os.MkdirAll(filepath.Dir(artifact), 0o700) },

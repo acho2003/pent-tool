@@ -33,6 +33,9 @@ func (s *Server) scannerAvailability() map[string]bool {
 		_, err := exec.LookPath(path)
 		available[id] = err == nil
 	}
+	if scanner.MasscanCapabilityReason() != "" {
+		available["masscan"] = false
+	}
 	// Typed assessment planning requires an explicitly dedicated managed ZAP
 	// backend; a configured shared daemon is not sufficient evidence.
 	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
@@ -78,7 +81,13 @@ func (s *Server) buildAssessmentPlan(cfg assessment.AssessmentConfig) scanner.As
 			}
 		}
 	}
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), CredentialAvailability: credentialAvailability})
+	unavailableReasons := map[string]string{}
+	if _, err := exec.LookPath(s.cfg.MasscanPath); err == nil {
+		if reason := scanner.MasscanCapabilityReason(); reason != "" {
+			unavailableReasons["masscan"] = reason
+		}
+	}
+	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), UnavailabilityReasons: unavailableReasons, CredentialAvailability: credentialAvailability})
 	if len(plan.Errors) == 0 {
 		normalized := plan.Config
 		bindings := append([]assessment.APIDefinitionBinding(nil), normalized.APIDefinitions...)
@@ -132,6 +141,9 @@ func (s *Server) handleScannerRegistry(w http.ResponseWriter, r *http.Request) {
 	for i := range definitions {
 		if ok, exists := available[definitions[i].ID]; exists {
 			definitions[i].Available = ok
+		}
+		if definitions[i].ID == "masscan" && !definitions[i].Available {
+			definitions[i].AvailabilityReason = scanner.MasscanCapabilityReason()
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

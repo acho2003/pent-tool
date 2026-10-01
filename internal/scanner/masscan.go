@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -20,6 +21,9 @@ func (masscanRunner) Descriptor() Descriptor {
 	return Descriptor{Name: "masscan", Summary: "Bounded common-port SYN discovery", Phase: PhaseRecon, Weight: WeightLight, Applies: appliesToHost}
 }
 func (r masscanRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	if reason := MasscanCapabilityReason(); reason != "" {
+		return executeSpec(ctx, r.Name(), req, cfg, commandSpec{prepare: func() error { return errors.New(reason) }}, emit)
+	}
 	release, err := acquireMasscan(ctx, cfg.MasscanPath)
 	if err != nil {
 		return cancelledRun("masscan", req.Scope, req, err, emit)

@@ -23,7 +23,7 @@ func TestBuildNmapAcceptsNetworkTargetsAndRejectsUnsafeOnes(t *testing.T) {
 		if arg != want {
 			t.Fatalf("%q scanned as %q, want %q (args=%v)", target, arg, want, spec.args)
 		}
-		if !hasArg(spec.args, "-sV") || !hasArg(spec.args, "-oX") {
+		if !hasArg(spec.args, "-sT") || !hasArg(spec.args, "-sV") || !hasArg(spec.args, "-oX") {
 			t.Fatalf("%q missing service-detection/XML args: %v", target, spec.args)
 		}
 	}

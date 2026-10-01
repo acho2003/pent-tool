@@ -90,7 +90,13 @@ func cliAssessmentPlanFromConfig(args cliArgs, cfg assessment.AssessmentConfig, 
 		}
 		endpoints = append(endpoints, parsed...)
 	}
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: cliAssessmentAvailability(web.ScannerConfig(appConfig))})
+	unavailableReasons := map[string]string{}
+	if commandExists(appConfig.MasscanPath) {
+		if reason := scanner.MasscanCapabilityReason(); reason != "" {
+			unavailableReasons["masscan"] = reason
+		}
+	}
+	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: cliAssessmentAvailability(web.ScannerConfig(appConfig)), UnavailabilityReasons: unavailableReasons})
 	if len(plan.Errors) == 0 {
 		plan.APIEndpoints = endpoints
 	}
