@@ -1,0 +1,74 @@
+- generic [ref=e2]:
+  - generic [ref=e44]:
+    - complementary [ref=e46]:
+      - generic [ref=e50]:
+        - generic [ref=e51]: Xalgorix
+        - generic [ref=e52]: v4.5.100
+      - navigation "Primary" [ref=e53]:
+        - list [ref=e54]:
+          - listitem [ref=e55]:
+            - paragraph [ref=e56]: Workspace
+            - list [ref=e57]:
+              - listitem [ref=e58]:
+                - link "Overview" [ref=e59] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=e66]:
+                - link "Assessments" [ref=e67] [cursor=pointer]:
+                  - /url: /scans
+              - listitem [ref=e73]:
+                - link "Findings" [ref=e74] [cursor=pointer]:
+                  - /url: /findings
+              - listitem [ref=e78]:
+                - link "Reports" [ref=e79] [cursor=pointer]:
+                  - /url: /reports
+          - listitem [ref=e84]:
+            - paragraph [ref=e85]: Operations
+            - list [ref=e86]:
+              - listitem [ref=e87]:
+                - link "New assessment" [ref=e88] [cursor=pointer]:
+                  - /url: /scans/new
+              - listitem [ref=e91]:
+                - link "Live feed" [ref=e92] [cursor=pointer]:
+                  - /url: /live
+              - listitem [ref=e100]:
+                - link "Monitoring" [ref=e101] [cursor=pointer]:
+                  - /url: /monitoring
+              - listitem [ref=e105]:
+                - link "Instances" [ref=e106] [cursor=pointer]:
+                  - /url: /instances
+              - listitem [ref=e111]:
+                - link "Schedules" [ref=e112] [cursor=pointer]:
+                  - /url: /schedules
+          - listitem [ref=e117]:
+            - paragraph [ref=e118]: Configure
+            - list [ref=e119]:
+              - listitem [ref=e120]:
+                - link "Integrations" [ref=e121] [cursor=pointer]:
+                  - /url: /integrations
+              - listitem [ref=e125]:
+                - link "Settings" [ref=e126] [cursor=pointer]:
+                  - /url: /settings
+      - generic [ref=e131]:
+        - generic [ref=e132]: Local scanner
+        - generic [ref=e136]: Ctrl+K for actions
+    - generic [ref=e140]:
+      - banner [ref=e141]:
+        - button "Open command palette" [ref=e142]:
+          - generic [ref=e146]: Search scans, findings, actions…
+          - generic [ref=e147]: Ctrl K
+        - generic [ref=e148]:
+          - 'generic "WebSocket: Connected" [ref=e149]': Connected
+          - link "New scan" [ref=e152] [cursor=pointer]:
+            - /url: /scans/new
+            - generic [ref=e153]: New Scan
+      - main [ref=e154]:
+        - generic [ref=e156]:
+          - generic [ref=e158]:
+            - heading "Continuous Monitoring" [level=1] [ref=e159]
+            - paragraph [ref=e160]: Wazuh agent health and security activity. Separate from one-time assessments.
+          - generic [ref=e161]:
+            - generic [ref=e166]:
+              - paragraph [ref=e167]: Connect Wazuh to start monitoring
+              - paragraph [ref=e168]: Deploy the optional Wazuh stack on a Linux server, then add its API endpoints here.
+            - button "Configure Wazuh" [ref=e169]
+  - region "Notifications alt+T"
