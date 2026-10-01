@@ -352,3 +352,27 @@ func TestParseRunsRetainsBudgetLimitedNucleiFindings(t *testing.T) {
 		t.Fatalf("budget-limited findings = %+v, errors = %v", findings, errs)
 	}
 }
+
+func TestParseOpenVASReadsNestedGvmdReportAndSkipsLogResults(t *testing.T) {
+	// gvmd's get_reports_response nests the result-bearing <report> inside an
+	// outer <report>; a parser reading only report>results imports nothing.
+	xml := `<get_reports_response status="200"><report id="r" format_id="f"><name>n</name><report id="r"><results start="1" max="-1">` +
+		`<result id="log-1"><name>OS Detection Consolidation</name><host>192.0.2.1<asset asset_id="a"/><hostname/></host><port>general/tcp</port><threat>Log</threat><severity>0.0</severity><nvt oid="1.3.6.1.4.1.25623.1.0.105937"/></result>` +
+		`<result id="med-1"><name>Telnet Unencrypted Cleartext Login</name><host>192.0.2.1<asset asset_id="a"/><hostname/></host><port>23/tcp</port><threat>Medium</threat><severity>4.8</severity><nvt oid="1.3.6.1.4.1.25623.1.0.108522"/></result>` +
+		`</results></report></report></get_reports_response>`
+	path := filepath.Join(t.TempDir(), "results.xml")
+	if err := os.WriteFile(path, []byte(xml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := parseOpenVAS(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("want 1 finding (Log result skipped), got %d: %+v", len(findings), findings)
+	}
+	f := findings[0]
+	if f.Title != "Telnet Unencrypted Cleartext Login" || f.Severity != "medium" || f.Target != "192.0.2.1" || f.Port != "23/tcp" {
+		t.Fatalf("unexpected finding: %+v", f)
+	}
+}

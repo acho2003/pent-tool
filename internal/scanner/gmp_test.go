@@ -142,11 +142,12 @@ func (f *fakeGvmd) respond(command string) string {
 	case "stop_task":
 		return `<stop_task_response status="202" status_text="OK, request submitted"/>`
 	case "get_reports":
-		return `<get_reports_response status="200"><report id="rep-1"><results>` +
-			`<result id="res-1"><name>Deprecated TLS</name><host>example.test</host><port>443/tcp</port>` +
+		// Real gvmd shape: the result-bearing <report> is nested in an outer one.
+		return `<get_reports_response status="200"><report id="rep-1" format_id="a994b278"><name>r</name><report id="rep-1"><results>` +
+			`<result id="res-1"><name>Deprecated TLS</name><host>example.test<asset asset_id="a1"/><hostname/></host><port>443/tcp</port>` +
 			`<threat>Medium</threat><severity>5.3</severity><description>legacy protocol</description>` +
 			`<nvt oid="1.3.6.1.4.1.25623.1.0.1"><cve>CVE-2021-0000</cve><cvss_base>5.3</cvss_base></nvt>` +
-			`</result></results></report></get_reports_response>`
+			`</result></results></report></report></get_reports_response>`
 	}
 	return `<response status="404" status_text="unknown command"/>`
 }

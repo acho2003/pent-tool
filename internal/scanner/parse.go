@@ -418,23 +418,37 @@ func parseOpenVAS(path string) ([]Finding, error) {
 			CVSS string `xml:"cvss_base"`
 		} `xml:"nvt"`
 	}
+	// gvmd's get_reports nests the result-bearing <report> inside an outer
+	// <report> (get_reports_response > report > report > results > result).
+	// The flatter shapes are accepted for older exports and fixtures.
 	var doc struct {
-		Results []result `xml:"report>results>result"`
+		Nested []result `xml:"report>report>results>result"`
+		Flat   []result `xml:"report>results>result"`
 	}
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, err
 	}
-	if len(doc.Results) == 0 {
+	results := doc.Nested
+	if len(results) == 0 {
+		results = doc.Flat
+	}
+	if len(results) == 0 {
 		var alt struct {
 			Results []result `xml:"results>result"`
 		}
 		_ = xml.Unmarshal(data, &alt)
-		doc.Results = alt.Results
+		results = alt.Results
 	}
-	out := make([]Finding, 0, len(doc.Results))
-	for _, r := range doc.Results {
+	out := make([]Finding, 0, len(results))
+	for _, r := range results {
 		score, _ := strconv.ParseFloat(strings.TrimSpace(r.Severity), 64)
-		out = append(out, Finding{SourceID: "openvas:" + firstNonEmpty(r.ID, r.NVT.OID), Scanner: "openvas", RuleID: r.NVT.OID, Title: r.Name, Severity: cvssSeverity(score, r.Threat), Target: r.Host, Endpoint: r.Port, Port: r.Port, Description: r.Description, Evidence: "Greenbone NVT " + r.NVT.OID, CVE: firstCSV(r.NVT.CVE), CVSS: score})
+		// "Log" results are detection notes (open ports, OS and service
+		// identification), not vulnerabilities; Greenbone's default view hides them.
+		if strings.EqualFold(strings.TrimSpace(r.Threat), "log") && score <= 0 {
+			continue
+		}
+		host := strings.TrimSpace(r.Host)
+		out = append(out, Finding{SourceID: "openvas:" + firstNonEmpty(r.ID, r.NVT.OID), Scanner: "openvas", RuleID: r.NVT.OID, Title: strings.TrimSpace(r.Name), Severity: cvssSeverity(score, r.Threat), Target: host, Endpoint: r.Port, Port: r.Port, Description: r.Description, Evidence: "Greenbone NVT " + r.NVT.OID, CVE: firstCSV(r.NVT.CVE), CVSS: score})
 	}
 	return out, nil
 }
