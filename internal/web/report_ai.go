@@ -96,7 +96,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 		return ""
 	}
 	for _, run := range rec.ScannerRuns {
-		if run.Status == "completed" && run.ArtifactPath != "" {
+		if (run.Status == "completed" || (run.Scanner == "testssl" && run.Status == "failed" && run.Checksum != "")) && run.ArtifactPath != "" {
 			if err := scanner.VerifyChecksum(run); err != nil {
 				log.Printf("[report] refusing changed scanner artifact: %v", err)
 				return ""

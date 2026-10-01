@@ -50,36 +50,39 @@ const (
 )
 
 type RawObservation struct {
-	ID                string  `json:"id"`
-	Scanner           string  `json:"scanner"`
-	RuleID            string  `json:"rule_id,omitempty"`
-	SourceID          string  `json:"source_id"`
-	EvidenceReference string  `json:"evidence_reference,omitempty"`
-	Title             string  `json:"title"`
-	Severity          string  `json:"severity,omitempty"`
-	Target            string  `json:"target,omitempty"`
-	Endpoint          string  `json:"endpoint,omitempty"`
-	CanonicalEndpoint string  `json:"canonical_endpoint,omitempty"`
-	Method            string  `json:"method,omitempty"`
-	Parameter         string  `json:"parameter,omitempty"`
-	ParameterLocation string  `json:"parameter_location,omitempty"`
-	Protocol          string  `json:"protocol,omitempty"`
-	Port              string  `json:"port,omitempty"`
-	Package           string  `json:"package,omitempty"`
-	PackageVersion    string  `json:"package_version,omitempty"`
-	SourceLocation    string  `json:"source_location,omitempty"`
-	Container         string  `json:"container,omitempty"`
-	Resource          string  `json:"resource,omitempty"`
-	Description       string  `json:"description,omitempty"`
-	Evidence          string  `json:"evidence,omitempty"`
-	Remediation       string  `json:"remediation,omitempty"`
-	CVE               string  `json:"cve,omitempty"`
-	CWE               string  `json:"cwe,omitempty"`
-	CVSS              float64 `json:"cvss,omitempty"`
-	SeverityUnrated   bool    `json:"severity_unrated,omitempty"`
-	Scope             string  `json:"scope,omitempty"`
-	ObservedAt        string  `json:"observed_at,omitempty"`
-	ObservationKind   string  `json:"observation_kind,omitempty"`
+	ID                   string  `json:"id"`
+	EvidenceCompleteness string  `json:"evidence_completeness,omitempty"`
+	SourceRunStatus      string  `json:"source_run_status,omitempty"`
+	SourceRunReason      string  `json:"source_run_reason,omitempty"`
+	Scanner              string  `json:"scanner"`
+	RuleID               string  `json:"rule_id,omitempty"`
+	SourceID             string  `json:"source_id"`
+	EvidenceReference    string  `json:"evidence_reference,omitempty"`
+	Title                string  `json:"title"`
+	Severity             string  `json:"severity,omitempty"`
+	Target               string  `json:"target,omitempty"`
+	Endpoint             string  `json:"endpoint,omitempty"`
+	CanonicalEndpoint    string  `json:"canonical_endpoint,omitempty"`
+	Method               string  `json:"method,omitempty"`
+	Parameter            string  `json:"parameter,omitempty"`
+	ParameterLocation    string  `json:"parameter_location,omitempty"`
+	Protocol             string  `json:"protocol,omitempty"`
+	Port                 string  `json:"port,omitempty"`
+	Package              string  `json:"package,omitempty"`
+	PackageVersion       string  `json:"package_version,omitempty"`
+	SourceLocation       string  `json:"source_location,omitempty"`
+	Container            string  `json:"container,omitempty"`
+	Resource             string  `json:"resource,omitempty"`
+	Description          string  `json:"description,omitempty"`
+	Evidence             string  `json:"evidence,omitempty"`
+	Remediation          string  `json:"remediation,omitempty"`
+	CVE                  string  `json:"cve,omitempty"`
+	CWE                  string  `json:"cwe,omitempty"`
+	CVSS                 float64 `json:"cvss,omitempty"`
+	SeverityUnrated      bool    `json:"severity_unrated,omitempty"`
+	Scope                string  `json:"scope,omitempty"`
+	ObservedAt           string  `json:"observed_at,omitempty"`
+	ObservationKind      string  `json:"observation_kind,omitempty"`
 }
 
 type FindingEndpoint struct {
@@ -360,7 +363,7 @@ func observationFromFinding(f Finding, run Run, index int) RawObservation {
 	if seen == "" {
 		seen = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	return RawObservation{ID: id, Scanner: f.Scanner, RuleID: f.RuleID, SourceID: f.SourceID, EvidenceReference: f.EvidenceRef, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: observed, CanonicalEndpoint: canonical, Method: strings.ToUpper(f.Method), Parameter: f.Parameter, ParameterLocation: f.ParameterLocation, Protocol: f.Protocol, Port: f.Port, Package: f.Package, PackageVersion: f.PackageVersion, SourceLocation: f.SourceLocation, Container: f.Container, Resource: f.Resource, Description: f.Description, Evidence: f.Evidence, Remediation: f.Remediation, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Scope: f.Scope, ObservedAt: seen, ObservationKind: rule.Type}
+	return RawObservation{ID: id, EvidenceCompleteness: f.EvidenceCompleteness, SourceRunStatus: run.Status, SourceRunReason: run.Reason, Scanner: f.Scanner, RuleID: f.RuleID, SourceID: f.SourceID, EvidenceReference: f.EvidenceRef, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: observed, CanonicalEndpoint: canonical, Method: strings.ToUpper(f.Method), Parameter: f.Parameter, ParameterLocation: f.ParameterLocation, Protocol: f.Protocol, Port: f.Port, Package: f.Package, PackageVersion: f.PackageVersion, SourceLocation: f.SourceLocation, Container: f.Container, Resource: f.Resource, Description: f.Description, Evidence: f.Evidence, Remediation: f.Remediation, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Scope: f.Scope, ObservedAt: seen, ObservationKind: rule.Type}
 }
 
 func findingFingerprint(f RawObservation, rule findingRule) string {
@@ -414,11 +417,23 @@ func BuildFindingsSnapshot(runs []Run, legacy []Finding) (*FindingsSnapshot, []e
 		if (run.Status != "completed" && run.Status != "failed") || run.ArtifactPath == "" {
 			continue
 		}
+		if run.Scanner == "testssl" && run.Status == "failed" {
+			if _, err := os.Stat(run.ArtifactPath); err != nil {
+				continue
+			}
+			if err := VerifyChecksum(run); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
 		parsed, err := ParseRun(run)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", run.Scanner, err))
 		}
 		for i, f := range parsed {
+			if run.Scanner == "testssl" && run.Status == "failed" {
+				f.EvidenceCompleteness = "partial"
+			}
 			f.Scope = FindingScope(run)
 			f.EvidenceRef = run.ArtifactPath + "#" + f.SourceID
 			snapshot.RawObservations = append(snapshot.RawObservations, observationFromFinding(f, run, i))

@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -27,6 +29,56 @@ func TestBuildTestsslCommand(t *testing.T) {
 	}
 	if spec.args[len(spec.args)-1] != "example.com" {
 		t.Errorf("target not last arg: %v", spec.args)
+	}
+}
+
+func TestFailedTestsslRetainsOnlyVerifiedCompleteEntries(t *testing.T) {
+	entry := `{"id":"TLS1_0","severity":"HIGH","ip":"example.test","port":"443","finding":"TLS 1.0 offered"}`
+	for _, tc := range []struct {
+		name, data string
+		want       int
+		parseError bool
+	}{
+		{"complete", "[" + entry + "]", 1, false},
+		{"truncated", "[" + entry + `,{"id":"cut`, 1, true},
+		{"unusable", `[{"id":`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "results.json")
+			if err := os.WriteFile(path, []byte(tc.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			run := finalizeRun(Run{Scanner: "testssl", Status: "failed", Reason: "exit status 3", ArtifactPath: path})
+			findings, errs := ParseRuns([]Run{run})
+			if len(findings) != tc.want || (len(errs) > 0) != tc.parseError {
+				t.Fatalf("findings=%+v errors=%v", findings, errs)
+			}
+			if tc.want > 0 && findings[0].EvidenceCompleteness != "partial" {
+				t.Fatalf("completeness=%q", findings[0].EvidenceCompleteness)
+			}
+			snapshot, snapshotErrs := BuildFindingsSnapshot([]Run{run}, nil)
+			if len(snapshot.RawObservations) != tc.want || (len(snapshotErrs) > 0) != tc.parseError {
+				t.Fatalf("observations=%+v errors=%v", snapshot.RawObservations, snapshotErrs)
+			}
+			if tc.want > 0 && (snapshot.RawObservations[0].SourceRunStatus != "failed" || snapshot.RawObservations[0].SourceRunReason != run.Reason || snapshot.RawObservations[0].EvidenceCompleteness != "partial") {
+				t.Fatalf("partial provenance=%+v", snapshot.RawObservations[0])
+			}
+			if err := os.WriteFile(path, []byte(`[]`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			findings, errs = ParseRuns([]Run{run})
+			if len(findings) != 0 || len(errs) == 0 {
+				t.Fatalf("changed artifact accepted: %+v, %v", findings, errs)
+			}
+		})
+	}
+}
+
+func TestFailedTestsslWithoutJSONProducesNoFindings(t *testing.T) {
+	run := finalizeRun(Run{Scanner: "testssl", Status: "failed", Reason: "exit status 3", ArtifactPath: filepath.Join(t.TempDir(), "missing.json")})
+	findings, errs := ParseRuns([]Run{run})
+	if len(findings) != 0 || len(errs) != 0 {
+		t.Fatalf("diagnostics must not become findings: %+v, %v", findings, errs)
 	}
 }
 

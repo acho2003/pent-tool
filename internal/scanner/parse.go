@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -84,8 +85,18 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 	for _, run := range runs {
 		budgetPartial := run.Status == "failed" && (run.Scanner == "nikto" || run.Scanner == "nuclei") &&
 			(strings.Contains(run.Reason, "time budget reached") || strings.Contains(run.Reason, "time budget exhausted"))
-		if (run.Status != "completed" && !budgetPartial) || run.ArtifactPath == "" {
+		partialTestssl := run.Scanner == "testssl" && run.Status == "failed"
+		if (run.Status != "completed" && !budgetPartial && !partialTestssl) || run.ArtifactPath == "" {
 			continue
+		}
+		if partialTestssl {
+			if _, statErr := os.Stat(run.ArtifactPath); statErr != nil {
+				continue
+			}
+			if err := VerifyChecksum(run); err != nil {
+				errs = append(errs, err)
+				continue
+			}
 		}
 		parsed, err := ParseRun(run)
 		if err != nil {
@@ -103,6 +114,9 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 			parsed[i].Scope = scope
 			if parsed[i].EvidenceCompleteness == "" {
 				parsed[i].EvidenceCompleteness = "artifact"
+			}
+			if partialTestssl {
+				parsed[i].EvidenceCompleteness = "partial"
 			}
 			if sourceRoot != "" {
 				parsed[i].Target = relativeToRoot(parsed[i].Target, sourceRoot)
@@ -707,13 +721,26 @@ func parseNmap(path string) ([]Finding, error) {
 // per actionable entry (severity LOW and above). OK/INFO/DEBUG/WARN entries are
 // status lines, not vulnerabilities, and are dropped so the report stays focused.
 func parseTestssl(path string) ([]Finding, error) {
-	var entries []map[string]any
-	if err := readJSON(path, &entries); err != nil {
+	f, err := os.Open(path)
+	if err != nil {
 		return nil, err
+	}
+	defer f.Close()
+	decoder := json.NewDecoder(f)
+	start, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if start != json.Delim('[') {
+		return nil, fmt.Errorf("testssl results must be a JSON array")
 	}
 	actionable := map[string]bool{"LOW": true, "MEDIUM": true, "HIGH": true, "CRITICAL": true}
 	var out []Finding
-	for _, m := range entries {
+	for decoder.More() {
+		var m map[string]any
+		if err := decoder.Decode(&m); err != nil {
+			return out, fmt.Errorf("testssl JSON stopped after %d complete findings: %w", len(out), err)
+		}
 		sev := strings.ToUpper(strings.TrimSpace(str(m["severity"])))
 		if !actionable[sev] {
 			continue
@@ -742,6 +769,16 @@ func parseTestssl(path string) ([]Finding, error) {
 			CVE:         asCVE(firstCSV(cve)),
 			CWE:         str(m["cwe"]),
 		})
+	}
+	end, err := decoder.Token()
+	if err != nil {
+		return out, fmt.Errorf("testssl JSON ended before array closed: %w", err)
+	}
+	if end != json.Delim(']') {
+		return out, fmt.Errorf("testssl JSON array has invalid terminator")
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return out, fmt.Errorf("testssl JSON has trailing data")
 	}
 	return out, nil
 }
