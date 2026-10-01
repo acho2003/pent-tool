@@ -16,7 +16,7 @@ func TestScannerRegistryPreservesLegacyCatalogAndAddsUnavailableAdapters(t *test
 	if !slices.Equal(got, want) {
 		t.Fatalf("legacy catalog changed: %v", got)
 	}
-	for _, id := range []string{"masscan", "nikto", "sqlmap", "lynis"} {
+	for _, id := range []string{"masscan", "nikto", "lynis"} {
 		d, ok := RegistryEntry(id)
 		if !ok || d.Available {
 			t.Errorf("%s should be registered and unavailable", id)
@@ -124,26 +124,23 @@ func TestPlanFingerprintStableAcrossCallsAndUnsupportedTypesExplainCoverage(t *t
 
 func TestOptionalScannerNeedsExplicitSelectionAndUnknownSelectionDoesNotCreateJobs(t *testing.T) {
 	base := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/search?q=x"}}}
-	defaultPlan := PlanAssessment(PlanInput{Config: base, Availability: map[string]bool{"nikto": true, "sqlmap": true}})
+	defaultPlan := PlanAssessment(PlanInput{Config: base, Availability: map[string]bool{"nikto": true}})
 	for _, d := range defaultPlan.Decisions {
 		if d.Scanner == "nikto" && d.TargetID == "app" && d.State != PlanOptional {
 			t.Fatalf("Nikto should remain optional by default, got %+v", d)
 		}
-		if d.Scanner == "sqlmap" && d.TargetID == "app" && d.State != PlanOptional {
-			t.Fatalf("SQLMap should remain opt-in by default, got %+v", d)
-		}
 	}
 
-	base.ScannerSelection = assessment.ScannerSelection{Mode: "custom", Variants: []string{"sqlmap"}}
-	selected := PlanAssessment(PlanInput{Config: base, Availability: map[string]bool{"sqlmap": true}})
+	base.ScannerSelection = assessment.ScannerSelection{Mode: "custom", Variants: []string{"nikto"}}
+	selected := PlanAssessment(PlanInput{Config: base, Availability: map[string]bool{"nikto": true}})
 	foundJob := false
 	for _, job := range selected.Jobs {
-		if job.Scanner == "sqlmap" && job.TargetID == "app" {
+		if job.Scanner == "nikto" && job.TargetID == "app" {
 			foundJob = true
 		}
 	}
 	if !foundJob {
-		t.Fatalf("explicitly selected and available SQLMap should create a planned job: %+v", selected)
+		t.Fatalf("explicitly selected and available Nikto should create a planned job: %+v", selected)
 	}
 
 	base.ScannerSelection.Variants = []string{"missing"}

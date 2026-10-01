@@ -42,25 +42,24 @@ Complete list of the security tools included in Xalgorix - a deterministic, open
 | 14 | **joomscan** | Joomla scanner | `git clone https://github.com/rezasp/joomscan` |
 | 15 | **cmsmap** | CMS scanner | `git clone https://github.com/Dionach/CMSmap` |
 
-## 💉 Exploitation (15 tools)
+## 💉 Exploitation (14 tools)
 
 | # | Tool | Purpose | Install |
 |---|------|---------|---------|
-| 1 | **sqlmap** | SQL injection | `git clone https://github.com/sqlmapproject/sqlmap` |
-| 2 | **nmap** | Port & service scanning | `apt install nmap` |
-| 3 | **masscan** | Fast port scanner | `apt install masscan` |
-| 4 | **naabu** | Fast port scanner | `go install github.com/projectdiscovery/naabu/cmd/naabu@latest` |
-| 5 | **arp-scan** | ARP discovery | `apt install arp-scan` |
-| 6 | **netdiscover** | Network discovery | `apt install netdiscover` |
-| 7 | **responder** | LLMNR/NBTNS spoofing | `git clone https://github.com/SpiderLabs/Responder` |
-| 8 | **impacket** | Windows exploitation | `pip install impacket` |
-| 9 | **secretdump** | SAM database dump | `pip install impacket` |
-| 10 | **evilwinrm** | Windows remoting | `gem install evilwinrm` |
-| 11 | **hydra** | Password cracking | `apt install hydra` |
-| 12 | **medusa** | Password cracking | `apt install medusa` |
-| 13 | **john** | Password cracking | `apt install john` |
-| 14 | **hashcat** | GPU password cracking | `apt install hashcat` |
-| 15 | **crackmapexec** | Network exploitation | `pip install crackmapexec` |
+| 1 | **nmap** | Port & service scanning | `apt install nmap` |
+| 2 | **masscan** | Fast port scanner | `apt install masscan` |
+| 3 | **naabu** | Fast port scanner | `go install github.com/projectdiscovery/naabu/cmd/naabu@latest` |
+| 4 | **arp-scan** | ARP discovery | `apt install arp-scan` |
+| 5 | **netdiscover** | Network discovery | `apt install netdiscover` |
+| 6 | **responder** | LLMNR/NBTNS spoofing | `git clone https://github.com/SpiderLabs/Responder` |
+| 7 | **impacket** | Windows exploitation | `pip install impacket` |
+| 8 | **secretdump** | SAM database dump | `pip install impacket` |
+| 9 | **evilwinrm** | Windows remoting | `gem install evilwinrm` |
+| 10 | **hydra** | Password cracking | `apt install hydra` |
+| 11 | **medusa** | Password cracking | `apt install medusa` |
+| 12 | **john** | Password cracking | `apt install john` |
+| 13 | **hashcat** | GPU password cracking | `apt install hashcat` |
+| 14 | **crackmapexec** | Network exploitation | `pip install crackmapexec` |
 
 ## 🕵️ Information Gathering (10 tools)
 
@@ -132,7 +131,7 @@ tool binary (and any required credential) is present.
 
 | Group | Scanners |
 |---|---|
-| **Web & API** | subfinder, httpx, katana, nuclei, zap, testssl, nikto*, dalfox*, wapiti*, sqlmap* |
+| **Web & API** | subfinder, httpx, katana, nuclei, zap, testssl, nikto*, dalfox*, wapiti* |
 | **Network & servers** | nmap, masscan*, openvas, vuls, lynis* |
 | **Cloud** | prowler*, scoutsuite* |
 | **Kubernetes** | kube-bench* |
@@ -161,7 +160,7 @@ and `XALGORIX_KUBEBENCH_PATH`.
 |----------|-------|
 | Recon & Subdomain | 15 |
 | HTTP & Scanning | 15 |
-| Exploitation | 15 |
+| Exploitation | 14 |
 | Information Gathering | 10 |
 | Security Scanning | 10 |
 | WAF & Protection | 5 |

@@ -211,10 +211,9 @@ RUN for p in scrapling semgrep bandit git-dumper arjun uro; do \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
     done
 
-# Staged web-pipeline scanners (Python): wapiti3 provides the `wapiti` binary,
-# and sqlmap provides `sqlmap` (used detection-only, opt-in, by the scanner).
+# Staged web-pipeline scanner (Python): wapiti3 provides the `wapiti` binary.
 # Best-effort per tool so a flaky package never fails the image.
-RUN for p in wapiti3 sqlmap; do \
+RUN for p in wapiti3; do \
       pipx install "$p" || pip3 install --break-system-packages "$p" \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
     done

@@ -103,9 +103,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.WapitiPath == "" {
 		cfg.WapitiPath = "wapiti"
 	}
-	if cfg.SqlmapPath == "" {
-		cfg.SqlmapPath = "sqlmap"
-	}
 	if cfg.KubeBenchPath == "" {
 		cfg.KubeBenchPath = "kube-bench"
 	}
@@ -138,9 +135,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.WapitiTimeout <= 0 {
 		cfg.WapitiTimeout = 20 * time.Minute
-	}
-	if cfg.SqlmapTimeout <= 0 {
-		cfg.SqlmapTimeout = 20 * time.Minute
 	}
 	if cfg.KubeBenchTimeout <= 0 {
 		cfg.KubeBenchTimeout = 10 * time.Minute

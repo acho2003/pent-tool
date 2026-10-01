@@ -494,8 +494,7 @@ func formParameters(form map[string]any) []EndpointParameter {
 }
 
 // DispatchTargets returns concrete URLs eligible for a scanner and records the
-// deterministic decision on every endpoint. SQLMap deliberately has no
-// automatic route; its existing explicit approval list remains authoritative.
+// deterministic decision on every endpoint.
 func DispatchTargets(surface *AttackSurface, scannerName string, max int) []string {
 	if surface == nil {
 		return nil
@@ -584,8 +583,6 @@ func endpointEligibleForScanner(ep AttackSurfaceEndpoint, scannerName string) (b
 			return true, ""
 		}
 		return false, "host-level scanner only tests the origin root"
-	case "sqlmap":
-		return false, "SQLMap requires an explicitly approved URL"
 	default:
 		return false, "scanner is not endpoint-dispatched"
 	}

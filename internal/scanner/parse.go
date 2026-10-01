@@ -182,8 +182,6 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseDalfox(run.ArtifactPath)
 	case "wapiti":
 		return parseWapiti(run.ArtifactPath)
-	case "sqlmap":
-		return parseSqlmap(run.ArtifactPath)
 	case "kube-bench":
 		return parseKubeBench(run.ArtifactPath)
 	case "prowler":

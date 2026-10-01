@@ -94,9 +94,6 @@ func TestAttackSurfaceDispatchMatrix(t *testing.T) {
 	if got := DispatchTargets(surface, "dalfox", 100); len(got) != 1 {
 		t.Fatalf("dalfox targets = %v", got)
 	}
-	if got := DispatchTargets(surface, "sqlmap", 100); len(got) != 0 {
-		t.Fatalf("sqlmap must never auto-dispatch: %v", got)
-	}
 }
 
 func TestAttackSurfaceSnapshotChecksum(t *testing.T) {

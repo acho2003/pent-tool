@@ -379,7 +379,7 @@ func TestPlanHasRunnableJobsCountsConditionalSourceJobs(t *testing.T) {
 	if !planHasRunnableJobs(selected) {
 		t.Fatal("a plan with a selected job should be runnable")
 	}
-	gaps := scanner.AssessmentPlan{Jobs: []scanner.PlanJob{{Scanner: "zap", State: scanner.PlanUnavailable}, {Scanner: "sqlmap", State: scanner.PlanSkipped}}}
+	gaps := scanner.AssessmentPlan{Jobs: []scanner.PlanJob{{Scanner: "zap", State: scanner.PlanUnavailable}, {Scanner: "nikto", State: scanner.PlanSkipped}}}
 	if planHasRunnableJobs(gaps) {
 		t.Fatal("a plan of only unavailable or skipped jobs must not start")
 	}
@@ -436,7 +436,7 @@ func TestScannerRegistryIncludesUnavailableAdapters(t *testing.T) {
 	for _, d := range body.Scanners {
 		seen[d.ID] = true
 	}
-	for _, id := range []string{"masscan", "nikto", "sqlmap", "lynis"} {
+	for _, id := range []string{"masscan", "nikto", "lynis"} {
 		if !seen[id] {
 			t.Errorf("registry omitted %s", id)
 		}

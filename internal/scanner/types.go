@@ -78,10 +78,6 @@ type Request struct {
 	EndpointTargets    []string `json:"-"`
 	WebEndpoints       []string `json:"-"`
 	StructuredDispatch bool     `json:"-"`
-	// SQLMapApprovedURLs are the parameterized URLs an operator has EXPLICITLY
-	// approved for SQL-injection detection. SQLMap runs only against these — never
-	// against auto-discovered URLs — enforcing the opt-in, approved-request policy.
-	SQLMapApprovedURLs []string `json:"-"`
 	// CloudCredential is the resolved, target-bound cloud credential for the cloud
 	// audit adapters (prowler/scoutsuite). Runtime-only; never serialized.
 	CloudCredential CloudCredential `json:"-"`
@@ -147,7 +143,6 @@ type Config struct {
 	KatanaChromePath  string
 	DalfoxPath        string
 	WapitiPath        string
-	SqlmapPath        string
 	KubeBenchPath     string
 	ProwlerPath       string
 	ScoutSuitePath    string
@@ -205,7 +200,6 @@ type Config struct {
 	KatanaTimeout       time.Duration
 	DalfoxTimeout       time.Duration
 	WapitiTimeout       time.Duration
-	SqlmapTimeout       time.Duration
 	KubeBenchTimeout    time.Duration
 	ProwlerTimeout      time.Duration
 	ScoutSuiteTimeout   time.Duration

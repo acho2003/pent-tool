@@ -36,7 +36,6 @@ type Config struct {
 	BrowserPath           string
 	DalfoxPath            string
 	WapitiPath            string
-	SqlmapPath            string
 	KubeBenchPath         string
 	ProwlerPath           string
 	ScoutSuitePath        string
@@ -263,7 +262,6 @@ func load() *Config {
 		BrowserPath:           envOr("XALGORIX_BROWSER_PATH", "/usr/bin/chromium"),
 		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
-		SqlmapPath:            envOr("XALGORIX_SQLMAP_PATH", "sqlmap"),
 		KubeBenchPath:         envOr("XALGORIX_KUBEBENCH_PATH", "kube-bench"),
 		ProwlerPath:           envOr("XALGORIX_PROWLER_PATH", "prowler"),
 		ScoutSuitePath:        envOr("XALGORIX_SCOUTSUITE_PATH", "scout"),
