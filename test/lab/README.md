@@ -64,3 +64,26 @@ result without a typed `assessment_coverage` snapshot cannot pass the gate,
 even if its scanner process exited successfully. Review the class mapping and
 native evidence before publishing a release scorecard; the tool has not yet
 run scanners or proven the quality targets.
+
+### Cached-image baseline runner
+
+`run_baseline.py` uses the existing dashboard API to create temporary lab-only
+form credentials, preview and run three `web-gentle` assessments, and collect
+reports, request counters, wall time, and sampled Docker memory use. It starts
+the three lab containers with `--no-build --pull never`; it does not rebuild,
+pull, recreate, or restart the running Xalgorix service. The Xalgorix dashboard
+must already be running and reachable at `http://127.0.0.1:9137`.
+
+```sh
+python3 test/lab/run_baseline.py --output /private/path/xalgorix-baseline-1
+go run ./test/lab/scorecard --observations /private/path/xalgorix-baseline-1/observations.json --gate
+```
+
+The runner prompts for the dashboard password, or reads it from
+`XALGORIX_BENCH_PASSWORD`; `XALGORIX_BENCH_USER` defaults to `admin`. Do not
+commit `report.json`, metrics, observations, or the output directory. The
+runner deletes each temporary lab credential when its scan ends. It records
+the actual running container image IDs, cached image IDs, available tool
+versions, and `source_revision: unknown` when the cached image has no
+Xalgorix source commit label. A baseline from such an image is useful for
+diagnosis but is not a before/after comparison for current source code.

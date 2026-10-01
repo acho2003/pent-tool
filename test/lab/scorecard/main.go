@@ -32,6 +32,7 @@ type labManifest struct {
 
 type observedRun struct {
 	ApplicationID   string `json:"application_id"`
+	TargetURL       string `json:"target_url,omitempty"`
 	ResultPath      string `json:"result_path"`
 	MetricsPath     string `json:"metrics_path"`
 	DurationMS      int64  `json:"duration_ms"`
@@ -245,8 +246,12 @@ func scoreApplication(app labApplication, run observedRun, result scanResult, me
 		classes[finding.Class] = score
 	}
 	seen := map[string]bool{}
+	baseURL := app.BaseURL
+	if run.TargetURL != "" {
+		baseURL = run.TargetURL
+	}
 	for _, finding := range result.Findings {
-		path := findingPath(app.BaseURL, finding)
+		path := findingPath(baseURL, finding)
 		class := classifyFinding(path, finding)
 		key := class + "\x00" + path
 		if class != "" && expected[key] && !seen[key] {

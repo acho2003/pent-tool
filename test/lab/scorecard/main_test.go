@@ -57,6 +57,16 @@ func TestScorecardRequiresEveryApplicationAndComparableCoverage(t *testing.T) {
 	}
 }
 
+func TestScorecardUsesObservedContainerOrigin(t *testing.T) {
+	app := labApplication{ID: "lab", BaseURL: "http://127.0.0.1:18080", ExpectedFindings: []findingLabel{{Class: "reflected_xss", Path: "/search"}}}
+	run := observedRun{ApplicationID: "lab", TargetURL: "http://host.docker.internal:18080"}
+	result := scanResult{Assessment: &scanCoverageState{State: "complete"}, Findings: []observedFinding{{CWE: "CWE-79", Endpoint: "http://host.docker.internal:18080/search"}}}
+	item := scoreApplication(app, run, result, labMetrics{}, map[string]classScore{})
+	if item.TP != 1 || item.FP != 0 || item.FN != 0 {
+		t.Fatalf("container origin was not matched: %+v", item)
+	}
+}
+
 func TestScorecardGatePassesOnlyFullyMeasuredLabeledRun(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name string, value any) string {
