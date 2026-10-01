@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Card,
@@ -67,6 +67,7 @@ import {
   Terminal,
   ListChecks,
   ArrowRight,
+  RefreshCw,
 } from "lucide-react";
 import { LiveFeed, type FeedFilter } from "@/components/live-feed";
 import { ScannerTerminal } from "@/components/scanner-terminal";
@@ -488,6 +489,14 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	}, [scopes, hostCount]);
 	const isOpen = (sc: ReportScope) => openState[sc.id] ?? defaultOpen(sc);
 	const scanProgress = useMemo(() => computeScanProgress(scan), [scan]);
+	// Re-parse the scan's sealed scanner output into findings (e.g. after a
+	// parser fix). Artifacts are only read, never rewritten.
+	const queryClient = useQueryClient();
+	const reimport = useMutation({
+		mutationFn: () => api.rebuildScanFindings(scan.id),
+		onSuccess: () => { void queryClient.invalidateQueries(); },
+	});
+	const scanFinished = ["completed", "finished", "failed", "cancelled", "stopped"].includes(scan.status);
 	// Scope runs refetch only on status changes; live progress comes from the
 	// scan record, which polls every few seconds while running.
 	const liveRun = (scanner: string, scope: string) => (scan.scanner_runs ?? []).find((run) => run.scanner === scanner && (run.scope ?? "") === scope);
@@ -504,7 +513,9 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	};
 	return <div className="space-y-6">
 		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>
-		<header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h1 className="font-mono text-2xl font-semibold">{scan.target}</h1><div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{scan.id}</span><span>·</span><span>{formatDuration(scan.started_at, scan.finished_at)}</span><Badge variant="outline">schema v{scan.schema_version ?? 2}</Badge>{scan.assessment && <><Badge variant="outline">{scan.assessment.assessment_mode.replaceAll("_", " ")}</Badge><Badge variant="outline">{scan.profile || scan.assessment.profile || "web-gentle"}</Badge></>}</div></div><div className="flex gap-2"><ScanStatusPill status={scan.status} /><Button variant="outline" size="sm" asChild><a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer"><Download className="mr-1 h-4 w-4" /> Report</a></Button></div></header>
+		<header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h1 className="font-mono text-2xl font-semibold">{scan.target}</h1><div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{scan.id}</span><span>·</span><span>{formatDuration(scan.started_at, scan.finished_at)}</span><Badge variant="outline">schema v{scan.schema_version ?? 2}</Badge>{scan.assessment && <><Badge variant="outline">{scan.assessment.assessment_mode.replaceAll("_", " ")}</Badge><Badge variant="outline">{scan.profile || scan.assessment.profile || "web-gentle"}</Badge></>}</div></div><div className="flex flex-wrap items-center gap-2"><ScanStatusPill status={scan.status} />{scanFinished && <Button variant="outline" size="sm" disabled={reimport.isPending} onClick={() => reimport.mutate()} title="Re-read this scan's saved scanner output into findings"><RefreshCw className={cn("mr-1 h-4 w-4", reimport.isPending && "animate-spin")} /> {reimport.isPending ? "Re-importing…" : "Re-import findings"}</Button>}<Button variant="outline" size="sm" asChild><a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer"><Download className="mr-1 h-4 w-4" /> Report</a></Button></div></header>
+		{reimport.isSuccess && <p className="text-xs text-emerald-300">Findings re-imported from the saved scanner output.</p>}
+		{reimport.isError && <p role="alert" className="text-xs text-destructive">Could not re-import findings: {reimport.error instanceof Error ? reimport.error.message : "unknown error"}</p>}
 		{scanProgress && !["completed", "finished", "failed", "cancelled", "stopped"].includes(scan.status) && <ScanProgressBar progress={scanProgress} />}
 		{scan.assessment && coverageQuery.data && <Card><CardHeader><CardTitle className="text-sm">Assessment coverage · {coverageQuery.data.state}</CardTitle><CardDescription>Requested types, scanner job outcomes, and remaining coverage gaps.</CardDescription></CardHeader><CardContent className="space-y-4">
 			{coverageQuery.data.reason && <p className="text-xs text-muted-foreground">{coverageQuery.data.reason}</p>}
