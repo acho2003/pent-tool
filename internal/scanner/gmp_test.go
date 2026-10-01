@@ -184,6 +184,11 @@ func TestOpenVASRunAgainstFakeGvmd(t *testing.T) {
 	if !fake.seen(`<port_list id="pl-tcp"/>`) {
 		t.Error("target was not created with the exact-match All IANA assigned TCP port list")
 	}
+	// gvmd's default results view pages at rows=10; the export must disable
+	// pagination or every result after the first ten is dropped.
+	if !fake.seen(`ignore_pagination="1"`) || !fake.seen(`rows=-1`) {
+		t.Error("report export did not request every result (pagination left on)")
+	}
 	findings, err := parseOpenVAS(run.ArtifactPath)
 	if err != nil || len(findings) != 1 || findings[0].CVE != "CVE-2021-0000" {
 		t.Fatalf("parsed report = %+v err = %v", findings, err)

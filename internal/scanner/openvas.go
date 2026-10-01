@@ -221,7 +221,10 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	if reportID == "" {
 		return fail(fmt.Errorf("Greenbone report id unavailable"))
 	}
-	reportData, err := call("export-report", fmt.Sprintf(`<get_reports report_id="%s" details="1"/>`, reportID), 5*time.Minute)
+	// Without an explicit filter gvmd applies its default results view, which
+	// pages at rows=10 — every result after the first page was silently lost.
+	// Fetch all results (no pagination) at Greenbone's standard QoD floor.
+	reportData, err := call("export-report", fmt.Sprintf(`<get_reports report_id="%s" details="1" ignore_pagination="1" filter="apply_overrides=0 min_qod=70 levels=hmlg first=1 rows=-1"/>`, reportID), 5*time.Minute)
 	if err != nil {
 		return fail(err)
 	}
