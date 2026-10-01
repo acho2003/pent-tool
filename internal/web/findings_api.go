@@ -44,7 +44,13 @@ func (s *Server) handleFindingsAPI(w http.ResponseWriter, r *http.Request) {
 			rec.Vulns = snapshotSummaries(snapshot)
 			s.saveScanRecordTo(rec, dir)
 		}
-		writeFindingJSON(w, http.StatusOK, map[string]any{"status": "rebuilt", "summary": snapshot.Summary, "errors": errorStrings(errs)})
+		// The download handler serves the PDF saved at scan end; regenerate it
+		// so the report reflects the re-imported findings, not the stale ones.
+		reportRegenerated := false
+		if rec.SchemaVersion >= scanner.SchemaVersion && rec.Status != "running" {
+			reportRegenerated = s.generateScannerReport(rec, dir, rec.InstanceID) != ""
+		}
+		writeFindingJSON(w, http.StatusOK, map[string]any{"status": "rebuilt", "summary": snapshot.Summary, "report_regenerated": reportRegenerated, "errors": errorStrings(errs)})
 		return
 	}
 

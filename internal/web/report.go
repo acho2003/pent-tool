@@ -588,7 +588,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetFont("Helvetica", "B", 16)
 		setColor(white)
 		pdf.SetXY(x, y+h/2-4)
-		pdf.CellFormat(w, 8, reportInitials(brandName), "", 0, "C", false, 0, "")
+		pdfCellFormat(pdf, w, 8, reportInitials(brandName), "", 0, "C", false, 0, "")
 	}
 
 	// Helper: severity color
@@ -620,17 +620,17 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	pdf.SetXY(74, 41)
 	pdf.SetFont("Helvetica", "B", 23)
 	setColor(white)
-	pdf.MultiCell(112, 9, "Security Assessment Report", "", "L", false)
+	pdfMultiCell(pdf, 112, 9, "Security Assessment Report", "", "L", false)
 
 	pdf.SetXY(74, 62)
 	pdf.SetFont("Helvetica", "B", 14)
 	setColor(coral)
-	pdf.MultiCell(112, 7, reportDisplayText(brandName, "Target", 60), "", "L", false)
+	pdfMultiCell(pdf, 112, 7, reportDisplayText(brandName, "Target", 60), "", "L", false)
 
 	pdf.SetXY(74, 78)
 	pdf.SetFont("Courier", "", 8)
 	setColor(gray)
-	pdf.MultiCell(112, 4.5, reportDisplayText(scan.Target, "No target recorded", 95), "", "L", false)
+	pdfMultiCell(pdf, 112, 4.5, reportDisplayText(scan.Target, "No target recorded", 95), "", "L", false)
 
 	pdf.SetY(124)
 	coverRisk := riskLabel(riskScore(scan.Vulns))
@@ -653,31 +653,31 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetXY(x+4, 131)
 		pdf.SetFont("Helvetica", "", 7.5)
 		setColor(gray)
-		pdf.CellFormat(coverCardW-8, 4, strings.ToUpper(c.label), "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, coverCardW-8, 4, strings.ToUpper(c.label), "", 1, "L", false, 0, "")
 		pdf.SetXY(x+4, 138)
 		pdf.SetFont("Helvetica", "B", 11)
 		setColor(c.color)
-		pdf.CellFormat(coverCardW-8, 6, c.value, "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, coverCardW-8, 6, c.value, "", 0, "L", false, 0, "")
 	}
 
 	pdf.SetXY(14, 176)
 	pdf.SetFont("Helvetica", "B", 10)
 	setColor(gray)
-	pdf.CellFormat(182, 6, "SCAN ID", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 182, 6, "SCAN ID", "", 1, "L", false, 0, "")
 	pdf.SetX(14)
 	pdf.SetFont("Courier", "", 10)
 	setColor(white)
-	pdf.CellFormat(182, 7, reportDisplayText(scan.ID, "not recorded", 90), "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 182, 7, reportDisplayText(scan.ID, "not recorded", 90), "", 1, "L", false, 0, "")
 
 	pdf.SetY(248)
 	drawRect(14, pdf.GetY(), 182, 0.3, border)
 	pdf.Ln(8)
 	pdf.SetFont("Helvetica", "B", 10)
 	setColor(white)
-	pdf.CellFormat(182, 5, "Xalgorix", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 182, 5, "Xalgorix", "", 1, "L", false, 0, "")
 	pdf.SetFont("Helvetica", "", 8)
 	setColor(gray)
-	pdf.CellFormat(182, 5, "Deterministic multi-scanner security assessment", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 182, 5, "Deterministic multi-scanner security assessment", "", 1, "L", false, 0, "")
 	drawRect(0, 294, 210, 3, coral)
 
 	// ─── EXECUTIVE SUMMARY ─────────────────────────────────
@@ -688,7 +688,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	pdf.SetY(15)
 	pdf.SetFont("Helvetica", "B", 22)
 	setColor(coral)
-	pdf.CellFormat(190, 12, "Executive Summary", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 190, 12, "Executive Summary", "", 1, "L", false, 0, "")
 	drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
 	pdf.Ln(8)
 
@@ -743,12 +743,12 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetXY(x+4, cy+6)
 		pdf.SetFont("Helvetica", "", 9)
 		setColor(gray)
-		pdf.CellFormat(cardW-8, 5, c.label, "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, cardW-8, 5, c.label, "", 1, "L", false, 0, "")
 
 		pdf.SetXY(x+4, cy+14)
 		pdf.SetFont("Helvetica", "B", 18)
 		setColor(c.color)
-		pdf.CellFormat(cardW-8, 10, c.value, "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, cardW-8, 10, c.value, "", 0, "L", false, 0, "")
 	}
 
 	pdf.SetY(y + 2*(cardH+6) + 10)
@@ -776,18 +776,18 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	pdf.SetXY(14, riskY+5)
 	pdf.SetFont("Helvetica", "B", 11)
 	setColor(gray)
-	pdf.CellFormat(60, 6, "OVERALL RISK SCORE", "", 0, "L", false, 0, "")
+	pdfCellFormat(pdf, 60, 6, "OVERALL RISK SCORE", "", 0, "L", false, 0, "")
 	pdf.SetFont("Helvetica", "B", 22)
 	setColor(riskColor)
-	pdf.CellFormat(25, 10, fmt.Sprintf("%.1f", score), "", 0, "L", false, 0, "")
+	pdfCellFormat(pdf, 25, 10, fmt.Sprintf("%.1f", score), "", 0, "L", false, 0, "")
 	pdf.SetFont("Helvetica", "B", 14)
-	pdf.CellFormat(50, 10, label, "", 0, "L", false, 0, "")
+	pdfCellFormat(pdf, 50, 10, label, "", 0, "L", false, 0, "")
 	pdf.SetY(riskY + 26)
 
 	// ── Executive Risk Narrative ──
 	pdf.SetFont("Helvetica", "B", 11)
 	setColor(white)
-	pdf.CellFormat(190, 7, "Risk Assessment", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 190, 7, "Risk Assessment", "", 1, "L", false, 0, "")
 	pdf.SetFont("Helvetica", "", 9)
 	setColor(white)
 	narrative := fmt.Sprintf(
@@ -815,22 +815,20 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		)
 	}
 	pdf.SetX(10)
-	pdf.MultiCell(190, 4.5, narrative, "", "L", false)
+	pdfMultiCell(pdf, 190, 4.5, narrative, "", "L", false)
 	pdf.Ln(6)
 
 	// Scan metadata
 	pdf.SetFont("Helvetica", "B", 13)
 	setColor(white)
-	pdf.CellFormat(190, 8, "Scan Details", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 190, 8, "Scan Details", "", 1, "L", false, 0, "")
 	pdf.Ln(2)
 
 	metaItems := [][2]string{
 		{"Target", scan.Target},
 		{"Status", strings.ToUpper(scan.Status)},
 		{"Duration", duration},
-		{"Iterations", fmt.Sprintf("%d", scan.Iterations)},
-		{"Tool Calls", fmt.Sprintf("%d", scan.ToolCalls)},
-		{"Total Tokens", fmt.Sprintf("%d", scan.TotalTokens)},
+		{"Scanner Runs", fmt.Sprintf("%d", scan.ToolCalls)},
 		{"Started", formatReportTimestamp(startTime)},
 		{"Finished", formatReportTimestamp(endTime)},
 	}
@@ -843,10 +841,10 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		drawRect(10, pdf.GetY(), 190, 8, bgColor)
 		pdf.SetFont("Helvetica", "B", 9)
 		setColor(gray)
-		pdf.CellFormat(45, 8, "  "+m[0], "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 45, 8, "  "+m[0], "", 0, "L", false, 0, "")
 		pdf.SetFont("Helvetica", "", 9)
 		setColor(white)
-		pdf.CellFormat(145, 8, m[1], "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 145, 8, m[1], "", 1, "L", false, 0, "")
 	}
 
 	// ─── METHODOLOGY ──────────────────────────────────────
@@ -857,90 +855,147 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	pdf.SetY(15)
 	pdf.SetFont("Helvetica", "B", 22)
 	setColor(coral)
-	pdf.CellFormat(190, 12, "Testing Methodology", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 190, 12, "Testing Methodology", "", 1, "L", false, 0, "")
 	drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
 	pdf.Ln(8)
 
 	pdf.SetFont("Helvetica", "", 9)
 	setColor(white)
 	pdf.SetX(10)
-	pdf.MultiCell(190, 4.5, "Xalgorix executes Nuclei, OWASP ZAP, OpenVAS/Greenbone, Trivy, and Vuls in a fixed order. "+
-		"Findings in this report are parsed from immutable native scanner artifacts. Report AI, when configured, "+
-		"may explain and deduplicate those records but cannot introduce new findings or control scanning.", "", "L", false)
-	pdf.Ln(4)
-
-	// Determine which phases were executed
-	executedPhases := scan.Phases
-	allPhases := len(executedPhases) == 0 // empty = all phases
-	for phaseNum := 1; phaseNum <= 22; phaseNum++ {
-		name, ok := methodologyPhaseNames[phaseNum]
-		if !ok {
-			continue
+	if len(scan.ScannerRuns) > 0 {
+		// Deterministic scans: describe the scanners that actually ran, not the
+		// legacy agent methodology phases.
+		pdfMultiCell(pdf, 190, 4.5, "Xalgorix ran the deterministic, plan-selected scanners listed below against the approved targets. "+
+			"Findings in this report are parsed from each scanner's immutable native output; nothing is added by hand or by AI.", "", "L", false)
+		pdf.Ln(4)
+		for i, run := range scan.ScannerRuns {
+			rowY := pdf.GetY()
+			if rowY > 270 {
+				pdf.AddPage()
+				drawRect(0, 0, 210, 297, darkBg)
+				drawRect(0, 0, 210, 1.5, coral)
+				pdf.SetY(15)
+				rowY = pdf.GetY()
+			}
+			bgColor := darkBg
+			if i%2 == 0 {
+				bgColor = sectionBg
+			}
+			ran := run.Status == "completed"
+			if ran {
+				bgColor = palette.muted
+			}
+			drawRect(10, rowY, 190, 7, bgColor)
+			if ran {
+				drawRect(10, rowY, 3, 7, teal)
+				drawRect(14, rowY+1.5, 4, 4, teal)
+			} else {
+				drawRect(14, rowY+1.5, 4, 4, gray)
+			}
+			pdf.SetXY(22, rowY)
+			pdf.SetFont("Helvetica", "", 8)
+			setColor(white)
+			label := run.Scanner
+			if run.Target != "" {
+				label += " @ " + reportDisplayText(run.Target, "", 70)
+			}
+			pdfCellFormat(pdf, 140, 7, label, "", 0, "L", false, 0, "")
+			pdf.SetFont("Helvetica", "B", 7)
+			if ran {
+				setColor(teal)
+			} else {
+				setColor(gray)
+			}
+			pdfCellFormat(pdf, 30, 7, strings.ToUpper(strings.ReplaceAll(run.Status, "_", " ")), "", 1, "R", false, 0, "")
 		}
-		executed := allPhases
-		if !allPhases {
-			for _, p := range executedPhases {
-				if p == phaseNum {
-					executed = true
-					break
+		pdf.Ln(4)
+		pdf.SetFont("Helvetica", "", 7)
+		setColor(gray)
+		drawRect(12, pdf.GetY()+1, 3, 3, teal)
+		pdf.SetX(18)
+		pdfCellFormat(pdf, 30, 5, "= Completed", "", 0, "L", false, 0, "")
+		drawRect(50, pdf.GetY()+1, 3, 3, gray)
+		pdf.SetX(56)
+		pdfCellFormat(pdf, 60, 5, "= Not applicable, skipped or failed", "", 1, "L", false, 0, "")
+	} else {
+		pdfMultiCell(pdf, 190, 4.5, "Xalgorix executes Nuclei, OWASP ZAP, OpenVAS/Greenbone, Trivy, and Vuls in a fixed order. "+
+			"Findings in this report are parsed from immutable native scanner artifacts. Report AI, when configured, "+
+			"may explain and deduplicate those records but cannot introduce new findings or control scanning.", "", "L", false)
+		pdf.Ln(4)
+
+		// Determine which phases were executed
+		executedPhases := scan.Phases
+		allPhases := len(executedPhases) == 0 // empty = all phases
+		for phaseNum := 1; phaseNum <= 22; phaseNum++ {
+			name, ok := methodologyPhaseNames[phaseNum]
+			if !ok {
+				continue
+			}
+			executed := allPhases
+			if !allPhases {
+				for _, p := range executedPhases {
+					if p == phaseNum {
+						executed = true
+						break
+					}
 				}
 			}
+			rowY := pdf.GetY()
+			if rowY > 270 {
+				pdf.AddPage()
+				drawRect(0, 0, 210, 297, darkBg)
+				drawRect(0, 0, 210, 1.5, coral)
+				pdf.SetY(15)
+				rowY = pdf.GetY()
+			}
+			bgColor := darkBg
+			if phaseNum%2 == 0 {
+				bgColor = sectionBg
+			}
+			if executed {
+				bgColor = palette.muted
+			}
+			drawRect(10, rowY, 190, 7, bgColor)
+			// Status indicator
+			if executed {
+				drawRect(10, rowY, 3, 7, teal)
+				drawRect(14, rowY+1.5, 4, 4, teal)
+			} else {
+				drawRect(14, rowY+1.5, 4, 4, gray)
+			}
+			pdf.SetXY(22, rowY)
+			pdf.SetFont("Helvetica", "", 8)
+			if executed {
+				setColor(white)
+			} else {
+				setColor(gray)
+			}
+			status := "SKIPPED"
+			if executed {
+				status = "SELECTED"
+			}
+			pdfCellFormat(pdf, 145, 7, fmt.Sprintf("Phase %d: %s", phaseNum, name), "", 0, "L", false, 0, "")
+			pdf.SetFont("Helvetica", "B", 7)
+			if executed {
+				setColor(teal)
+			} else {
+				setColor(gray)
+			}
+			pdfCellFormat(pdf, 25, 7, status, "", 1, "R", false, 0, "")
 		}
-		rowY := pdf.GetY()
-		if rowY > 270 {
-			pdf.AddPage()
-			drawRect(0, 0, 210, 297, darkBg)
-			drawRect(0, 0, 210, 1.5, coral)
-			pdf.SetY(15)
-			rowY = pdf.GetY()
-		}
-		bgColor := darkBg
-		if phaseNum%2 == 0 {
-			bgColor = sectionBg
-		}
-		if executed {
-			bgColor = palette.muted
-		}
-		drawRect(10, rowY, 190, 7, bgColor)
-		// Status indicator
-		if executed {
-			drawRect(10, rowY, 3, 7, teal)
-			drawRect(14, rowY+1.5, 4, 4, teal)
-		} else {
-			drawRect(14, rowY+1.5, 4, 4, gray)
-		}
-		pdf.SetXY(22, rowY)
-		pdf.SetFont("Helvetica", "", 8)
-		if executed {
-			setColor(white)
-		} else {
-			setColor(gray)
-		}
-		status := "SKIPPED"
-		if executed {
-			status = "SELECTED"
-		}
-		pdf.CellFormat(145, 7, fmt.Sprintf("Phase %d: %s", phaseNum, name), "", 0, "L", false, 0, "")
-		pdf.SetFont("Helvetica", "B", 7)
-		if executed {
-			setColor(teal)
-		} else {
-			setColor(gray)
-		}
-		pdf.CellFormat(25, 7, status, "", 1, "R", false, 0, "")
-	}
 
-	// Legend
-	pdf.Ln(4)
-	pdf.SetFont("Helvetica", "", 7)
-	setColor(gray)
-	pdf.SetX(10)
-	drawRect(12, pdf.GetY()+1, 3, 3, teal)
-	pdf.SetX(18)
-	pdf.CellFormat(30, 5, "= Executed", "", 0, "L", false, 0, "")
-	drawRect(50, pdf.GetY()+1, 3, 3, gray)
-	pdf.SetX(56)
-	pdf.CellFormat(30, 5, "= Skipped", "", 1, "L", false, 0, "")
+		// Legend
+		pdf.Ln(4)
+		pdf.SetFont("Helvetica", "", 7)
+		setColor(gray)
+		pdf.SetX(10)
+		drawRect(12, pdf.GetY()+1, 3, 3, teal)
+		pdf.SetX(18)
+		pdfCellFormat(pdf, 30, 5, "= Executed", "", 0, "L", false, 0, "")
+		drawRect(50, pdf.GetY()+1, 3, 3, gray)
+		pdf.SetX(56)
+		pdfCellFormat(pdf, 30, 5, "= Skipped", "", 1, "L", false, 0, "")
+	}
 
 	// ─── RECONNAISSANCE FINDINGS ─────────────────────────
 	recon := collectReconReportSummary(scan.Events)
@@ -952,14 +1007,14 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetY(15)
 		pdf.SetFont("Helvetica", "B", 22)
 		setColor(teal)
-		pdf.CellFormat(190, 12, "Reconnaissance Findings", "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 190, 12, "Reconnaissance Findings", "", 1, "L", false, 0, "")
 		drawRect(10, pdf.GetY()+2, 62, 0.8, teal)
 		pdf.Ln(8)
 
 		pdf.SetFont("Helvetica", "", 9)
 		setColor(white)
 		pdf.SetX(10)
-		pdf.MultiCell(190, 4.5, "The following non-exploit reconnaissance observations were extracted from the scan feed and tool outputs. These are included for attack-surface documentation and operational handoff.", "", "L", false)
+		pdfMultiCell(pdf, 190, 4.5, "The following non-exploit reconnaissance observations were extracted from the scan feed and tool outputs. These are included for attack-surface documentation and operational handoff.", "", "L", false)
 		pdf.Ln(5)
 
 		drawReconList := func(title string, items []string) {
@@ -977,7 +1032,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			pdf.SetXY(14, headerY+1)
 			pdf.SetFont("Helvetica", "B", 9)
 			setColor(teal)
-			pdf.CellFormat(180, 6, strings.ToUpper(title), "", 1, "L", false, 0, "")
+			pdfCellFormat(pdf, 180, 6, strings.ToUpper(title), "", 1, "L", false, 0, "")
 			pdf.Ln(2)
 			pdf.SetFont("Courier", "", 7)
 			setColor(white)
@@ -989,7 +1044,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 					pdf.SetY(15)
 				}
 				pdf.SetX(14)
-				pdf.MultiCell(182, 4, "- "+item, "", "L", false)
+				pdfMultiCell(pdf, 182, 4, "- "+item, "", "L", false)
 			}
 			pdf.Ln(4)
 		}
@@ -1019,14 +1074,14 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	}
 	pdf.SetFont("Helvetica", "B", 16)
 	setColor(coral)
-	pdf.CellFormat(190, 10, "Blue Team Reference Timestamps", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 190, 10, "Blue Team Reference Timestamps", "", 1, "L", false, 0, "")
 	drawRect(10, pdf.GetY()+1, 50, 0.8, teal)
 	pdf.Ln(6)
 
 	pdf.SetFont("Helvetica", "", 8)
 	setColor(gray)
 	pdf.SetX(10)
-	pdf.MultiCell(190, 4, "The following RFC3339 timestamps enable Blue Team operators to correlate "+
+	pdfMultiCell(pdf, 190, 4, "The following RFC3339 timestamps enable Blue Team operators to correlate "+
 		"scan activity with SIEM/log sources for use-case development and alert tuning.", "", "L", false)
 	pdf.Ln(3)
 
@@ -1067,10 +1122,10 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		if titleRunes := []rune(titleStr); len(titleRunes) > 75 {
 			titleStr = string(titleRunes[:72]) + "..."
 		}
-		pdf.CellFormat(120, 7, "  "+titleStr, "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 120, 7, "  "+titleStr, "", 0, "L", false, 0, "")
 		pdf.SetFont("Courier", "", 7)
 		setColor(teal)
-		pdf.CellFormat(70, 7, ts[1], "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 70, 7, ts[1], "", 1, "L", false, 0, "")
 	}
 
 	// Pre-compute all vuln mappings once for the entire report.
@@ -1096,14 +1151,14 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetY(15)
 		pdf.SetFont("Helvetica", "B", 22)
 		setColor(coral)
-		pdf.CellFormat(190, 12, "Vulnerabilities by Host", "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 190, 12, "Vulnerabilities by Host", "", 1, "L", false, 0, "")
 		drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
 		pdf.Ln(8)
 
 		pdf.SetFont("Helvetica", "", 8)
 		setColor(white)
 		pdf.SetX(10)
-		pdf.MultiCell(190, 4, "Unique scanner findings grouped by host. Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
+		pdfMultiCell(pdf, 190, 4, "Unique scanner findings grouped by host. Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
 		pdf.Ln(4)
 
 		// Table header
@@ -1112,13 +1167,13 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetFont("Helvetica", "B", 7)
 		setColor(coral)
 		pdf.SetXY(12, thY+1)
-		pdf.CellFormat(10, 6, "ID", "", 0, "L", false, 0, "")
-		pdf.CellFormat(68, 6, "FINDING", "", 0, "L", false, 0, "")
-		pdf.CellFormat(20, 6, "SEVERITY", "", 0, "C", false, 0, "")
-		pdf.CellFormat(14, 6, "CVSS", "", 0, "C", false, 0, "")
-		pdf.CellFormat(40, 6, "CVE", "", 0, "L", false, 0, "")
-		pdf.CellFormat(18, 6, "CWE", "", 0, "L", false, 0, "")
-		pdf.CellFormat(20, 6, "OWASP", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 10, 6, "ID", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 68, 6, "FINDING", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 20, 6, "SEVERITY", "", 0, "C", false, 0, "")
+		pdfCellFormat(pdf, 14, 6, "CVSS", "", 0, "C", false, 0, "")
+		pdfCellFormat(pdf, 40, 6, "CVE", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 18, 6, "CWE", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 20, 6, "OWASP", "", 0, "L", false, 0, "")
 		pdf.Ln(8)
 
 		scopeLabels := make(map[string]string, len(scan.ReportScopes))
@@ -1142,7 +1197,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				pdf.SetXY(12, groupY)
 				pdf.SetFont("Helvetica", "B", 7)
 				setColor(teal)
-				pdf.CellFormat(186, 6, fitPDFText(pdf, firstNonBlank(scopeLabels[v.Scope], v.Scope, "UNSCOPED"), 186), "", 1, "L", false, 0, "")
+				pdfCellFormat(pdf, 186, 6, fitPDFText(pdf, firstNonBlank(scopeLabels[v.Scope], v.Scope, "UNSCOPED"), 186), "", 1, "L", false, 0, "")
 			}
 			if pdf.GetY() > 268 {
 				pdf.AddPage()
@@ -1166,7 +1221,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			pdf.SetXY(12, rowY)
 			pdf.SetFont("Helvetica", "B", 7)
 			setColor(gray)
-			pdf.CellFormat(10, 7, fmt.Sprintf("F-%02d", i+1), "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 10, 7, fmt.Sprintf("F-%02d", i+1), "", 0, "L", false, 0, "")
 
 			pdf.SetFont("Helvetica", "", 7)
 			setColor(white)
@@ -1174,11 +1229,11 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			if titleRunes := []rune(titleStr); len(titleRunes) > 40 {
 				titleStr = string(titleRunes[:37]) + "..."
 			}
-			pdf.CellFormat(68, 7, titleStr, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 68, 7, titleStr, "", 0, "L", false, 0, "")
 
 			pdf.SetFont("Helvetica", "B", 7)
 			pdf.SetTextColor(sc[0], sc[1], sc[2])
-			pdf.CellFormat(20, 7, strings.ToUpper(v.Severity), "", 0, "C", false, 0, "")
+			pdfCellFormat(pdf, 20, 7, strings.ToUpper(v.Severity), "", 0, "C", false, 0, "")
 
 			setColor(white)
 			pdf.SetFont("Helvetica", "", 7)
@@ -1186,7 +1241,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			if v.CVSS > 0 {
 				cvssStr = fmt.Sprintf("%.1f", v.CVSS)
 			}
-			pdf.CellFormat(14, 7, cvssStr, "", 0, "C", false, 0, "")
+			pdfCellFormat(pdf, 14, 7, cvssStr, "", 0, "C", false, 0, "")
 
 			setColor(gray)
 			cveStr := v.CVE
@@ -1196,20 +1251,20 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			if cveStr == "" {
 				cveStr = "-"
 			}
-			pdf.CellFormat(40, 7, cveStr, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 40, 7, cveStr, "", 0, "L", false, 0, "")
 
 			setColor(teal)
 			cweStr := mappings.CWEID
 			if cweStr == "" {
 				cweStr = "-"
 			}
-			pdf.CellFormat(18, 7, cweStr, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 18, 7, cweStr, "", 0, "L", false, 0, "")
 
 			owaspStr := mappings.OWASP
 			if owaspStr == "" {
 				owaspStr = "-"
 			}
-			pdf.CellFormat(20, 7, owaspStr, "", 1, "L", false, 0, "")
+			pdfCellFormat(pdf, 20, 7, owaspStr, "", 1, "L", false, 0, "")
 		}
 
 		// ─── VULNERABILITY DETAILS ─────────────────────────────
@@ -1220,7 +1275,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetY(15)
 		pdf.SetFont("Helvetica", "B", 22)
 		setColor(coral)
-		pdf.CellFormat(190, 12, "Vulnerability Details", "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 190, 12, "Vulnerability Details", "", 1, "L", false, 0, "")
 		drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
 		pdf.Ln(8)
 
@@ -1244,7 +1299,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			vulnTitle := fmt.Sprintf("#%d  %s", idx+1, v.Title)
 			pdf.SetFont("Helvetica", "B", 10)
 			maxTitleW := 150.0 // badge starts at x=170, title starts at x=16, leave 4mm gap
-			for len(vulnTitle) > 0 && pdf.GetStringWidth(vulnTitle) > maxTitleW {
+			for len(vulnTitle) > 0 && pdfStringWidth(pdf, vulnTitle) > maxTitleW {
 				runes := []rune(vulnTitle)
 				vulnTitle = string(runes[:len(runes)-1])
 			}
@@ -1254,14 +1309,14 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 
 			pdf.SetXY(16, headerY+1)
 			setColor(white)
-			pdf.CellFormat(maxTitleW, 8, vulnTitle, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, maxTitleW, 8, vulnTitle, "", 0, "L", false, 0, "")
 
 			// Severity badge
 			pdf.SetXY(170, headerY+2)
 			pdf.SetFont("Helvetica", "B", 8)
 			drawRect(170, headerY+2, 28, 6, sc)
 			pdf.SetTextColor(255, 255, 255)
-			pdf.CellFormat(28, 6, strings.ToUpper(v.Severity), "", 0, "C", false, 0, "")
+			pdfCellFormat(pdf, 28, 6, strings.ToUpper(v.Severity), "", 0, "C", false, 0, "")
 
 			pdf.SetY(headerY + 12)
 
@@ -1272,10 +1327,10 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				pdf.SetX(14)
 				if scan.SchemaVersion < 2 && v.Verified {
 					setColor(teal)
-					pdf.CellFormat(0, 5, fmt.Sprintf("Verified via: %s", strings.ToUpper(v.VerificationMethod)), "", 1, "L", false, 0, "")
+					pdfCellFormat(pdf, 0, 5, fmt.Sprintf("Verified via: %s", strings.ToUpper(v.VerificationMethod)), "", 1, "L", false, 0, "")
 				} else {
 					setColor(gray)
-					pdf.CellFormat(0, 5, fmt.Sprintf("SCANNER-REPORTED via %s — review native evidence", strings.ToUpper(v.VerificationMethod)), "", 1, "L", false, 0, "")
+					pdfCellFormat(pdf, 0, 5, fmt.Sprintf("SCANNER-REPORTED via %s — review native evidence", strings.ToUpper(v.VerificationMethod)), "", 1, "L", false, 0, "")
 				}
 			}
 
@@ -1285,14 +1340,14 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				pdf.SetFont("Helvetica", "", 8)
 				setColor(gray)
 				pdf.SetXY(14, metaY)
-				pdf.CellFormat(15, 5, "CVSS:", "", 0, "L", false, 0, "")
+				pdfCellFormat(pdf, 15, 5, "CVSS:", "", 0, "L", false, 0, "")
 				setColor(sc)
 				pdf.SetFont("Helvetica", "B", 8)
-				pdf.CellFormat(15, 5, fmt.Sprintf("%.1f", v.CVSS), "", 0, "L", false, 0, "")
+				pdfCellFormat(pdf, 15, 5, fmt.Sprintf("%.1f", v.CVSS), "", 0, "L", false, 0, "")
 				if v.CVSSVector != "" {
 					setColor(gray)
 					pdf.SetFont("Helvetica", "", 7)
-					pdf.CellFormat(0, 5, v.CVSSVector, "", 0, "L", false, 0, "")
+					pdfCellFormat(pdf, 0, 5, v.CVSSVector, "", 0, "L", false, 0, "")
 				}
 				pdf.Ln(6)
 			}
@@ -1305,17 +1360,17 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				if v.CVE != "" {
 					setColor(gray)
 					pdf.SetFont("Helvetica", "", 8)
-					pdf.CellFormat(12, 5, "CVE:", "", 0, "L", false, 0, "")
+					pdfCellFormat(pdf, 12, 5, "CVE:", "", 0, "L", false, 0, "")
 					setColor(white)
 					cveText := reportDisplayText(v.CVE, "", 80)
-					pdf.CellFormat(90, 5, cveText, "", 0, "L", false, 0, "")
+					pdfCellFormat(pdf, 90, 5, cveText, "", 0, "L", false, 0, "")
 				}
 				if v.Method != "" {
 					setColor(gray)
 					pdf.SetFont("Helvetica", "", 8)
-					pdf.CellFormat(18, 5, "Method:", "", 0, "L", false, 0, "")
+					pdfCellFormat(pdf, 18, 5, "Method:", "", 0, "L", false, 0, "")
 					setColor(white)
-					pdf.CellFormat(20, 5, v.Method, "", 0, "L", false, 0, "")
+					pdfCellFormat(pdf, 20, 5, v.Method, "", 0, "L", false, 0, "")
 				}
 				pdf.Ln(6)
 			}
@@ -1328,11 +1383,11 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				pdf.SetXY(14, meta3Y)
 				if vulnMappings.CWEID != "" {
 					// CWE badge
-					badgeW := pdf.GetStringWidth(vulnMappings.CWEID) + 6
+					badgeW := pdfStringWidth(pdf, vulnMappings.CWEID) + 6
 					pdf.SetFont("Helvetica", "B", 7)
 					drawRect(pdf.GetX(), meta3Y, badgeW, 5.5, palette.muted)
 					setColor(teal)
-					pdf.CellFormat(badgeW, 5.5, vulnMappings.CWEID, "", 0, "C", false, 0, "")
+					pdfCellFormat(pdf, badgeW, 5.5, vulnMappings.CWEID, "", 0, "C", false, 0, "")
 					pdf.SetX(pdf.GetX() + 2)
 					if vulnMappings.CWEName != "" {
 						pdf.SetFont("Helvetica", "", 7)
@@ -1341,7 +1396,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 						if nameRunes := []rune(nameStr); len(nameRunes) > 45 {
 							nameStr = string(nameRunes[:42]) + "..."
 						}
-						pdf.CellFormat(0, 5.5, nameStr, "", 0, "L", false, 0, "")
+						pdfCellFormat(pdf, 0, 5.5, nameStr, "", 0, "L", false, 0, "")
 					}
 				}
 				pdf.Ln(7)
@@ -1351,11 +1406,11 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 					if vulnMappings.OWASPName != "" {
 						owaspLabel = vulnMappings.OWASP + " — " + vulnMappings.OWASPName
 					}
-					badgeW := pdf.GetStringWidth(owaspLabel) + 6
+					badgeW := pdfStringWidth(pdf, owaspLabel) + 6
 					pdf.SetFont("Helvetica", "B", 7)
 					drawRect(pdf.GetX(), pdf.GetY(), badgeW, 5.5, palette.muted)
 					setColor(coral)
-					pdf.CellFormat(badgeW, 5.5, owaspLabel, "", 0, "C", false, 0, "")
+					pdfCellFormat(pdf, badgeW, 5.5, owaspLabel, "", 0, "C", false, 0, "")
 					pdf.Ln(7)
 				}
 			}
@@ -1408,7 +1463,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				pdf.SetXY(14, secY+1)
 				pdf.SetFont("Helvetica", "B", 8)
 				setColor(coral)
-				pdf.CellFormat(0, 6, sec.label, "", 0, "L", false, 0, "")
+				pdfCellFormat(pdf, 0, 6, sec.label, "", 0, "L", false, 0, "")
 
 				pdf.SetY(secY + 9)
 
@@ -1439,11 +1494,11 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 					pdf.SetXY(17, codeY+3)
 					pdf.SetFont("Courier", "", 7)
 					setColor(cyan)
-					pdf.MultiCell(175, 4, reportDisplayText(content, "", 0), "", "L", false)
+					pdfMultiCell(pdf, 175, 4, reportDisplayText(content, "", 0), "", "L", false)
 				} else {
 					setColor(white)
 					pdf.SetX(14)
-					pdf.MultiCell(182, 5, reportDisplayText(sec.content, "", 0), "", "L", false)
+					pdfMultiCell(pdf, 182, 5, reportDisplayText(sec.content, "", 0), "", "L", false)
 				}
 				pdf.Ln(4)
 			}
@@ -1490,7 +1545,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetY(15)
 		pdf.SetFont("Helvetica", "B", 22)
 		setColor(coral)
-		pdf.CellFormat(190, 12, "Tested Endpoints & URLs", "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 190, 12, "Tested Endpoints & URLs", "", 1, "L", false, 0, "")
 		drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
 		pdf.Ln(8)
 
@@ -1510,13 +1565,13 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			}
 			pdf.SetFont("Courier", "", 8)
 			setColor(cyan)
-			pdf.CellFormat(190, 5, "- "+ep, "", 1, "L", false, 0, "")
+			pdfCellFormat(pdf, 190, 5, "- "+ep, "", 1, "L", false, 0, "")
 		}
 		if len(endpoints) > 30 {
 			pdf.Ln(2)
 			pdf.SetFont("Helvetica", "", 9)
 			setColor(gray)
-			pdf.CellFormat(190, 5, fmt.Sprintf("... and %d more endpoints", len(endpoints)-30), "", 1, "L", false, 0, "")
+			pdfCellFormat(pdf, 190, 5, fmt.Sprintf("... and %d more endpoints", len(endpoints)-30), "", 1, "L", false, 0, "")
 		}
 	}
 
@@ -1528,7 +1583,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	pdf.SetY(15)
 	pdf.SetFont("Helvetica", "B", 22)
 	setColor(red)
-	pdf.CellFormat(190, 12, "Disclaimer", "", 1, "L", false, 0, "")
+	pdfCellFormat(pdf, 190, 12, "Disclaimer", "", 1, "L", false, 0, "")
 	drawRect(10, pdf.GetY()+2, 50, 0.8, teal)
 	pdf.Ln(10)
 
@@ -1553,7 +1608,7 @@ https://github.com/xalgord/xalgorix`
 
 	pdf.SetFont("Helvetica", "", 10)
 	setColor(white)
-	pdf.MultiCell(182, 5, disclaimer, "", "L", false)
+	pdfMultiCell(pdf, 182, 5, disclaimer, "", "L", false)
 
 	// ─── REFERENCE INDEX APPENDIX ──────────────────────────
 	if len(scan.Vulns) > 0 {
@@ -1564,20 +1619,20 @@ https://github.com/xalgord/xalgorix`
 		pdf.SetY(15)
 		pdf.SetFont("Helvetica", "B", 22)
 		setColor(teal)
-		pdf.CellFormat(190, 12, "Reference Index", "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 190, 12, "Reference Index", "", 1, "L", false, 0, "")
 		drawRect(10, pdf.GetY()+2, 50, 0.8, teal)
 		pdf.Ln(8)
 
 		pdf.SetFont("Helvetica", "", 8)
 		setColor(white)
 		pdf.SetX(10)
-		pdf.MultiCell(190, 4, "The mappings below are inferred from each finding's vulnerability class and are provided as a consolidated index for traceability and compliance reporting.", "", "L", false)
+		pdfMultiCell(pdf, 190, 4, "The mappings below are inferred from each finding's vulnerability class and are provided as a consolidated index for traceability and compliance reporting.", "", "L", false)
 		pdf.Ln(5)
 
 		// ── CWE Reference Table ──
 		pdf.SetFont("Helvetica", "B", 13)
 		setColor(teal)
-		pdf.CellFormat(190, 8, "CWE Reference Table", "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 190, 8, "CWE Reference Table", "", 1, "L", false, 0, "")
 		pdf.Ln(2)
 
 		// Table header
@@ -1586,10 +1641,10 @@ https://github.com/xalgord/xalgorix`
 		pdf.SetFont("Helvetica", "B", 7)
 		setColor(teal)
 		pdf.SetXY(12, cweThY+1)
-		pdf.CellFormat(15, 6, "FINDING", "", 0, "L", false, 0, "")
-		pdf.CellFormat(22, 6, "CWE", "", 0, "L", false, 0, "")
-		pdf.CellFormat(80, 6, "CWE NAME", "", 0, "L", false, 0, "")
-		pdf.CellFormat(63, 6, "FINDING TITLE", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 15, 6, "FINDING", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 22, 6, "CWE", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 80, 6, "CWE NAME", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 63, 6, "FINDING TITLE", "", 0, "L", false, 0, "")
 		pdf.Ln(8)
 
 		for i, v := range scan.Vulns {
@@ -1610,14 +1665,14 @@ https://github.com/xalgord/xalgorix`
 			pdf.SetXY(12, rowY)
 			pdf.SetFont("Helvetica", "B", 7)
 			setColor(gray)
-			pdf.CellFormat(15, 7, fmt.Sprintf("F-%02d", i+1), "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 15, 7, fmt.Sprintf("F-%02d", i+1), "", 0, "L", false, 0, "")
 
 			setColor(teal)
 			cweStr := mappings.CWEID
 			if cweStr == "" {
 				cweStr = "—"
 			}
-			pdf.CellFormat(22, 7, cweStr, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 22, 7, cweStr, "", 0, "L", false, 0, "")
 
 			setColor(white)
 			pdf.SetFont("Helvetica", "", 7)
@@ -1628,14 +1683,14 @@ https://github.com/xalgord/xalgorix`
 			if cweRunes := []rune(cweName); len(cweRunes) > 48 {
 				cweName = string(cweRunes[:45]) + "..."
 			}
-			pdf.CellFormat(80, 7, cweName, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 80, 7, cweName, "", 0, "L", false, 0, "")
 
 			setColor(gray)
 			titleStr := v.Title
 			if titleRunes := []rune(titleStr); len(titleRunes) > 38 {
 				titleStr = string(titleRunes[:35]) + "..."
 			}
-			pdf.CellFormat(63, 7, titleStr, "", 1, "L", false, 0, "")
+			pdfCellFormat(pdf, 63, 7, titleStr, "", 1, "L", false, 0, "")
 		}
 
 		pdf.Ln(8)
@@ -1650,7 +1705,7 @@ https://github.com/xalgord/xalgorix`
 
 		pdf.SetFont("Helvetica", "B", 13)
 		setColor(teal)
-		pdf.CellFormat(190, 8, "OWASP Top 10 (2021) Coverage", "", 1, "L", false, 0, "")
+		pdfCellFormat(pdf, 190, 8, "OWASP Top 10 (2021) Coverage", "", 1, "L", false, 0, "")
 		pdf.Ln(2)
 
 		// owaspCounts was pre-computed above
@@ -1661,10 +1716,10 @@ https://github.com/xalgord/xalgorix`
 		pdf.SetFont("Helvetica", "B", 7)
 		setColor(teal)
 		pdf.SetXY(12, owThY+1)
-		pdf.CellFormat(16, 6, "ID", "", 0, "L", false, 0, "")
-		pdf.CellFormat(120, 6, "OWASP CATEGORY", "", 0, "L", false, 0, "")
-		pdf.CellFormat(20, 6, "FINDINGS", "", 0, "C", false, 0, "")
-		pdf.CellFormat(24, 6, "STATUS", "", 0, "C", false, 0, "")
+		pdfCellFormat(pdf, 16, 6, "ID", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 120, 6, "OWASP CATEGORY", "", 0, "L", false, 0, "")
+		pdfCellFormat(pdf, 20, 6, "FINDINGS", "", 0, "C", false, 0, "")
+		pdfCellFormat(pdf, 24, 6, "STATUS", "", 0, "C", false, 0, "")
 		pdf.Ln(8)
 
 		for i, cat := range owaspCategories {
@@ -1692,7 +1747,7 @@ https://github.com/xalgord/xalgorix`
 			} else {
 				setColor(gray)
 			}
-			pdf.CellFormat(16, 7, cat.ID, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 16, 7, cat.ID, "", 0, "L", false, 0, "")
 
 			pdf.SetFont("Helvetica", "", 7)
 			if hasFindings {
@@ -1700,24 +1755,24 @@ https://github.com/xalgord/xalgorix`
 			} else {
 				setColor(gray)
 			}
-			pdf.CellFormat(120, 7, cat.Name, "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 120, 7, cat.Name, "", 0, "L", false, 0, "")
 
 			pdf.SetFont("Helvetica", "B", 7)
 			if hasFindings {
 				setColor(red)
-				pdf.CellFormat(20, 7, fmt.Sprintf("%d", count), "", 0, "C", false, 0, "")
+				pdfCellFormat(pdf, 20, 7, fmt.Sprintf("%d", count), "", 0, "C", false, 0, "")
 				pdf.SetFont("Helvetica", "B", 6)
 				drawRect(166, rowY+1, 22, 5, red)
 				pdf.SetTextColor(255, 255, 255)
 				pdf.SetXY(166, rowY+1)
-				pdf.CellFormat(22, 5, "FOUND", "", 0, "C", false, 0, "")
+				pdfCellFormat(pdf, 22, 5, "FOUND", "", 0, "C", false, 0, "")
 			} else {
 				setColor(gray)
-				pdf.CellFormat(20, 7, "0", "", 0, "C", false, 0, "")
+				pdfCellFormat(pdf, 20, 7, "0", "", 0, "C", false, 0, "")
 				pdf.SetFont("Helvetica", "", 6)
 				setColor(teal)
 				pdf.SetXY(166, rowY+1)
-				pdf.CellFormat(22, 5, "CLEAR", "", 0, "C", false, 0, "")
+				pdfCellFormat(pdf, 22, 5, "CLEAR", "", 0, "C", false, 0, "")
 			}
 			pdf.Ln(7)
 		}
@@ -1734,7 +1789,7 @@ https://github.com/xalgord/xalgorix`
 
 			pdf.SetFont("Helvetica", "B", 13)
 			setColor(teal)
-			pdf.CellFormat(190, 8, "PTES Phase Mapping", "", 1, "L", false, 0, "")
+			pdfCellFormat(pdf, 190, 8, "PTES Phase Mapping", "", 1, "L", false, 0, "")
 			pdf.Ln(2)
 
 			ptesPhases := []string{
@@ -1751,9 +1806,9 @@ https://github.com/xalgord/xalgorix`
 			pdf.SetFont("Helvetica", "B", 7)
 			setColor(teal)
 			pdf.SetXY(12, ptThY+1)
-			pdf.CellFormat(100, 6, "PTES PHASE", "", 0, "L", false, 0, "")
-			pdf.CellFormat(30, 6, "FINDINGS", "", 0, "C", false, 0, "")
-			pdf.CellFormat(50, 6, "STATUS", "", 0, "C", false, 0, "")
+			pdfCellFormat(pdf, 100, 6, "PTES PHASE", "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 30, 6, "FINDINGS", "", 0, "C", false, 0, "")
+			pdfCellFormat(pdf, 50, 6, "STATUS", "", 0, "C", false, 0, "")
 			pdf.Ln(8)
 
 			for j, phase := range ptesPhases {
@@ -1780,20 +1835,20 @@ https://github.com/xalgord/xalgorix`
 				} else {
 					setColor(gray)
 				}
-				pdf.CellFormat(100, 7, phase, "", 0, "L", false, 0, "")
+				pdfCellFormat(pdf, 100, 7, phase, "", 0, "L", false, 0, "")
 
 				pdf.SetFont("Helvetica", "B", 7)
 				if hasFindings {
 					setColor(coral)
-					pdf.CellFormat(30, 7, fmt.Sprintf("%d", count), "", 0, "C", false, 0, "")
+					pdfCellFormat(pdf, 30, 7, fmt.Sprintf("%d", count), "", 0, "C", false, 0, "")
 					pdf.SetFont("Helvetica", "B", 6)
 					setColor(white)
-					pdf.CellFormat(50, 7, "TESTED", "", 0, "C", false, 0, "")
+					pdfCellFormat(pdf, 50, 7, "TESTED", "", 0, "C", false, 0, "")
 				} else {
 					setColor(gray)
-					pdf.CellFormat(30, 7, "0", "", 0, "C", false, 0, "")
+					pdfCellFormat(pdf, 30, 7, "0", "", 0, "C", false, 0, "")
 					pdf.SetFont("Helvetica", "", 6)
-					pdf.CellFormat(50, 7, "—", "", 0, "C", false, 0, "")
+					pdfCellFormat(pdf, 50, 7, "—", "", 0, "C", false, 0, "")
 				}
 				pdf.Ln(7)
 			}
@@ -1839,4 +1894,20 @@ func extractURL(s string) string {
 	url = strings.TrimSpace(url)
 	url = strings.TrimRight(url, ".,;:!)]}>")
 	return url
+}
+
+// cp1252 converts UTF-8 to the Windows-1252 encoding fpdf's core fonts use, so
+// punctuation such as em dashes renders instead of mojibake (e.g. "â€”").
+var cp1252 = fpdf.New("P", "mm", "A4", "").UnicodeTranslatorFromDescriptor("")
+
+func pdfCellFormat(pdf *fpdf.Fpdf, w, h float64, txt, borderStr string, ln int, alignStr string, fill bool, link int, linkStr string) {
+	pdf.CellFormat(w, h, cp1252(txt), borderStr, ln, alignStr, fill, link, linkStr)
+}
+
+func pdfMultiCell(pdf *fpdf.Fpdf, w, h float64, txt, borderStr, alignStr string, fill bool) {
+	pdf.MultiCell(w, h, cp1252(txt), borderStr, alignStr, fill)
+}
+
+func pdfStringWidth(pdf *fpdf.Fpdf, s string) float64 {
+	return pdf.GetStringWidth(cp1252(s))
 }
