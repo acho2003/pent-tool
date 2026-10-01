@@ -1009,6 +1009,9 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 		args = []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut"}
 	}
 	args = append(args, "-pt", "http,headless")
+	if cfg.NucleiTemplatesDir != "" {
+		args = append(args, "-t", cfg.NucleiTemplatesDir)
+	}
 	if !(req.TypedAssessment && req.Profile == ProfileThorough) {
 		args = append(args, "-rl", strconv.Itoa(cfg.RateRPS))
 	}

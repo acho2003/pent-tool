@@ -20,6 +20,7 @@ import (
 // deterministic; there is no LLM/AI configuration.
 type Config struct {
 	NucleiPath            string
+	NucleiTemplatesDir    string
 	TrivyPath             string
 	VulsPath              string
 	VulsSSHConfigPath     string
@@ -246,6 +247,7 @@ func load() *Config {
 	cfg := &Config{
 		// Report AI (report generation only)
 		NucleiPath:            envOr("XALGORIX_NUCLEI_PATH", "nuclei"),
+		NucleiTemplatesDir:    os.Getenv("XALGORIX_NUCLEI_TEMPLATES_DIR"),
 		TrivyPath:             envOr("XALGORIX_TRIVY_PATH", "trivy"),
 		VulsPath:              envOr("XALGORIX_VULS_PATH", "vuls"),
 		VulsSSHConfigPath:     envOr("XALGORIX_VULS_SSH_CONFIG", filepath.Join(home, ".ssh", "config")),

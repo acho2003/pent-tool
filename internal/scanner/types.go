@@ -135,27 +135,28 @@ type Event struct {
 }
 
 type Config struct {
-	NucleiPath        string
-	TrivyPath         string
-	VulsPath          string
-	VulsSSHConfigPath string
-	SubfinderPath     string
-	HttpxPath         string
-	NmapPath          string
-	MasscanPath       string
-	NiktoPath         string
-	KatanaPath        string
-	KatanaChromePath  string
-	DalfoxPath        string
-	WapitiPath        string
-	KubeBenchPath     string
-	ProwlerPath       string
-	ScoutSuitePath    string
-	SSHPath           string
-	TestsslPath       string
-	SemgrepPath       string
-	GitleaksPath      string
-	OsvPath           string
+	NucleiPath         string
+	NucleiTemplatesDir string
+	TrivyPath          string
+	VulsPath           string
+	VulsSSHConfigPath  string
+	SubfinderPath      string
+	HttpxPath          string
+	NmapPath           string
+	MasscanPath        string
+	NiktoPath          string
+	KatanaPath         string
+	KatanaChromePath   string
+	DalfoxPath         string
+	WapitiPath         string
+	KubeBenchPath      string
+	ProwlerPath        string
+	ScoutSuitePath     string
+	SSHPath            string
+	TestsslPath        string
+	SemgrepPath        string
+	GitleaksPath       string
+	OsvPath            string
 
 	ZAPURL       string
 	ZAPAPIKey    string

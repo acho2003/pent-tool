@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "review_state": "candidate pins; image build and lab validation pending",
+  "apt_suite": "kali-last-snapshot",
+  "apt_inrelease_sha256": "5bc9a9bf729d7f9a0c360afe66488379a04d809cbaa7ad4fcefe1704266f5f51",
+  "nuclei_templates_revision": "8b9d065ccb0492d39f7680c908b3030a97ddfe1b",
+  "required": {
+    "nuclei": "v3.11.1",
+    "trivy": "v0.74.0",
+    "vuls": "v0.41.0",
+    "osv-scanner": "v1.9.2",
+    "semgrep": "1.178.0",
+    "httpx": "v1.12.0",
+    "subfinder": "v2.16.0",
+    "katana": "v1.7.0",
+    "gitleaks": "v8.30.1",
+    "testssl.sh": "5b900792f2a6a86135d1151e965c05c59a861e72"
+  },
+  "optional": {
+    "dalfox": "v2.13.0",
+    "feroxbuster": "v2.13.1",
+    "trufflehog": "v3.97.9"
+  }
+}

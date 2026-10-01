@@ -53,7 +53,7 @@ func RunCLI(cfg *config.Config, targets []string, artifactKind string, vulsSSHHo
 	fmt.Println()
 
 	pipeline := scanner.NewPipeline(scanner.Config{
-		NucleiPath: cfg.NucleiPath, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
+		NucleiPath: cfg.NucleiPath, NucleiTemplatesDir: cfg.NucleiTemplatesDir, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
 		ZAPURL: cfg.ZAPURL, ZAPAPIKey: cfg.ZAPAPIKey, GVMHost: cfg.GVMHost, GVMPort: cfg.GVMPort, GVMSocket: cfg.GVMSocket,
 		GVMUser: cfg.GVMUsername, GVMPass: cfg.GVMPassword, RateRPS: int(cfg.RateLimitRPS),
 		ScanHeaders: append([]string(nil), cfg.ScanHeaders...), MaxOutputBytes: cfg.ScannerMaxOutputBytes,

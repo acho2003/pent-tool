@@ -36,7 +36,7 @@
 # Linux amd64 and arm64. Published historical releases may be amd64-only.
 
 # ── Stage 1: build the React web UI ──────────────────────────────────────────
-FROM node:22-bookworm-slim AS webui
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS webui
 WORKDIR /src
 # Copy the lockfile so npm ci installs the exact versions verified by the
 # contributor (React 19 / TS 7 / Vite 8), instead of resolving fresh from
@@ -54,9 +54,8 @@ RUN cd webui && npm run build
 
 # ── Stage 2: build the Go binary + the latest Go security toolset ────────────
 # Go 1.26+ is required: projectdiscovery/httpx v1.10.0 declares `go >= 1.26`, so
-# a 1.25 builder makes `go install httpx@latest` fail (silently, via the `|| WARN`
-# in the tool loop) and the image ships without the ProjectDiscovery scanner.
-FROM golang:1.26-bookworm AS gobuild
+# a 1.25 builder can reject the pinned ProjectDiscovery httpx module.
+FROM golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d AS gobuild
 # libpcap-dev is needed to compile naabu (CGO); git for module fetches.
 RUN apt-get update && apt-get install -y --no-install-recommends libpcap-dev git \
     && rm -rf /var/lib/apt/lists/*
@@ -77,47 +76,46 @@ ENV GOBIN=/go/bin
 # can exhaust a small Docker memory allotment and get OOM-killed, surfacing as
 # a bare "exit code: 1" with no Go error. Separate RUN layers also mean a
 # failure names the exact tool and successful tools stay cached on rebuild.
-RUN go install -v -p 4 github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/aquasecurity/trivy/cmd/trivy@latest
-RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/future-architect/vuls/cmd/vuls@latest
+RUN go install -v -p 4 github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.1
+RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/aquasecurity/trivy/cmd/trivy@v0.74.0
+RUN GOEXPERIMENT=jsonv2 go install -v -p 4 github.com/future-architect/vuls/cmd/vuls@v0.41.0
+RUN go install -v -p 4 github.com/projectdiscovery/httpx/cmd/httpx@v1.12.0
+RUN go install -v -p 4 github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0
+RUN go install -v -p 4 github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+RUN go install -v -p 4 github.com/zricethezav/gitleaks/v8@v8.30.1
 # Pinned to osv-scanner v1: buildOSV uses the v1 CLI form (bare invocation with
 # --format/--output/-r). v2 restructured the CLI into `scan source`; installing
 # v2 here would make the bare invocation exit non-zero and its findings would be
 # recorded as a failed run. v1 still queries the live OSV.dev database, so vuln
 # coverage is current regardless of binary version.
-RUN go install -v -p 4 github.com/google/osv-scanner/cmd/osv-scanner@v1.9.2 \
-    || echo "WARN: osv-scanner install failed (installable at runtime)"
+RUN go install -v -p 4 github.com/google/osv-scanner/cmd/osv-scanner@v1.9.2
 
 RUN set -eux; \
     for pkg in \
-      github.com/projectdiscovery/httpx/cmd/httpx@latest \
-      github.com/projectdiscovery/dnsx/cmd/dnsx@latest \
-      github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
-      github.com/projectdiscovery/katana/cmd/katana@latest \
-      github.com/jaeles-project/gospider@latest \
-      github.com/lc/gau/v2/cmd/gau@latest \
-      github.com/tomnomnom/waybackurls@latest \
-      github.com/tomnomnom/assetfinder@latest \
-      github.com/tomnomnom/qsreplace@latest \
-      github.com/tomnomnom/gf@latest \
-      github.com/tomnomnom/anew@latest \
-      github.com/hakluke/hakrawler@latest \
-      github.com/OJ/gobuster/v3@latest \
-      github.com/ffuf/ffuf/v2@latest \
-      github.com/hahwul/dalfox/v2@latest \
-      github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest \
-      github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest \
-      github.com/projectdiscovery/notify/cmd/notify@latest \
-      github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest \
-      github.com/tomnomnom/unfurl@latest \
-      github.com/tomnomnom/gron@latest \
-      github.com/tomnomnom/httprobe@latest \
-      github.com/haccer/subjack@latest \
-      github.com/securego/gosec/v2/cmd/gosec@latest \
-      github.com/zricethezav/gitleaks/v8@latest \
-      github.com/aquasecurity/kube-bench@latest \
+      github.com/projectdiscovery/dnsx/cmd/dnsx@v1.3.1 \
+      github.com/jaeles-project/gospider@v1.1.6 \
+      github.com/lc/gau/v2/cmd/gau@v2.2.4 \
+      github.com/tomnomnom/waybackurls@v0.1.0 \
+      github.com/tomnomnom/assetfinder@v0.1.1 \
+      github.com/tomnomnom/qsreplace@v0.0.3 \
+      github.com/tomnomnom/gf@v0.0.0-20200618134122-dcd4c361f9f5 \
+      github.com/tomnomnom/anew@v0.1.1 \
+      github.com/hakluke/hakrawler@v0.0.0-20260805040537-52a16fe61bd1 \
+      github.com/OJ/gobuster/v3@v3.8.2 \
+      github.com/ffuf/ffuf/v2@v2.3.0 \
+      github.com/hahwul/dalfox/v2@v2.13.0 \
+      github.com/projectdiscovery/mapcidr/cmd/mapcidr@v1.1.97 \
+      github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.4.1 \
+      github.com/projectdiscovery/notify/cmd/notify@v1.0.7 \
+      github.com/projectdiscovery/shuffledns/cmd/shuffledns@v1.2.1 \
+      github.com/tomnomnom/unfurl@v0.4.3 \
+      github.com/tomnomnom/gron@v0.7.1 \
+      github.com/tomnomnom/httprobe@v0.1.2 \
+      github.com/haccer/subjack@v0.0.0-20260316055456-b53899ce6230 \
+      github.com/securego/gosec/v2/cmd/gosec@v2.29.0 \
+      github.com/aquasecurity/kube-bench@v0.16.0 \
     ; do go install -v "$pkg" || echo "WARN: optional utility $pkg unavailable"; done; \
-    CGO_ENABLED=1 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest \
+    CGO_ENABLED=1 go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.6.1 \
       || echo "WARN: optional naabu utility unavailable"
 
 # ── App build LAST — only this and below re-run on a code change ─────────────
@@ -130,7 +128,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/xalgorix ./cmd/xalgorix/
 
 # ── Stage 3: runtime — Kali Linux, full toolset, runs as root ────────────────
-FROM kalilinux/kali-rolling
+FROM kalilinux/kali-last-release@sha256:61d2b988d3be6b5b2d8f55b40946a2b82f98e71f961927a4c44ba70b0ec95542
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -139,8 +137,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # endpoint: the HTTP mirror redirector can select unreachable regional mirrors
 # during ARM image builds. Package managers remain available for operators,
 # while scanner runtime auto-install is disabled.
-RUN sed -i 's|http://http.kali.org/kali|http://kali.download/kali|g' /etc/apt/sources.list.d/kali.sources \
-    && apt-get update && apt-get install -y \
+RUN sed -i -e 's|http://http.kali.org/kali|https://kali.download/kali|g' \
+           -e 's|kali-rolling|kali-last-snapshot|g' /etc/apt/sources.list.d/kali.sources \
+    && apt-get update \
+    && set -- /var/lib/apt/lists/*kali-last-snapshot_InRelease \
+    && test -f "$1" \
+    && echo "5bc9a9bf729d7f9a0c360afe66488379a04d809cbaa7ad4fcefe1704266f5f51  $1" | sha256sum -c - \
+    && apt-get install -y \
       kali-linux-headless \
       kali-tools-information-gathering \
       kali-tools-web \
@@ -181,7 +184,7 @@ RUN getcap -r / 2>/dev/null | awk '{print $1}' | while read -r f; do \
 
 # Go toolchain at runtime so the runtime can `go install` anything not baked in.
 COPY --from=gobuild /usr/local/go /usr/local/go
-# Prebuilt latest Go security tools → on PATH via /root/go/bin. This comes from
+# Prebuilt pinned Go security tools → on PATH via /root/go/bin. This comes from
 # the gobuild stage's cached tool layers, so it stays cached across code changes.
 # The xalgorix binary itself is copied LAST (near ENTRYPOINT) so a code-only
 # rebuild busts only that final layer, not the tool installs below.
@@ -193,7 +196,14 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.cargo/bin:/root/.local/bin:${PAT
 
 # feroxbuster (Rust) — Kali packages it, but grab the latest release binary too
 # so it's current; cargo stays available at runtime as the engine's fallback.
-RUN curl -sSLo /tmp/ferox.zip https://github.com/epi052/feroxbuster/releases/latest/download/x86_64-linux-feroxbuster.zip \
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) ferox_arch=x86_64; ferox_sha=0978619a10049ccaad290b2d1241bc4d8a6aac18da07d6231186fb9d343f99de ;; \
+      arm64) ferox_arch=aarch64; ferox_sha=1e5244e1f52e55a647b65e0c76ae7afe0b9983c1fbea30ed7c67e477175eb381 ;; \
+      *) echo "WARN: feroxbuster is unavailable for $TARGETARCH"; exit 0 ;; \
+    esac; \
+    curl -fsSLo /tmp/ferox.zip "https://github.com/epi052/feroxbuster/releases/download/v2.13.1/${ferox_arch}-linux-feroxbuster.zip" \
+    && echo "$ferox_sha  /tmp/ferox.zip" | sha256sum -c - \
     && unzip -o /tmp/ferox.zip -d /usr/local/bin feroxbuster \
     && chmod +x /usr/local/bin/feroxbuster \
     && rm -f /tmp/ferox.zip \
@@ -205,15 +215,16 @@ RUN curl -sSLo /tmp/ferox.zip https://github.com/epi052/feroxbuster/releases/lat
 # root by design. Each tool is installed on its own so a single flaky package
 # never fails the image; the rest stay runtime-installable via the
 # packageMap → pipx path.
-RUN pipx install gvm-tools || pip3 install --break-system-packages gvm-tools
-RUN for p in scrapling semgrep bandit git-dumper arjun uro; do \
+RUN pipx install 'gvm-tools==26.1.1' || pip3 install --break-system-packages 'gvm-tools==26.1.1'
+RUN pipx install 'semgrep==1.178.0'
+RUN for p in 'scrapling==0.4.15' 'bandit==1.9.4' 'git-dumper==1.0.9' 'arjun==2.2.7' 'uro==1.0.2'; do \
       pipx install "$p" || pip3 install --break-system-packages "$p" \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
     done
 
 # Staged web-pipeline scanner (Python): wapiti3 provides the `wapiti` binary.
 # Best-effort per tool so a flaky package never fails the image.
-RUN for p in wapiti3; do \
+RUN for p in 'wapiti3==3.3.2'; do \
       pipx install "$p" || pip3 install --break-system-packages "$p" \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
     done
@@ -222,49 +233,56 @@ RUN for p in wapiti3; do \
 # (provides the `scout` binary). Read-only; they need a supplied credential at
 # scan time (never baked into the image). kube-bench (CIS Kubernetes) is a Go
 # binary installed above; it needs cluster/node access provided by the operator.
-RUN for p in prowler scoutsuite; do \
+RUN for p in 'prowler==5.44.0' 'scoutsuite==5.14.0'; do \
       pipx install "$p" || pip3 install --break-system-packages "$p" \
         || echo "WARN: pipx prefetch of $p failed (installable at runtime)"; \
     done
 
 # paramspider — the real tool is GitHub-only (PyPI `paramspider` is an empty
 # 1.3 kB stub with no CLI), so install straight from the repo.
-RUN pipx install "git+https://github.com/devanshbatham/paramspider.git" \
+RUN pipx install "git+https://github.com/devanshbatham/paramspider.git@c44bdaae54789b237028e309b603d1aa5ad52e5e" \
     || echo "WARN: paramspider prefetch failed (installable at runtime)"
 
 # Ruby (Rails SAST) — best-effort.
-RUN gem install --no-document brakeman || echo "WARN: brakeman prefetch failed (installable at runtime)"
+RUN gem install --no-document brakeman -v 8.1.0 || echo "WARN: brakeman prefetch failed"
 
 # trufflehog — no clean `go install` (its go.mod uses replace directives), so
 # pull the official release binary into /usr/local/bin.
-RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-      | sh -s -- -b /usr/local/bin \
-    || echo "WARN: trufflehog prefetch failed (installable at runtime)"
-
-# GitHub CLI (gh) — not in the Kali apt index, so add GitHub's official repo.
-RUN mkdir -p -m 755 /etc/apt/keyrings \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-         > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/* \
-    || echo "WARN: gh prefetch failed (installable at runtime)"
+RUN case "$TARGETARCH" in \
+      amd64) truffle_sha=40377e6572495412fb9ba0bc21c9401f73b72f1d2afd11b9931bc4a5ed622866 ;; \
+      arm64) truffle_sha=372c568695d49e53517075b5f74d1ee9a19053f13661d689c7928ee1fc27d705 ;; \
+      *) echo "WARN: trufflehog is unavailable for $TARGETARCH"; exit 0 ;; \
+    esac; \
+    curl -fsSLo /tmp/trufflehog.tar.gz "https://github.com/trufflesecurity/trufflehog/releases/download/v3.97.9/trufflehog_3.97.9_linux_${TARGETARCH}.tar.gz" \
+    && echo "$truffle_sha  /tmp/trufflehog.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog \
+    && rm /tmp/trufflehog.tar.gz \
+    || echo "WARN: trufflehog prefetch failed"
 
 # CMSmap — git-cloned CMS scanner; expose a `cmsmap` wrapper on PATH.
-RUN git clone --depth 1 https://github.com/Dionach/CMSmap /opt/CMSmap \
+RUN git init /opt/CMSmap \
+    && git -C /opt/CMSmap fetch --depth 1 https://github.com/Dionach/CMSmap.git 59dd0e2b3b0c751c6da2b0565374ab83c736b0e6 \
+    && git -C /opt/CMSmap checkout --detach FETCH_HEAD \
     && (pip3 install --break-system-packages -r /opt/CMSmap/requirements.txt 2>/dev/null || true) \
     && printf '#!/bin/sh\nexec python3 /opt/CMSmap/cmsmap.py "$@"\n' > /usr/local/bin/cmsmap \
     && chmod +x /usr/local/bin/cmsmap \
     || echo "WARN: cmsmap prefetch failed (installable at runtime)"
 
 # testssl.sh — TLS/cert scanner (bash script; needs its bundled etc/ data dir)
-RUN git clone --depth 1 https://github.com/testssl/testssl.sh /opt/testssl.sh \
-      && ln -sf /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh \
-    || echo "WARN: testssl.sh install failed (installable at runtime)"
+RUN git init /opt/testssl.sh \
+      && git -C /opt/testssl.sh fetch --depth 1 https://github.com/testssl/testssl.sh.git 5b900792f2a6a86135d1151e965c05c59a861e72 \
+      && git -C /opt/testssl.sh checkout --detach FETCH_HEAD \
+      && ln -sf /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh
 
 # Bake nuclei templates so first-run scans don't stall on a template fetch.
-RUN /root/go/bin/nuclei -update-templates >/dev/null 2>&1 || echo "WARN: nuclei template prefetch skipped"
+RUN git init /opt/nuclei-templates \
+    && git -C /opt/nuclei-templates fetch --depth 1 https://github.com/projectdiscovery/nuclei-templates.git 8b9d065ccb0492d39f7680c908b3030a97ddfe1b \
+    && git -C /opt/nuclei-templates checkout --detach FETCH_HEAD
+
+COPY runtime/content-lock.json /usr/local/share/xalgorix/content-lock.json
+COPY runtime/write-content-manifest.py /usr/local/bin/write-content-manifest.py
+RUN python3 /usr/local/bin/write-content-manifest.py /usr/local/share/xalgorix/content-lock.json \
+      /usr/local/share/xalgorix/content-manifest.json
 
 # Make `httpx` resolve to ProjectDiscovery's scanner. Kali/pip ship a Python
 # `httpx` CLI (the HTTP client) at /usr/bin/httpx that otherwise answers `httpx`
@@ -276,6 +294,7 @@ RUN if [ -x /root/go/bin/httpx ]; then ln -sf /root/go/bin/httpx /usr/bin/httpx;
 
 ENV XALGORIX_BIND=0.0.0.0 \
     XALGORIX_BROWSER_PATH=/usr/bin/chromium \
+    XALGORIX_NUCLEI_TEMPLATES_DIR=/opt/nuclei-templates \
     XALGORIX_DATA_DIR=/data \
 	XALGORIX_ALLOW_AUTO_INSTALL=0 \
     XALGORIX_NO_AUTO_UPDATE=1
