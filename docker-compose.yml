@@ -37,6 +37,14 @@ services:
       XALGORIX_GVM_USERNAME: ${XALGORIX_GVM_USERNAME:-admin}
       XALGORIX_GVM_PASSWORD: ${XALGORIX_GVM_PASSWORD:-admin}
       XALGORIX_CREDENTIAL_KEY_FILE: /run/secrets/xalgorix_credential_key
+      # Fixed dashboard login, read from the git-ignored .env next to this file.
+      # Without it the entrypoint generates a NEW random password on every
+      # container start, which logs you out after each rebuild. Prefer the bcrypt
+      # hash (single-quote it in .env so Compose does not expand the $ signs):
+      #   XALGORIX_PASSWORD_HASH='$2y$10$...'   (htpasswd -nbBC 10 "" 'pass' | cut -d: -f2)
+      XALGORIX_USERNAME: ${XALGORIX_USERNAME:-admin}
+      XALGORIX_PASSWORD_HASH: ${XALGORIX_PASSWORD_HASH:-}
+      XALGORIX_PASSWORD: ${XALGORIX_PASSWORD:-}
       # Self-hosted opt-in: allow scanning locally-hosted apps. The
       # dashboard's own listener stays protected. Leave OFF on shared hosts.
       XALGORIX_ALLOW_LOCAL_TARGETS: "true"

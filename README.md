@@ -54,6 +54,15 @@ Losing it makes every saved credential unrecoverable. It is git-ignored and
 mounted read-only as a Compose secret; see
 [docs/security/target-credentials.md](docs/security/target-credentials.md).
 
+Set a fixed dashboard login in a `.env` file next to `docker-compose.yml`
+(git-ignored). Without it, the container generates a new random admin password
+on every start, which logs you out after each rebuild:
+
+```bash
+# Single quotes stop Compose from expanding the $ signs in the bcrypt hash.
+echo "XALGORIX_PASSWORD_HASH='$(htpasswd -nbBC 10 "" 'your-password' | cut -d: -f2)'" > .env
+```
+
 On Apple Silicon this avoids the older `xalgord/xalgorix:latest` release image,
 which does not provide an arm64 manifest. The first Greenbone startup downloads
 and initializes persistent vulnerability feeds, so it can take a while before

@@ -71,3 +71,6 @@ internal/reporting/testdata/cover.actual.pdf
 
 # Credential-vault key (docker-compose secret). Never commit it.
 secrets/
+
+# Local compose settings, e.g. the dashboard login. Never commit it.
+.env
