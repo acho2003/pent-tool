@@ -48,7 +48,7 @@ def installed_versions(container):
     versions = {}
     for tool in TOOLS:
         result = subprocess.run(
-            ("docker", "exec", container, "sh", "-c", 'command -v "$1" >/dev/null && "$1" --version 2>&1 | head -n 3', "sh", tool),
+            ("docker", "exec", container, "sh", "-c", 'command -v "$1" >/dev/null || exit 127; "$1" --version 2>&1 | head -n 3', "sh", tool),
             text=True, capture_output=True, timeout=15, check=False,
         )
         versions[tool] = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout.strip()) if result.returncode == 0 else "unavailable"
@@ -128,6 +128,8 @@ def wait_for_scan(api, instance_id, containers, max_seconds):
                 time.sleep(2)  # queue registration follows the /api/scan ack
                 continue
             raise
+        if state["status"] == "pending" and time.monotonic() - start > 120:
+            raise RuntimeError("scan remained pending for 120 seconds; scanner admission capacity is unavailable")
         peak = max(peak, peak_memory(containers))
         if state["status"] in ("finished", "stopped", "failed", "cancelled"):
             return state, peak, int((time.monotonic() - start) * 1000)
@@ -221,12 +223,16 @@ def main():
     del password
     manifest = json.loads(MANIFEST.read_text())
     observations, outcomes = [], []
+    failure = ""
     try:
         for app in manifest["applications"]:
             observation, outcome = run_one(api, app, args.output, args.container, args.zap_container, args.max_seconds)
             observations.append(observation)
             outcomes.append(outcome)
             print(app["id"] + ": " + outcome["coverage_state"], flush=True)
+    except BaseException as exc:
+        failure = type(exc).__name__ + (": " + str(exc) if str(exc) else "")
+        raise
     finally:
         (args.output / "observations.json").write_text(json.dumps({"schema_version": 1, "runs": observations}, indent=2) + "\n")
         summary = {"schema_version": 1, "source_revision": "unknown: cached image has no Xalgorix commit label",
@@ -234,7 +240,8 @@ def main():
                    "running_image_matches_cache": images == cached_images,
                    "versions": installed_versions(args.container), "zap_content": zap_content(args.container),
                    "profile": "web-gentle",
-                   "applications": outcomes, "baseline_complete": len(observations) == len(manifest["applications"])}
+                   "applications": outcomes, "baseline_complete": len(observations) == len(manifest["applications"]),
+                   "failure": failure}
         (args.output / "baseline.json").write_text(json.dumps(summary, indent=2) + "\n")
     if len(observations) == len(manifest["applications"]):
         score = subprocess.run(("go", "run", "./test/lab/scorecard", "--observations", str(args.output / "observations.json")),
@@ -252,3 +259,6 @@ if __name__ == "__main__":
     except (OSError, RuntimeError, subprocess.CalledProcessError, TimeoutError, ValueError) as exc:
         print("baseline failed: " + str(exc), file=sys.stderr)
         sys.exit(1)
+    except KeyboardInterrupt:
+        print("baseline interrupted; the queued lab scan was stopped", file=sys.stderr)
+        sys.exit(130)

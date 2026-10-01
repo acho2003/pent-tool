@@ -24,6 +24,12 @@ class BaselineHelpersTest(unittest.TestCase):
         self.assertEqual(state["status"], "finished")
         self.assertEqual(peak, 42)
 
+    def test_missing_scanner_is_unavailable(self):
+        missing = __import__("subprocess").CompletedProcess([], 127, "", "")
+        with mock.patch.object(baseline.subprocess, "run", return_value=missing):
+            versions = baseline.installed_versions("container")
+        self.assertEqual(versions["trivy"], "unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()

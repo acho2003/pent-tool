@@ -87,3 +87,11 @@ the actual running container image IDs, cached image IDs, available tool
 versions, and `source_revision: unknown` when the cached image has no
 Xalgorix source commit label. A baseline from such an image is useful for
 diagnosis but is not a before/after comparison for current source code.
+
+The [2026-10-01 cached-image attempt](baselines/2026-10-01-cached-attempt.json)
+records scanner and ZAP content versions, but **no quality measurement**:
+the isolated ZAP container first exceeded its memory limit, and the next run
+remained queued because the shared Docker server was below Xalgorix's free
+memory admission threshold. The existing service was left running. Repeat on
+the reference server or with sufficient free memory; do not infer precision or
+recall from this attempt.
