@@ -16,6 +16,11 @@ import (
 
 type openVASRunner struct{}
 
+// Kept separate from the overall scan timeout so a responding but stalled
+// Greenbone task cannot hold the rest of an assessment indefinitely.
+var openVASIdleTimeout = 5 * time.Minute
+var openVASPollInterval = 10 * time.Second
+
 var gvmSSHCredentialPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func (openVASRunner) Name() string { return "openvas" }
@@ -130,6 +135,7 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 			note := "Greenbone task stop requested\n"
 			if stopErr != nil {
 				note = "Greenbone task stop failed: " + redact(stopErr.Error(), secretValues(req, cfg)) + "\n"
+				err = fmt.Errorf("%w; %s; remote task may still be running", err, strings.TrimSpace(note))
 			}
 			_ = appendFile(run.StderrPath, []byte(note))
 		}
@@ -212,6 +218,7 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	reportID := firstXMLText(startData, "report_id")
 
 	lastProgress := -1
+	lastAdvance := time.Now()
 	for {
 		pollData, pollErr := call("poll-task", fmt.Sprintf(`<get_tasks task_id="%s" details="1"/>`, taskID), 2*time.Minute)
 		if pollErr != nil {
@@ -219,11 +226,16 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 		}
 		status := strings.ToLower(firstXMLText(pollData, "status"))
 		// gvmd reports the task's completion as <progress>; -1 means not started.
-		if pct, convErr := strconv.Atoi(strings.TrimSpace(firstXMLText(pollData, "progress"))); convErr == nil && pct >= 0 && pct <= 100 && pct != lastProgress {
-			lastProgress = pct
-			run.Progress, run.ProgressStage = pct, "scan"
-			if emit != nil {
-				emit(Event{Type: "scanner_progress", Scanner: run.Scanner, Run: run})
+		if pct, convErr := strconv.Atoi(strings.TrimSpace(firstXMLText(pollData, "progress"))); convErr == nil && pct >= 0 && pct <= 100 {
+			if pct > lastProgress {
+				lastAdvance = time.Now()
+			}
+			if pct != lastProgress {
+				lastProgress = pct
+				run.Progress, run.ProgressStage = pct, "scan"
+				if emit != nil {
+					emit(Event{Type: "scanner_progress", Scanner: run.Scanner, Run: run})
+				}
 			}
 		}
 		if reportID == "" {
@@ -236,10 +248,13 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 			startedTaskID = "" // already stopped in gvmd
 			return fail(fmt.Errorf("Greenbone task ended with status %s", status))
 		}
+		if time.Since(lastAdvance) >= openVASIdleTimeout {
+			return fail(fmt.Errorf("Greenbone task made no progress for %s", openVASIdleTimeout))
+		}
 		select {
 		case <-cmdCtx.Done():
 			return fail(cmdCtx.Err())
-		case <-time.After(10 * time.Second):
+		case <-time.After(openVASPollInterval):
 		}
 	}
 	// The task has finished in gvmd; later failures (export) need no stop.

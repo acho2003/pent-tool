@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -60,7 +61,10 @@ type fakeGvmd struct {
 	mu       sync.Mutex
 	commands []string
 	// taskStatus is what get_tasks reports; empty means "Done".
-	taskStatus string
+	taskStatus   string
+	taskProgress []int
+	polls        int
+	stopFails    bool
 }
 
 func (f *fakeGvmd) seen(substr string) bool {
@@ -134,12 +138,26 @@ func (f *fakeGvmd) respond(command string) string {
 	case "start_task":
 		return `<start_task_response status="202" status_text="OK"><report_id>rep-1</report_id></start_task_response>`
 	case "get_tasks":
+		f.mu.Lock()
+		progress := 100
+		if len(f.taskProgress) > 0 {
+			index := f.polls
+			if index >= len(f.taskProgress) {
+				index = len(f.taskProgress) - 1
+			}
+			progress = f.taskProgress[index]
+		}
+		f.polls++
+		f.mu.Unlock()
 		status := f.taskStatus
 		if status == "" {
 			status = "Done"
 		}
-		return `<get_tasks_response status="200"><task id="task-1"><name>t</name><status>` + status + `</status><progress>100</progress></task></get_tasks_response>`
+		return fmt.Sprintf(`<get_tasks_response status="200"><task id="task-1"><name>t</name><status>%s</status><progress>%d</progress></task></get_tasks_response>`, status, progress)
 	case "stop_task":
+		if f.stopFails {
+			return `<stop_task_response status="400" status_text="stop denied"/>`
+		}
 		return `<stop_task_response status="202" status_text="OK, request submitted"/>`
 	case "get_reports":
 		// Real gvmd shape: the result-bearing <report> is nested in an outer one.
@@ -232,6 +250,44 @@ func TestOpenVASRunAgainstFakeGvmd(t *testing.T) {
 	invalid := openVASRunner{}.Run(t.Context(), Request{Target: "host.example.test", ScanDir: t.TempDir(), TypedAssessment: true, GVMSSHCredentialID: `bad" id="injected`, GVMSSHPort: 22}, cfg, nil)
 	if invalid.Status != "failed" || !strings.Contains(invalid.Reason, "invalid target-bound") {
 		t.Fatalf("unsafe credential reference was accepted: %+v", invalid)
+	}
+}
+
+func TestOpenVASStopsStalledTask(t *testing.T) {
+	oldIdle, oldPoll := openVASIdleTimeout, openVASPollInterval
+	openVASIdleTimeout, openVASPollInterval = 35*time.Millisecond, 5*time.Millisecond
+	defer func() { openVASIdleTimeout, openVASPollInterval = oldIdle, oldPoll }()
+	for _, stopFails := range []bool{false, true} {
+		t.Run(fmt.Sprint("stopFails=", stopFails), func(t *testing.T) {
+			socketDir, err := os.MkdirTemp("", "gmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(socketDir)
+			socket := filepath.Join(socketDir, "gvmd.sock")
+			listener, err := net.Listen("unix", socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			fake := &fakeGvmd{taskStatus: "Running", taskProgress: []int{0}, stopFails: stopFails}
+			go func() {
+				for {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					go fake.serve(t, conn)
+				}
+			}()
+			run := openVASRunner{}.Run(t.Context(), Request{Target: "example.test", ScanDir: t.TempDir()}, Config{GVMSocket: socket, GVMUser: "admin", GVMPass: "secret", OpenVASTimeout: time.Second, MaxOutputBytes: 1 << 20}, nil)
+			if run.Status != "failed" || !strings.Contains(run.Reason, "no progress") || !fake.seen("<stop_task") {
+				t.Fatalf("stalled run: %+v", run)
+			}
+			if stopFails && !strings.Contains(run.Reason, "remote task may still be running") {
+				t.Fatalf("missing stop failure: %s", run.Reason)
+			}
+		})
 	}
 }
 
