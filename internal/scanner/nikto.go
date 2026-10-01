@@ -28,9 +28,14 @@ func buildNikto(req Request, cfg Config) commandSpec {
 		return commandSpec{notApp: "Nikto executable is not configured", timeout: cfg.NiktoTimeout}
 	}
 	target := strings.TrimSpace(req.Target)
+	// A network target (IP, CIDR host, or hostname/domain) carries no scheme;
+	// probe its default HTTP root. URL targets keep their exact scheme and host.
+	if host, ok := nmapTargetSpec(target); ok && !strings.Contains(target, "://") {
+		target = "http://" + host + "/"
+	}
 	u, err := url.Parse(target)
 	if err != nil || !u.IsAbs() || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return commandSpec{notApp: "Nikto requires one explicit HTTP(S) URL without credentials, query, or fragment", timeout: cfg.NiktoTimeout}
+		return commandSpec{notApp: "Nikto requires an HTTP(S) URL or a bare IP, host, or domain without credentials, query, or fragment", timeout: cfg.NiktoTimeout}
 	}
 	if u.EscapedPath() != "" && u.EscapedPath() != "/" {
 		return commandSpec{notApp: "this Nikto adapter is limited to application root URLs because Nikto cannot enforce a nested path boundary", timeout: cfg.NiktoTimeout}

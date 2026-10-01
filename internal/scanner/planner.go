@@ -295,6 +295,12 @@ func eligibility(def ScannerDefinition, target assessment.Target, evidence []ass
 		if required == assessment.CapNetwork && target.Kind == assessment.KindURL && def.ID == "testssl" {
 			found = true
 		}
+		// Nikto needs only reachability to the host's web port, so a network
+		// target (IP, host, or domain) satisfies its web-capability requirement
+		// without granting CapWeb broadly to other web scanners.
+		if required == assessment.CapWeb && def.ID == "nikto" && (target.Kind == assessment.KindIP || target.Kind == assessment.KindHost || target.Kind == assessment.KindDomain) {
+			found = true
+		}
 		if target.Kind == assessment.KindSBOM && def.ID == "trivy" {
 			conditional = true // local file readability is checked at execution
 		}

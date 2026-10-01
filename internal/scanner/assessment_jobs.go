@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
+	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
 		return true
 	}
 	for _, runner := range NewPipeline(Config{}).Runners {
@@ -66,6 +66,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	for _, runner := range p.Runners {
 		byName[runner.Name()] = runner
 	}
+	// nmap has a descriptor stub in the legacy recon phase; the typed assessment
+	// path dispatches this real adapter instead.
+	byName["nmap"] = nmapAssessmentRunner{}
 	// Masscan is an assessment-only opt-in runner. Keeping it out of the legacy
 	// pipeline prevents empty legacy scanner selections from silently adding raw
 	// network probes to existing scans.

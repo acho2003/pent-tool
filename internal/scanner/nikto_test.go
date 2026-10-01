@@ -65,12 +65,20 @@ func TestBuildNiktoIsBoundedAndIsolated(t *testing.T) {
 func TestBuildNiktoRejectsTargetsOutsideRootHTTPOrigin(t *testing.T) {
 	for _, target := range []string{
 		"https://example.test/admin", "https://example.test/?x=1", "https://user:pass@example.test/",
-		"https://example.test/#fragment", "ftp://example.test/", "example.test", "https://example.test:bad/",
+		"https://example.test/#fragment", "ftp://example.test/", "https://example.test:bad/",
+		// A bare target must be a plain host/IP/CIDR, never one carrying a path,
+		// port, or scheme-like text.
+		"example.test/admin", "example.test:8080", "evil.test;id",
 	} {
 		spec := buildNikto(Request{Target: target, ScanDir: t.TempDir()}, Config{NiktoPath: "nikto"})
 		if spec.notApp == "" {
 			t.Errorf("target %q was accepted", target)
 		}
+	}
+	// A bare host, IP, or domain is now a valid network target (probed at its
+	// HTTP root), so it must be accepted rather than rejected.
+	if spec := buildNikto(Request{Target: "example.test", ScanDir: t.TempDir()}, Config{NiktoPath: "nikto", NiktoTimeout: time.Minute}); spec.notApp != "" {
+		t.Errorf("bare domain was rejected: %s", spec.notApp)
 	}
 }
 
