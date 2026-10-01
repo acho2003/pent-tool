@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 spec = importlib.util.spec_from_file_location("run_baseline", Path(__file__).with_name("run_baseline.py"))
@@ -15,8 +16,13 @@ class BaselineHelpersTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             baseline.memory_bytes("unknown")
 
-    def test_report_path_hash_is_stable(self):
-        self.assertEqual(len(__import__("hashlib").sha256(b"example").hexdigest()[:32]), 32)
+    def test_wait_for_queued_instance_registration(self):
+        api = mock.Mock()
+        api.request.side_effect = [baseline.APIError(404, "pending"), {"status": "finished"}]
+        with mock.patch.object(baseline.time, "sleep"), mock.patch.object(baseline, "peak_memory", return_value=42):
+            state, peak, _ = baseline.wait_for_scan(api, "id", ("scanner",), 10)
+        self.assertEqual(state["status"], "finished")
+        self.assertEqual(peak, 42)
 
 
 if __name__ == "__main__":

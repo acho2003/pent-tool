@@ -55,6 +55,25 @@ def installed_versions(container):
     return versions
 
 
+def zap_content(container):
+    urls = {
+        "version": '"$XALGORIX_ZAP_URL/JSON/core/view/version/?apikey=$XALGORIX_ZAP_API_KEY"',
+        "addons": '"$XALGORIX_ZAP_URL/JSON/autoupdate/view/installedAddons/?apikey=$XALGORIX_ZAP_API_KEY"',
+    }
+    content = {}
+    for name, url in urls.items():
+        result = subprocess.run(("docker", "exec", container, "sh", "-c", "curl -fsS --max-time 10 " + url),
+                                capture_output=True, text=True, timeout=15, check=False)
+        if result.returncode == 0:
+            try:
+                content[name] = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                content[name] = "unavailable"
+        else:
+            content[name] = "unavailable"
+    return content
+
+
 def memory_bytes(usage):
     amount = usage.split("/", 1)[0].strip().replace(" ", "")
     match = re.fullmatch(r"([0-9.]+)([KMGT]?i?B|B)", amount)
@@ -88,15 +107,27 @@ class API:
             with self.opener.open(request, timeout=30) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"{method} {path}: HTTP {exc.code}") from exc
+            raise APIError(exc.code, f"{method} {path}: HTTP {exc.code}") from exc
         return json.loads(raw) if raw else None
+
+
+class APIError(RuntimeError):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
 
 
 def wait_for_scan(api, instance_id, containers, max_seconds):
     start = time.monotonic()
     peak = 0
     while time.monotonic() - start < max_seconds:
-        state = api.request("GET", "/api/instances/" + instance_id)
+        try:
+            state = api.request("GET", "/api/instances/" + instance_id)
+        except APIError as exc:
+            if exc.status == 404 and time.monotonic() - start < 30:
+                time.sleep(2)  # queue registration follows the /api/scan ack
+                continue
+            raise
         peak = max(peak, peak_memory(containers))
         if state["status"] in ("finished", "stopped", "failed", "cancelled"):
             return state, peak, int((time.monotonic() - start) * 1000)
@@ -124,6 +155,8 @@ def run_one(api, app, output, container, zap_container, max_seconds):
         "name": "temporary lab baseline", "kind": "FORM_LOGIN", "target_ids": ["app"], "values": values,
     })
     credential_id = credential["id"]
+    instance_id = None
+    terminal = False
     try:
         assessment = {
             "assessment_mode": "GRAY_BOX", "assessment_types": ["WEB_APPLICATION", "API"],
@@ -143,6 +176,7 @@ def run_one(api, app, output, container, zap_container, max_seconds):
         })
         instance_id = started["instance_id"]
         state, peak, duration = wait_for_scan(api, instance_id, (container, zap_container), max_seconds)
+        terminal = True
         report = read_report(container, instance_id)
         with urllib.request.urlopen(urllib.request.Request(local + "/__lab/metrics", headers=headers), timeout=10) as response:
             metrics = json.load(response)
@@ -159,6 +193,11 @@ def run_one(api, app, output, container, zap_container, max_seconds):
                  "scanner_failures": [r.get("scanner") + ": " + r.get("status", "unknown")
                                       for r in report.get("source_runs", []) if r.get("status") in ("failed", "cancelled")]})
     finally:
+        if instance_id and not terminal:
+            try:
+                api.request("POST", "/api/instances/" + instance_id + "/stop")
+            except (APIError, RuntimeError):
+                pass
         api.request("DELETE", "/api/credentials/" + credential_id)
 
 
@@ -193,7 +232,8 @@ def main():
         summary = {"schema_version": 1, "source_revision": "unknown: cached image has no Xalgorix commit label",
                    "images": images, "cached_image_ids": cached_images,
                    "running_image_matches_cache": images == cached_images,
-                   "versions": installed_versions(args.container), "profile": "web-gentle",
+                   "versions": installed_versions(args.container), "zap_content": zap_content(args.container),
+                   "profile": "web-gentle",
                    "applications": outcomes, "baseline_complete": len(observations) == len(manifest["applications"])}
         (args.output / "baseline.json").write_text(json.dumps(summary, indent=2) + "\n")
     if len(observations) == len(manifest["applications"]):
