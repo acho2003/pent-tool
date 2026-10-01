@@ -79,6 +79,7 @@ services:
     command:
       - zap.sh
       - -Xmx${XALGORIX_ZAP_MAX_HEAP:-2g}
+      - -silent
       - -daemon
       - -host
       - 0.0.0.0

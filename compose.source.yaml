@@ -37,7 +37,8 @@ services:
     pull_policy: never
     command:
       - zap.sh
-      - -Xmx2g
+      - -Xmx1g
+      - -silent
       - -daemon
       - -host
       - 0.0.0.0
@@ -51,7 +52,7 @@ services:
       - api.key=${XALGORIX_ZAP_API_KEY:-xalgorix-source-zap}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    mem_limit: 3g
+    mem_limit: 2g
     security_opt:
       - no-new-privileges:true
     healthcheck:

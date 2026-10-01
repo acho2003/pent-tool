@@ -6,6 +6,8 @@ hash before installing packages. When Kali advances that branch, the build
 fails until the hash and scanner results are reviewed. The image writes
 `/usr/local/share/xalgorix/content-manifest.json` with the binaries actually
 present and a digest of its installed Debian package list.
+The pinned ZAP daemon runs with `-silent`, which disables unsolicited update
+checks so installed add-ons do not change during an assessment.
 
 This lock has **not been build-tested** because Docker builds are deferred.
 Do not present it as a tested release or claim a quality improvement from the
