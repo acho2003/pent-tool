@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"net"
 	"os"
@@ -58,6 +59,8 @@ func TestXMLIDByExactNamePrefersTheExactMatch(t *testing.T) {
 type fakeGvmd struct {
 	mu       sync.Mutex
 	commands []string
+	// taskStatus is what get_tasks reports; empty means "Done".
+	taskStatus string
 }
 
 func (f *fakeGvmd) seen(substr string) bool {
@@ -131,7 +134,13 @@ func (f *fakeGvmd) respond(command string) string {
 	case "start_task":
 		return `<start_task_response status="202" status_text="OK"><report_id>rep-1</report_id></start_task_response>`
 	case "get_tasks":
-		return `<get_tasks_response status="200"><task id="task-1"><name>t</name><status>Done</status><progress>100</progress></task></get_tasks_response>`
+		status := f.taskStatus
+		if status == "" {
+			status = "Done"
+		}
+		return `<get_tasks_response status="200"><task id="task-1"><name>t</name><status>` + status + `</status><progress>100</progress></task></get_tasks_response>`
+	case "stop_task":
+		return `<stop_task_response status="202" status_text="OK, request submitted"/>`
 	case "get_reports":
 		return `<get_reports_response status="200"><report id="rep-1"><results>` +
 			`<result id="res-1"><name>Deprecated TLS</name><host>example.test</host><port>443/tcp</port>` +
@@ -262,5 +271,40 @@ func TestOpenVASRunFailsOnGMPErrorStatus(t *testing.T) {
 		Config{GVMSocket: socket, GVMUser: "admin", GVMPass: "wrong", OpenVASTimeout: 15 * time.Second, MaxOutputBytes: 1 << 20}, nil)
 	if run.Status != "failed" || !strings.Contains(run.Reason, "Authentication failed") {
 		t.Fatalf("status = %q reason = %q", run.Status, run.Reason)
+	}
+}
+
+func TestOpenVASStopsGreenboneTaskWhenCancelled(t *testing.T) {
+	socketDir, err := os.MkdirTemp("", "gmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDir)
+	socket := filepath.Join(socketDir, "gvmd.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Skipf("UNIX socket unavailable: %v", err)
+	}
+	defer listener.Close()
+	fake := &fakeGvmd{taskStatus: "Running"}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go fake.serve(t, conn)
+		}
+	}()
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	cfg := Config{GVMSocket: socket, GVMUser: "admin", GVMPass: "gvm-secret", OpenVASTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
+	run := openVASRunner{}.Run(ctx, Request{Target: "https://example.test/app", ScanDir: t.TempDir()}, cfg, nil)
+	if run.Status != "cancelled" {
+		t.Fatalf("status = %q reason = %q", run.Status, run.Reason)
+	}
+	// A cancelled scan must not leave its task scanning in Greenbone.
+	if !fake.seen(`<stop_task task_id="task-1"/>`) {
+		t.Fatal("cancelled OpenVAS run did not stop its Greenbone task")
 	}
 }

@@ -120,7 +120,19 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 		}
 	}
 
+	// startedTaskID is set once gvmd accepts start_task. Any failure or
+	// cancellation after that stops the task in Greenbone; otherwise it keeps
+	// scanning the target with nothing tracking it.
+	startedTaskID := ""
 	fail := func(err error) Run {
+		if startedTaskID != "" {
+			stopErr := stopGreenboneTask(cfg, startedTaskID)
+			note := "Greenbone task stop requested\n"
+			if stopErr != nil {
+				note = "Greenbone task stop failed: " + redact(stopErr.Error(), secretValues(req, cfg)) + "\n"
+			}
+			_ = appendFile(run.StderrPath, []byte(note))
+		}
 		run.FinishedAt = time.Now().Format(time.RFC3339Nano)
 		run.Status, run.Reason = "failed", err.Error()
 		if ctx.Err() != nil || cmdCtx.Err() == context.Canceled {
@@ -196,6 +208,7 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	if err != nil {
 		return fail(err)
 	}
+	startedTaskID = taskID
 	reportID := firstXMLText(startData, "report_id")
 
 	lastProgress := -1
@@ -220,6 +233,7 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 			break
 		}
 		if status == "stopped" || status == "interrupted" {
+			startedTaskID = "" // already stopped in gvmd
 			return fail(fmt.Errorf("Greenbone task ended with status %s", status))
 		}
 		select {
@@ -228,6 +242,8 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 		case <-time.After(10 * time.Second):
 		}
 	}
+	// The task has finished in gvmd; later failures (export) need no stop.
+	startedTaskID = ""
 	if reportID == "" {
 		return fail(fmt.Errorf("Greenbone report id unavailable"))
 	}
@@ -380,4 +396,30 @@ func firstXMLText(data []byte, element string) string {
 			}
 		}
 	}
+}
+
+var greenboneTaskID = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
+// stopGreenboneTask asks gvmd to stop a running task on a fresh, short-lived
+// connection: the scan's own context is usually already cancelled when this
+// runs, so the scan's GMP connection cannot carry the request.
+func stopGreenboneTask(cfg Config, taskID string) error {
+	if !greenboneTaskID.MatchString(taskID) {
+		return fmt.Errorf("invalid Greenbone task id")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := dialGMP(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.authenticate(ctx, cfg.GVMUser, cfg.GVMPass); err != nil {
+		return fmt.Errorf("GMP authentication failed: %w", err)
+	}
+	out, err := conn.exec(ctx, fmt.Sprintf(`<stop_task task_id="%s"/>`, taskID))
+	if err != nil {
+		return err
+	}
+	return gmpStatusError(out)
 }
