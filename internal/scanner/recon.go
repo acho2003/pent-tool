@@ -61,15 +61,20 @@ func candidateHosts(target string) []string {
 }
 
 // httpxResult is one live-host record parsed from httpx JSONL output.
-type httpxResult struct {
-	URL, Host, Port, Scheme string
-	TLS                     bool
-	StatusCode              int
-	ContentType             string
-	Title                   string
-	Technologies            []string
-	RedirectURL             string
+type HTTPObservation struct {
+	URL          string   `json:"url"`
+	Host         string   `json:"host"`
+	Port         string   `json:"port"`
+	Scheme       string   `json:"scheme"`
+	TLS          bool     `json:"tls"`
+	StatusCode   int      `json:"status_code,omitempty"`
+	ContentType  string   `json:"content_type,omitempty"`
+	Title        string   `json:"title,omitempty"`
+	Technologies []string `json:"technologies,omitempty"`
+	RedirectURL  string   `json:"redirect_url,omitempty"`
 }
+
+type httpxResult = HTTPObservation
 
 // parseSubfinderHosts reads subfinder JSONL output ({"host":"..."} per line)
 // and collects the discovered hostnames. Blank or malformed lines are skipped.
@@ -377,19 +382,6 @@ func loadReconScopes(scanDir string) ([]Scope, bool) {
 // persisted under scanDir by recon, for report generation. ok is false when the
 // file is absent or empty, e.g. a single-host scan with no recon evidence.
 func LoadReconScopes(scanDir string) ([]Scope, bool) { return loadReconScopes(scanDir) }
-
-// httpxRunner is a descriptor stub for httpx within the recon phase.
-type httpxRunner struct{}
-
-func (httpxRunner) Name() string { return "httpx" }
-
-func (httpxRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "httpx", Summary: "Live-host and HTTP/TLS probing of discovered hosts", Phase: PhaseRecon, Weight: WeightLight}
-}
-
-func (httpxRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
-	return notApplicableRun("httpx", req, cfg, "recon runs via the recon phase", emit)
-}
 
 // nmapRunner is a descriptor stub for nmap within the recon phase.
 type nmapRunner struct{}

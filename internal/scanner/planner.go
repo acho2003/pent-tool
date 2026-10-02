@@ -150,11 +150,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		return plan
 	}
 
-	// httpx (reachability probe) and katana (the web-crawl stage that feeds the
-	// scanners) run implicitly, not as selectable per-target coverage jobs, so
-	// they never surface as coverage gaps. subfinder stays planner-managed: it is
-	// a real conditional job (opt-in subdomain discovery).
-	discoveryTools := map[string]bool{"httpx": true, "katana": true}
+	// Katana is promoted separately below as the crawl stage. HTTPX and
+	// Subfinder are ordinary evidence jobs so failures are visible in coverage.
+	discoveryTools := map[string]bool{"katana": true}
 	// Discovery provider choices select a registry ID directly (in auto mode
 	// too, so custom-mode demotion never applies) and skip its alternative.
 	providerChosen, providerReplaced := providerSelections(cfg.DiscoveryProviders)

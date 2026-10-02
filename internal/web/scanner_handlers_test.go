@@ -133,7 +133,7 @@ func TestTypedPlanMarksLegacyReconStubsUnavailable(t *testing.T) {
 	// Discovery tools (subfinder/httpx/katana) run implicitly — recon and the
 	// katana crawl stage — so they are excluded from coverage decisions entirely
 	// (no false "unavailable" gap) and never emit a job.
-	for _, id := range []string{"httpx", "katana"} {
+	for _, id := range []string{"katana"} {
 		if slices.ContainsFunc(plan.Decisions, func(d scanner.PlanDecision) bool { return d.Scanner == id }) {
 			t.Errorf("discovery tool %s must not appear as a coverage decision: %+v", id, plan.Decisions)
 		}

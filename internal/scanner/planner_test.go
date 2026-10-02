@@ -312,13 +312,12 @@ func TestPlanJobsCarryStageAndDependencies(t *testing.T) {
 			t.Errorf("%s stage = %q, want %q", id, job.Stage, stage)
 		}
 	}
-	subfinderID := byScanner["subfinder"].ID
 	if len(byScanner["subfinder"].Dependencies) != 0 {
 		t.Errorf("subfinder must have no prerequisites: %v", byScanner["subfinder"].Dependencies)
 	}
 	for _, id := range []string{"testssl"} {
-		if got := byScanner[id].Dependencies; !slices.Equal(got, []string{subfinderID}) {
-			t.Errorf("%s dependencies = %v, want [%s]", id, got, subfinderID)
+		if got := byScanner[id].Dependencies; !slices.Equal(got, []string{byScanner["httpx"].ID}) {
+			t.Errorf("%s dependencies = %v, want [%s]", id, got, byScanner["httpx"].ID)
 		}
 	}
 	for _, id := range []string{"nuclei", "zap"} {
