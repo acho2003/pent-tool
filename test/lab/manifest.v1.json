@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "applications": [
+    {
+      "id": "app-a-vulnerable",
+      "base_url": "http://127.0.0.1:18080",
+      "variant": "vulnerable",
+      "expected_endpoints": ["/", "/search", "/items", "/file", "/.env", "/js", "/js/profile", "/login", "/private", "/redirect", "/openapi.json", "/api/records", "/api/private"],
+      "expected_findings": [
+        {"class": "reflected_xss", "path": "/search", "severity": "high"},
+        {"class": "sql_injection", "path": "/items", "severity": "high"},
+        {"class": "path_traversal", "path": "/file", "severity": "high"},
+        {"class": "exposed_file", "path": "/.env", "severity": "high"},
+        {"class": "dom_xss", "path": "/js/profile", "severity": "high"}
+      ]
+    },
+    {
+      "id": "app-a-fixed",
+      "base_url": "http://127.0.0.1:18081",
+      "variant": "fixed",
+      "expected_endpoints": ["/", "/search", "/items", "/file", "/js", "/js/profile", "/login", "/private", "/redirect", "/openapi.json", "/api/records", "/api/private"],
+      "expected_findings": []
+    },
+    {
+      "id": "app-b-vulnerable",
+      "base_url": "http://127.0.0.1:18082",
+      "variant": "vulnerable",
+      "expected_endpoints": ["/", "/search", "/items", "/file", "/.env", "/js", "/js/profile", "/login", "/private", "/redirect", "/openapi.json", "/api/records", "/api/private"],
+      "expected_findings": [
+        {"class": "reflected_xss", "path": "/search", "severity": "high"},
+        {"class": "sql_injection", "path": "/items", "severity": "high"},
+        {"class": "path_traversal", "path": "/file", "severity": "high"},
+        {"class": "exposed_file", "path": "/.env", "severity": "high"},
+        {"class": "dom_xss", "path": "/js/profile", "severity": "high"}
+      ]
+    }
+  ],
+  "credentials": {"username": "lab-user", "password": "lab-password", "verification_path": "/private", "verification_marker": "LAB_AUTHENTICATED_MARKER"}
+}

@@ -1,0 +1,396 @@
+import type {
+	AssessmentCoverage,
+	AttackSurfaceResponse,
+	AssessmentConfig,
+	AssessmentPlan,
+	AssessmentScannerDefinition,
+	CredentialMetadata,
+  AuthStatus,
+  EnvironmentSettings,
+  FindingObservation,
+  FindingsProject,
+  InstancesResponse,
+  ListParams,
+  Paginated,
+  QueueStatus,
+  RateLimitSettings,
+  ScanInstance,
+  ScanFinding,
+  ScanListItem,
+  ScanRecord,
+  ScanRequest,
+  ScanSchedule,
+  ScanScopes,
+  StatusResponse,
+  ToolInfo,
+  VersionInfo,
+  WSEvent,
+  VulnSummary,
+} from "@/types/api";
+import type { FlatFinding } from "@/lib/findings";
+
+// Auth session expiry handling. When any API call returns 401 we dispatch a
+// global event so the auth store (in store/auth.ts) can flip the user back
+// to the login screen without each component having to handle it.
+// We avoid importing the store directly to keep this module free of
+// circular deps with the rest of the app.
+const AUTH_EXPIRED_EVENT = "xalgorix:auth-expired";
+let lastAuthExpiredDispatch = 0;
+
+function dispatchAuthExpired() {
+  // Debounce: when multiple SWR keys fail at once we'd otherwise fire
+  // dozens of events in a single tick.
+  const now = Date.now();
+  if (now - lastAuthExpiredDispatch < 1000) return;
+  lastAuthExpiredDispatch = now;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
+}
+
+export const AUTH_EXPIRED = AUTH_EXPIRED_EVENT;
+
+/**
+ * Structured HTTP error thrown by `http()`. Carries the status code, the
+ * raw response body, and any JSON-decoded body so callers (login form,
+ * settings, etc.) can render a friendly message instead of leaking the
+ * raw `HTTP 401 Unauthorized: {"error":"…"}` envelope into the UI.
+ */
+export class HttpError extends Error {
+  status: number;
+  statusText: string;
+  body: string;
+  data: unknown;
+  retryAfter?: number;
+  constructor(opts: {
+    status: number;
+    statusText: string;
+    body: string;
+    data: unknown;
+    retryAfter?: number;
+  }) {
+    // `message` stays useful for unhandled-error toasts / console logs, but
+    // UI code should branch on `.status` and use `.data?.error` when it
+    // wants a polished string.
+    const fromData =
+      opts.data &&
+      typeof opts.data === "object" &&
+      "error" in (opts.data as Record<string, unknown>)
+        ? String((opts.data as { error?: unknown }).error ?? "")
+        : "";
+    const detail = fromData || opts.body;
+    super(
+      `HTTP ${opts.status}${opts.statusText ? ` ${opts.statusText}` : ""}${
+        detail ? `: ${detail}` : ""
+      }`,
+    );
+    this.name = "HttpError";
+    this.status = opts.status;
+    this.statusText = opts.statusText;
+    this.body = opts.body;
+    this.data = opts.data;
+    this.retryAfter = opts.retryAfter;
+  }
+}
+
+async function http<T>(
+  path: string,
+  init?: RequestInit & { json?: unknown; timeoutMs?: number },
+): Promise<T> {
+  const headers: HeadersInit = {
+    Accept: "application/json",
+    ...(init?.headers || {}),
+  };
+  let body = init?.body;
+  if (init?.json !== undefined) {
+    body = JSON.stringify(init.json);
+    (headers as Record<string, string>)["Content-Type"] = "application/json";
+  }
+
+  // Optional client-side timeout. Without this a hung/unreachable backend
+  // (e.g. an origin returning a Cloudflare 5xx after the connection, or a
+  // stalled upload) leaves the request pending forever — the UI just spins.
+  // When timeoutMs is set we abort and surface a clear, catchable error.
+  const timeoutMs = init?.timeoutMs;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer =
+    controller && timeoutMs
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      headers,
+      body,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+  } catch (err) {
+    // Network-level failure: server unreachable, DNS, CORS, abort. Surface
+    // it as an HttpError with status 0 so callers can distinguish it from
+    // a real HTTP response.
+    const aborted = controller?.signal.aborted;
+    throw new HttpError({
+      status: 0,
+      statusText: aborted ? "Request timed out" : "Network error",
+      body: aborted
+        ? `The server did not respond within ${Math.round((timeoutMs ?? 0) / 1000)}s. It may be overloaded or unreachable.`
+        : err instanceof Error
+          ? err.message
+          : String(err),
+      data: null,
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    // Surface session expiry / auth failure to the rest of the app, but
+    // never on the login endpoint itself (that 401 is just "bad password"
+    // and the form already shows the error inline).
+    if (res.status === 401 && path !== "/api/auth/login") {
+      dispatchAuthExpired();
+    }
+    let rawBody = "";
+    try {
+      rawBody = await res.text();
+    } catch {
+      /* ignore */
+    }
+    let parsed: unknown = null;
+    if (rawBody) {
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        /* not JSON, leave as null */
+      }
+    }
+    const retryHeader = res.headers.get("Retry-After");
+    const retryAfter = retryHeader ? Number(retryHeader) : undefined;
+    throw new HttpError({
+      status: res.status,
+      statusText: res.statusText,
+      body: rawBody,
+      data: parsed,
+      retryAfter: Number.isFinite(retryAfter) ? retryAfter : undefined,
+    });
+  }
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    return (await res.json()) as T;
+  }
+  return (await res.text()) as unknown as T;
+}
+
+/**
+ * Build a query string from list params, omitting empty/default values so
+ * the URL stays clean (e.g. `?page=2&size=50&q=foo&status=running`).
+ */
+function listQuery(params: ListParams): string {
+  const sp = new URLSearchParams();
+  if (params.page) sp.set("page", String(params.page));
+  if (params.size) sp.set("size", String(params.size));
+  if (params.q && params.q.trim()) sp.set("q", params.q.trim());
+  if (params.status && params.status !== "all") sp.set("status", params.status);
+  if (params.severity && params.severity !== "all") sp.set("severity", params.severity);
+  if (params.scanner && params.scanner !== "all") sp.set("scanner", params.scanner);
+  if (params.mode && params.mode !== "all") sp.set("mode", params.mode);
+  const qs = sp.toString();
+  return qs ? `?${qs}` : "";
+}
+
+const scopeQuery = (scope?: string) => (scope ? `?scope=${encodeURIComponent(scope)}` : "");
+
+export const api = {
+	monitoringConnection: () => http<import("@/types/api").MonitoringConnection>("/api/monitoring/connection"),
+	saveMonitoringConnection: (value: import("@/types/api").MonitoringConnectionInput) => http<{status:string}>("/api/monitoring/connection", {method:"PUT", json:value}),
+	monitoringHealth: () => http<import("@/types/api").MonitoringHealth>("/api/monitoring/health"),
+	monitoringAgents: (page=1, limit=25, q="") => http<import("@/types/api").WazuhList<import("@/types/api").WazuhAgent>>(`/api/monitoring/agents?page=${page}&limit=${limit}&q=${encodeURIComponent(q)}`),
+	monitoringAgent: (id:string) => http<import("@/types/api").WazuhList<import("@/types/api").WazuhAgent>>(`/api/monitoring/agents/${encodeURIComponent(id)}`),
+	monitoringSCA: (id:string) => http<import("@/types/api").WazuhList<Record<string, unknown>>>(`/api/monitoring/agents/${encodeURIComponent(id)}/sca`),
+	monitoringFIM: (id:string) => http<import("@/types/api").WazuhList<Record<string, unknown>>>(`/api/monitoring/agents/${encodeURIComponent(id)}/fim`),
+	monitoringSearch: (kind:"alerts"|"vulnerabilities", page=1, limit=25, q="", agentId="") => http<import("@/types/api").WazuhSearch>(`/api/monitoring/${agentId ? `agents/${encodeURIComponent(agentId)}/` : ""}${kind}?page=${page}&limit=${limit}&q=${encodeURIComponent(q)}`),
+	monitoringAudit: () => http<import("@/types/api").MonitoringAction[]>("/api/monitoring/audit"),
+	monitoringEnrollments: () => http<import("@/types/api").MonitoringEnrollment[]>("/api/monitoring/enrollments"),
+	addMonitoringEnrollment: (name:string, os:"Linux"|"Windows"|"macOS") => http<import("@/types/api").MonitoringEnrollment>("/api/monitoring/enrollments", {method:"POST",json:{name,os}}),
+	monitoringResponse: (id:string, command:string) => http<import("@/types/api").MonitoringAction>(`/api/monitoring/agents/${encodeURIComponent(id)}/active-response`, {method:"POST", json:{command,confirm_agent:id}}),
+  authStatus: () => http<AuthStatus>("/api/auth/status"),
+  login: (username: string, password: string) =>
+    http<{ status: string }>("/api/auth/login", {
+      method: "POST",
+      json: { username, password },
+    }),
+  logout: () =>
+    http<{ status: string }>("/api/auth/logout", { method: "POST" }),
+
+  status: () => http<StatusResponse>("/api/status"),
+  version: () => http<VersionInfo>("/api/version"),
+  listScans: () => http<ScanListItem[] | null>("/api/scans"),
+  // Server-side paginated + filtered scan list. Returns the envelope shape
+  // { items, total, page, size }.
+  listScansPage: (params: ListParams) =>
+    http<Paginated<ScanListItem>>(`/api/scans${listQuery(params)}`),
+  getScan: (id: string) => http<ScanRecord | null>(`/api/scans/${id}`),
+  // Flattened + deduped findings across all scans, computed server-side in a
+  // single walk. Replaces the previous per-scan getScan() fan-out.
+  listFindings: () => http<FlatFinding[] | null>("/api/findings"),
+  listFindingProjects: () => http<{ projects: FindingsProject[] }>("/api/findings/projects"),
+  listScanFindings: (scanId: string, params: ListParams = { page: 1, size: 50 }) =>
+    http<Paginated<ScanFinding>>(`/api/scans/${encodeURIComponent(scanId)}/findings${listQuery(params)}`),
+  rebuildScanFindings: (scanId: string) =>
+    http<{ status: string; summary: unknown }>(`/api/scans/${scanId}/findings/rebuild`, { method: "POST" }),
+  updateFindingStatus: (scanId: string, findingId: string, status: string, reason: string) =>
+    http<ScanFinding>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}`, { method: "PATCH", body: JSON.stringify({ status, reason }) }),
+  findingEndpoints: (scanId: string, findingId: string, params: ListParams = { page: 1, size: 50 }) =>
+    http<Paginated<NonNullable<ScanFinding["endpoints"]>[number]>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/endpoints${listQuery(params)}`),
+  findingObservations: (scanId: string, findingId: string, params: ListParams = { page: 1, size: 50 }) =>
+    http<Paginated<FindingObservation>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/observations${listQuery(params)}`),
+  deleteScan: (id: string) =>
+    http<{ status: string }>(`/api/scans/${id}`, { method: "DELETE" }),
+  deleteVuln: (scanId: string, vulnId: string) =>
+    http<{ status: string; removed: number; remaining: number }>(
+      `/api/scans/${scanId}/vulns/${vulnId}`,
+      { method: "DELETE" },
+    ),
+
+  instances: () => http<InstancesResponse>("/api/instances"),
+  // Server-side paginated + filtered instances list. Resources and the
+  // distinct `modes` list are returned alongside the paged `instances`.
+  instancesPage: (params: ListParams) =>
+    http<InstancesResponse>(`/api/instances${listQuery(params)}`),
+  instance: (id: string) => http<ScanInstance>(`/api/instances/${id}`),
+  instanceEvents: (id: string) =>
+    http<WSEvent[]>(`/api/instances/${id}/events`),
+  stopInstance: (id: string) =>
+    http<{ status: string }>(`/api/instances/${id}/stop`, { method: "POST" }),
+  restartInstance: (id: string) =>
+    http<{ status: string }>(`/api/instances/${id}/restart`, {
+      method: "POST",
+    }),
+  startSavedInstance: (id: string) =>
+    http<{ status: string; instance_id?: string }>(
+      `/api/instances/${id}/start`,
+      { method: "POST" },
+    ),
+
+  startScan: (req: ScanRequest) =>
+    http<{ status: string; instance_id: string }>("/api/scan", {
+      method: "POST",
+      json: req,
+    }),
+  uploadLogo: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return http<{ path: string; filename: string }>("/api/upload-logo", {
+      method: "POST",
+      body,
+      timeoutMs: 120_000,
+    });
+  },
+  uploadContext: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return http<{
+      path: string;
+      filename: string;
+      endpoints: number;
+      formats: string[];
+      has_auth: boolean;
+    }>("/api/upload-context", {
+      method: "POST",
+      body,
+      // APK/HAR parsing can take a little while, but a KB spec is instant —
+      // if we're past this the backend is wedged, so fail with a clear error
+      // instead of spinning forever.
+      timeoutMs: 120_000,
+    });
+  },
+  stopAll: () => http<{ status: string }>("/api/stop", { method: "POST" }),
+
+  queueStatus: () => http<QueueStatus>("/api/queue/status"),
+  queueResume: () =>
+    http<{
+      status: string;
+      resumed_queues?: number;
+      from_index?: number;
+      targets_left?: number;
+      error?: string;
+    }>("/api/queue/resume", { method: "POST" }),
+  queueClear: () =>
+    http<{ status: string }>("/api/queue/clear", { method: "POST" }),
+
+  rateLimit: () => http<RateLimitSettings>("/api/settings/rate-limit"),
+  updateRateLimit: (req: RateLimitSettings) =>
+    http<RateLimitSettings>("/api/settings/rate-limit", {
+      method: "POST",
+      json: req,
+    }),
+
+  environmentSettings: () =>
+    http<EnvironmentSettings>("/api/settings/environment"),
+  updateEnvironmentSettings: (values: Record<string, string>) =>
+    http<EnvironmentSettings>("/api/settings/environment", {
+      method: "POST",
+      json: { values },
+    }),
+
+  reportUrl: (scanId: string) => `/api/report/${scanId}`,
+	scannerOutput: (scanId: string, scanner: string, stream: "stdout" | "stderr", scope?: string) =>
+		http<string>(`/api/scans/${scanId}/output/${scanner}/${stream}${scopeQuery(scope)}`),
+	scannerOutputChunk: async (scanId: string, scanner: string, stream: "combined" | "stdout" | "stderr", scope: string | undefined, offset: number, limit = 65536) => {
+		const path = `/api/scans/${encodeURIComponent(scanId)}/output/${encodeURIComponent(scanner)}/${stream}${scopeQuery(scope)}`;
+		const response = await fetch(`${path}${path.includes("?") ? "&" : "?"}offset=${offset}&limit=${limit}`, { credentials: "same-origin" });
+		if (response.status === 401) dispatchAuthExpired();
+		if (!response.ok) throw new HttpError({ status: response.status, statusText: response.statusText, body: await response.text(), data: null });
+		return { text: await response.text(), start: Number(response.headers.get("X-Start-Offset") ?? offset), next: Number(response.headers.get("X-Next-Offset") ?? offset), total: Number(response.headers.get("X-Total-Size") ?? 0) };
+	},
+	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
+	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
+	assessmentCoverage: (scanId: string) => http<AssessmentCoverage>(`/api/scans/${scanId}/coverage`),
+	attackSurface: (scanId: string, params?: { page?: number; size?: number; kind?: string; scanner?: string; status?: string; q?: string }) => {
+		const query = new URLSearchParams();
+		for (const [key, value] of Object.entries(params ?? {})) if (value !== undefined && value !== "") query.set(key, String(value));
+		return http<AttackSurfaceResponse>(`/api/scans/${scanId}/attack-surface${query.size ? `?${query}` : ""}`);
+	},
+	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
+	planAssessment: (config: AssessmentConfig) =>
+		http<AssessmentPlan>("/api/scans/plan", { method: "POST", json: config }),
+	scannerRegistry: () => http<{ registry_version: string; scanners: AssessmentScannerDefinition[] }>("/api/scanners/registry"),
+	createCredential: (credential: { name: string; kind: string; target_ids: string[]; values: Record<string, string> }) =>
+		http<CredentialMetadata>("/api/credentials", { method: "POST", json: credential }),
+	uploadAPIDefinition: async (file: File) =>
+		http<{ id: string; format: string; operation_count: number; size_bytes: number }>("/api/api-definitions", {
+			method: "POST",
+			body: await file.text(),
+			headers: { "Content-Type": "application/octet-stream" },
+		}),
+
+  legacyImportStatus: () =>
+    http<{ count: number; dismissed: boolean }>("/api/legacy-import/status"),
+  dismissLegacyImport: () =>
+    http<{ count: number; dismissed: boolean }>(
+      "/api/legacy-import/status",
+      { method: "POST" },
+    ),
+
+  listSchedules: () => http<ScanSchedule[]>("/api/schedules"),
+  createSchedule: (schedule: Omit<ScanSchedule, "id" | "next_run">) =>
+    http<ScanSchedule>("/api/schedules", {
+      method: "POST",
+      json: schedule,
+    }),
+  updateSchedule: (id: string, schedule: Partial<ScanSchedule>) =>
+    http<ScanSchedule>(`/api/schedules/${id}`, {
+      method: "PUT",
+      json: schedule,
+    }),
+  deleteSchedule: (id: string) =>
+    http<{ status: string }>(`/api/schedules/${id}`, { method: "DELETE" }),
+  triggerSchedule: (id: string) =>
+    http<{ status: string; instance_id: string }>(`/api/schedules/${id}/trigger`, {
+      method: "POST",
+    }),
+
+};

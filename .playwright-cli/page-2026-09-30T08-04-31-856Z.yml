@@ -1,0 +1,112 @@
+- generic [ref=e2]:
+  - generic [ref=e44]:
+    - complementary [ref=e46]:
+      - generic [ref=e50]:
+        - generic [ref=e51]: Xalgorix
+        - generic [ref=e52]: v4.5.100
+      - navigation "Primary" [ref=e53]:
+        - list [ref=e54]:
+          - listitem [ref=e55]:
+            - paragraph [ref=e56]: Workspace
+            - list [ref=e57]:
+              - listitem [ref=e58]:
+                - link "Overview" [ref=e59] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=e66]:
+                - link "Assessments" [ref=e67] [cursor=pointer]:
+                  - /url: /scans
+              - listitem [ref=e73]:
+                - link "Findings" [ref=e74] [cursor=pointer]:
+                  - /url: /findings
+              - listitem [ref=e78]:
+                - link "Reports" [ref=e79] [cursor=pointer]:
+                  - /url: /reports
+          - listitem [ref=e84]:
+            - paragraph [ref=e85]: Operations
+            - list [ref=e86]:
+              - listitem [ref=e87]:
+                - link "New assessment" [ref=e88] [cursor=pointer]:
+                  - /url: /scans/new
+              - listitem [ref=e91]:
+                - link "Live feed" [ref=e92] [cursor=pointer]:
+                  - /url: /live
+              - listitem [ref=e100]:
+                - link "Monitoring" [ref=e101] [cursor=pointer]:
+                  - /url: /monitoring
+              - listitem [ref=e105]:
+                - link "Instances" [ref=e106] [cursor=pointer]:
+                  - /url: /instances
+              - listitem [ref=e111]:
+                - link "Schedules" [ref=e112] [cursor=pointer]:
+                  - /url: /schedules
+          - listitem [ref=e117]:
+            - paragraph [ref=e118]: Configure
+            - list [ref=e119]:
+              - listitem [ref=e120]:
+                - link "Integrations" [ref=e121] [cursor=pointer]:
+                  - /url: /integrations
+              - listitem [ref=e125]:
+                - link "Settings" [ref=e126] [cursor=pointer]:
+                  - /url: /settings
+      - generic [ref=e131]:
+        - generic [ref=e132]: Local scanner
+        - generic [ref=e136]: Ctrl+K for actions
+    - generic [ref=e140]:
+      - banner [ref=e141]:
+        - button "Open command palette" [ref=e142]:
+          - generic [ref=e146]: Search scans, findings, actions…
+          - generic [ref=e147]: Ctrl K
+        - generic [ref=e148]:
+          - 'generic "WebSocket: Connected" [ref=e149]': Connected
+          - link "New scan" [ref=e152] [cursor=pointer]:
+            - /url: /scans/new
+            - generic [ref=e153]: New Scan
+      - main [ref=e154]:
+        - generic [ref=e156]:
+          - generic [ref=e158]:
+            - heading "Continuous Monitoring" [level=1] [ref=e159]
+            - paragraph [ref=e160]: Wazuh agent health and security activity. Separate from one-time assessments.
+          - generic [ref=e170]:
+            - tablist [ref=e171]:
+              - tab "Overview" [ref=e172]
+              - tab "Servers" [ref=e173]
+              - tab "Alerts & FIM" [ref=e174]
+              - tab "CVE & SCA" [ref=e175]
+              - tab "Responses" [ref=e176]
+              - tab "Connection" [selected] [ref=e177]
+            - tabpanel "Connection" [ref=e178]:
+              - generic [ref=e179]:
+                - heading "Wazuh connection" [level=3] [ref=e181]
+                - generic [ref=e182]:
+                  - paragraph [ref=e183]: Use HTTPS endpoints reachable from the Xalgorix server. Passwords and the CA certificate stay on the server and are never returned to the browser.
+                  - generic [ref=e184]:
+                    - generic [ref=e185]:
+                      - text: Manager API URL
+                      - textbox "Manager API URL" [ref=e186]
+                    - generic [ref=e187]:
+                      - text: Indexer API URL
+                      - textbox "Indexer API URL" [ref=e188]
+                    - generic [ref=e189]:
+                      - text: Manager API user
+                      - textbox "Manager API user" [ref=e190]
+                    - generic [ref=e191]:
+                      - text: Indexer API user
+                      - textbox "Indexer API user" [ref=e192]
+                    - generic [ref=e193]:
+                      - text: Manager password
+                      - textbox "Manager password" [ref=e194]
+                    - generic [ref=e195]:
+                      - text: Indexer password
+                      - textbox "Indexer password" [ref=e196]
+                    - generic [ref=e197]:
+                      - text: Public manager hostname/IP for agents
+                      - textbox "Public manager hostname/IP for agents" [ref=e198]
+                  - generic [ref=e199]:
+                    - text: Trusted CA certificate PEM
+                    - textbox "Trusted CA certificate PEM" [ref=e200]
+                  - generic [ref=e201]:
+                    - text: Approved active-response command names, one per line
+                    - textbox "Approved active-response command names, one per line" [ref=e202]
+                    - paragraph [ref=e203]: Empty by default. Commands must already be configured in Wazuh; this list only permits them in Xalgorix.
+                  - button "Save connection" [ref=e204]
+  - region "Notifications alt+T"

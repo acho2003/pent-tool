@@ -1,0 +1,6 @@
+services:
+  xalgorix:
+    # Opt in only for raw-packet network adapters such as Masscan.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW

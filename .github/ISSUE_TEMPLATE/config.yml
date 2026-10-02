@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 Documentation
+    url: https://docs.xalgorix.com
+    about: Setup, configuration, integrations, and the CLI/API reference.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/xalgord/xalgorix/security/policy
+    about: Please do NOT open a public issue for security bugs — follow our responsible-disclosure process in SECURITY.md.
+  - name: ☁️ Hosted version (no install)
+    url: https://www.xalgorix.com
+    about: Prefer a managed, zero-setup version? Try the hosted cloud.

@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+/* Charcoal and mint palette from the Xalgorix reference. */
+@theme {
+  --color-background: #080d11;
+  --color-foreground: #f4f8fa;
+
+  --color-card: #0d151a;
+  --color-card-foreground: #f4f8fa;
+
+  --color-popover: #111c22;
+  --color-popover-foreground: #f4f8fa;
+
+  --color-primary: #4ce6b5;
+  --color-primary-foreground: #062019;
+
+  --color-secondary: #142028;
+  --color-secondary-foreground: #e8f1f4;
+
+  --color-muted: #17242b;
+  --color-muted-foreground: #aab9c6;
+
+  --color-accent: #10352e;
+  --color-accent-foreground: #72efc7;
+
+  --color-border: #293740;
+  --color-input: #17232a;
+  --color-ring: #4ce6b5;
+
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafafa;
+
+  /* Severity palette */
+  --color-severity-critical: #dc2626;
+  --color-severity-high: #ea580c;
+  --color-severity-medium: #ca8a04;
+  --color-severity-low: #2563eb;
+  --color-severity-info: #525252;
+
+  --color-success: #4ce6b5;
+  --color-warning: #f59e0b;
+
+  /* Existing success classes use emerald; align them with the reference mint. */
+  --color-emerald-100: #d5fbed;
+  --color-emerald-200: #b6f7df;
+  --color-emerald-300: #89f0cb;
+  --color-emerald-400: #60e9ba;
+  --color-emerald-500: #4ce6b5;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+
+  --font-sans:
+    "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono:
+    "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+
+  *,
+  *::before,
+  *::after {
+    border-color: var(--color-border);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--color-primary);
+    color: var(--color-primary-foreground);
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--color-primary);
+  }
+
+  /* Subtle charcoal scrollbar. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #263740;
+    border-radius: 6px;
+    border: 2px solid var(--color-background);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #365048;
+  }
+}
+
+/* Utility: subtle border + slight hover lift on cards */
+@utility card-hover {
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.card-hover:hover {
+  background-color: #132027;
+  border-color: #3a6658;
+}
+
+/* Keep dense analyst screens readable without changing the component API. */
+@utility tabular-nums { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  body { font-size: 14px; }
+}
+
+/* Animated connection dot */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* Mono code block style */
+.mono {
+  font-family: var(--font-mono);
+}

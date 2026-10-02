@@ -1,0 +1,176 @@
+version: "2"
+run:
+  go: "1.26"
+  modules-download-mode: readonly
+  tests: true
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    # nilerr is intentionally NOT enabled. This codebase has two deliberate
+    # patterns it flags as false positives: (1) tool handlers surface errors
+    # to the LLM via tools.Result{Output/Error} and return a nil Go error so
+    # the agent loop treats them as normal results, and (2) filepath.WalkDir
+    # callbacks return nil on a per-entry error to skip and keep walking.
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unconvert
+    - unused
+    - whitespace
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      # Best-effort calls whose error is intentionally ignored across the
+      # codebase: writing to an HTTP ResponseWriter (the status/headers are
+      # already committed), closing readers/connections in cleanup paths, and
+      # setting socket deadlines. Excluding them keeps errcheck focused on
+      # error returns that callers can actually act on.
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*github.com/gorilla/websocket.Conn).Close
+        - (*github.com/gorilla/websocket.Conn).WriteMessage
+        - (*github.com/gorilla/websocket.Conn).SetWriteDeadline
+        - (*github.com/gorilla/websocket.Conn).SetReadDeadline
+    gosec:
+      excludes:
+        - G104 # audited error returns are checked by errcheck
+        - G304 # file path joins reviewed in storage/* directly
+        - G404 # weak RNG: scanner uses math/rand for non-crypto paths
+        # G101 (hardcoded credentials) is inherent to this tool: the scanner's
+        # source ships credential-DETECTION regexes (codesearch sink patterns
+        # like `password|secret|token`) and example payloads. These are
+        # detection strings, not real secrets — no credential is embedded.
+        - G101
+        # G204 (subprocess with variable input) is inherent to this tool:
+        # xalgorix is an LLM-driven pentest agent whose core function is
+        # running the security tools/commands the model constructs. Command
+        # construction is reviewed in the terminal/python tool packages and
+        # gated by the scope guard, not by static analysis here.
+        - G204
+        # The rules below are new in the gosec bundle shipped with
+        # golangci-lint v2.12.2; none of them ran under the previous v2.5.0
+        # pin. They are excluded so this toolchain bump stays source-change
+        # free (per review on #298) and lint enforcement stays equivalent to
+        # the prior baseline. Triage in a dedicated follow-up.
+        #   Experimental taint-analysis series (noisy on an LLM-driven pentest
+        #   agent that deliberately constructs commands/paths from model input):
+        - G702 # command injection via taint analysis
+        - G703 # path traversal via taint analysis
+        - G705 # XSS via taint analysis
+        - G706 # log injection via taint analysis
+        #   Newer heuristic rules (some may be worth fixing later; kept out of
+        #   this toolchain-only PR):
+        - G117 # marshaled struct field matches secret pattern (auth store persists API keys by design)
+        - G118 # goroutine uses context.Background/TODO while request-scoped ctx available
+        - G120 # unbounded form parsing in HTTP handlers
+        - G122 # filepath.Walk/WalkDir callback uses race-prone path
+        - G124 # http.Cookie missing/insecure Secure/HttpOnly/SameSite
+    govet:
+      disable:
+        - fieldalignment
+        # 'shadow' is intentionally disabled. It is not part of the
+        # default `go vet` suite because it is noisy on idiomatic Go —
+        # most findings are harmless `err`/`s` re-declarations in nested
+        # scopes. Re-enable selectively if a real shadowing bug appears.
+        - shadow
+      enable-all: true
+    misspell:
+      locale: US
+      # MITRE is a proper noun (MITRE ATT&CK), not a misspelling of "miter".
+      # It appears in skill directory names that are referenced as alias
+      # targets in skills.go.
+      ignore-rules:
+        - mitre
+    revive:
+      severity: warning
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          arguments:
+            - checkPrivateReceivers
+            - disableStutteringCheck
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+    staticcheck:
+      checks:
+        - all
+        # QF1012 (stylistic quickfix: WriteString(fmt.Sprintf(...)) -> Fprintf)
+        # is newly surfaced by the staticcheck bundle in golangci-lint v2.12.2;
+        # it did not run under the prior v2.5.0 pin. Deferred like the gosec
+        # rules above to keep this a toolchain-only change (per review on #298).
+        - "-QF1012"
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - bodyclose
+          - errcheck
+          - gosec
+        path: _test\.go
+      - linters:
+          - all
+        path: \.pb\.go$
+      - linters:
+          - all
+        path: _gen\.go$
+      - linters:
+          - revive
+        text: should have comment
+    paths:
+      - webui/node_modules
+      - webui/dist
+      - webui/build
+      - internal/web/static
+      - build
+      - assets/webui
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - webui/node_modules
+      - webui/dist
+      - webui/build
+      - internal/web/static
+      - build
+      - assets/webui
+      - third_party$
+      - builtin$
+      - examples$

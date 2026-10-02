@@ -1,0 +1,291 @@
+# Xalgorix
+
+Xalgorix is a self-hosted deterministic security-scanner pipeline. It runs established scanners in a fixed order and assembles a source-traceable report from their native output.
+
+## Execution model
+
+Each scan runs fixed phases:
+
+1. **Recon** — Subfinder enumerates subdomains (skipped for a bare host or URL), httpx keeps the live hosts, and Nmap records open ports and services per host. Each live host becomes a *host scope*. A target with nothing to expand (for example `localhost:3000`) is scanned as a single host.
+2. **Classify** — from recon evidence alone, each host gets the `web` track (a live HTTP(S) URL, TLS, or an open 80/443/8080/8443 or HTTP-like service) and/or the `server` track (any other open port). A host with no recon evidence is scanned on both tracks.
+3. **Scan** — per host: Nuclei, OWASP ZAP, and testssl.sh on the web track; OpenVAS/Greenbone and Vuls on the server track. ZAP spiders the application, drains passive alerts, runs an active scan, drains passive alerts from that traffic, then exports both kinds of alerts. If passive scanning cannot be confirmed, the ZAP run fails instead of reporting complete coverage.
+4. **Source code** — once per scan, on a single *source scope*: Trivy, Semgrep, Gitleaks, and OSV-Scanner. Source comes from `--source` (a local directory, or a git repository cloned into the scan directory) or from a git-URL target. With no source, these tools record `not_applicable`.
+
+Scanners run on a bounded worker pool (`XALGORIX_MAX_WORKERS`, default 3). The heavy tools, ZAP and OpenVAS, never run at the same time.
+
+Every applicable tool records exactly one terminal status per scope. Every scope×tool the classifier deemed inapplicable is recorded `not_applicable` or `skipped`, so the report still accounts for all of them. Recon, target classification, tool selection, and command construction are deterministic.
+
+A scanner failure is recorded and other scanners continue. Cancelling a scan stops the active scanners and marks the remaining attempts cancelled. Completed attempts and their checksums are reused during restart recovery, keyed by (scope, scanner).
+
+During execution the dashboard displays native scanner stdout and stderr only.
+
+After all attempts reach terminal states, Xalgorix parses each tool's native output (Nuclei JSONL, ZAP JSON, testssl JSON, Greenbone XML, Vuls JSON, Nmap XML, Trivy, Semgrep, Gitleaks, and OSV-Scanner JSON) into a private canonical input. When different scanners report the same CVE on the same scope, the report shows one finding that lists every source and keeps each source's evidence reference. Output records with unknown source IDs are rejected. The report is assembled deterministically from these scanner records.
+
+The report groups findings by scope (each host, then the source code), shows each host's classifier tracks, and opens with a scan-coverage section: a recon summary (hosts discovered, open ports, detected services) and the terminal status of every tool on every scope.
+
+Findings are labelled scanner-reported. Xalgorix does not claim independent exploitation or verification.
+
+## Quick start
+
+Build from source:
+
+```bash
+git clone https://github.com/xalgord/xalgorix.git
+cd xalgorix
+make build
+./build/xalgorix --web
+```
+
+Open `http://127.0.0.1:9137`.
+
+To start the full local scanner stack (including internal ZAP and Greenbone),
+build the checked-out source for your Docker architecture:
+
+```bash
+# One-time: the key that encrypts saved target credentials (form login,
+# tokens, cloud keys). Compose refuses to start until this file exists.
+mkdir -p secrets && openssl rand -out secrets/xalgorix-credential.key 32
+
+docker compose up -d --build
+```
+
+
+The app image uses a pinned Debian slim base with only integrated scanner clients
+and their dependencies. It excludes the broad Kali toolbox, unused scanners,
+wordlists, and runtime compilers. ZAP and Greenbone remain separate services in
+the default stack. See [runtime inventory and verification](runtime/README.md).
+
+The default Xalgorix service now runs without `privileged: true`. Typed Nmap
+uses TCP connect mode. Masscan's raw-packet adapter requires `NET_ADMIN` and
+`NET_RAW`; preflight marks it unavailable with a capability reason unless the
+operator explicitly starts the full stack with the narrower override:
+
+```sh
+docker compose -f docker-compose.yml -f compose.network-capabilities.yaml up -d --no-build --pull never
+```
+
+That override is for approved network scans. The [source/web workflow](docs/source-container-scans.md)
+does not need it. An already-running service is unaffected until it is
+recreated; no container recreation is part of this change.
+
+Back up `secrets/xalgorix-credential.key` separately from the data volume.
+Losing it makes every saved credential unrecoverable. It is git-ignored and
+mounted read-only as a Compose secret; see
+[docs/security/target-credentials.md](docs/security/target-credentials.md).
+
+Set a fixed dashboard login in a `.env` file next to `docker-compose.yml`
+(git-ignored). Without it, the container generates a new random admin password
+on every start, which logs you out after each rebuild:
+
+```bash
+# Single quotes stop Compose from expanding the $ signs in the bcrypt hash.
+echo "XALGORIX_PASSWORD_HASH='$(htpasswd -nbBC 10 "" 'your-password' | cut -d: -f2)'" > .env
+```
+
+On Apple Silicon this avoids the older `xalgord/xalgorix:latest` release image,
+which does not provide an arm64 manifest. The first Greenbone startup downloads
+and initializes persistent vulnerability feeds, so it can take a while before
+the scanner is ready.
+
+CLI examples:
+
+```bash
+xalgorix --target https://example.com
+xalgorix --target example.com --vuls-ssh-host prod-web
+xalgorix --source ./my-app --artifact-kind filesystem
+xalgorix --source https://github.com/example/app.git --artifact-kind repository
+```
+
+## Scanner inputs
+
+| Scanner | Scope | Input |
+|---|---|---|
+| Subfinder, httpx, Nmap | Recon | Submitted target; per-host Nmap on each live host |
+| Nuclei | Host (web) | Host or live URL |
+| ZAP | Host (web) | Deterministically normalized HTTP/HTTPS URL |
+| testssl.sh | Host (web) | Host with TLS |
+| OpenVAS | Host (server) | Host |
+| Vuls | Host (server) | Optional operator-managed SSH host alias |
+| Trivy, Semgrep, Gitleaks, OSV-Scanner | Source | Resolved source directory |
+
+## Selecting scanners
+
+By default every scan runs the whole pipeline. To run a subset, tick the scanners in
+the dashboard's New scan form, send `"scanners": ["nuclei", "zap"]` to
+`POST /api/scan`, or pass `--scanners nuclei,zap` on the CLI. An unknown name is
+rejected; order and duplicates do not matter.
+
+A deselected scanner is not omitted from the scan — it is recorded with the
+terminal status `skipped` and the reason `not selected for this scan`, so every
+scan still accounts for every scope×tool and the report shows what was not attempted.
+That is distinct from `not_applicable`, which means a selected scanner had
+nothing to work with (no URL, no source, no SSH alias, or a scope outside the tool's track).
+
+Supported Trivy artifact kinds are `filesystem`, `repository`, `image`, and `sbom`. Vuls aliases refer to the operator's SSH configuration. SSH private material is never returned by the API or written to scan records.
+
+For read-only Dockerfile/source scans with an already-cached image and without
+Greenbone, use the [source container workflow](docs/source-container-scans.md).
+
+Wildcard mode uses deterministic subdomain discovery and normalization before running the full pipeline for each discovered target.
+
+### Typed assessments from the CLI
+
+Use `--plan` to validate a JSON assessment without contacting its targets, or
+`--run-assessment --assessment-config assessment.json` to run the typed scanner
+plan and print a JSON result containing the plan, per-scanner runs, findings,
+and parse diagnostics. The CLI applies the same plan builder, profile limits,
+artifact isolation, and local-listener protection as the web application.
+
+New web assessments and schedules default to `web-gentle` (a 2-request/second
+Nuclei limit and a 30-minute per-application budget). For lab or staging targets,
+select `web-thorough` in the web UI or assessment JSON to use Nuclei's default
+rate (up to 150 requests/second) with no application-wide time budget or overall
+Nuclei, Nikto, ZAP, or testssl scan deadline. Nikto uses a 1-second pause in
+gentle mode and no Xalgorix request pause in thorough mode. Connection and
+per-request timeouts, the 2,000-endpoint inventory limit, and manual cancellation
+still apply. Skipped or failed work is reported as partial coverage.
+
+The CLI accepts local OpenAPI 3.0/3.1 or Swagger 2.0 files using repeatable
+`--api-definition target-id=file` options. Target IDs must match explicit
+HTTP(S) URL targets in the assessment, and the file content hash is included
+in the reviewed plan. Only safe, resolved GET routes are currently seeded into
+ZAP; other operations remain visible as untested. The CLI does not resolve
+credential references or server-uploaded definition IDs; use the web
+application for those resources. Each run's raw artifacts are retained under
+`$XALGORIX_DATA_DIR/assessments/` for review.
+`--scanners` maps to a typed custom selection; `--source` with
+`--artifact-kind` maps filesystem, repository, image, or SBOM inputs. Typed
+execution rejects `--vuls-ssh-host` until a remote host access adapter is
+available.
+
+```sh
+xalgorix --plan --assessment-config assessment.json
+xalgorix --run-assessment --assessment-config assessment.json --api-definition app=api.yaml
+```
+
+## Native and container configuration
+
+Native installations use configured binary paths and external ZAP/GMP endpoints. Xalgorix does not install tools at scan time. Missing binaries and unavailable services become explicit scanner failures.
+
+Key environment variables:
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `XALGORIX_NUCLEI_PATH` | `nuclei` | Nuclei executable |
+| `XALGORIX_TRIVY_PATH` | `trivy` | Trivy executable |
+| `XALGORIX_VULS_PATH` | `vuls` | Vuls executable |
+| `XALGORIX_VULS_SSH_CONFIG` | `~/.ssh/config` | Operator-managed SSH configuration used to resolve Vuls aliases |
+| `XALGORIX_SUBFINDER_PATH` | `subfinder` | Subfinder executable (recon) |
+| `XALGORIX_HTTPX_PATH` | `httpx` | httpx executable (recon) |
+| `XALGORIX_NMAP_PATH` | `nmap` | Nmap executable (recon) |
+| `XALGORIX_MASSCAN_PATH` | `masscan` | Optional typed IP/CIDR discovery executable |
+| `XALGORIX_MASSCAN_RATE` | `100` | Masscan packet rate; this adapter caps it at 1,000 packets/second |
+| `XALGORIX_MASSCAN_TIMEOUT_SEC` | `900` | Maximum duration for one Masscan job |
+| `XALGORIX_NIKTO_PATH` | `nikto` | Optional Nikto executable for explicitly selected root-path web checks |
+| `XALGORIX_NIKTO_TIMEOUT_SEC` | `600` | Maximum duration for one Nikto job; adapter caps it at 10 minutes and reserves up to 60 seconds for Nikto to save partial JSON before the deadline. Budget-limited runs are marked incomplete while valid findings are retained. |
+| `XALGORIX_TESTSSL_PATH` | `testssl.sh` | testssl.sh executable |
+| `XALGORIX_SEMGREP_PATH` | `semgrep` | Semgrep executable |
+| `XALGORIX_GITLEAKS_PATH` | `gitleaks` | Gitleaks executable |
+| `XALGORIX_OSV_PATH` | `osv-scanner` | OSV-Scanner executable |
+| `XALGORIX_MAX_WORKERS` | `3` | Concurrent scanner limit (ZAP/OpenVAS/Masscan are additionally serialized) |
+| `XALGORIX_ZAP_URL` | empty | Internal ZAP API URL |
+| `XALGORIX_ZAP_API_KEY` | empty | ZAP API key |
+| `XALGORIX_ZAP_DEDICATED` | `false` | Set `true` only when this deployment owns a dedicated ZAP daemon for isolated assessments |
+| `XALGORIX_GVM_HOST` | empty | Greenbone GMP host |
+| `XALGORIX_GVM_PORT` | `9390` | Greenbone GMP port (TLS) |
+| `XALGORIX_GVM_SOCKET` | empty | Greenbone GMP UNIX socket; takes precedence over host/port |
+| `XALGORIX_GVM_USERNAME` | empty | GMP username |
+| `XALGORIX_GVM_PASSWORD` | empty | GMP password |
+| `XALGORIX_CREDENTIAL_KEY_FILE` | empty | Path to a 32-byte raw key that encrypts saved target credentials; without it, saving credentials fails |
+| `XALGORIX_SCANNER_MAX_OUTPUT_BYTES` | `104857600` | Per-scanner raw output limit |
+| `XALGORIX_<TOOL>_TIMEOUT_SECONDS` | per tool | Per-tool timeout, e.g. `XALGORIX_NMAP_TIMEOUT_SECONDS` (1800), `XALGORIX_SEMGREP_TIMEOUT_SECONDS` (1800), `XALGORIX_GITLEAKS_TIMEOUT_SECONDS` (900), `XALGORIX_OSV_TIMEOUT_SECONDS` (900) |
+
+Nuclei, Trivy, Vuls, Subfinder, httpx, Nmap, testssl.sh, Semgrep, Gitleaks, and OSV-Scanner are expected in the Xalgorix runtime image. ZAP and Greenbone run as authenticated internal services with persistent state and feeds.
+
+## API
+
+Core v2 endpoints:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/scans/plan` | Validate and preview a typed assessment without contacting targets |
+| `GET` | `/api/scans/:id/coverage` | Show planned jobs, actual outcomes, verified artifacts, and coverage gaps |
+| `POST` | `/api/scan` | Start a legacy scan or a typed assessment with its current `plan_fingerprint` |
+| `GET` | `/api/scanners/registry` | Typed scanner variants and runtime availability |
+| `GET` | `/api/scanners/status` | Scanner health/configuration |
+| `GET` | `/api/scans/:id/output/:scanner/:stream` | Read paged/tail raw output |
+| `GET` | `/api/scans/:id/:scanner/artifact` | Download a native artifact |
+| `GET` | `/api/report/:id` | Download the generated PDF |
+| `POST` | `/api/reports/:id/regenerate` | Regenerate from immutable artifacts |
+
+Typed assessment starts must include the `fingerprint` returned by the latest
+`/api/scans/plan` response as `plan_fingerprint`. If runtime capabilities or
+configuration changed since preview, the server returns `409` with a refreshed
+plan. Scanner jobs without a direct typed adapter are shown as unavailable and
+are not queued. Typed ZAP jobs can use encrypted, target-bound HTTP headers or
+form login credentials. Before scanning, the server checks an in-scope URL for
+the configured authenticated response marker. Failed verification skips the
+authenticated job. Form login currently supports an HTML POST form with
+username/password fields and hidden CSRF fields. During typed ZAP scans, the
+session is checked at stage boundaries and approximately once per minute while
+waiting for crawl or active-scan progress. An expired form session gets one
+re-login attempt; another expiry or a failed re-login ends authenticated work
+and records failed coverage. The ZAP terminal transcript shows credential-safe
+verification, recheck, renewal, and error messages. A login rejected before ZAP
+starts also leaves a terminal transcript explaining why the job was skipped.
+
+White Box host audits can use a target-bound `SSH` credential whose encrypted
+`ssh_alias` value names an operator-managed SSH config entry. Vuls uses that
+alias; Lynis runs `lynis audit system --quick --nocolors` on the remote host
+through SSH with batch mode and strict host-key checking. Lynis must be
+installed on the remote host. Its identified warnings and suggestions are
+reported as host findings; the complete native output remains available for
+review.
+
+For credentialed Greenbone scans, the same target-bound `SSH` record can include
+`gvm_credential_id` (a pre-provisioned Greenbone SSH credential UUID) and
+optional `gvm_ssh_port` (default `22`). A requested host credential without a
+valid Greenbone ID skips credentialed OpenVAS instead of falling back to an
+anonymous scan. Greenbone reports still need review to confirm login succeeded.
+
+Example request:
+
+```json
+{
+  "targets": ["https://example.com"],
+  "scan_mode": "single",
+  "target_auth": "Authorization: Bearer …",
+  "artifact": {
+    "kind": "repository",
+    "ref": "https://github.com/example/app.git"
+  },
+  "vuls_ssh_host": "prod-web",
+  "scanners": ["nuclei", "zap"],
+  "company_name": "Example Ltd"
+}
+```
+
+The legacy `dast` mode is accepted as an alias for `single`. Legacy scan records and their existing reports remain readable.
+
+## Persistence
+
+Schema-v2 records contain a `scanner_runs` collection with scanner name, scope (`recon:<target>`, `host:<host>`, or `source:main`), target, terminal status, timestamps, exit code, reason, output paths, checksum, and truncation state. Large output is not embedded in `scan.json`; stdout, stderr, and native artifacts are append-only files with deterministic credential redaction.
+
+Resume keys on the (scope, scanner) pair. A record written before scopes existed has an empty scope and is treated as the single implicit host scope (`host:<target>`), so older records resume and report unchanged. Recon's discovered host set, with per-host evidence, is persisted at `scanner-output/recon-scopes.json`. The resolved source scope, with its provenance (clone URL or provided directory), is persisted at `scanner-output/source-scope.json`, so the report can name the source by origin.
+
+`report.json` (manifest schema 2) records source run checksums, generation mode, timestamp, parse errors, the per-scope coverage list and recon summary, and validated report findings (each with its scope and, for merged findings, every contributing source).
+
+## Safety
+
+Use Xalgorix only on systems you own or have explicit authorization to test. The fixed pipeline can perform active scanning. Scope enforcement and target protections still apply.
+
+## Development
+
+```bash
+go test ./...
+cd webui && npm run typecheck && npm run build
+```
+
+On macOS environments affected by native CPU-detection initialization, use `CGO_ENABLED=0 go test ./...`.
+
+See [LICENSE](LICENSE).

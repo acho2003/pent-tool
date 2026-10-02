@@ -1,0 +1,34 @@
+name: xalgorix-assessment-lab
+
+x-lab-service: &lab-service
+  build:
+    context: ../..
+    dockerfile: test/lab/Dockerfile
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+    interval: 5s
+    timeout: 2s
+    retries: 10
+
+services:
+  app-a-vulnerable:
+    <<: *lab-service
+    environment:
+      LAB_VARIANT: vulnerable
+      LAB_NAME: app-a
+    ports: ["127.0.0.1:18080:8080"]
+  app-a-fixed:
+    <<: *lab-service
+    environment:
+      LAB_VARIANT: fixed
+      LAB_NAME: app-a
+    ports: ["127.0.0.1:18081:8080"]
+  app-b-vulnerable:
+    <<: *lab-service
+    environment:
+      LAB_VARIANT: vulnerable
+      LAB_NAME: app-b
+    ports: ["127.0.0.1:18082:8080"]

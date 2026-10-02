@@ -1,0 +1,91 @@
+# GitHub Actions CI workflow for xalgorix.
+#
+# Every pull request runs `make lint`, the unit-test suite, and `go vet`.
+# This file stays focused on the per-PR fast feedback loop.
+
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - "release/**"
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26.5"
+  GOLANGCI_LINT_VERSION: "v2.12.2"
+
+jobs:
+  lint:
+    name: Lint (make lint + golangci-lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: gofmt + go vet (make lint)
+        run: make lint
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --config .golangci.yml
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Run unit tests
+        run: go test ./... -race -count=1
+
+      - name: Coverage report
+        run: go test ./... -covermode=atomic -coverprofile=coverage.out
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage.out
+          retention-days: 7
+          if-no-files-found: warn

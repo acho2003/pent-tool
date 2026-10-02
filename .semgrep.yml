@@ -1,0 +1,38 @@
+# Semgrep configuration for xalgorix.
+#
+# Consumed by `make sec` and by the security CI workflow.
+#
+# Conventions:
+# - Public registry rulesets are pulled by their `p/<name>` shortcuts when
+#   `make sec` is invoked with network access.
+# - The `rules:` section below holds first-party rules tailored to the
+#   xalgorix codebase. Keep these scoped to genuine smells: noisy rules
+#   should live in `p/*` registry packs, not here.
+#
+# Schema reference: https://semgrep.dev/docs/writing-rules/rule-syntax
+
+# Registry packs to apply on top of the in-repo rules. The CI workflow
+# passes these through `--config` flags so this file only needs the
+# project-specific rules; the packs are documented here for traceability.
+#
+# Used packs (kept in sync with .github/workflows/ci.yml):
+#   - p/golang
+#   - p/security-audit
+#   - p/secrets
+#   - p/owasp-top-ten
+
+rules:
+  - id: xalgorix-no-md5-sha1-for-auth
+    message: >-
+      MD5 and SHA-1 are not collision-resistant; never use them for
+      authentication, signing, or token derivation. Use SHA-256 or bcrypt
+      for password hashing.
+    severity: ERROR
+    languages: [go]
+    pattern-either:
+      - pattern: crypto/md5
+      - pattern: crypto/sha1
+      - pattern: md5.New(...)
+      - pattern: sha1.New(...)
+      - pattern: md5.Sum(...)
+      - pattern: sha1.Sum(...)

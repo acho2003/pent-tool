@@ -1,0 +1,11 @@
+# Fast application-only rebuild using an already-built slim runtime.
+# First: docker build -t xalgorix:local .
+# Then: build a Linux binary into build/xalgorix and run:
+# docker build -f Dockerfile.local -t xalgorix:dev .
+# build/xalgorix must be a Linux binary matching the image architecture.
+ARG RUNTIME_IMAGE=xalgorix:local
+FROM ${RUNTIME_IMAGE}
+# Fail rather than accidentally inherit the historical Kali toolbox image.
+RUN python3 -c 'import json; assert json.load(open("/usr/local/share/xalgorix/content-lock.json"))["runtime_family"] == "debian-slim", "Build the slim runtime first"'
+COPY build/xalgorix /usr/local/bin/xalgorix
+RUN chmod +x /usr/local/bin/xalgorix && xalgorix --version

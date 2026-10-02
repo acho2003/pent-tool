@@ -1,0 +1,39 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - img "Xalgorix" [ref=e6]
+        - generic [ref=e7]: XALGORIX
+      - generic [ref=e8]:
+        - generic [ref=e9]:
+          - heading "Deterministic multi-scanner security assessments." [level=1] [ref=e10]
+          - paragraph [ref=e11]: Recon, per-host web and server scanners, and source-code analysis in a fully deterministic pipeline — managed from a single console.
+        - generic [ref=e12]:
+          - generic [ref=e13]:
+            - term [ref=e14]: Recon
+            - definition [ref=e15]: "01"
+          - generic [ref=e16]:
+            - term [ref=e17]: Web
+            - definition [ref=e18]: "02"
+          - generic [ref=e19]:
+            - term [ref=e20]: Server
+            - definition [ref=e21]: "03"
+          - generic [ref=e22]:
+            - term [ref=e23]: Source code
+            - definition [ref=e24]: "04"
+      - paragraph [ref=e25]: © Xalgorix · Internal use only
+    - generic [ref=e27]:
+      - generic [ref=e28]:
+        - generic [ref=e29]:
+          - heading "Sign in" [level=3] [ref=e30]
+          - paragraph [ref=e31]: Operator console access
+        - generic [ref=e33]:
+          - generic [ref=e34]:
+            - text: Username
+            - textbox "Username" [active] [ref=e35]
+          - generic [ref=e36]:
+            - text: Password
+            - textbox "Password" [ref=e37]
+          - button "Sign in" [ref=e38]
+      - paragraph [ref=e39]: Protected by CSRF · Session cookies are HTTP-only
+  - region "Notifications alt+T"

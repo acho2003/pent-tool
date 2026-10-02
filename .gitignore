@@ -1,0 +1,76 @@
+# Binaries
+/xalgorix
+xalgorix-linux-amd64
+antigravity-kit
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Scan output / data
+*.txt
+*.json
+!go.sum
+!package.json
+!webui/tsconfig.json
+!webui/tsconfig.app.json
+!webui/tsconfig.node.json
+!webui/package-lock.json
+!internal/web/static/.eslintrc.json
+xalgorix-data/
+*_assessment/
+
+# AI agent config (local only)
+.agent/
+CLAUDE.md
+ralph
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+*.test
+*.out
+__debug_bin*
+
+# Temp
+tmp/
+*.log
+nohup.out
+gospider/
+
+# Webui
+webui/node_modules/
+webui/dist/
+webui/.vite/
+webui/.turbo/
+
+# Local-only ephemeral files used by release/commit tooling
+.commit_msg.tmp
+.pr_body.tmp
+.release_notes.tmp
+
+# Local-only spec/design docs (Kiro). Internal authoring scratch space —
+# not part of the published source.
+.kiro/
+node_modules
+research/
+
+# Cover-snapshot failure dump written by internal/reporting tests on drift.
+internal/reporting/testdata/cover.actual.pdf
+
+# Credential-vault key (docker-compose secret). Never commit it.
+secrets/
+
+# Local compose settings, e.g. the dashboard login. Never commit it.
+.env
