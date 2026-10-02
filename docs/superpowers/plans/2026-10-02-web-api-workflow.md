@@ -13,12 +13,16 @@ does not expand server, cloud, Kubernetes, code, or monitoring workflows.
 
 ### Implementation status
 
-**Foundation in progress.** The scope, authentication, budget, inventory,
-Katana, Nuclei, adapter and ZAP policy work has local code and tests. The
-assessment executor now passes approved origins and the shared budget to the
-crawl and scanner paths. Stage promotion, journal-gated resume, legacy routing
-and later increments remain to be implemented. Sections 3–7 describe the
-intended complete workflow; the requirements in section 2 are the contract.
+**Foundation and discovery in progress.** Scope, authentication checks, shared
+budget, journal-gated resume, stage records, Katana, Nuclei, adapter and ZAP
+policy are implemented with tests. The typed executor promotes auth, DNSX,
+HTTPX, Katana, Subfinder, Amass, and optional archive providers into stage
+jobs; it blocks a crawl when its prerequisites fail. Discovery evidence does
+not expand accepted origins. OpenAPI GET/HEAD eligibility and local reference
+resolution are implemented. Remaining work includes legacy web routing,
+SSLyze/per-service TLS, sample request and API fixture materialization, native
+API checks and approved writes, UI/report coverage, runtime pins, and release
+validation. Sections 3–7 remain the intended complete workflow.
 
 Required hierarchy (same house pattern as the capability-planner plan):
 
