@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -83,6 +84,56 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		mode = "auto"
 	}
 	out.ScannerSelection.Mode = mode
+
+	// Scope/policy fields: canonicalized, sorted and de-duplicated so the
+	// persisted config and the plan fingerprint do not depend on input order.
+	// Empty inputs stay nil so legacy configs serialise exactly as before.
+	var origins []ApprovedOrigin
+	for _, o := range cfg.ApprovedOrigins {
+		n, _ := normalizeOrigin(o)
+		origins = append(origins, n)
+	}
+	out.ApprovedOrigins = sortDedupeOrigins(origins)
+	out.Exclusions = sortDedupeExclusions(normalizeExclusions(cfg.Exclusions))
+	out.DiscoveryProviders = normalizeDiscoveryProviders(cfg.DiscoveryProviders)
+	out.ManualSeeds = nil
+	seenSeeds := map[string]bool{}
+	for _, seed := range cfg.ManualSeeds {
+		seed = strings.TrimSpace(seed)
+		if seed != "" && !seenSeeds[seed] {
+			seenSeeds[seed] = true
+			out.ManualSeeds = append(out.ManualSeeds, seed)
+		}
+	}
+	sort.Strings(out.ManualSeeds)
+	return out
+}
+
+// normalizeDiscoveryProviders lower-cases provider names, sorts and dedupes the
+// subdomain list, maps "none" to "" and collapses an empty selection to nil.
+func normalizeDiscoveryProviders(in *DiscoveryProviders) *DiscoveryProviders {
+	if in == nil {
+		return nil
+	}
+	out := &DiscoveryProviders{
+		Historical: strings.ToLower(strings.TrimSpace(in.Historical)),
+		TLS:        strings.ToLower(strings.TrimSpace(in.TLS)),
+	}
+	if out.Historical == ProviderNone {
+		out.Historical = ""
+	}
+	seen := map[string]bool{}
+	for _, p := range in.Subdomain {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out.Subdomain = append(out.Subdomain, p)
+		}
+	}
+	sort.Strings(out.Subdomain)
+	if len(out.Subdomain) == 0 && out.Historical == "" && out.TLS == "" {
+		return nil
+	}
 	return out
 }
 
@@ -171,6 +222,9 @@ func Validate(cfg AssessmentConfig) []Problem {
 				if len(ab.VerifyMarker) > 256 || strings.ContainsAny(ab.VerifyMarker, "\r\n\x00") {
 					probs = append(probs, blocking("access.verify_marker.invalid", "credential verification marker must be 1–256 printable characters"))
 				}
+				if len(ab.NegativeMarker) > 256 || strings.ContainsAny(ab.NegativeMarker, "\r\n\x00") {
+					probs = append(probs, blocking("access.negative_marker.invalid", "negative-control marker must be at most 256 printable characters"))
+				}
 			}
 		}
 		for _, id := range ab.TargetIDs {
@@ -182,8 +236,8 @@ func Validate(cfg AssessmentConfig) []Problem {
 				for _, target := range cfg.Targets {
 					if target.ID == id && target.Kind != KindURL {
 						probs = append(probs, blocking("access.target_must_be_url", fmt.Sprintf("application credential target %q must be an explicit URL", id)))
-					} else if target.ID == id && ab.VerifyURL != "" && !verificationURLWithinTarget(target.Value, ab.VerifyURL) {
-						probs = append(probs, blocking("access.verify_url.out_of_scope", fmt.Sprintf("verification URL for target %q must use the same origin and remain under its path boundary", id)))
+					} else if target.ID == id && ab.VerifyURL != "" && !verificationURLWithinScope(AppScopeForTarget(cfg, id), ab.VerifyURL) {
+						probs = append(probs, blocking("access.verify_url.out_of_scope", fmt.Sprintf("verification URL for target %q must stay inside its approved origin and path boundary", id)))
 					}
 				}
 			}
@@ -217,19 +271,162 @@ func Validate(cfg AssessmentConfig) []Problem {
 		probs = append(probs, blocking("api_definition.target_must_be_url", "unbound API definition requires one explicit URL target"))
 	}
 
+	probs = append(probs, validateScopePolicy(cfg, ids)...)
 	probs = append(probs, validateModePolicy(cfg)...)
 	return probs
 }
 
+// verificationURLWithinTarget reports whether verifyURL stays inside the
+// boundary derived from targetURL (default ports normalized).
 func verificationURLWithinTarget(targetURL, verifyURL string) bool {
-	target, targetErr := url.Parse(targetURL)
-	verify, verifyErr := url.Parse(verifyURL)
-	if targetErr != nil || verifyErr != nil || target.Host == "" || verify.Host == "" || !strings.EqualFold(target.Scheme, verify.Scheme) || !strings.EqualFold(target.Host, verify.Host) || verify.User != nil || verify.Fragment != "" || verify.RawQuery != "" {
+	return verificationURLWithinScope(AppScopeForTarget(AssessmentConfig{Targets: []Target{{ID: "t", Kind: KindURL, Value: targetURL}}}, "t"), verifyURL)
+}
+
+// verificationURLWithinScope reports whether verifyURL is allowed by scope and
+// carries no query or fragment (verification requests are fixed GETs).
+func verificationURLWithinScope(scope AppScope, verifyURL string) bool {
+	verify, err := url.Parse(verifyURL)
+	if err != nil || verify.Fragment != "" || verify.RawQuery != "" || strings.HasSuffix(verifyURL, "#") || strings.HasSuffix(verifyURL, "?") {
 		return false
 	}
-	base := strings.TrimSuffix(target.EscapedPath(), "/")
-	path := verify.EscapedPath()
-	return base == "" || path == base || strings.HasPrefix(path, base+"/")
+	ok, _ := scope.Allows(verifyURL)
+	return ok
+}
+
+var httpMethods = map[string]bool{
+	"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true,
+	"DELETE": true, "OPTIONS": true, "TRACE": true, "CONNECT": true,
+}
+
+// validateScopePolicy checks approved origins, exclusions, discovery provider
+// selections and manual seeds of a NORMALIZED config. ids is the set of known
+// target IDs.
+func validateScopePolicy(cfg AssessmentConfig, ids map[string]bool) []Problem {
+	var probs []Problem
+	targetKind := map[string]TargetKind{}
+	for _, tgt := range cfg.Targets {
+		targetKind[tgt.ID] = tgt.Kind
+	}
+
+	hasOrigins := map[string]bool{}
+	for _, o := range cfg.ApprovedOrigins {
+		if !ids[o.TargetID] {
+			probs = append(probs, blocking("origin.target.unknown", fmt.Sprintf("approved origin %s references unknown target id %q", o.String(), o.TargetID)))
+			continue
+		}
+		switch targetKind[o.TargetID] {
+		case KindURL, KindDomain, KindIP, KindHost:
+		default:
+			probs = append(probs, blocking("origin.target_kind", fmt.Sprintf("approved origins can only belong to URL, domain, IP or host targets; %q is %s", o.TargetID, targetKind[o.TargetID])))
+		}
+		if reason := validOrigin(o); reason != "" {
+			probs = append(probs, blocking("origin.invalid", fmt.Sprintf("target %q: %s", o.TargetID, reason)))
+			continue
+		}
+		hasOrigins[o.TargetID] = true
+	}
+	scopes := map[string]AppScope{}
+	for _, tgt := range cfg.Targets {
+		scopes[tgt.ID] = AppScopeForTarget(cfg, tgt.ID)
+		// Once origins are supplied they are authoritative, so the URL target
+		// itself must still be inside them or every job against it is out of scope.
+		if tgt.Kind == KindURL && hasOrigins[tgt.ID] {
+			if ok, _ := scopes[tgt.ID].Allows(tgt.Value); !ok {
+				probs = append(probs, blocking("origin.target_not_covered", fmt.Sprintf("target %q URL is outside its approved origins", tgt.ID)))
+			}
+		}
+	}
+
+	for _, e := range cfg.Exclusions {
+		if !strings.HasPrefix(e.PathPattern, "/") || strings.ContainsAny(e.PathPattern, "?#") {
+			probs = append(probs, blocking("exclusion.invalid", fmt.Sprintf("exclusion path_pattern %q must be an absolute path without query or fragment", e.PathPattern)))
+		}
+		if e.Method != "" && !httpMethods[e.Method] {
+			probs = append(probs, blocking("exclusion.invalid", fmt.Sprintf("exclusion method %q is not an HTTP method", e.Method)))
+		}
+		if e.TargetID != "" && !ids[e.TargetID] {
+			probs = append(probs, blocking("exclusion.target.unknown", fmt.Sprintf("exclusion references unknown target id %q", e.TargetID)))
+			continue
+		}
+		if e.Origin != "" && !exclusionOriginKnown(cfg, scopes, e) {
+			probs = append(probs, blocking("exclusion.origin.unknown", fmt.Sprintf("exclusion origin %q is not an approved origin", e.Origin)))
+		}
+	}
+
+	if cfg.Mode == ModeBlackBox && cfg.TestEnvironment {
+		probs = append(probs, blocking("blackbox.test_environment.forbidden", "Black Box cannot declare a test environment; use Gray Box or White Box"))
+	}
+
+	if dp := cfg.DiscoveryProviders; dp != nil {
+		for _, p := range dp.Subdomain {
+			if p != ProviderSubfinder && p != ProviderAmass {
+				probs = append(probs, blocking("discovery.subdomain.invalid", fmt.Sprintf("subdomain provider %q must be subfinder or amass", p)))
+			}
+		}
+		if len(dp.Subdomain) > 0 {
+			if !cfg.SubdomainDiscovery {
+				probs = append(probs, blocking("discovery.subdomain.not_authorized", "subdomain providers require subdomain_discovery to be enabled"))
+			}
+			hasDomain := false
+			for _, tgt := range cfg.Targets {
+				hasDomain = hasDomain || tgt.Kind == KindDomain
+			}
+			if !hasDomain {
+				probs = append(probs, blocking("discovery.subdomain.domain_required", "subdomain providers require a domain target"))
+			}
+		}
+		switch dp.Historical {
+		case "", ProviderGau, ProviderWaybackurls:
+		default:
+			probs = append(probs, blocking("discovery.historical.invalid", fmt.Sprintf("historical provider %q must be one of gau, waybackurls or none (waybackurls is an alternative to gau, not an addition)", dp.Historical)))
+		}
+		switch dp.TLS {
+		case "", ProviderTestssl, ProviderSSLyze:
+		default:
+			probs = append(probs, blocking("discovery.tls.invalid", fmt.Sprintf("TLS provider %q must be testssl or sslyze (sslyze is an alternative to testssl, not an addition)", dp.TLS)))
+		}
+	}
+
+	for _, seed := range cfg.ManualSeeds {
+		if err := validateTargetValue(Target{Kind: KindURL, Value: seed}); err != nil {
+			probs = append(probs, blocking("manual_seed.invalid", fmt.Sprintf("manual seed %q must be an absolute HTTP(S) URL without embedded credentials or fragments", seed)))
+			continue
+		}
+		allowed, excluded := false, ""
+		for _, tgt := range cfg.Targets {
+			if ok, _ := scopes[tgt.ID].Allows(seed); ok {
+				allowed = true
+				if hit, why := scopes[tgt.ID].Excluded("GET", seed); hit {
+					excluded = why
+				}
+				break
+			}
+		}
+		switch {
+		case !allowed:
+			probs = append(probs, blocking("manual_seed.out_of_scope", fmt.Sprintf("manual seed %q is outside every target's approved origins", seed)))
+		case excluded != "":
+			probs = append(probs, blocking("manual_seed.excluded", fmt.Sprintf("manual seed %q is excluded: %s", seed, excluded)))
+		}
+	}
+	return probs
+}
+
+// exclusionOriginKnown reports whether an exclusion's Origin is one of the
+// approved (or derived) origins of its target, or of any target when the
+// exclusion is global.
+func exclusionOriginKnown(cfg AssessmentConfig, scopes map[string]AppScope, e Exclusion) bool {
+	for _, tgt := range cfg.Targets {
+		if e.TargetID != "" && tgt.ID != e.TargetID {
+			continue
+		}
+		for _, o := range scopes[tgt.ID].Origins() {
+			if o.Origin() == e.Origin {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateTargetValue(target Target) error {

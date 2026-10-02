@@ -373,3 +373,203 @@ func TestCheckAndRunSchedules(t *testing.T) {
 		t.Errorf("expected 1 registered scan instance, got %d", len(s.instances))
 	}
 }
+
+// scheduleReviewTestCreate posts a typed schedule reviewed against the current
+// plan and returns the stored record plus the request used to create it.
+func scheduleReviewTestCreate(t *testing.T, s *Server) (*ScanSchedule, map[string]any) {
+	t.Helper()
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication},
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+		Profile: "web-gentle",
+	}
+	plan := s.buildAssessmentPlan(cfg)
+	request := map[string]any{
+		"assessment": cfg, "profile": "web-gentle", "plan_fingerprint": plan.Fingerprint,
+		"interval": "daily", "name": "typed daily", "enabled": true,
+		// A client cannot pre-clear or forge the review state.
+		"review_state": ScheduleReviewNeeded, "review_reason": "forged",
+	}
+	body, _ := json.Marshal(request)
+	rr := httptest.NewRecorder()
+	s.handleSchedules(rr, httptest.NewRequest(http.MethodPost, "/api/schedules", strings.NewReader(string(body))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("typed schedule rejected: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var saved ScanSchedule
+	if err := json.Unmarshal(rr.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.ReviewState != "" || saved.ReviewReason != "" {
+		t.Fatalf("new schedule accepted a client review state: %+v", saved)
+	}
+	s.schedulesMu.RLock()
+	sch := s.schedules[saved.ID]
+	s.schedulesMu.RUnlock()
+	return sch, request
+}
+
+func scheduleReviewTestLoadDisk(t *testing.T, s *Server, id string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "_schedules", id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestScheduleFingerprintDriftMarksNeedsReview(t *testing.T) {
+	s := newTestServer(t, nil)
+	sch, _ := scheduleReviewTestCreate(t, s)
+	s.instancesMu.Lock()
+	s.instances = make(map[string]*ScanInstance)
+	s.instancesMu.Unlock()
+
+	// An image upgrade changes the content-manifest tool versions, which are
+	// part of the plan fingerprint.
+	s.toolVersions = map[string]string{"nuclei-templates": "drifted-revision"}
+
+	// The startup refresh makes drift visible before the schedule is due.
+	s.refreshScheduleReviews()
+	s.schedulesMu.RLock()
+	state, reason := sch.ReviewState, sch.ReviewReason
+	s.schedulesMu.RUnlock()
+	if state != ScheduleReviewNeeded || !strings.Contains(reason, "preview") {
+		t.Fatalf("drift not surfaced on refresh: state=%q reason=%q", state, reason)
+	}
+
+	// The schedules API exposes the state to clients.
+	rr := httptest.NewRecorder()
+	s.handleSchedules(rr, httptest.NewRequest(http.MethodGet, "/api/schedules", nil))
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0]["review_state"] != ScheduleReviewNeeded || listed[0]["review_reason"] == "" {
+		t.Fatalf("schedules API hides the review state: %v", listed)
+	}
+
+	// A due tick skips the run, records why, and persists the state.
+	s.schedulesMu.Lock()
+	sch.NextRun = time.Now().Add(-time.Minute)
+	s.schedulesMu.Unlock()
+	s.checkAndRunSchedules()
+	s.schedulesMu.RLock()
+	if sch.ReviewState != ScheduleReviewNeeded || sch.ReviewReason == "" {
+		t.Errorf("due tick lost the review state: %+v", sch)
+	}
+	if !sch.LastRun.IsZero() {
+		t.Errorf("skipped run recorded as LastRun: %v", sch.LastRun)
+	}
+	if sch.LastSkippedAt.IsZero() {
+		t.Errorf("skipped run did not record LastSkippedAt")
+	}
+	if !sch.NextRun.After(time.Now()) {
+		t.Errorf("NextRun not advanced after skip: %v", sch.NextRun)
+	}
+	s.schedulesMu.RUnlock()
+	raw := scheduleReviewTestLoadDisk(t, s, sch.ID)
+	if raw["review_state"] != ScheduleReviewNeeded || raw["review_reason"] == "" || raw["last_skipped_at"] == nil {
+		t.Errorf("review state not persisted: %v", raw)
+	}
+
+	// A manual trigger is refused with a re-preview hint and the plan.
+	rr = httptest.NewRecorder()
+	s.handleScheduleDetail(rr, httptest.NewRequest(http.MethodPost, "/api/schedules/"+sch.ID+"/trigger", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("stale schedule triggered: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	var conflict map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &conflict); err != nil {
+		t.Fatal(err)
+	}
+	if conflict["review_state"] != ScheduleReviewNeeded || conflict["plan"] == nil || !strings.Contains(conflict["error"].(string), "preview") {
+		t.Fatalf("conflict lacks review hint: %v", conflict)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	s.instancesMu.RLock()
+	queued := len(s.instances)
+	s.instancesMu.RUnlock()
+	if queued != 0 {
+		t.Fatalf("stale typed schedule queued %d scans", queued)
+	}
+
+	// A legacy record without a reviewed fingerprint is flagged too.
+	s.schedulesMu.Lock()
+	sch.PlanFingerprint = ""
+	s.schedulesMu.Unlock()
+	s.toolVersions = nil
+	s.refreshScheduleReviews()
+	s.schedulesMu.RLock()
+	defer s.schedulesMu.RUnlock()
+	if sch.ReviewState != ScheduleReviewNeeded || !strings.Contains(sch.ReviewReason, "fingerprint") {
+		t.Fatalf("missing fingerprint not flagged: state=%q reason=%q", sch.ReviewState, sch.ReviewReason)
+	}
+}
+
+func TestScheduleNeedsReviewClearedAfterResave(t *testing.T) {
+	s := newTestServer(t, nil)
+	sch, request := scheduleReviewTestCreate(t, s)
+	s.toolVersions = map[string]string{"nuclei-templates": "drifted-revision"}
+	s.refreshScheduleReviews()
+	s.schedulesMu.RLock()
+	if sch.ReviewState != ScheduleReviewNeeded {
+		s.schedulesMu.RUnlock()
+		t.Fatalf("precondition: schedule not marked: %+v", sch)
+	}
+	s.schedulesMu.RUnlock()
+
+	// Saving with the old (now stale) fingerprint is still refused.
+	delete(request, "review_state")
+	delete(request, "review_reason")
+	body, _ := json.Marshal(request)
+	rr := httptest.NewRecorder()
+	s.handleScheduleDetail(rr, httptest.NewRequest(http.MethodPut, "/api/schedules/"+sch.ID, strings.NewReader(string(body))))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("stale resave accepted: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Re-preview, then save with the refreshed fingerprint.
+	cfg := request["assessment"].(assessment.AssessmentConfig)
+	fresh := s.buildAssessmentPlan(cfg)
+	request["plan_fingerprint"] = fresh.Fingerprint
+	body, _ = json.Marshal(request)
+	rr = httptest.NewRecorder()
+	s.handleScheduleDetail(rr, httptest.NewRequest(http.MethodPut, "/api/schedules/"+sch.ID, strings.NewReader(string(body))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("re-reviewed schedule rejected: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saved["review_state"]; ok {
+		t.Fatalf("review state not cleared in response: %v", saved)
+	}
+	if saved["plan_fingerprint"] != fresh.Fingerprint {
+		t.Fatalf("resave did not store the new fingerprint: %v", saved["plan_fingerprint"])
+	}
+	raw := scheduleReviewTestLoadDisk(t, s, sch.ID)
+	if _, ok := raw["review_state"]; ok || raw["plan_fingerprint"] != fresh.Fingerprint {
+		t.Fatalf("cleared state not persisted: %v", raw)
+	}
+
+	// The refresh agrees with the new fingerprint and keeps it clear.
+	s.refreshScheduleReviews()
+	s.schedulesMu.RLock()
+	defer s.schedulesMu.RUnlock()
+	if sch.ReviewState != "" || sch.ReviewReason != "" || sch.PlanFingerprint != fresh.Fingerprint {
+		t.Fatalf("schedule still needs review after resave: %+v", sch)
+	}
+}

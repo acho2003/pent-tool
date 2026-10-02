@@ -24,9 +24,17 @@ type ScanSchedule struct {
 	Assessment      *assessment.AssessmentConfig `json:"assessment,omitempty"`
 	Profile         string                       `json:"profile,omitempty"`
 	PlanFingerprint string                       `json:"plan_fingerprint,omitempty"`
-	ID              string                       `json:"id"`
-	Name            string                       `json:"name"`
-	Interval        string                       `json:"interval"` // "hourly", "daily", "weekly", "monthly"
+	// ReviewState is ScheduleReviewNeeded when the plan regenerated for a typed
+	// assessment no longer matches PlanFingerprint (registry bump, tool or
+	// template upgrade, credential rotation) or has blocking errors. Such a
+	// schedule skips its runs until it is previewed and saved again.
+	ReviewState  string `json:"review_state,omitempty"`
+	ReviewReason string `json:"review_reason,omitempty"`
+	// LastSkippedAt is the last due run skipped because the schedule needs review.
+	LastSkippedAt time.Time `json:"last_skipped_at,omitzero"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Interval      string    `json:"interval"` // "hourly", "daily", "weekly", "monthly"
 	// RunAt anchors the schedule to a wall-clock time of day, "HH:MM" in 24h
 	// form. Empty keeps the legacy behavior of firing one interval after the
 	// schedule was created or last ran. For "hourly" only the minutes apply.
@@ -57,6 +65,76 @@ type ScanSchedule struct {
 	Model          string           `json:"-"`
 	Artifact       scanner.Artifact `json:"artifact,omitempty"`
 	VulsSSHHost    string           `json:"vuls_ssh_host,omitempty"`
+}
+
+// ScheduleReviewNeeded is the ScanSchedule.ReviewState of a typed schedule
+// whose reviewed plan is stale or invalid.
+const ScheduleReviewNeeded = "needs_review"
+
+// scheduleReviewReason explains why plan cannot run under the reviewed
+// fingerprint, or returns "" when the reviewed plan is still current.
+func scheduleReviewReason(plan scanner.AssessmentPlan, reviewed string) string {
+	switch {
+	case len(plan.Errors) > 0:
+		return fmt.Sprintf("assessment plan has blocking problems (%s); preview and save the schedule again", plan.Errors[0].Message)
+	case reviewed == "":
+		return "schedule has no reviewed plan fingerprint; preview and save the schedule again"
+	case plan.Fingerprint != reviewed:
+		return "assessment plan changed since it was reviewed (planner, tool versions or credential revisions); preview and save the schedule again"
+	}
+	return ""
+}
+
+// setReview marks the schedule as needing review (reason != "") or clears the
+// mark, and reports whether anything changed.
+func (sch *ScanSchedule) setReview(reason string) bool {
+	state := ""
+	if reason != "" {
+		state = ScheduleReviewNeeded
+	}
+	if sch.ReviewState == state && sch.ReviewReason == reason {
+		return false
+	}
+	sch.ReviewState, sch.ReviewReason = state, reason
+	return true
+}
+
+// refreshScheduleReviews regenerates the plan of every typed schedule and
+// records drift, so an upgrade that invalidates reviewed plans shows up before
+// the next due run. Plans are built outside the lock; a schedule re-saved or
+// deleted meanwhile is left alone.
+func (s *Server) refreshScheduleReviews() {
+	type reviewed struct {
+		sch         *ScanSchedule
+		config      assessment.AssessmentConfig
+		fingerprint string
+	}
+	s.schedulesMu.RLock()
+	typed := make([]reviewed, 0, len(s.schedules))
+	for _, sch := range s.schedules {
+		if sch.Assessment != nil {
+			typed = append(typed, reviewed{sch: sch, config: *sch.Assessment, fingerprint: sch.PlanFingerprint})
+		}
+	}
+	s.schedulesMu.RUnlock()
+
+	for _, item := range typed {
+		reason := scheduleReviewReason(s.buildAssessmentPlan(item.config), item.fingerprint)
+		s.schedulesMu.Lock()
+		current, ok := s.schedules[item.sch.ID]
+		if !ok || current != item.sch || current.PlanFingerprint != item.fingerprint || !current.setReview(reason) {
+			s.schedulesMu.Unlock()
+			continue
+		}
+		diskCopy := *current // snapshot under lock for race-free disk write
+		s.schedulesMu.Unlock()
+		if reason != "" {
+			log.Printf("[SCHEDULER] Typed assessment %s needs review: %s", diskCopy.Name, reason)
+		}
+		if err := s.saveScheduleToDisk(&diskCopy); err != nil {
+			log.Printf("[SCHEDULER] Error saving review state of schedule %s: %v", diskCopy.ID, err)
+		}
+	}
 }
 
 // runAtPattern validates ScanSchedule.RunAt as a 24h "HH:MM" time of day.
@@ -247,6 +325,10 @@ func (s *Server) loadSchedulesFromDisk() {
 			continue
 		}
 		normalizeScheduleActivity(&sch)
+		if sch.Assessment == nil {
+			// Review state only applies to typed assessments.
+			sch.setReview("")
+		}
 		if err := normalizeDeterministicSchedule(&sch); err != nil {
 			log.Printf("[SCHEDULER] Schedule %s needs deterministic input updates: %v", sch.ID, err)
 		}
@@ -293,6 +375,9 @@ func (s *Server) deleteScheduleFromDisk(id string) error {
 
 // startScheduler runs the background checker loop.
 func (s *Server) startScheduler() {
+	// Surface typed schedules invalidated by this build (registry version,
+	// tool/template versions) right away instead of at their next due run.
+	s.refreshScheduleReviews()
 	// Evaluate overdue schedules immediately on startup so scans missed
 	// while the server was down don't wait a full ticker interval.
 	s.checkAndRunSchedules()
@@ -327,13 +412,19 @@ func (s *Server) checkAndRunSchedules() {
 			if now.After(sch.NextRun) || now.Equal(sch.NextRun) {
 				if sch.Assessment != nil {
 					plan := s.buildAssessmentPlan(*sch.Assessment)
-					if len(plan.Errors) > 0 || sch.PlanFingerprint == "" || plan.Fingerprint != sch.PlanFingerprint {
-						log.Printf("[SCHEDULER] Typed assessment %s was not queued because its reviewed plan is invalid or stale", sch.Name)
-						sch.LastRun = now
+					if reason := scheduleReviewReason(plan, sch.PlanFingerprint); reason != "" {
+						// Skip visibly: the schedule stays enabled but needs
+						// review, and the skipped slot is recorded.
+						log.Printf("[SCHEDULER] Typed assessment %s was not queued and needs review: %s", sch.Name, reason)
+						sch.setReview(reason)
+						sch.LastSkippedAt = now
 						sch.NextRun = calculateNextRun(sch, now)
-						_ = s.saveScheduleToDisk(sch)
+						if err := s.saveScheduleToDisk(sch); err != nil {
+							log.Printf("[SCHEDULER] Error saving skipped schedule %s: %v", sch.ID, err)
+						}
 						return
 					}
+					sch.setReview("")
 				}
 				log.Printf("[SCHEDULER] Triggering scheduled scan: %s (Targets: %v)", sch.Name, sch.Targets)
 

@@ -93,7 +93,7 @@ func TestPrepareAssessmentAuthenticationVerifiesAndScopesHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(failed["app"]) != 0 || plan.Jobs[0].State != scanner.PlanSkipped || plan.Capabilities[0].State != assessment.StateUnavailable {
+	if len(failed["app"]) != 0 || plan.Jobs[0].State != scanner.PlanSkipped || plan.Capabilities[0].State != assessment.StateFailed {
 		t.Fatalf("failed verification did not block authenticated job: headers=%v plan=%+v", failed, plan)
 	}
 	plan.Fingerprint = "sha256:failed-auth"
@@ -127,6 +127,29 @@ func TestCredentialHeaderConversionAndApplicationURLBoundaries(t *testing.T) {
 	} {
 		if urlWithinApplication("https://app.example.test/Portal/Case", candidate) {
 			t.Errorf("accepted out-of-scope URL %s", candidate)
+		}
+	}
+}
+
+func TestURLWithinApplicationDefaultPort(t *testing.T) {
+	for _, tc := range []struct {
+		app, candidate string
+		want           bool
+	}{
+		{"https://app.example.test/portal", "https://app.example.test:443/portal/me", true},
+		{"https://app.example.test:443/portal", "https://app.example.test/portal/me", true},
+		{"http://app.example.test/portal", "http://app.example.test:80/portal", true},
+		{"https://APP.example.test/portal", "https://app.example.test/portal/me", true},
+		{"https://app.example.test/portal", "https://app.example.test:8443/portal/me", false},
+		{"https://app.example.test/portal", "http://app.example.test:443/portal/me", false},
+		{"https://app.example.test/portal", "https://app.example.test/portal/../admin", false},
+		{"https://app.example.test/portal", "https://user@app.example.test/portal/me", false},
+		{"https://app.example.test/portal", "https://app.example.test/portal/me?next=1", false},
+		{"https://app.example.test/portal", "https://app.example.test/portal/me#top", false},
+		{"app.example.test", "https://app.example.test/", false},
+	} {
+		if got := urlWithinApplication(tc.app, tc.candidate); got != tc.want {
+			t.Errorf("urlWithinApplication(%q, %q) = %v, want %v", tc.app, tc.candidate, got, tc.want)
 		}
 	}
 }

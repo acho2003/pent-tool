@@ -73,6 +73,17 @@ func (l *Limiter) Wait(targetURL string) {
 	_ = rl.Wait(context.Background()) //nolint:errcheck // background context cannot be canceled
 }
 
+// WaitCtx is Wait bounded by ctx: it blocks until a token is available for
+// the domain extracted from targetURL and returns ctx's error (or the
+// limiter's "would exceed deadline" error) instead of waiting past
+// cancellation. A disabled limiter only reports ctx's error.
+func (l *Limiter) WaitCtx(ctx context.Context, targetURL string) error {
+	if l.rps <= 0 {
+		return ctx.Err()
+	}
+	return l.limiterFor(domain(targetURL)).Wait(ctx)
+}
+
 // Allow reports whether a token is immediately available for targetURL
 // without blocking. Returns true when rate limiting is disabled.
 func (l *Limiter) Allow(targetURL string) bool {

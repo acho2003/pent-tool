@@ -24,10 +24,17 @@ type Port struct {
 }
 
 type HostEvidence struct {
-	ResolvedIPs []string
-	OpenPorts   []Port
-	LiveURLs    []string
-	TLS         bool
+	ResolvedIPs  []string
+	CNAMEs       []string
+	DNSWildcard  bool
+	DNSChanged   bool
+	HTTPStatus   int
+	ContentType  string
+	Title        string
+	Technologies []string
+	OpenPorts    []Port
+	LiveURLs     []string
+	TLS          bool
 	// WebEndpoints is the legacy flattened compatibility view. New runs persist
 	// and dispatch the normalized AttackSurface instead.
 	WebEndpoints []string

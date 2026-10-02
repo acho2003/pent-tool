@@ -39,6 +39,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/sandbox"
 	"github.com/xalgord/xalgorix/v4/internal/scanctx"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/xalgord/xalgorix/v4/internal/storage"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 )
 
@@ -353,7 +354,7 @@ func (req *ScanRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	canonicalFields := false
-	for _, name := range []string{"assessment_mode", "assessment_types", "assessment_targets", "access", "scanner_selection"} {
+	for _, name := range []string{"assessment_mode", "assessment_types", "assessment_targets", "access", "scanner_selection", "approved_origins", "exclusions", "test_environment", "discovery_providers", "manual_seeds"} {
 		if _, ok := fields[name]; ok {
 			canonicalFields = true
 			break
@@ -729,6 +730,11 @@ type Server struct {
 	legacyImportMu        sync.RWMutex
 	legacyImportCount     int
 	legacyImportDismissed bool
+
+	// toolVersions caches the build-time content manifest's tool/template
+	// versions, read once at start and hashed into every plan fingerprint.
+	// nil (tests building a bare Server) fingerprints like an empty map.
+	toolVersions map[string]string
 }
 
 // NewServer creates a new web server.
@@ -763,6 +769,7 @@ func NewServer(cfg *config.Config, port int) *Server {
 		// is delivered to whichever waiter is currently parked in the
 		// admission select.
 		admissionWake: make(chan struct{}, 1),
+		toolVersions:  loadToolVersions(contentManifestPath()),
 	}
 
 	// Import legacy data dir (pre-migration ~/xalgorix-data/) into the
@@ -1378,7 +1385,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Assessment != nil {
 		req.Assessment.Profile = req.Profile
-		plan := s.buildAssessmentPlan(*req.Assessment)
+		plan := s.buildAssessmentPlanForScan(*req.Assessment, req.allowLoopbackPorts)
 		if len(plan.Errors) > 0 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
@@ -2616,7 +2623,8 @@ func (s *Server) saveScanRecordTo(rec *ScanRecord, scanDir string) {
 		log.Printf("Error: failed to marshal scan record: %v", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(scanDir, "scan.json"), data, 0600); err != nil {
+	// Temp file + rename so a crash mid-write never leaves a truncated scan.json.
+	if err := storage.WriteAtomic(filepath.Join(scanDir, "scan.json"), data); err != nil {
 		log.Printf("Error: failed to save scan record to %s: %v", scanDir, err)
 		s.broadcast(WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Failed to save scan data: %v", err)})
 	}

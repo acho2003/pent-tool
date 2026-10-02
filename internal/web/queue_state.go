@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/storage"
 )
 
 // saveQueueState saves the current queue state to disk.
@@ -65,7 +67,8 @@ func (s *Server) saveQueueState(idx int, req ScanRequest, progress ...queueProgr
 		return
 	}
 	path := s.queueStatePathForInstance(req.InstanceID)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	// Temp file + rename so a crash never leaves a truncated queue file.
+	if err := storage.WriteAtomic(path, data); err != nil {
 		log.Printf("Error: failed to save queue state: %v", err)
 	}
 }
@@ -445,7 +448,7 @@ func (s *Server) markQueueStatePaused(instanceID string) {
 		log.Printf("Error: failed to marshal paused queue state: %v", err)
 		return
 	}
-	if err := os.WriteFile(entry.path, data, 0600); err != nil {
+	if err := storage.WriteAtomic(entry.path, data); err != nil {
 		log.Printf("Error: failed to mark queue state paused: %v", err)
 	}
 }

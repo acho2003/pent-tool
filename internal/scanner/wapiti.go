@@ -10,14 +10,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 const wapitiMaxDuration = 20 * time.Minute
 
-// wapitiRunner is the web-fuzzing stage. Wapiti crawls from the seed URL (within
-// a bounded scope) and fuzzes discovered parameters. It is an assessment-only,
-// opt-in runner like nikto/dalfox. Katana-discovered URLs are added as extra
-// crawl entry points so unlinked routes are still covered.
+// wapitiRunner is the web-fuzzing stage. It is an assessment-only, opt-in
+// runner like nikto/dalfox, and restricted to declared test environments
+// (AdapterPolicyRestriction): Wapiti attacks the dispatcher-approved endpoints
+// it is given as entry points with a reviewed GET-only module allowlist and
+// does not crawl beyond them.
 type wapitiRunner struct{}
 
 func (wapitiRunner) Name() string { return "wapiti" }
@@ -25,18 +28,32 @@ func (wapitiRunner) Descriptor() Descriptor {
 	return Descriptor{Name: "wapiti", Summary: "Bounded web fuzzing of a web host and its discovered endpoints", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightHeavy, Applies: appliesToHost}
 }
 func (r wapitiRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
-	return executeSpec(ctx, r.Name(), req, cfg, buildWapiti(req, cfg), emit)
+	return executePolicySpec(ctx, r.Name(), req, cfg, buildWapiti(req, cfg), emit)
 }
 
 // wapitiMaxStartURLs bounds how many discovered endpoints are added as extra
 // crawl entry points, so a large crawl result can't blow up the fuzz scope.
 const wapitiMaxStartURLs = 50
 
+// wapitiTestEnvironmentModules is the reviewed -m allowlist (module names
+// verified against the pinned wapiti 3.3.2 wapitiCore/attack/modules/core.py;
+// "name:get" restricts a module to GET requests). It keeps the passive
+// response checks and read-only reflected/error-based GET probes. Left out:
+// ssrf, xxe, log4shell (external callbacks), exec, shellshock, spring4shell
+// (code execution), upload, permanentxss, csrf (form replay/stored payloads),
+// methods, htaccess (non-GET methods), brute_login_form, buster, nikto,
+// backup, timesql (brute-force or heavy), takeover, htp, wapp, cms, wp_enum
+// (external lookups or broad enumeration) and the remaining device probes.
+const wapitiTestEnvironmentModules = "passive,xss:get,sql:get,file:get,redirect:get,crlf:get"
+
 func buildWapiti(req Request, cfg Config) commandSpec {
+	if restricted, reason := requestPolicyRestriction("wapiti", req); restricted {
+		return commandSpec{notApp: reason, timeout: cfg.WapitiTimeout}
+	}
 	if strings.TrimSpace(cfg.WapitiPath) == "" {
 		return commandSpec{notApp: "Wapiti executable is not configured", timeout: cfg.WapitiTimeout}
 	}
-	targets := requestEndpointTargets(req)
+	targets := wapitiAllowedTargets(req.AppScope, requestEndpointTargets(req))
 	if req.StructuredDispatch && len(targets) == 0 {
 		return commandSpec{notApp: "Wapiti has no dispatcher-approved parameter or form endpoint to test", timeout: cfg.WapitiTimeout}
 	}
@@ -47,6 +64,9 @@ func buildWapiti(req Request, cfg Config) commandSpec {
 	u, err := url.Parse(target)
 	if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return commandSpec{notApp: "Wapiti requires an explicit HTTP(S) URL", timeout: cfg.WapitiTimeout}
+	}
+	if len(wapitiAllowedTargets(req.AppScope, []string{target})) == 0 {
+		return commandSpec{notApp: "Wapiti target is outside the approved scope or excluded", timeout: cfg.WapitiTimeout}
 	}
 
 	base := filepath.Join(req.ScanDir, "scanner-output", "wapiti")
@@ -66,30 +86,43 @@ func buildWapiti(req Request, cfg Config) commandSpec {
 		scanSeconds = 1
 	}
 
-	// Bounded run: URL-scoped crawl, capped scan time, JSON output, flushed
-	// session so reruns don't reuse stale state, and no interactive prompts.
+	// Bounded run (flags verified against wapiti 3.3.2 commandline.py):
+	//   --scope url -d 0 : explore only the given entry points; discovered
+	//                      links and forms are never followed or submitted
+	//   -m <allowlist>   : reviewed GET-only modules
+	//   --tasks 1        : one concurrent exploration task
+	//   capped scan time, JSON output, flushed session so reruns don't reuse
+	//   stale state, and no interactive prompts.
 	args := []string{
 		"-u", target,
-		"--scope", "folder",
+		"--scope", "url",
+		"-d", "0",
+		"-m", wapitiTestEnvironmentModules,
+		"--tasks", "1",
 		"--max-scan-time", strconv.Itoa(scanSeconds),
 		"--flush-session",
 		"--format", "json",
 		"-o", artifact,
 		"--verify-ssl", "0",
 	}
-	// Add katana-discovered in-scope URLs as extra entry points (bounded).
-	added := 0
+	// Add the other dispatcher-approved URLs as entry points (bounded).
+	var starts []string
 	for _, e := range targets {
 		if e == target {
 			continue
 		}
-		if added >= wapitiMaxStartURLs {
+		if len(starts) >= wapitiMaxStartURLs {
 			break
 		}
 		if isHTTPish(e) {
-			args = append(args, "--start", e)
-			added++
+			starts = append(starts, e)
 		}
+	}
+	for _, x := range wapitiExcludePatterns(req.AppScope, append([]string{target}, starts...)) {
+		args = append(args, "-x", x)
+	}
+	for _, e := range starts {
+		args = append(args, "--start", e)
 	}
 	for _, h := range cfg.ScanHeaders {
 		if strings.TrimSpace(h) != "" {
@@ -111,6 +144,83 @@ func buildWapiti(req Request, cfg Config) commandSpec {
 			return os.MkdirAll(base, 0o700)
 		},
 	}
+}
+
+// wapitiAllowedTargets drops URLs the application scope does not allow or
+// excludes for GET. The dispatch gate already filters endpoints; this keeps an
+// excluded route from ever becoming a Wapiti entry point. A nil scope (legacy)
+// keeps every URL.
+func wapitiAllowedTargets(scope *assessment.AppScope, urls []string) []string {
+	if scope == nil {
+		return urls
+	}
+	var out []string
+	for _, raw := range urls {
+		if ok, _ := scope.Allows(raw); !ok {
+			continue
+		}
+		if excluded, _ := scope.Excluded("GET", raw); excluded {
+			continue
+		}
+		out = append(out, raw)
+	}
+	return out
+}
+
+// wapitiExcludePatterns renders each configured exclusion as a Wapiti -x
+// wildcard URL for every entry-point origin it applies to. Wapiti matches -x
+// against the whole URL ("*" is any run, anchored at both ends), so a trailing
+// "*" also covers sub-paths and query strings; over-matching (e.g. /logout2)
+// only excludes more. Wapiti matches case-sensitively and for every method,
+// so the dispatch gate stays the authoritative exclusion check.
+func wapitiExcludePatterns(scope *assessment.AppScope, urls []string) []string {
+	if scope == nil {
+		return nil
+	}
+	exclusions := scope.Exclusions()
+	if len(exclusions) == 0 {
+		return nil
+	}
+	var origins []string
+	normalized := map[string]string{}
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		origin := u.Scheme + "://" + u.Host
+		if _, seen := normalized[origin]; seen {
+			continue
+		}
+		key := origin
+		if o, err := assessment.ParseApprovedOrigin("", origin); err == nil {
+			key = o.Origin()
+		}
+		normalized[origin] = key
+		origins = append(origins, origin)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range exclusions {
+		pattern := strings.TrimSpace(e.PathPattern)
+		if pattern == "" {
+			continue
+		}
+		if !strings.HasPrefix(pattern, "/") {
+			pattern = "/" + pattern
+		}
+		for _, origin := range origins {
+			if e.Origin != "" && e.Origin != normalized[origin] {
+				continue
+			}
+			x := origin + strings.TrimSuffix(pattern, "/") + "*"
+			if !seen[x] {
+				seen[x] = true
+				out = append(out, x)
+			}
+		}
+	}
+	return out
 }
 
 // wapitiReport is the subset of wapiti's JSON output we consume.

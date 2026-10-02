@@ -89,7 +89,7 @@ func (s *Server) handleCredentialDetail(w http.ResponseWriter, r *http.Request) 
 		if credentialError(w, err) {
 			return
 		}
-		_ = json.NewEncoder(w).Encode(credentials.Metadata{ID: record.ID, Name: record.Name, Kind: record.Kind, TargetIDs: record.TargetIDs, CreatedAt: record.CreatedAt})
+		_ = json.NewEncoder(w).Encode(credentials.Metadata{ID: record.ID, Name: record.Name, Kind: record.Kind, TargetIDs: record.TargetIDs, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, Revision: record.Revision})
 	case http.MethodPut:
 		var req credentialRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCredentialRequestBytes)).Decode(&req); err != nil {

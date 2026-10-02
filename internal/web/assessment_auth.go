@@ -2,20 +2,32 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
+// maxSessionRenewals bounds how many fresh form logins one target may get per
+// scan. A multi-stage workflow can lose its session more than once; an
+// application that keeps expiring it stops authenticated work instead of
+// being logged into indefinitely.
+const maxSessionRenewals = 3
+
 // prepareAssessmentAuthentication verifies target-bound headers or a form
-// session before any typed scanner receives them. Secret values remain in
+// session before any typed scanner receives them. Verification is a positive
+// check with the credential plus one unauthenticated negative control; a saved
+// credential or a successful response alone never makes a target verified.
+// Configuration and vault problems are unavailable (nothing ran); a
+// verification that ran and was rejected is failed. Secret values remain in
 // runtime memory only.
 func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scanner.AssessmentPlan) (map[string][]string, error) {
 	headersByTarget := map[string][]string{}
@@ -43,7 +55,7 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 			}
 		}
 		for i := range plan.Jobs {
-			if (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") && hasUnavailableAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
+			if (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") && hasBlockingAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
 				plan.Jobs[i].State = scanner.PlanSkipped
 				plan.Jobs[i].Reason = "authenticated scan skipped because credential verification was unavailable"
 			}
@@ -74,16 +86,30 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 				setAuthCapability(plan, targetID, assessment.StateUnavailable, "bound credential could not be resolved")
 				continue
 			}
-			if !urlWithinApplication(target.Value, binding.VerifyURL) {
+			scope := assessment.AppScopeForTarget(plan.Config, targetID)
+			if !urlWithinApplication(target.Value, binding.VerifyURL) || !scopeAllowsRequest(scope, binding.VerifyURL) {
 				setAuthCapability(plan, targetID, assessment.StateUnavailable, "verification URL is outside the application origin or path boundary")
+				continue
+			}
+			negativeMarker := binding.NegativeMarker
+			if negativeMarker == "" {
+				negativeMarker = binding.VerifyMarker
+			}
+			if binding.VerifyMarker == "" || negativeMarker == "" {
+				setAuthCapability(plan, targetID, assessment.StateUnavailable, "no verification marker is configured")
 				continue
 			}
 			var lines []string
 			if binding.Kind == assessment.AccessFormLogin {
 				cookieHeader, loginErr := verifyFormSession(ctx, target.Value, binding.VerifyURL, binding.VerifyMarker, record.Values)
+				var configErr formConfigError
+				if errors.As(loginErr, &configErr) {
+					setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login is not usable ("+configErr.Error()+"); authenticated scanning was skipped")
+					continue
+				}
 				if loginErr != nil {
 					// verifyFormSession errors are fixed, secret-free phrases.
-					setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login or session verification failed ("+loginErr.Error()+"); authenticated scanning was skipped")
+					setAuthVerification(plan, targetID, assessment.StateFailed, "form login or session verification failed ("+loginErr.Error()+"); authenticated scanning was skipped")
 					continue
 				}
 				lines = []string{cookieHeader}
@@ -95,12 +121,18 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 					continue
 				}
 				if verifyErr := verifyHeaderSession(ctx, binding.VerifyURL, binding.VerifyMarker, lines, target.Value); verifyErr != nil {
-					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
+					setAuthVerification(plan, targetID, assessment.StateFailed, "credential verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
 					continue
 				}
 			}
+			// The negative control runs once per verification, after the positive
+			// check; session refreshes only repeat the positive check.
+			if controlErr := verifyNegativeControl(ctx, scope, binding.VerifyURL, negativeMarker); controlErr != nil {
+				setAuthVerification(plan, targetID, assessment.StateFailed, "negative control failed ("+controlErr.Error()+"); the marker does not prove an authenticated session, so authenticated scanning was skipped")
+				continue
+			}
 			headersByTarget[targetID] = append(headersByTarget[targetID], lines...)
-			setAuthCapability(plan, targetID, assessment.StateVerified, "target-bound credentials passed the configured verification check")
+			setAuthVerification(plan, targetID, assessment.StateVerified, "target-bound credentials passed the configured verification check and an unauthenticated request did not show the marker (negative control passed)")
 			for i := range plan.Jobs {
 				if plan.Jobs[i].TargetID == targetID && (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") {
 					plan.Jobs[i].ExecutionMode = "authenticated"
@@ -114,17 +146,19 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 		}
 	}
 	for i := range plan.Jobs {
-		if (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") && plan.Jobs[i].ExecutionMode != "authenticated" && hasUnavailableAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
+		if (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") && plan.Jobs[i].ExecutionMode != "authenticated" && hasBlockingAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
 			plan.Jobs[i].State = scanner.PlanSkipped
-			plan.Jobs[i].Reason = "authenticated scan skipped: " + unavailableAuthReason(plan.Capabilities, plan.Jobs[i].TargetID)
+			plan.Jobs[i].Reason = "authenticated scan skipped: " + blockingAuthReason(plan.Capabilities, plan.Jobs[i].TargetID)
 		}
 	}
 	return headersByTarget, nil
 }
 
 // assessmentAuthRefreshers rechecks the complete target-bound header set while
-// ZAP is running. Form sessions get one fresh login if their marker disappears;
-// a second expiry stops authenticated work instead of silently downgrading it.
+// ZAP is running. Form sessions get a fresh login each time their marker
+// disappears, up to maxSessionRenewals per target; the next expiry stops
+// authenticated work instead of silently downgrading it. Refreshes repeat only
+// the positive check, never the negative control.
 func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers map[string][]string) (map[string]func(context.Context, []string) ([]string, error), error) {
 	refreshers := map[string]func(context.Context, []string) ([]string, error){}
 	if len(headers) == 0 {
@@ -165,15 +199,23 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 			}
 		}
 		appURL := target.Value
-		refreshed := false
+		// Concurrent jobs on one target share the renewal budget; the lock also
+		// keeps two of them from logging in at the same time.
+		var mu sync.Mutex
+		renewals := 0
 		refreshers[target.ID] = func(ctx context.Context, current []string) ([]string, error) {
+			mu.Lock()
+			defer mu.Unlock()
 			if err := verifyHeaderSession(ctx, verifyURL, marker, current, appURL); err == nil {
 				return current, nil
 			}
-			if formValues == nil || refreshed {
+			if formValues == nil {
 				return nil, fmt.Errorf("authenticated session expired or verification failed")
 			}
-			refreshed = true
+			if renewals >= maxSessionRenewals {
+				return nil, fmt.Errorf("authenticated session expired again after %d renewals; renewal limit reached", maxSessionRenewals)
+			}
+			renewals++
 			cookie, err := verifyFormSession(ctx, appURL, verifyURL, marker, formValues)
 			if err != nil {
 				return nil, fmt.Errorf("authenticated session renewal failed")
@@ -254,12 +296,13 @@ func validHTTPHeaderName(name string) bool {
 }
 
 func verifyHeaderSession(ctx context.Context, verifyURL, marker string, lines []string, appURL string) error {
-	if !urlWithinApplication(appURL, verifyURL) {
+	scope := applicationScope(appURL)
+	if !urlWithinScope(scope, verifyURL) {
 		return fmt.Errorf("verification URL outside scope")
 	}
 	u, _ := url.Parse(verifyURL)
 	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 || !urlWithinApplication(appURL, req.URL.String()) {
+		if len(via) >= 5 || !urlWithinScope(scope, req.URL.String()) {
 			return http.ErrUseLastResponse
 		}
 		return nil
@@ -290,15 +333,23 @@ func verifyHeaderSession(ctx context.Context, verifyURL, marker string, lines []
 	return nil
 }
 
+// urlWithinApplication reports whether candidate is inside the origin and path
+// boundary of appURL. The comparison is the shared assessment.AppScope matcher
+// (default ports normalized, host case-insensitive, dot segments resolved).
 func urlWithinApplication(appURL, candidate string) bool {
-	app, err1 := url.Parse(appURL)
-	u, err2 := url.Parse(candidate)
-	if err1 != nil || err2 != nil || app.Host == "" || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || !strings.EqualFold(app.Scheme, u.Scheme) || !strings.EqualFold(app.Host, u.Host) {
+	return urlWithinScope(applicationScope(appURL), candidate)
+}
+
+// urlWithinScope keeps the stricter request rules of the login and
+// verification flows on top of the scope matcher: no query string, fragment
+// or embedded credentials.
+func urlWithinScope(scope assessment.AppScope, candidate string) bool {
+	u, err := url.Parse(candidate)
+	if err != nil || u.User != nil || u.Fragment != "" || u.RawQuery != "" || strings.HasSuffix(candidate, "#") || strings.HasSuffix(candidate, "?") {
 		return false
 	}
-	base := strings.TrimSuffix(app.EscapedPath(), "/")
-	path := u.EscapedPath()
-	return base == "" || path == base || strings.HasPrefix(path, base+"/")
+	ok, _ := scope.Allows(candidate)
+	return ok
 }
 
 func setAuthCapability(plan *scanner.AssessmentPlan, target string, state assessment.EvidenceState, reason string) {
@@ -310,18 +361,36 @@ func setAuthCapability(plan *scanner.AssessmentPlan, target string, state assess
 	}
 }
 
-func hasUnavailableAuth(all []assessment.CapabilityEvidence, target string) bool {
+// setAuthVerification records the outcome of a verification that actually
+// ran, marking the evidence as coming from the probe itself.
+func setAuthVerification(plan *scanner.AssessmentPlan, target string, state assessment.EvidenceState, reason string) {
+	setAuthCapability(plan, target, state, reason)
+	for i := range plan.Capabilities {
+		if plan.Capabilities[i].Capability == assessment.CapAuthWeb && plan.Capabilities[i].TargetID == target {
+			plan.Capabilities[i].Provenance = authVerificationProvenance
+		}
+	}
+}
+
+// blockingAuthState reports whether an authenticated-web state forbids
+// running authenticated jobs: nothing could be verified (unavailable), the
+// verification was rejected (failed), or the session was lost (expired).
+func blockingAuthState(state assessment.EvidenceState) bool {
+	return state == assessment.StateUnavailable || state == assessment.StateFailed || state == assessment.StateExpired
+}
+
+func hasBlockingAuth(all []assessment.CapabilityEvidence, target string) bool {
 	for _, e := range all {
-		if e.Capability == assessment.CapAuthWeb && e.TargetID == target && e.State == assessment.StateUnavailable {
+		if e.Capability == assessment.CapAuthWeb && e.TargetID == target && blockingAuthState(e.State) {
 			return true
 		}
 	}
 	return false
 }
 
-func unavailableAuthReason(all []assessment.CapabilityEvidence, target string) string {
+func blockingAuthReason(all []assessment.CapabilityEvidence, target string) string {
 	for _, evidence := range all {
-		if evidence.Capability == assessment.CapAuthWeb && evidence.TargetID == target && evidence.State == assessment.StateUnavailable {
+		if evidence.Capability == assessment.CapAuthWeb && evidence.TargetID == target && blockingAuthState(evidence.State) {
 			return evidence.Reason
 		}
 	}

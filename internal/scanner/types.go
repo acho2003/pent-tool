@@ -86,6 +86,56 @@ type Request struct {
 	// the original request, so they survive per-scope copies whose Target no
 	// longer holds that URL. Not serialized.
 	Secrets []string `json:"-"`
+	// AppScope is the approved request boundary (origins plus exclusions) of
+	// the application this request tests, so web builders can apply scope and
+	// exclusions without new parameters. Nil means the legacy behavior: the
+	// builder derives its boundary from Target. Runtime-only.
+	AppScope *assessment.AppScope `json:"-"`
+	// TestEnvironment records that the operator declared the target a test
+	// environment. It informs builders; it never enables writes on its own.
+	TestEnvironment bool `json:"-"`
+}
+
+// GapKind classifies why planned coverage did not happen. It is a stable
+// machine token, separate from the free-text Run.Reason, so coverage and
+// reports never substring-match prose. Empty means no gap.
+type GapKind string
+
+const (
+	// GapPrerequisiteFailed: a required capability or earlier stage failed.
+	GapPrerequisiteFailed GapKind = "prerequisite_failed"
+	// GapToolUnavailable: the scanner binary or service is not available.
+	GapToolUnavailable GapKind = "tool_unavailable"
+	// GapExcluded: the work was excluded by scope, exclusions or policy.
+	GapExcluded GapKind = "excluded"
+	// GapEmptyInput: the scanner had nothing to test (no endpoints, no files).
+	GapEmptyInput GapKind = "empty_input"
+	// GapBudgetExhausted: the assessment time, endpoint or rate budget ran out.
+	GapBudgetExhausted GapKind = "budget_exhausted"
+	// GapAuthFailed: authentication was required and could not be established.
+	GapAuthFailed GapKind = "auth_failed"
+	// GapAuthExpired: the authenticated session expired and was not restored.
+	GapAuthExpired GapKind = "auth_expired"
+	// GapCancelled: the operator or the process cancelled the work.
+	GapCancelled GapKind = "cancelled"
+	// GapInterruptedWrite: the run's results were not durably written.
+	GapInterruptedWrite GapKind = "interrupted_write"
+)
+
+// Run limitation kinds: categories a completed run deliberately did not cover.
+const (
+	// LimitationHeadlessExcluded: nuclei headless templates were not run.
+	LimitationHeadlessExcluded = "headless_excluded"
+	// LimitationStandardEngineFallback: katana fell back from the headless
+	// browser engine to its standard (non-JavaScript) engine.
+	LimitationStandardEngineFallback = "standard_engine_fallback"
+)
+
+// RunLimitation records a category of coverage a run that otherwise completed
+// excluded, so a completed status is not read as full coverage.
+type RunLimitation struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type Run struct {
@@ -114,6 +164,18 @@ type Run struct {
 	// Only scanners with a native progress signal set it.
 	Progress      int    `json:"progress,omitempty"`
 	ProgressStage string `json:"progress_stage,omitempty"`
+	// GapKind classifies a run that did not deliver its planned coverage;
+	// empty means no gap. Reason stays the human explanation.
+	GapKind GapKind `json:"gap_kind,omitempty"`
+	// Stage is the planner stage this run belongs to.
+	Stage string `json:"stage,omitempty"`
+	// AuthState is the structured outcome of the run's authenticated-session
+	// check (verified, failed, expired, ...) as of AuthCheckedAt (RFC 3339).
+	// Coverage reads it instead of matching Reason text.
+	AuthState     assessment.EvidenceState `json:"auth_state,omitempty"`
+	AuthCheckedAt string                   `json:"auth_checked_at,omitempty"`
+	// Limitations lists categories a completed run excluded.
+	Limitations []RunLimitation `json:"limitations,omitempty"`
 }
 
 func (r Run) Terminal() bool {
@@ -141,6 +203,11 @@ type Config struct {
 	VulsPath           string
 	VulsSSHConfigPath  string
 	SubfinderPath      string
+	AmassPath          string
+	DNSXPath           string
+	GauPath            string
+	WaybackurlsPath    string
+	SSLyzePath         string
 	HttpxPath          string
 	NmapPath           string
 	MasscanPath        string
@@ -198,6 +265,11 @@ type Config struct {
 	TrivyTimeout        time.Duration
 	VulsTimeout         time.Duration
 	SubfinderTimeout    time.Duration
+	AmassTimeout        time.Duration
+	DNSXTimeout         time.Duration
+	GauTimeout          time.Duration
+	WaybackurlsTimeout  time.Duration
+	SSLyzeTimeout       time.Duration
 	HttpxTimeout        time.Duration
 	NmapTimeout         time.Duration
 	MasscanTimeout      time.Duration
@@ -214,6 +286,17 @@ type Config struct {
 	SemgrepTimeout      time.Duration
 	GitleaksTimeout     time.Duration
 	OsvTimeout          time.Duration
+
+	// ScopeGuard re-runs the caller's self-listener/local-target guard at
+	// execution time, so this package can refuse a URL without importing the
+	// web layer. resolved holds the addresses the URL's host resolved to, when
+	// known. Nil means no extra guard. Runtime-only.
+	ScopeGuard func(rawURL string, resolved []string) (blocked bool, reason string) `json:"-"`
+	// Budget is the assessment-wide rate, endpoint and time budget shared by
+	// every scanner and target of one assessment. RateRPS remains the single
+	// rate source; Budget enforces it across callers. Nil means no shared
+	// budget (legacy scans). Runtime-only.
+	Budget *AssessmentBudget `json:"-"`
 }
 
 type GVMSSHCredential struct {

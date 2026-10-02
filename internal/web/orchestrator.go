@@ -26,15 +26,9 @@ import (
 func (s *Server) runMultiScan(req ScanRequest, scanCfg *config.Config, instanceIDs ...string) {
 	normalizeScanRequestActivity(&req)
 	if req.Assessment != nil {
-		plan := s.buildAssessmentPlan(*req.Assessment)
-		for _, target := range req.Assessment.Targets {
-			switch target.Kind {
-			case assessment.KindDomain, assessment.KindURL, assessment.KindIP, assessment.KindCIDR, assessment.KindHost:
-				if s.isBlockedTargetForScan(target.Value, req.allowLoopbackPorts) {
-					plan.Errors = append(plan.Errors, assessment.Problem{Code: "target.scope_blocked", Message: "assessment target is local, internal, or the Xalgorix listener and is outside scan policy", Blocking: true})
-				}
-			}
-		}
+		// The plan builder runs the same scope guard as preview (targets and
+		// approved origins) with this request's loopback allowlist.
+		plan := s.buildAssessmentPlanForScan(*req.Assessment, req.allowLoopbackPorts)
 		if req.PlanFingerprint != "" && req.PlanFingerprint != plan.Fingerprint {
 			plan.Errors = append(plan.Errors, assessment.Problem{Code: "plan.stale", Message: "assessment plan changed before execution; preview it again", Blocking: true})
 		}

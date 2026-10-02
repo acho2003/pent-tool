@@ -5,6 +5,8 @@
 // depend on it without a cycle.
 package assessment
 
+import "strings"
+
 // Mode is the assessment mode. It establishes the ALLOWED access for an
 // assessment; it is not a scanner list and not a spelling of scan_mode
 // (single/wildcard) or a web profile.
@@ -155,6 +157,12 @@ const (
 	StateAvailable   EvidenceState = "available"
 	StateVerified    EvidenceState = "verified"
 	StateUnavailable EvidenceState = "unavailable"
+	// StateFailed means verification ran and was rejected (wrong marker,
+	// negative control matched anonymously, login refused). It is distinct from
+	// unavailable, which covers configuration/vault problems where nothing ran.
+	StateFailed EvidenceState = "failed"
+	// StateExpired means a previously verified session was lost mid-scan.
+	StateExpired EvidenceState = "expired"
 )
 
 // Target is one assessment target or resource. ID is an opaque, stable
@@ -173,12 +181,16 @@ type Target struct {
 // credential by opaque ID. It never carries resolved secret values in response
 // DTOs.
 type AccessBinding struct {
-	TargetIDs     []string   `json:"target_ids"`
-	Kind          AccessKind `json:"kind"`
-	CredentialID  string     `json:"credential_id,omitempty"`
-	VerifyURL     string     `json:"verify_url,omitempty"`
-	VerifyMarker  string     `json:"verify_marker,omitempty"`
-	APIOperations []string   `json:"api_operations,omitempty"`
+	TargetIDs    []string   `json:"target_ids"`
+	Kind         AccessKind `json:"kind"`
+	CredentialID string     `json:"credential_id,omitempty"`
+	VerifyURL    string     `json:"verify_url,omitempty"`
+	VerifyMarker string     `json:"verify_marker,omitempty"`
+	// NegativeMarker is the text whose presence on an anonymous request proves
+	// the verify page is public (negative control). Empty falls back to
+	// VerifyMarker.
+	NegativeMarker string   `json:"negative_marker,omitempty"`
+	APIOperations  []string `json:"api_operations,omitempty"`
 }
 
 // CapabilityEvidence records why a capability is (or is not) available for a
@@ -212,6 +224,79 @@ type AssessmentConfig struct {
 	APIDefinitionIDs   []string               `json:"api_definition_ids,omitempty"`
 	APIDefinitions     []APIDefinitionBinding `json:"api_definitions,omitempty"`
 	SubdomainDiscovery bool                   `json:"subdomain_discovery,omitempty"`
+	// ApprovedOrigins are the explicit scheme/host/port/path destinations of
+	// each application target. When a target has none, AppScopeForTarget
+	// derives its boundary from Target.Value.
+	ApprovedOrigins []ApprovedOrigin `json:"approved_origins,omitempty"`
+	// Exclusions are routes no tool may request (logout, deletion, purchases,
+	// administrative or operator-specified routes), whatever the method.
+	Exclusions []Exclusion `json:"exclusions,omitempty"`
+	// TestEnvironment declares the targets are disposable test systems. It is a
+	// prerequisite for state-changing tests and is forbidden in Black Box.
+	TestEnvironment    bool                `json:"test_environment,omitempty"`
+	DiscoveryProviders *DiscoveryProviders `json:"discovery_providers,omitempty"`
+	// ManualSeeds are operator-supplied entry URLs merged into the inventory.
+	// Each must lie inside some target's AppScope and not be excluded.
+	ManualSeeds []string `json:"manual_seeds,omitempty"`
+}
+
+// ApprovedOrigin is one approved application/API destination. It always
+// belongs to exactly one target so access bindings stay target-keyed; sharing
+// a host with another origin never merges applications or authorizes other
+// ports. After Normalize, Scheme and Host are lower-case, Host is bare (IPv6
+// without brackets), Port is explicit (80/443 filled for the defaults) and
+// PathPrefix is a cleaned absolute path ("/" for the whole origin).
+type ApprovedOrigin struct {
+	TargetID   string `json:"target_id"`
+	Scheme     string `json:"scheme"`
+	Host       string `json:"host"`
+	Port       int    `json:"port,omitempty"`
+	PathPrefix string `json:"path_prefix,omitempty"`
+}
+
+// Exclusion forbids requests to matching routes. An empty TargetID or Origin
+// applies to every approved origin; an empty Method applies to every method
+// (GET is not inherently side-effect-free). PathPattern is an absolute path
+// in which "*" matches any run of characters; it matches the path itself and
+// everything below it, case-insensitively.
+type Exclusion struct {
+	TargetID    string `json:"target_id,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	Method      string `json:"method,omitempty"`
+	PathPattern string `json:"path_pattern"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+// Discovery provider identifiers.
+const (
+	ProviderSubfinder   = "subfinder"
+	ProviderAmass       = "amass"
+	ProviderGau         = "gau"
+	ProviderWaybackurls = "waybackurls"
+	ProviderNone        = "none"
+	ProviderTestssl     = "testssl"
+	ProviderSSLyze      = "sslyze"
+)
+
+// DiscoveryProviders selects optional discovery tools. Subdomain providers
+// additionally require SubdomainDiscovery and a Domain target. Historical and
+// TLS are single-valued: waybackurls is an alternative to gau and sslyze an
+// alternative to testssl, never run together. A Historical provider other than
+// ""/"none" is the explicit authorization to query external archives.
+type DiscoveryProviders struct {
+	Subdomain  []string `json:"subdomain,omitempty"`
+	Historical string   `json:"historical,omitempty"`
+	TLS        string   `json:"tls,omitempty"`
+}
+
+// HistoricalAuthorized reports whether external archive queries were
+// explicitly authorized. It is nil-safe.
+func (d *DiscoveryProviders) HistoricalAuthorized() bool {
+	if d == nil {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSpace(d.Historical))
+	return h != "" && h != ProviderNone
 }
 
 // ScannerSelection chooses auto planning or an explicit custom variant list.

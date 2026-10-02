@@ -68,7 +68,100 @@ type ScannerDefinition struct {
 	Available              bool                    `json:"available"`
 	AvailabilityReason     string                  `json:"availability_reason,omitempty"`
 	Summary                string                  `json:"summary"`
+	// Stage is the workflow stage the scanner runs in (see stageForScanner).
+	Stage string `json:"stage,omitempty"`
+	// PolicySupport lists the request-policy controls the adapter can enforce
+	// or must be gated on (Policy* constants), sorted.
+	PolicySupport []string `json:"policy_support,omitempty"`
+	// OutputFormat is the machine-readable format the adapter parses:
+	// jsonl, json, text or xml.
+	OutputFormat string `json:"output_format,omitempty"`
 }
+
+// Workflow stages, in dependency order. Each stage consumes the outputs of the
+// stages listed for it in stagePrerequisites; a job never depends on a job in
+// the same or a later stage, so ordering by stage rank is a topological order.
+const (
+	StageScope        = "scope"
+	StageDiscovery    = "discovery"
+	StageDNS          = "dns"
+	StageReachability = "reachability"
+	StageAuth         = "auth"
+	StageCrawl        = "crawl"
+	StageInventory    = "inventory"
+	StagePassive      = "passive"
+	StageTemplates    = "templates"
+	StageTLS          = "tls"
+	StageDAST         = "dast"
+	StageValidation   = "validation"
+	StageResults      = "results"
+)
+
+var stageOrder = []string{StageScope, StageDiscovery, StageDNS, StageReachability, StageAuth, StageCrawl, StageInventory, StagePassive, StageTemplates, StageTLS, StageDAST, StageValidation, StageResults}
+
+// stagePrerequisites names the stages whose outputs a stage consumes. When a
+// prerequisite stage has no job for the target, its own prerequisites stand in
+// for it. Analysis stages share the inventory; TLS needs only reachability.
+var stagePrerequisites = map[string][]string{
+	StageDiscovery:    {StageScope},
+	StageDNS:          {StageDiscovery},
+	StageReachability: {StageDNS},
+	StageAuth:         {StageReachability},
+	StageCrawl:        {StageAuth},
+	StageInventory:    {StageCrawl},
+	StagePassive:      {StageInventory},
+	StageTemplates:    {StageInventory},
+	StageTLS:          {StageReachability},
+	StageDAST:         {StageInventory},
+	StageValidation:   {StageInventory},
+	StageResults:      {StagePassive, StageTemplates, StageTLS, StageDAST, StageValidation},
+}
+
+// stageForScanner maps a registry ID onto the workflow stage ladder. Network,
+// host, code, cloud and Kubernetes scanners have no web-workflow inputs and run
+// in the main testing stage (dast); port discovery runs with reachability.
+func stageForScanner(id string) string {
+	switch id {
+	case "subfinder", "amass":
+		return StageDiscovery
+	case "dnsx":
+		return StageDNS
+	case "httpx", "nmap", "masscan":
+		return StageReachability
+	case "auth":
+		return StageAuth
+	case "katana", "gau", "waybackurls":
+		return StageCrawl
+	case "nuclei", "nikto":
+		return StageTemplates
+	case "testssl", "sslyze":
+		return StageTLS
+	case "dalfox":
+		return StageValidation
+	default:
+		return StageDAST
+	}
+}
+
+// stageRank is the position of a stage in the ladder, or -1 if unknown.
+func stageRank(stage string) int {
+	for i, s := range stageOrder {
+		if s == stage {
+			return i
+		}
+	}
+	return -1
+}
+
+// Policy controls a scanner adapter supports (ScannerDefinition.PolicySupport).
+const (
+	PolicyGetHeadOnly  = "get_head_only" // sends only GET/HEAD requests to the target
+	PolicyExclusions   = "exclusions"    // honours path/method exclusions natively
+	PolicyRateLimited  = "rate_limited"  // honours a request-rate limit
+	PolicyScopeRegex   = "scope_regex"   // confines requests with an in-scope regex
+	PolicyWriteCapable = "write_capable" // may send state-changing requests
+	PolicyOASTDisabled = "oast_disabled" // out-of-band interaction can be disabled
+)
 
 // Catalog lists every tool a scan runs: the recon tools, which always run, then
 // the scan runners in pipeline order (grouped by phase). It is derived from the

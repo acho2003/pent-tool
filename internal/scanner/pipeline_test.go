@@ -220,8 +220,8 @@ func TestApplicabilityAndArguments(t *testing.T) {
 		}
 	}
 	thoroughNuclei := strings.Join(buildNuclei(Request{Target: "https://example.com/Portal/", TypedAssessment: true, Profile: ProfileThorough}, cfg).args, " ")
-	if strings.Contains(thoroughNuclei, "-rl ") {
-		t.Errorf("thorough Nuclei args %q must use Nuclei's default rate", thoroughNuclei)
+	if !strings.Contains(thoroughNuclei, "-rl 17") {
+		t.Errorf("thorough Nuclei args %q must retain the configured rate", thoroughNuclei)
 	}
 	if got := buildNuclei(Request{Target: "https://example.com/Portal/", TypedAssessment: true, Profile: ProfileThorough}, Config{NucleiTimeout: time.Second}).timeout; got != 0 {
 		t.Errorf("thorough Nuclei timeout = %s, want no overall deadline", got)

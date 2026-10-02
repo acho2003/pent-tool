@@ -1,6 +1,11 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -34,7 +39,7 @@ func TestScannerConfigThreadsReconAndTestsslPaths(t *testing.T) {
 		OsvTimeoutSec:       777,
 	}
 
-	sc := ScannerConfig(cfg)
+	sc := (&Server{}).ScannerConfig(cfg)
 
 	if sc.SubfinderPath != "/usr/local/bin/subfinder" {
 		t.Errorf("SubfinderPath = %q, want /usr/local/bin/subfinder", sc.SubfinderPath)
@@ -140,4 +145,138 @@ func TestUpsertDistinguishesLiveEmittedScopes(t *testing.T) {
 	if byScope["recon:t:a"].Target != "a" || byScope["recon:t:b"].Target != "b" {
 		t.Fatalf("per-host live-emitted runs lost their identity: %#v", runs)
 	}
+}
+
+// TestWildcardUsesConfiguredSubfinderPathWithDUC guards that legacy wildcard
+// discovery runs the operator-configured subfinder binary (so runtime pins
+// apply) rather than resolving a bare "subfinder" off PATH, and that it passes
+// -duc so subfinder's own auto-update stays disabled during a scan (spec 5).
+func TestWildcardUsesConfiguredSubfinderPathWithDUC(t *testing.T) {
+	cmd := subfinderCommand(context.Background(), "/opt/pinned/subfinder", "example.com", "/data/scan/subfinder.txt", "/data/scan")
+
+	if cmd.Path != "/opt/pinned/subfinder" {
+		t.Errorf("subfinder path = %q, want the configured /opt/pinned/subfinder", cmd.Path)
+	}
+	if !slices.Contains(cmd.Args, "-duc") {
+		t.Errorf("subfinder args %v missing -duc (runtime auto-update must stay disabled)", cmd.Args)
+	}
+	if !slices.Contains(cmd.Args, "-d") || !slices.Contains(cmd.Args, "example.com") {
+		t.Errorf("subfinder args %v missing -d example.com", cmd.Args)
+	}
+	if cmd.Dir != "/data/scan" {
+		t.Errorf("subfinder dir = %q, want /data/scan", cmd.Dir)
+	}
+}
+
+// TestLegacyTargetAuthNotForwardedToSiblingHosts guards the credential-free
+// wildcard rule: discovered hosts are candidates, and the spec forbids
+// forwarding credentials to discovered sibling hosts, so a per-host wildcard
+// session must carry no targetAuth even when the request configured it.
+func TestLegacyTargetAuthNotForwardedToSiblingHosts(t *testing.T) {
+	s := &Server{}
+	req := ScanRequest{TargetAuth: "cookie: session=super-secret", InstanceID: "inst-1", Name: "n"}
+
+	sess := s.newWildcardSubdomainSession(context.Background(), &config.Config{}, req, "example.com", "sub.example.com", "/data/scan/sub", false)
+
+	if sess.targetAuth != "" {
+		t.Errorf("sibling session targetAuth = %q, want empty (credentials must never reach discovered hosts)", sess.targetAuth)
+	}
+	if sess.scanMode != "wildcard" {
+		t.Errorf("scanMode = %q, want wildcard", sess.scanMode)
+	}
+	if sess.target != "sub.example.com" || sess.parentTarget != "example.com" {
+		t.Errorf("session target/parent = %q/%q, want sub.example.com/example.com", sess.target, sess.parentTarget)
+	}
+}
+
+// TestWildcardDiscoveredHostsRecordedAsCandidatesAndResumeStatePreserved guards
+// two behaviors: (1) resume reuses persisted ResumeSubdomains verbatim and never
+// shells out to subfinder, and (2) discovered hosts are recorded as candidates
+// with provenance subfinder and the "legacy wildcard candidate" label, while the
+// originally-requested root is marked as such.
+func TestWildcardDiscoveredHostsRecordedAsCandidatesAndResumeStatePreserved(t *testing.T) {
+	s := &Server{}
+
+	// Resume state preserved: discovery reuses ResumeSubdomains and does not run
+	// subfinder (the configured path is intentionally nonexistent).
+	req := ScanRequest{
+		IsResume:            true,
+		ResumeDiscoveryDone: true,
+		ResumeSubdomains:    []string{"b.example.com", "a.example.com", "example.com", "a.example.com"},
+	}
+	got := s.discoverWildcardHosts(context.Background(), &config.Config{SubfinderPath: "/nonexistent/subfinder"}, req, "example.com", t.TempDir())
+	want := []string{"a.example.com", "b.example.com", "example.com"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("resumed hosts = %v, want %v (dedup+sort of ResumeSubdomains, no subfinder exec)", got, want)
+	}
+
+	// Candidate recording.
+	dir := t.TempDir()
+	if err := writeWildcardCandidates(dir, "example.com", []string{"api.example.com", "example.com"}); err != nil {
+		t.Fatalf("writeWildcardCandidates: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "candidates.json"))
+	if err != nil {
+		t.Fatalf("read candidates.json: %v", err)
+	}
+	var cands []wildcardCandidate
+	if err := json.Unmarshal(data, &cands); err != nil {
+		t.Fatalf("unmarshal candidates: %v", err)
+	}
+	byHost := map[string]wildcardCandidate{}
+	for _, c := range cands {
+		byHost[c.Host] = c
+	}
+	disc, ok := byHost["api.example.com"]
+	if !ok {
+		t.Fatalf("api.example.com not recorded as candidate: %#v", cands)
+	}
+	if disc.Provenance != "subfinder" {
+		t.Errorf("discovered host provenance = %q, want subfinder", disc.Provenance)
+	}
+	if disc.Label != "legacy wildcard candidate" {
+		t.Errorf("discovered host label = %q, want legacy wildcard candidate", disc.Label)
+	}
+	if disc.Root {
+		t.Errorf("discovered host must not be marked root")
+	}
+	root, ok := byHost["example.com"]
+	if !ok || !root.Root {
+		t.Fatalf("root host not recorded/marked as root: %#v", cands)
+	}
+}
+
+// TestScannerConfigWiresScopeGuard guards the execution-time DNS-rebinding
+// defence: ScannerConfig installs a ScopeGuard closure that re-runs the
+// self-listener/local-target guard on both the raw URL and the addresses the
+// host resolved to.
+func TestScannerConfigWiresScopeGuard(t *testing.T) {
+	s := &Server{cfg: &config.Config{BindAddr: "127.0.0.1"}, port: 8089}
+	sc := s.ScannerConfig(&config.Config{})
+	if sc.ScopeGuard == nil {
+		t.Fatal("ScannerConfig did not wire ScopeGuard")
+	}
+
+	t.Run("listener address blocked", func(t *testing.T) {
+		blocked, reason := sc.ScopeGuard("http://127.0.0.1:8089", nil)
+		if !blocked {
+			t.Fatalf("ScopeGuard allowed the dashboard listener address")
+		}
+		if reason == "" {
+			t.Errorf("blocked verdict must carry a reason")
+		}
+	})
+
+	t.Run("resolved loopback blocked (DNS rebinding)", func(t *testing.T) {
+		blocked, _ := sc.ScopeGuard("http://evil.example.com", []string{"127.0.0.1"})
+		if !blocked {
+			t.Fatalf("ScopeGuard allowed a host that resolved to loopback")
+		}
+	})
+
+	t.Run("external target allowed", func(t *testing.T) {
+		if blocked, _ := sc.ScopeGuard("http://93.184.216.34:80", nil); blocked {
+			t.Fatalf("ScopeGuard blocked a non-local external target")
+		}
+	})
 }

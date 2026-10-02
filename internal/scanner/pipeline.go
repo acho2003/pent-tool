@@ -79,6 +79,36 @@ func applyDefaults(cfg *Config) {
 	if cfg.SubfinderPath == "" {
 		cfg.SubfinderPath = "subfinder"
 	}
+	if cfg.AmassPath == "" {
+		cfg.AmassPath = "amass"
+	}
+	if cfg.DNSXPath == "" {
+		cfg.DNSXPath = "dnsx"
+	}
+	if cfg.GauPath == "" {
+		cfg.GauPath = "gau"
+	}
+	if cfg.WaybackurlsPath == "" {
+		cfg.WaybackurlsPath = "waybackurls"
+	}
+	if cfg.SSLyzePath == "" {
+		cfg.SSLyzePath = "sslyze"
+	}
+	if cfg.AmassTimeout <= 0 {
+		cfg.AmassTimeout = 10 * time.Minute
+	}
+	if cfg.DNSXTimeout <= 0 {
+		cfg.DNSXTimeout = 5 * time.Minute
+	}
+	if cfg.GauTimeout <= 0 {
+		cfg.GauTimeout = 5 * time.Minute
+	}
+	if cfg.WaybackurlsTimeout <= 0 {
+		cfg.WaybackurlsTimeout = 5 * time.Minute
+	}
+	if cfg.SSLyzeTimeout <= 0 {
+		cfg.SSLyzeTimeout = 15 * time.Minute
+	}
 	if cfg.HttpxPath == "" {
 		cfg.HttpxPath = "httpx"
 	}
@@ -654,6 +684,10 @@ type commandSpec struct {
 	// e.g. testssl turns "cannot connect to :443" into a clear not_applicable
 	// instead of an opaque exit code. It never runs on a successful run.
 	classify func(exitCode int, output string) (status, reason string, ok bool)
+	// limitations are attached to the run only when it completes, so a
+	// completed status is not read as full coverage of what the policy
+	// deliberately left out (e.g. nuclei's excluded template categories).
+	limitations []RunLimitation
 }
 
 type commandBuilder func(Request, Config) commandSpec
@@ -808,6 +842,9 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	_ = redactArtifact(run.ArtifactPath, secrets)
 	if run.Truncated && run.Reason == "" {
 		run.Reason = fmt.Sprintf("output truncated at configured %d-byte limit", cfg.MaxOutputBytes)
+	}
+	if run.Status == "completed" && len(spec.limitations) > 0 {
+		run.Limitations = append(run.Limitations, spec.limitations...)
 	}
 	run.FinishedAt = time.Now().Format(time.RFC3339Nano)
 	run = finalizeRun(run)
@@ -981,6 +1018,78 @@ func secretValues(req Request, cfg Config) []string {
 	return vals
 }
 
+// nucleiPolicyVersion identifies the reviewed default template policy below
+// (protocol, excluded tags, rate, concurrency, retries and timeouts). It
+// changes what a stored plan's nuclei job sends, so changing it requires a
+// PlanRegistryVersion bump; nucleiPolicyRegistryVersion records the registry
+// version the current policy shipped with.
+const (
+	nucleiPolicyVersion         = "1"
+	nucleiPolicyRegistryVersion = "4"
+)
+
+// nucleiExcludedTags is the reviewed -etags list applied on every nuclei path.
+// It removes templates that are denial-of-service or fuzzing, brute-force or
+// credential guessing, destructive or state-changing (intrusive, uploads,
+// request smuggling, cache poisoning, races, account takeover), execute code
+// on the target (rce, command injection, deserialization gadgets) or depend on
+// an external callback (OAST/interactsh). Tag names were checked against the
+// pinned nuclei-templates revision 8b9d065ccb0492d39f7680c908b3030a97ddfe1b
+// (the spelling "brute-force" carries no templates there; "bruteforce" does).
+var nucleiExcludedTags = []string{
+	"dos", "ddos", "fuzz", "fuzzing", "dast",
+	"intrusive", "bruteforce", "default-login", "creds-stuffing",
+	"oast", "oob", "interactsh",
+	"rce", "cmdi", "command-injection", "deserialization",
+	"file-upload", "fileupload", "upload",
+	"smuggling", "cache-poisoning", "race-condition", "account-takeover",
+}
+
+// Nuclei per-request bounds: one retry, a 10s request timeout, and a host is
+// abandoned after three errors rather than retried for every template.
+const (
+	nucleiRetries        = 1
+	nucleiRequestTimeout = 10
+	nucleiMaxHostErrors  = 3
+	// nucleiMaxConcurrency caps template concurrency at nuclei's own default.
+	nucleiMaxConcurrency = 25
+	// nucleiDefaultRate applies when no rate is configured, so an unset rate
+	// never means unlimited.
+	nucleiDefaultRate = 10
+)
+
+// nucleiPolicyArgs returns the reviewed policy flags. Only HTTP templates run:
+// headless browser sub-requests cannot be scope-checked. Redirects and the
+// interactsh callback service are always disabled. Template concurrency times
+// bulk size never exceeds the configured rate, which -rl enforces on every
+// profile, Thorough included.
+func nucleiPolicyArgs(cfg Config) []string {
+	rate := cfg.RateRPS
+	if rate <= 0 {
+		rate = nucleiDefaultRate
+	}
+	concurrency := min(rate, nucleiMaxConcurrency)
+	return []string{
+		"-pt", "http",
+		"-etags", strings.Join(nucleiExcludedTags, ","),
+		"-ni", "-dr",
+		"-rl", strconv.Itoa(rate),
+		"-c", strconv.Itoa(concurrency), "-bs", "1",
+		"-retries", strconv.Itoa(nucleiRetries),
+		"-timeout", strconv.Itoa(nucleiRequestTimeout),
+		"-mhe", strconv.Itoa(nucleiMaxHostErrors),
+	}
+}
+
+// nucleiPolicyLimitations records what the reviewed policy left out of a
+// completed nuclei run.
+func nucleiPolicyLimitations() []RunLimitation {
+	return []RunLimitation{
+		{Kind: string(GapExcluded), Reason: "nuclei policy " + nucleiPolicyVersion + " excluded template categories: " + strings.Join(nucleiExcludedTags, ", ") + "; headless templates were not run"},
+		{Kind: LimitationHeadlessExcluded, Reason: "nuclei headless templates were not run: browser sub-requests cannot be scope-checked"},
+	}
+}
+
 func buildNuclei(req Request, cfg Config) commandSpec {
 	if strings.HasPrefix(strings.TrimSpace(req.Target), "artifact://") {
 		return commandSpec{notApp: "Nuclei requires a submitted host or URL", timeout: cfg.NucleiTimeout}
@@ -1008,19 +1117,14 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 		}
 		args = []string{"-u", req.Target, "-jle", artifact, "-nc", "-duc", "-dut"}
 	}
-	args = append(args, "-pt", "http,headless")
 	if cfg.NucleiTemplatesDir != "" {
 		args = append(args, "-t", cfg.NucleiTemplatesDir)
 	}
-	if !(req.TypedAssessment && req.Profile == ProfileThorough) {
-		args = append(args, "-rl", strconv.Itoa(cfg.RateRPS))
-	}
+	// Every path (typed and legacy) runs the reviewed policy: a redirect never
+	// changes the destination and no template hands a callback to an external
+	// service.
+	args = append(args, nucleiPolicyArgs(cfg)...)
 	args = append(args, "-ot")
-	if req.TypedAssessment {
-		// Typed targets retain strict URL scope; do not let a redirect change
-		// the destination or hand template callbacks to an external service.
-		args = append(args, "-dr", "-ni")
-	}
 	for _, h := range cfg.ScanHeaders {
 		args = append(args, "-H", h)
 	}
@@ -1033,7 +1137,16 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 	if req.Profile == ProfileThorough {
 		timeout = 0
 	}
-	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: timeout, prepare: prepare}
+	if _, hasDeadline := cfg.Budget.Deadline(); hasDeadline {
+		remaining := cfg.Budget.Remaining()
+		if remaining <= 0 {
+			return commandSpec{notApp: "assessment time budget exhausted before Nuclei", timeout: cfg.NucleiTimeout}
+		}
+		if timeout <= 0 || remaining < timeout {
+			timeout = remaining
+		}
+	}
+	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: timeout, prepare: prepare, limitations: nucleiPolicyLimitations()}
 }
 
 func buildTrivy(req Request, cfg Config) commandSpec {

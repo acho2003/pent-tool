@@ -20,10 +20,13 @@ func (niktoRunner) Descriptor() Descriptor {
 	return Descriptor{Name: "nikto", Summary: "Optional bounded root-path web server checks", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}
 }
 func (r niktoRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
-	return executeSpec(ctx, r.Name(), req, cfg, buildNikto(req, cfg), emit)
+	return executePolicySpec(ctx, r.Name(), req, cfg, buildNikto(req, cfg), emit)
 }
 
 func buildNikto(req Request, cfg Config) commandSpec {
+	if restricted, reason := requestPolicyRestriction("nikto", req); restricted {
+		return commandSpec{notApp: reason, timeout: cfg.NiktoTimeout}
+	}
 	if strings.TrimSpace(cfg.NiktoPath) == "" {
 		return commandSpec{notApp: "Nikto executable is not configured", timeout: cfg.NiktoTimeout}
 	}

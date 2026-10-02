@@ -15,13 +15,55 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/storage"
 )
 
 const (
-	AttackSurfaceSchemaVersion     = 1
-	AttackSurfaceClassifierVersion = 1
+	AttackSurfaceSchemaVersion = 1
+	// AttackSurfaceClassifierVersion is bumped whenever eligibility semantics
+	// change, so cached snapshots are re-parsed from their raw JSONL (without
+	// contacting the target) instead of being reused. v2: endpoint State,
+	// exclusions and placeholder refusal.
+	AttackSurfaceClassifierVersion = 2
 )
+
+// Endpoint states. An empty State (seeds, OpenAPI merges, the legacy parse and
+// snapshots written before State existed) is treated as in_scope; every other
+// non-in_scope state is kept in the inventory with a reason but never
+// dispatched.
+const (
+	EndpointStateInScope              = "in_scope"
+	EndpointStateOutOfScope           = "out_of_scope"
+	EndpointStateExcluded             = "excluded"
+	EndpointStateStatic               = "static"
+	EndpointStateHistoricalUnverified = "historical_unverified"
+	EndpointStateUnreachable          = "unreachable"
+	EndpointStateUnauthorized         = "unauthorized"
+)
+
+// EndpointCoverageBatchCompleted is the coverage status of an endpoint that
+// was part of a completed run whose adapter only reports batch-level evidence,
+// so the run cannot say that this particular endpoint was exercised.
+const EndpointCoverageBatchCompleted = "batch_completed"
+
+// assessmentEndpointCapReason is the skip reason of an endpoint refused by the
+// assessment-wide unique endpoint cap.
+const assessmentEndpointCapReason = "assessment endpoint budget exhausted"
+
+// batchEvidenceScanners only report results for the dispatched batch as a
+// whole; a completed run of one of them marks its endpoints batch_completed.
+var batchEvidenceScanners = map[string]bool{"nuclei": true, "wapiti": true, "dalfox": true, "katana": true}
+
+// EndpointProvenance records which tool observed an endpoint, where, and
+// whether the observation was made with an authenticated session.
+type EndpointProvenance struct {
+	Tool          string `json:"tool"`
+	Source        string `json:"source,omitempty"`
+	Artifact      string `json:"artifact,omitempty"`
+	ObservedAt    string `json:"observed_at,omitempty"`
+	Authenticated bool   `json:"authenticated,omitempty"`
+}
 
 type EndpointParameter struct {
 	Name     string `json:"name"`
@@ -58,6 +100,9 @@ type AttackSurfaceEndpoint struct {
 	ObservedWithAuth bool                      `json:"observed_with_auth,omitempty"`
 	RequiresAuth     *bool                     `json:"requires_auth,omitempty"`
 	DiscoveredAt     string                    `json:"discovered_at,omitempty"`
+	State            string                    `json:"state,omitempty"`
+	StateReason      string                    `json:"state_reason,omitempty"`
+	Provenance       []EndpointProvenance      `json:"provenance,omitempty"`
 	ScannerCoverage  []EndpointScannerCoverage `json:"scanner_coverage,omitempty"`
 }
 
@@ -98,8 +143,21 @@ func EnsureSeedEndpoint(surface *AttackSurface, target string) {
 }
 
 // ParseKatanaAttackSurface tolerates malformed JSONL rows and returns every
-// usable request record, normalized and deduplicated in discovery order.
+// usable request record, normalized and deduplicated in discovery order. It is
+// the legacy entry point: endpoints off the target's host are dropped and no
+// State is stamped (see ParseKatanaAttackSurfaceScoped).
 func ParseKatanaAttackSurface(artifact, scope, target string, observedWithAuth bool) (*AttackSurface, error) {
+	return ParseKatanaAttackSurfaceScoped(artifact, scope, target, observedWithAuth, nil)
+}
+
+// ParseKatanaAttackSurfaceScoped parses katana JSONL like
+// ParseKatanaAttackSurface and stamps every endpoint's State against appScope:
+// rows outside the approved origins or matching an exclusion are KEPT as
+// out_of_scope/excluded with the reason, so they stay visible but are never
+// dispatched. A nil appScope keeps the legacy host-only boundary, under which
+// the legacy pipeline crawls nmap-discovered ports: off-host rows are dropped,
+// every port on the target host is kept and no State is stamped.
+func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWithAuth bool, appScope *assessment.AppScope) (*AttackSurface, error) {
 	data, err := os.ReadFile(artifact)
 	if err != nil {
 		return nil, err
@@ -112,10 +170,27 @@ func ParseKatanaAttackSurface(artifact, scope, target string, observedWithAuth b
 	}
 	byID := map[string]int{}
 	// Scope guard: katana emits off-host URLs it finds ON in-scope pages
-	// (external links like owasp.org, CDN fonts). Those must never enter the
-	// attack surface or be dispatched to scanners, so keep only endpoints on the
-	// assessed host. An empty target disables the filter.
+	// (external links like owasp.org, CDN fonts). Those must never be
+	// dispatched to scanners. Legacy (nil appScope) keeps only endpoints on the
+	// assessed host; an empty target disables that filter. A typed scope keeps
+	// them with an out_of_scope State instead.
 	targetHost := hostFromTarget(target)
+	artifactName := filepath.Base(artifact)
+	add := func(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm bool) {
+		allowed, reason := inSurfaceScope(rawURL, targetHost, appScope)
+		if !allowed && appScope == nil {
+			return
+		}
+		ep, ok := normalizeAttackSurfaceEndpoint(rawURL, method, source, timestamp, status, contentType, params, hasForm, observedWithAuth)
+		if !ok {
+			return
+		}
+		ep.Provenance = []EndpointProvenance{{Tool: "katana", Source: strings.TrimSpace(source), Artifact: artifactName, ObservedAt: timestamp, Authenticated: observedWithAuth}}
+		if appScope != nil {
+			stampEndpointState(&ep, *appScope, allowed, reason)
+		}
+		mergeSurfaceEndpoint(surface, byID, ep)
+	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	for scanner.Scan() {
@@ -152,10 +227,8 @@ func ParseKatanaAttackSurface(artifact, scope, target string, observedWithAuth b
 				}
 			}
 		}
-		if endpoint != "" && inSurfaceHostScope(endpoint, targetHost) {
-			if ep, ok := normalizeAttackSurfaceEndpoint(endpoint, method, source, firstStringValue(raw, "timestamp"), status, contentType, params, hasForm, observedWithAuth); ok {
-				mergeSurfaceEndpoint(surface, byID, ep)
-			}
+		if endpoint != "" {
+			add(endpoint, method, source, firstStringValue(raw, "timestamp"), status, contentType, params, hasForm)
 		}
 		// Katana versions have emitted form extraction at both the top level and
 		// under response. Decode generically so upgrades do not make forms vanish.
@@ -169,13 +242,7 @@ func ParseKatanaAttackSurface(artifact, scope, target string, observedWithAuth b
 					action = base.ResolveReference(ref).String()
 				}
 			}
-			if !inSurfaceHostScope(action, targetHost) {
-				continue
-			}
-			formParams := formParameters(form)
-			if ep, ok := normalizeAttackSurfaceEndpoint(action, firstStringValue(form, "method"), source, firstStringValue(raw, "timestamp"), 0, "", formParams, true, observedWithAuth); ok {
-				mergeSurfaceEndpoint(surface, byID, ep)
-			}
+			add(action, firstStringValue(form, "method"), source, firstStringValue(raw, "timestamp"), 0, "", formParameters(form), true)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -184,14 +251,52 @@ func ParseKatanaAttackSurface(artifact, scope, target string, observedWithAuth b
 	return surface, nil
 }
 
+// inSurfaceScope reports whether rawURL is inside the crawl boundary and why
+// not. A typed scope delegates to AppScope.Allows (scheme, host and port with
+// default ports normalized, plus the path prefix). A nil scope is the legacy
+// host-only boundary (see inSurfaceHostScope).
+func inSurfaceScope(rawURL, targetHost string, scope *assessment.AppScope) (bool, string) {
+	if scope != nil {
+		return scope.Allows(rawURL)
+	}
+	if inSurfaceHostScope(rawURL, targetHost) {
+		return true, ""
+	}
+	return false, "endpoint is not on the assessed host"
+}
+
 // inSurfaceHostScope reports whether rawURL is on the assessed host, so the
-// crawl stays scoped and off-host links are dropped before scanning. An empty
-// targetHost disables the filter (keep everything).
+// legacy crawl stays scoped and off-host links are dropped before scanning. An
+// empty targetHost disables the filter (keep everything).
 func inSurfaceHostScope(rawURL, targetHost string) bool {
 	if targetHost == "" {
 		return true
 	}
 	return strings.EqualFold(hostFromTarget(rawURL), targetHost)
+}
+
+// stampEndpointState records ep's State against scope at parse time, so the
+// dispatch gate stays a pure function of the endpoint. allowed/reason are the
+// already-computed scope.Allows decision for ep.
+func stampEndpointState(ep *AttackSurfaceEndpoint, scope assessment.AppScope, allowed bool, reason string) {
+	switch {
+	case !allowed:
+		ep.State, ep.StateReason = EndpointStateOutOfScope, reason
+	default:
+		if excluded, why := scope.Excluded(ep.Method, ep.URL); excluded {
+			ep.State, ep.StateReason = EndpointStateExcluded, why
+		} else if ep.Kind == "static" {
+			ep.State, ep.StateReason = EndpointStateStatic, "static resource is discovery-only"
+		} else {
+			ep.State, ep.StateReason = EndpointStateInScope, ""
+		}
+	}
+}
+
+// endpointStateDispatchable reports whether a State may be dispatched: only
+// in_scope and the legacy empty State.
+func endpointStateDispatchable(state string) bool {
+	return state == "" || state == EndpointStateInScope
 }
 
 func normalizeAttackSurfaceEndpoint(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm, observedWithAuth bool) (AttackSurfaceEndpoint, bool) {
@@ -356,10 +461,35 @@ func mergeSurfaceEndpoint(surface *AttackSurface, byID map[string]int, incoming 
 		if ep.RequiresAuth == nil {
 			ep.RequiresAuth = incoming.RequiresAuth
 		}
+		// A stamped State replaces an empty one, and a refusing State wins over
+		// a dispatchable one, so merging never widens what may be dispatched.
+		if ep.State == "" || (endpointStateDispatchable(ep.State) && !endpointStateDispatchable(incoming.State)) {
+			if incoming.State != "" {
+				ep.State, ep.StateReason = incoming.State, incoming.StateReason
+			}
+		}
+		ep.Provenance = mergeProvenance(ep.Provenance, incoming.Provenance)
 		return
 	}
 	byID[incoming.ID] = len(surface.Endpoints)
 	surface.Endpoints = append(surface.Endpoints, incoming)
+}
+
+func mergeProvenance(left, right []EndpointProvenance) []EndpointProvenance {
+	out := left
+	for _, p := range right {
+		duplicate := false
+		for _, existing := range out {
+			if existing.Tool == p.Tool && existing.Source == p.Source && existing.Artifact == p.Artifact && existing.Authenticated == p.Authenticated {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func mergeParameters(in []EndpointParameter) []EndpointParameter {
@@ -494,8 +624,21 @@ func formParameters(form map[string]any) []EndpointParameter {
 }
 
 // DispatchTargets returns concrete URLs eligible for a scanner and records the
-// deterministic decision on every endpoint.
+// deterministic decision on every endpoint. It is the legacy entry point: no
+// scope re-check and no assessment-wide endpoint cap (see
+// DispatchTargetsScoped).
 func DispatchTargets(surface *AttackSurface, scannerName string, max int) []string {
+	return DispatchTargetsScoped(surface, scannerName, max, nil, nil)
+}
+
+// DispatchTargetsScoped is the single dispatch gate. Each endpoint must pass
+// endpointEligibleInScope (State, approved origins, exclusions, placeholder
+// paths, safe method and scanner traits); at most max (<=0: unlimited) unique
+// URLs are dispatched, and each dispatched endpoint must also be granted by
+// budget's assessment-wide unique endpoint cap. A nil scope skips the boundary
+// re-check (legacy) and a nil budget never caps. Every endpoint records the
+// decision and its reason in its scanner coverage.
+func DispatchTargetsScoped(surface *AttackSurface, scannerName string, max int, scope *assessment.AppScope, budget *AssessmentBudget) []string {
 	if surface == nil {
 		return nil
 	}
@@ -504,16 +647,20 @@ func DispatchTargets(surface *AttackSurface, scannerName string, max int) []stri
 	var targets []string
 	for i := range surface.Endpoints {
 		ep := &surface.Endpoints[i]
-		eligible, reason := endpointEligibleForScanner(*ep, scannerName)
+		eligible, reason := endpointEligibleInScope(*ep, scannerName, scope)
 		status := "skipped"
-		if eligible && (max <= 0 || len(targets) < max) {
+		switch {
+		case !eligible:
+		case max > 0 && len(targets) >= max:
+			reason = "endpoint budget exhausted"
+		case budget != nil && len(budget.ReserveEndpoints([]string{ep.ID})) == 0:
+			reason = assessmentEndpointCapReason
+		default:
 			status = "dispatched"
 			if !seen[ep.URL] {
 				seen[ep.URL] = true
 				targets = append(targets, ep.URL)
 			}
-		} else if eligible {
-			reason = "endpoint budget exhausted"
 		}
 		setEndpointCoverage(ep, EndpointScannerCoverage{Scanner: scannerName, Status: status, Reason: reason, StartedAt: now})
 	}
@@ -549,7 +696,38 @@ func requestEndpointTargets(req Request) []string {
 	return req.WebEndpoints
 }
 
+// endpointEligibleForScanner is the pure gate over the endpoint alone (its
+// stamped State included); see endpointEligibleInScope.
 func endpointEligibleForScanner(ep AttackSurfaceEndpoint, scannerName string) (bool, string) {
+	return endpointEligibleInScope(ep, scannerName, nil)
+}
+
+// endpointEligibleInScope decides whether scannerName may be sent ep, and why
+// not. It refuses, in order: a non-dispatchable State, a URL outside scope or
+// matching one of its exclusions (re-checked because seeds, OpenAPI merges and
+// resumed snapshots carry no State), a path holding an unresolved {placeholder}
+// (literal or percent-encoded), an unsafe method, static resources, and
+// endpoints without the traits the scanner needs. A nil scope skips the
+// boundary re-check.
+func endpointEligibleInScope(ep AttackSurfaceEndpoint, scannerName string, scope *assessment.AppScope) (bool, string) {
+	if !endpointStateDispatchable(ep.State) {
+		reason := "endpoint state is " + ep.State
+		if ep.StateReason != "" {
+			reason += ": " + ep.StateReason
+		}
+		return false, reason
+	}
+	if scope != nil {
+		if allowed, why := scope.Allows(ep.URL); !allowed {
+			return false, "endpoint is out of scope: " + why
+		}
+		if excluded, why := scope.Excluded(ep.Method, ep.URL); excluded {
+			return false, "endpoint is excluded: " + why
+		}
+	}
+	if endpointHasPlaceholderPath(ep.URL) {
+		return false, "endpoint path contains an unresolved {placeholder}"
+	}
 	safeMethod := ep.Method == "GET" || ep.Method == "HEAD"
 	if !safeMethod {
 		return false, "unsafe or state-changing method is inventory-only"
@@ -588,6 +766,26 @@ func endpointEligibleForScanner(ep AttackSurfaceEndpoint, scannerName string) (b
 	}
 }
 
+// endpointHasPlaceholderPath reports whether rawURL's path still holds a
+// template placeholder such as {id}, literally or percent-encoded (once or
+// twice). An unparseable URL is treated as a placeholder (fail closed).
+func endpointHasPlaceholderPath(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return true
+	}
+	for _, p := range []string{u.Path, u.EscapedPath()} {
+		p = strings.ToLower(p)
+		if strings.ContainsAny(p, "{}") || strings.Contains(p, "%7b") || strings.Contains(p, "%7d") {
+			return true
+		}
+	}
+	return false
+}
+
+// CompleteEndpointCoverage records run's outcome on every endpoint dispatched
+// to scannerName. A completed run of a batch-evidence adapter is recorded as
+// batch_completed; completed is kept for adapters with per-endpoint evidence.
 func CompleteEndpointCoverage(surface *AttackSurface, scannerName string, run Run) {
 	if surface == nil {
 		return
@@ -595,6 +793,9 @@ func CompleteEndpointCoverage(surface *AttackSurface, scannerName string, run Ru
 	status := run.Status
 	if status == "not_applicable" || status == "cancelled" {
 		status = "failed"
+	}
+	if status == "completed" && batchEvidenceScanners[scannerName] {
+		status = EndpointCoverageBatchCompleted
 	}
 	for i := range surface.Endpoints {
 		for j := range surface.Endpoints[i].ScannerCoverage {

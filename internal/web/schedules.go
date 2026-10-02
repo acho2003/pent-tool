@@ -65,6 +65,9 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// The review state is server-owned: a new schedule was just reviewed.
+		req.setReview("")
+		req.LastSkippedAt = time.Time{}
 		req.ID = randomSlug()
 		req.Enabled = true
 		req.NextRun = calculateNextRun(&req, time.Now())
@@ -115,12 +118,24 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if sch.Assessment != nil {
-			plan := s.buildAssessmentPlan(*sch.Assessment)
-			if sch.PlanFingerprint == "" || sch.PlanFingerprint != plan.Fingerprint || len(plan.Errors) > 0 {
+		s.schedulesMu.RLock()
+		typedConfig, reviewedFingerprint := sch.Assessment, sch.PlanFingerprint
+		s.schedulesMu.RUnlock()
+		if typedConfig != nil {
+			plan := s.buildAssessmentPlan(*typedConfig)
+			if reason := scheduleReviewReason(plan, reviewedFingerprint); reason != "" {
+				s.schedulesMu.Lock()
+				changed := sch.PlanFingerprint == reviewedFingerprint && sch.setReview(reason)
+				diskCopy := *sch // snapshot under lock for race-free disk write
+				s.schedulesMu.Unlock()
+				if changed {
+					if err := s.saveScheduleToDisk(&diskCopy); err != nil {
+						log.Printf("[SCHEDULER] Error saving review state of schedule %s: %v", diskCopy.ID, err)
+					}
+				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				_ = json.NewEncoder(w).Encode(map[string]any{"error": "scheduled assessment plan changed; preview and save it again", "plan": plan})
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "scheduled assessment plan changed; preview and save it again", "review_state": ScheduleReviewNeeded, "review_reason": reason, "plan": plan})
 				return
 			}
 		}
@@ -218,6 +233,14 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 		sch.Model = req.Model
 		sch.Artifact = req.Artifact
 		sch.VulsSSHHost = req.VulsSSHHost
+		if req.Assessment != nil {
+			// The operator re-previewed and accepted the current plan, which
+			// clears any needs-review state. A PUT without an assessment (an
+			// older client editing name or timing) keeps the reviewed plan.
+			sch.Assessment = req.Assessment
+			sch.PlanFingerprint = req.PlanFingerprint
+			sch.setReview("")
+		}
 
 		// If any timing field changed, or enabled transitioned false -> true, recalculate NextRun
 		if sch.timing() != oldTiming || (sch.Enabled && !oldEnabled) {

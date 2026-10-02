@@ -25,8 +25,17 @@ func (dalfoxRunner) Descriptor() Descriptor {
 	return Descriptor{Name: "dalfox", Summary: "XSS detection over discovered parameterized URLs", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight, Applies: appliesToHost}
 }
 func (r dalfoxRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
-	return executeSpec(ctx, r.Name(), req, cfg, buildDalfox(req, cfg), emit)
+	run := executeSpec(ctx, r.Name(), req, cfg, buildDalfox(req, cfg), emit)
+	if run.Status == "completed" {
+		// A completed run still did not attempt headless DOM XSS verification.
+		run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationHeadlessExcluded, Reason: dalfoxHeadlessLimitation})
+	}
+	return run
 }
+
+// dalfoxHeadlessLimitation explains the excluded headless verification on
+// completed Dalfox runs.
+const dalfoxHeadlessLimitation = "headless DOM XSS verification is disabled: its browser requests bypass the rate delay and cannot be scope-checked"
 
 // parameterizedURLs returns the subset of candidate URLs that carry a query
 // string, since XSS parameter testing needs an input to fuzz. The seed target is
@@ -78,12 +87,18 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 		duration = dalfoxMaxDuration
 	}
 
-	// Bounded, machine-readable detection run:
+	// Bounded, machine-readable detection run (flags verified against the
+	// pinned dalfox v2.13.0 cmd/root.go):
 	//   file <list>   : test the discovered parameterized URLs
 	//   --format json : structured PoC output for the parser
 	//   --silence --no-color : quiet, parseable stdout
 	//   --skip-bav    : skip basic-another-vuln probing (stay focused on XSS)
-	//   --worker/-d   : bounded concurrency and a per-request delay
+	//   --skip-mining-all : no DOM/dictionary parameter mining; only the
+	//                   dispatcher-approved parameters are tested
+	//   --skip-headless : the headless DOM verifier runs beside the workers,
+	//                   outside the --delay limiter, and its browser requests
+	//                   cannot be scope-checked
+	//   --worker 1    : one request at a time, so --delay bounds the rate
 	//   --timeout     : per-request timeout in seconds
 	args := []string{
 		"file", listPath,
@@ -92,15 +107,25 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 		"--silence",
 		"--no-color",
 		"--skip-bav",
-		"--worker", "10",
+		"--skip-mining-all",
+		"--skip-headless",
+		"--worker", "1",
 		"--timeout", "10",
 	}
 	if cfg.RateRPS > 0 {
-		// Translate the profile rate into a per-request delay (ms) so the scan
-		// respects the same gentleness the rest of the web track uses.
-		delayMS := 1000 / cfg.RateRPS
-		if delayMS > 0 {
-			args = append(args, "--delay", strconv.Itoa(delayMS))
+		// With a single worker, a per-request delay (ms) rounded up from the
+		// profile rate keeps Dalfox at or below RateRPS.
+		delayMS := (1000 + cfg.RateRPS - 1) / cfg.RateRPS
+		args = append(args, "--delay", strconv.Itoa(delayMS))
+	}
+	// Only a typed assessment's TargetAuth is the verified, target-bound
+	// session (RunAssessmentJobs attaches it after verification); operator
+	// scan headers and legacy TargetAuth are never forwarded.
+	if req.TypedAssessment {
+		for _, h := range strings.Split(req.TargetAuth, "\n") {
+			if h = strings.TrimSpace(h); h != "" {
+				args = append(args, "-H", h)
+			}
 		}
 	}
 

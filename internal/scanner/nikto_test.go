@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 func TestNiktoBudgetRetainsPartialFindings(t *testing.T) {
@@ -90,6 +92,43 @@ func TestBuildNiktoThoroughHasNoRequestPause(t *testing.T) {
 	for _, arg := range spec.args {
 		if arg == "-Pause" || arg == "-maxtime" {
 			t.Fatalf("thorough Nikto must not set a request pause or host deadline: %v", spec.args)
+		}
+	}
+}
+
+// Nikto requests its own fixed test paths and cannot honour route exclusions,
+// so any configured exclusion refuses it with a visible excluded gap.
+func TestNiktoRestrictedWhenExclusionsConfigured(t *testing.T) {
+	origins := []assessment.ApprovedOrigin{{Scheme: "http", Host: "example.test", PathPrefix: "/"}}
+	excluded := assessment.NewAppScope(origins, assessment.Exclusion{PathPattern: "/logout"})
+	cfg := Config{NiktoPath: "nikto", NiktoTimeout: time.Minute}
+	req := Request{Target: "http://example.test/", ScanDir: t.TempDir(), TypedAssessment: true, AppScope: &excluded}
+	spec := buildNikto(req, cfg)
+	if spec.notApp == "" || len(spec.args) != 0 || !strings.Contains(spec.notApp, "exclusion") {
+		t.Fatalf("Nikto with exclusions = %+v, want a policy refusal", spec)
+	}
+	var events []Event
+	run := niktoRunner{}.Run(context.Background(), req, cfg, func(e Event) { events = append(events, e) })
+	if run.Status != "not_applicable" || run.GapKind != GapExcluded || run.Reason != spec.notApp {
+		t.Fatalf("restricted Nikto run = %+v", run)
+	}
+	if len(events) != 1 || events[0].Run.GapKind != GapExcluded {
+		t.Fatalf("restricted Nikto events = %+v", events)
+	}
+	if restricted, reason := AdapterPolicyRestriction("nikto", assessment.AssessmentConfig{Exclusions: []assessment.Exclusion{{PathPattern: "/logout"}}}); !restricted || reason != spec.notApp {
+		t.Fatalf("AdapterPolicyRestriction = %v %q, want %q", restricted, reason, spec.notApp)
+	}
+
+	// Without exclusions the root-only behaviour is unchanged, scope or not.
+	plain := assessment.NewAppScope(origins)
+	for _, scope := range []*assessment.AppScope{nil, &plain} {
+		ok := buildNikto(Request{Target: "http://example.test/", ScanDir: t.TempDir(), AppScope: scope}, cfg)
+		if ok.notApp != "" || !hasArg(ok.args, "-host") {
+			t.Fatalf("unrestricted Nikto spec = %+v", ok)
+		}
+		run := niktoRunner{}.Run(context.Background(), Request{Target: "ftp://example.test/", ScanDir: t.TempDir(), AppScope: scope}, cfg, nil)
+		if run.Status != "not_applicable" || run.GapKind != "" {
+			t.Fatalf("non-policy refusal must not be tagged as a policy gap: %+v", run)
 		}
 	}
 }

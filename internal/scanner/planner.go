@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
@@ -41,6 +42,7 @@ type PlanJob struct {
 	AssessmentType  assessment.Type   `json:"assessment_type"`
 	AssessmentTypes []assessment.Type `json:"assessment_types,omitempty"`
 	Variant         string            `json:"variant"`
+	Stage           string            `json:"stage,omitempty"`
 	Dependencies    []string          `json:"dependencies,omitempty"`
 	ExecutionMode   string            `json:"execution_mode,omitempty"`
 	Reason          string            `json:"reason,omitempty"`
@@ -63,7 +65,19 @@ type PlanInput struct {
 	// CredentialAvailability is keyed by targetID + NUL + accessKind + NUL + credentialID. A
 	// declared ID alone is not evidence that a secret exists or is target-bound.
 	CredentialAvailability map[string]bool `json:"-"`
+	// ToolVersions is keyed by registry ID (or a tool artifact such as a
+	// template set) and is hashed verbatim into the fingerprint, so a tool
+	// upgrade between preview and start makes the accepted plan stale.
+	ToolVersions map[string]string `json:"-"`
+	// CredentialRevisions is keyed by credential ID with a non-secret revision
+	// value; rotating a bound credential makes the accepted plan stale.
+	CredentialRevisions map[string]string `json:"-"`
 }
+
+// PlanRegistryVersion pins scanner, stage and preparation semantics that affect
+// execution identity. Bumping it deliberately invalidates stored plans and
+// schedules (version 4: stage ladder, dependencies, provider selection).
+const PlanRegistryVersion = "4"
 
 type AssessmentPlan struct {
 	Config          assessment.AssessmentConfig     `json:"config"`
@@ -76,6 +90,7 @@ type AssessmentPlan struct {
 	Errors          []assessment.Problem            `json:"errors,omitempty"`
 	Fingerprint     string                          `json:"fingerprint"`
 	RegistryVersion string                          `json:"registry_version"`
+	ToolVersions    map[string]string               `json:"-"`
 }
 
 // PlanAssessment is a deterministic, side-effect-free plan builder. It never
@@ -84,7 +99,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	cfg := assessment.Normalize(input.Config)
 	// RegistryVersion also pins scanner and preparation semantics which affect
 	// execution identity (including which imported API operations are seeded).
-	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: "3"}
+	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: input.ToolVersions}
 	for i := range plan.Capabilities {
 		evidence := &plan.Capabilities[i]
 		if evidence.Capability != assessment.CapAuthWeb && evidence.Capability != assessment.CapSSH {
@@ -113,7 +128,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 	}
 	if len(plan.Errors) > 0 {
-		plan.Fingerprint = planFingerprint(cfg, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion)
+		plan.Fingerprint = planFingerprint(plan, input.ToolVersions, input.CredentialRevisions)
 		return plan
 	}
 	defs := ScannerRegistry()
@@ -131,7 +146,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 	}
 	if len(plan.Errors) > 0 {
-		plan.Fingerprint = planFingerprint(cfg, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion)
+		plan.Fingerprint = planFingerprint(plan, input.ToolVersions, input.CredentialRevisions)
 		return plan
 	}
 
@@ -140,6 +155,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	// they never surface as coverage gaps. subfinder stays planner-managed: it is
 	// a real conditional job (opt-in subdomain discovery).
 	discoveryTools := map[string]bool{"httpx": true, "katana": true}
+	// Discovery provider choices select a registry ID directly (in auto mode
+	// too, so custom-mode demotion never applies) and skip its alternative.
+	providerChosen, providerReplaced := providerSelections(cfg.DiscoveryProviders)
 	for _, def := range defs {
 		if discoveryTools[def.ID] {
 			continue
@@ -157,6 +175,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		selected := def.DefaultSelection == "automatic" || def.DefaultSelection == "conditional"
 		if requestedCustom {
 			selected = custom[def.ID]
+		}
+		if providerChosen[def.ID] {
+			selected = true
 		}
 		for _, target := range matchedTargets {
 			for _, typ := range cfg.Types {
@@ -176,6 +197,12 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 				}
 				if requestedCustom && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
 					state, code, reason = PlanSelected, "scanner.explicitly_selected", "This optional scanner was explicitly selected by the operator."
+				}
+				if providerChosen[def.ID] && state == PlanOptional {
+					state, code, reason = PlanSelected, "discovery.provider_selected", "This scanner was chosen as a discovery provider."
+				}
+				if chosen := providerReplaced[def.ID]; chosen != "" && (state == PlanSelected || state == PlanConditional || state == PlanOptional) {
+					state, code, reason = PlanSkipped, "selection.provider_alternative", fmt.Sprintf("Skipped because %s was chosen as the alternative provider.", chosen)
 				}
 				if state == PlanSelected || state == PlanConditional {
 					if !selected {
@@ -198,6 +225,26 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: def.ID, State: PlanNotApplicable, ReasonCode: "target_or_type_missing", Reason: "No supplied target and requested assessment type match this scanner."})
 		}
 	}
+	// Authentication and crawling are accepted workflow jobs. They are not
+	// selectable vulnerability scanners: they prepare evidence for later stages
+	// and carry their own completion or gap status.
+	if slices.Contains(cfg.Types, assessment.TypeWebApplication) || slices.Contains(cfg.Types, assessment.TypeAPI) {
+		for _, target := range cfg.Targets {
+			if target.Kind != assessment.KindURL && target.Kind != assessment.KindDomain && target.Kind != assessment.KindHost {
+				continue
+			}
+			if assessmentWebAuthBound(cfg.Access, target.ID) {
+				plan.Jobs = append(plan.Jobs, PlanJob{ID: "auth:" + target.ID + ":auth", State: PlanSelected, Scanner: "auth", TargetID: target.ID, Target: target.Value, Variant: "auth", Stage: StageAuth})
+			}
+			state := PlanSelected
+			if available, known := input.Availability["katana"]; known && !available {
+				state = PlanUnavailable
+			}
+			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: "katana", TargetID: target.ID, State: state, ReasonCode: "workflow.crawl", Reason: "Endpoint discovery stage; authentication is verified before crawling when configured."})
+			plan.Jobs = append(plan.Jobs, PlanJob{ID: "katana:" + target.ID + ":katana", State: state, Scanner: "katana", TargetID: target.ID, Target: target.Value, Variant: "katana", Stage: StageCrawl})
+		}
+	}
+	plan.Decisions = append(plan.Decisions, unregisteredProviderDecisions(cfg)...)
 	for _, target := range cfg.Targets {
 		for _, typ := range cfg.Types {
 			if !targetSupportsType(target, typ) {
@@ -238,9 +285,142 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 		plan.Coverage = append(plan.Coverage, coverage)
 	}
-	sort.SliceStable(plan.Jobs, func(i, j int) bool { return plan.Jobs[i].ID < plan.Jobs[j].ID })
-	plan.Fingerprint = planFingerprint(cfg, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion)
+	assignStages(plan.Jobs)
+	// Every dependency points at a strictly earlier stage, so ordering by stage
+	// rank (ties by job ID) is a deterministic topological order.
+	sort.SliceStable(plan.Jobs, func(i, j int) bool {
+		ri, rj := stageRank(plan.Jobs[i].Stage), stageRank(plan.Jobs[j].Stage)
+		if ri != rj {
+			return ri < rj
+		}
+		return plan.Jobs[i].ID < plan.Jobs[j].ID
+	})
+	plan.Fingerprint = planFingerprint(plan, input.ToolVersions, input.CredentialRevisions)
 	return plan
+}
+
+// assignStages sets each job's Stage from the ladder and, for web/API workflow
+// jobs, its Dependencies: the same-target workflow jobs in each prerequisite
+// stage, looking through prerequisite stages that have no job for the target.
+// Scanners outside the web workflow are ordered by stage but get no
+// prerequisites, because their adapters do not consume workflow outputs.
+func assignStages(jobs []PlanJob) {
+	byStage := map[string]map[string][]string{} // targetID -> stage -> job IDs
+	for i := range jobs {
+		jobs[i].Stage = stageForScanner(jobs[i].Scanner)
+		if !webWorkflowScanner(jobs[i].Scanner) {
+			continue
+		}
+		if byStage[jobs[i].TargetID] == nil {
+			byStage[jobs[i].TargetID] = map[string][]string{}
+		}
+		byStage[jobs[i].TargetID][jobs[i].Stage] = append(byStage[jobs[i].TargetID][jobs[i].Stage], jobs[i].ID)
+	}
+	for i := range jobs {
+		jobs[i].Dependencies = nil
+		if !webWorkflowScanner(jobs[i].Scanner) {
+			continue
+		}
+		stages := byStage[jobs[i].TargetID]
+		visited := map[string]bool{}
+		var deps []string
+		var visit func(stage string)
+		visit = func(stage string) {
+			for _, prereq := range stagePrerequisites[stage] {
+				if visited[prereq] {
+					continue
+				}
+				visited[prereq] = true
+				if ids := stages[prereq]; len(ids) > 0 {
+					deps = append(deps, ids...)
+				} else {
+					visit(prereq)
+				}
+			}
+		}
+		visit(jobs[i].Stage)
+		sort.Strings(deps)
+		jobs[i].Dependencies = slices.Compact(deps)
+	}
+}
+
+func webWorkflowScanner(id string) bool {
+	return scannerGroups[id] == GroupWebAPI
+}
+
+// providerSelections returns the registry IDs chosen through discovery
+// providers and, for each unchosen alternative, the provider that replaced it.
+func providerSelections(dp *assessment.DiscoveryProviders) (map[string]bool, map[string]string) {
+	chosen, replaced := map[string]bool{}, map[string]string{}
+	if dp == nil {
+		return chosen, replaced
+	}
+	if len(dp.Subdomain) > 0 {
+		for _, p := range dp.Subdomain {
+			chosen[p] = true
+		}
+		for _, alt := range []string{assessment.ProviderSubfinder, assessment.ProviderAmass} {
+			if !chosen[alt] {
+				replaced[alt] = strings.Join(dp.Subdomain, ", ")
+			}
+		}
+	}
+	for _, pair := range []struct{ choice, a, b string }{
+		{dp.Historical, assessment.ProviderGau, assessment.ProviderWaybackurls},
+		{dp.TLS, assessment.ProviderTestssl, assessment.ProviderSSLyze},
+	} {
+		switch pair.choice {
+		case pair.a:
+			chosen[pair.a], replaced[pair.b] = true, pair.a
+		case pair.b:
+			chosen[pair.b], replaced[pair.a] = true, pair.b
+		}
+	}
+	return chosen, replaced
+}
+
+// providerTemplates maps provider IDs without a registry entry yet to the
+// registered scanner whose target kinds and assessment types they share.
+var providerTemplates = map[string]string{
+	assessment.ProviderAmass:       "subfinder",
+	assessment.ProviderGau:         "katana",
+	assessment.ProviderWaybackurls: "katana",
+	assessment.ProviderSSLyze:      "testssl",
+}
+
+// unregisteredProviderDecisions makes a chosen provider that has no adapter in
+// this build visible as unavailable instead of silently dropping it.
+func unregisteredProviderDecisions(cfg assessment.AssessmentConfig) []PlanDecision {
+	dp := cfg.DiscoveryProviders
+	if dp == nil {
+		return nil
+	}
+	ids := append(append([]string{}, dp.Subdomain...), dp.Historical, dp.TLS)
+	var out []PlanDecision
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, registered := RegistryEntry(id); registered {
+			continue
+		}
+		tmpl, ok := RegistryEntry(providerTemplates[id])
+		if !ok {
+			continue
+		}
+		for _, target := range cfg.Targets {
+			if !slices.Contains(tmpl.TargetKinds, target.Kind) {
+				continue
+			}
+			for _, typ := range cfg.Types {
+				if !slices.Contains(tmpl.AssessmentTypes, typ) || !targetSupportsType(target, typ) {
+					continue
+				}
+				out = append(out, PlanDecision{Scanner: id, TargetID: target.ID, Types: []assessment.Type{typ}, State: PlanUnavailable, ReasonCode: "scanner.unavailable", Reason: fmt.Sprintf("%s was chosen as a discovery provider, but this build has no %s adapter yet.", id, id)})
+			}
+		}
+	}
+	return out
 }
 
 func appendPlanJob(jobs *[]PlanJob, job PlanJob) {
@@ -370,14 +550,19 @@ func hasCapability(all []assessment.CapabilityEvidence, c assessment.Capability,
 	}
 	return false
 }
-func planFingerprint(cfg assessment.AssessmentConfig, capabilities []assessment.CapabilityEvidence, decisions []PlanDecision, jobs []PlanJob, registryVersion string) string {
+
+// planFingerprint binds the plan's decisions plus the tool versions and
+// credential revisions it was built against. Empty maps hash like nil ones.
+func planFingerprint(plan AssessmentPlan, toolVersions, credentialRevisions map[string]string) string {
 	data, _ := json.Marshal(struct {
-		Config          assessment.AssessmentConfig     `json:"config"`
-		Capabilities    []assessment.CapabilityEvidence `json:"capabilities"`
-		Decisions       []PlanDecision                  `json:"decisions"`
-		Jobs            []PlanJob                       `json:"jobs"`
-		RegistryVersion string                          `json:"registry_version"`
-	}{cfg, capabilities, decisions, jobs, registryVersion})
+		Config              assessment.AssessmentConfig     `json:"config"`
+		Capabilities        []assessment.CapabilityEvidence `json:"capabilities"`
+		Decisions           []PlanDecision                  `json:"decisions"`
+		Jobs                []PlanJob                       `json:"jobs"`
+		RegistryVersion     string                          `json:"registry_version"`
+		ToolVersions        map[string]string               `json:"tool_versions,omitempty"`
+		CredentialRevisions map[string]string               `json:"credential_revisions,omitempty"`
+	}{plan.Config, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion, toolVersions, credentialRevisions})
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }

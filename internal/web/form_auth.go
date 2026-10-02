@@ -39,16 +39,16 @@ func verifyFormSession(ctx context.Context, appURL, verifyURL, marker string, va
 		submitFormat = "form"
 	}
 	if loginURL == "" || username == "" || password == "" || marker == "" || len(marker) > 256 || strings.ContainsAny(marker, "\r\n\x00") || !validHTTPHeaderName(usernameField) || !validHTTPHeaderName(passwordField) || (csrfField != "" && !validHTTPHeaderName(csrfField)) {
-		return "", fmt.Errorf("form login configuration is incomplete or invalid")
+		return "", formConfigError("form login configuration is incomplete or invalid")
 	}
 	if submitFormat != "form" && submitFormat != "json" {
-		return "", fmt.Errorf("form login submit format must be form or json")
+		return "", formConfigError("form login submit format must be form or json")
 	}
 	if submitFormat == "json" && csrfField != "" {
-		return "", fmt.Errorf("a CSRF field is only supported for HTML form submission")
+		return "", formConfigError("a CSRF field is only supported for HTML form submission")
 	}
 	if !urlWithinApplication(appURL, loginURL) || !urlWithinApplication(appURL, verifyURL) || (submitURL != "" && !urlWithinApplication(appURL, submitURL)) {
-		return "", fmt.Errorf("form login, submit, or verification URL is outside the application boundary")
+		return "", formConfigError("form login, submit, or verification URL is outside the application boundary")
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -62,7 +62,7 @@ func verifyFormSession(ctx context.Context, appURL, verifyURL, marker string, va
 	}}
 	loginRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, loginURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("invalid form login URL")
+		return "", formConfigError("invalid form login URL")
 	}
 	loginResponse, err := client.Do(loginRequest)
 	if err != nil {

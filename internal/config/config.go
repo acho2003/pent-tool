@@ -25,6 +25,11 @@ type Config struct {
 	VulsPath              string
 	VulsSSHConfigPath     string
 	SubfinderPath         string
+	AmassPath             string
+	DNSXPath              string
+	GauPath               string
+	WaybackurlsPath       string
+	SSLyzePath            string
 	HttpxPath             string
 	NmapPath              string
 	MasscanPath           string
@@ -60,6 +65,11 @@ type Config struct {
 	TrivyTimeoutSec       int
 	VulsTimeoutSec        int
 	SubfinderTimeoutSec   int
+	AmassTimeoutSec       int
+	DNSXTimeoutSec        int
+	GauTimeoutSec         int
+	WaybackurlsTimeoutSec int
+	SSLyzeTimeoutSec      int
 	HttpxTimeoutSec       int
 	NmapTimeoutSec        int
 	TestsslTimeoutSec     int
@@ -252,6 +262,11 @@ func load() *Config {
 		VulsPath:              envOr("XALGORIX_VULS_PATH", "vuls"),
 		VulsSSHConfigPath:     envOr("XALGORIX_VULS_SSH_CONFIG", filepath.Join(home, ".ssh", "config")),
 		SubfinderPath:         envOr("XALGORIX_SUBFINDER_PATH", "subfinder"),
+		AmassPath:             envOr("XALGORIX_AMASS_PATH", "amass"),
+		DNSXPath:              envOr("XALGORIX_DNSX_PATH", "dnsx"),
+		GauPath:               envOr("XALGORIX_GAU_PATH", "gau"),
+		WaybackurlsPath:       envOr("XALGORIX_WAYBACKURLS_PATH", "waybackurls"),
+		SSLyzePath:            envOr("XALGORIX_SSLYZE_PATH", "sslyze"),
 		HttpxPath:             envOr("XALGORIX_HTTPX_PATH", "httpx"),
 		NmapPath:              envOr("XALGORIX_NMAP_PATH", "nmap"),
 		MasscanPath:           envOr("XALGORIX_MASSCAN_PATH", "masscan"),
@@ -287,6 +302,11 @@ func load() *Config {
 		TrivyTimeoutSec:       envOrInt("XALGORIX_TRIVY_TIMEOUT_SECONDS", 3600),
 		VulsTimeoutSec:        envOrInt("XALGORIX_VULS_TIMEOUT_SECONDS", 3600),
 		SubfinderTimeoutSec:   envOrInt("XALGORIX_SUBFINDER_TIMEOUT_SECONDS", 600),
+		AmassTimeoutSec:       envOrInt("XALGORIX_AMASS_TIMEOUT_SECONDS", 600),
+		DNSXTimeoutSec:        envOrInt("XALGORIX_DNSX_TIMEOUT_SECONDS", 300),
+		GauTimeoutSec:         envOrInt("XALGORIX_GAU_TIMEOUT_SECONDS", 300),
+		WaybackurlsTimeoutSec: envOrInt("XALGORIX_WAYBACKURLS_TIMEOUT_SECONDS", 300),
+		SSLyzeTimeoutSec:      envOrInt("XALGORIX_SSLYZE_TIMEOUT_SECONDS", 900),
 		HttpxTimeoutSec:       envOrInt("XALGORIX_HTTPX_TIMEOUT_SECONDS", 600),
 		NmapTimeoutSec:        envOrInt("XALGORIX_NMAP_TIMEOUT_SECONDS", 1800),
 		TestsslTimeoutSec:     envOrInt("XALGORIX_TESTSSL_TIMEOUT_SECONDS", 1800),

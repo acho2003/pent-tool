@@ -119,3 +119,78 @@ func TestAttackSurfaceSnapshotChecksum(t *testing.T) {
 		t.Fatal("snapshot with stale source checksum was reused")
 	}
 }
+
+func TestCompleteEndpointCoverageRecordsBatchCompletedForBatchAdapters(t *testing.T) {
+	surface := NewSeedAttackSurface("app:test", "https://example.test/")
+	byID := map[string]int{}
+	for i := range surface.Endpoints {
+		byID[surface.Endpoints[i].ID] = i
+	}
+	ep, _ := normalizeAttackSurfaceEndpoint("https://example.test/api/items?q=1", "GET", "katana", "", 200, "application/json", endpointParameters("https://example.test/api/items?q=1"), false, false)
+	mergeSurfaceEndpoint(surface, byID, ep)
+	for _, name := range []string{"nuclei", "wapiti", "dalfox", "zap"} {
+		if len(DispatchTargets(surface, name, 100)) == 0 {
+			t.Fatalf("%s dispatched nothing", name)
+		}
+		CompleteEndpointCoverage(surface, name, Run{Scanner: name, Status: "completed", FinishedAt: "2026-10-02T00:00:00Z"})
+	}
+	want := map[string]string{"nuclei": EndpointCoverageBatchCompleted, "wapiti": EndpointCoverageBatchCompleted, "dalfox": EndpointCoverageBatchCompleted, "zap": "completed"}
+	api := surface.Endpoints[byID[ep.ID]]
+	for name, status := range want {
+		var got string
+		for _, c := range api.ScannerCoverage {
+			if c.Scanner == name {
+				got = c.Status
+			}
+		}
+		if got != status {
+			t.Errorf("%s coverage status = %q, want %q", name, got, status)
+		}
+	}
+	// A failed batch run is still recorded as failed, not batch_completed.
+	DispatchTargets(surface, "nuclei", 100)
+	CompleteEndpointCoverage(surface, "nuclei", Run{Scanner: "nuclei", Status: "failed", Reason: "exit 1"})
+	for _, c := range surface.Endpoints[byID[ep.ID]].ScannerCoverage {
+		if c.Scanner == "nuclei" && c.Status != "failed" {
+			t.Fatalf("failed nuclei run recorded %q", c.Status)
+		}
+	}
+}
+
+func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
+	if AttackSurfaceClassifierVersion != 2 {
+		t.Fatalf("classifier version = %d, want 2", AttackSurfaceClassifierVersion)
+	}
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "results.jsonl")
+	if err := os.WriteFile(raw, []byte(`{"request":{"endpoint":"https://example.test/users/%7Bid%7D"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	surface, err := ParseKatanaAttackSurface(raw, "app:test", "https://example.test", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a snapshot cached by the previous classifier with the same
+	// source checksum: it must not be reused, so the caller re-parses the raw
+	// JSONL (no network) under the new eligibility semantics.
+	surface.ClassifierVersion = 1
+	if err := SaveAttackSurface(dir, surface); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := LoadAttackSurface(dir, "app:test", raw); ok {
+		t.Fatal("classifier v1 snapshot was reused")
+	}
+	reparsed, err := ParseKatanaAttackSurface(raw, "app:test", "https://example.test", false)
+	if err != nil || reparsed.ClassifierVersion != AttackSurfaceClassifierVersion {
+		t.Fatalf("reparse = %+v, %v", reparsed, err)
+	}
+	if err := SaveAttackSurface(dir, reparsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := LoadAttackSurface(dir, "app:test", raw); !ok {
+		t.Fatal("re-parsed snapshot was not reused")
+	}
+	if got := DispatchTargets(reparsed, "nuclei", 100); len(got) != 0 {
+		t.Fatalf("re-parsed placeholder endpoint dispatched: %v", got)
+	}
+}

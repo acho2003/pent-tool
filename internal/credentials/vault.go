@@ -33,6 +33,11 @@ type Record struct {
 	TargetIDs []string              `json:"target_ids"`
 	Values    map[string]string     `json:"values"`
 	CreatedAt time.Time             `json:"created_at"`
+	// UpdatedAt and Revision are vault-managed: Create starts at revision 1
+	// and every Replace increments it. Records written before revisions
+	// existed decode as revision 0 with a zero UpdatedAt.
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	Revision  int       `json:"revision,omitempty"`
 }
 
 // Metadata is safe to return to clients; it contains no credential values.
@@ -42,6 +47,10 @@ type Metadata struct {
 	Kind      assessment.AccessKind `json:"kind"`
 	TargetIDs []string              `json:"target_ids"`
 	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at,omitzero"`
+	// Revision is non-secret and lets plans fingerprint which version of a
+	// credential they were built against without touching its values.
+	Revision int `json:"revision,omitempty"`
 }
 
 type Vault struct {
@@ -134,6 +143,8 @@ func (v *Vault) Create(record Record) (Metadata, error) {
 	}
 	record.ID = id
 	record.CreatedAt = time.Now().UTC()
+	record.UpdatedAt = record.CreatedAt
+	record.Revision = 1
 	if err := v.write(record); err != nil {
 		return Metadata{}, err
 	}
@@ -149,6 +160,19 @@ func (v *Vault) Get(id, targetID string) (Record, error) {
 		return Record{}, ErrTargetNotBound
 	}
 	return record, nil
+}
+
+// RevisionOf returns the stored revision of a credential without exposing its
+// values. Legacy records written before revisions existed report 0.
+func (v *Vault) RevisionOf(id string) (int, error) {
+	if v == nil {
+		return 0, errors.New("credential vault is unavailable")
+	}
+	record, err := v.read(id)
+	if err != nil {
+		return 0, err
+	}
+	return record.Revision, nil
 }
 
 func (v *Vault) List() ([]Metadata, error) {
@@ -178,6 +202,8 @@ func (v *Vault) Replace(id string, replacement Record) (Metadata, error) {
 	}
 	replacement.ID = old.ID
 	replacement.CreatedAt = old.CreatedAt
+	replacement.Revision = old.Revision + 1
+	replacement.UpdatedAt = time.Now().UTC()
 	replacement.Name = strings.TrimSpace(replacement.Name)
 	if replacement.Name == "" {
 		return Metadata{}, errors.New("credential name is required")
@@ -346,7 +372,7 @@ func (v *Vault) read(id string) (Record, error) {
 }
 
 func metadata(record Record) Metadata {
-	return Metadata{ID: record.ID, Name: record.Name, Kind: record.Kind, TargetIDs: append([]string(nil), record.TargetIDs...), CreatedAt: record.CreatedAt}
+	return Metadata{ID: record.ID, Name: record.Name, Kind: record.Kind, TargetIDs: append([]string(nil), record.TargetIDs...), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, Revision: record.Revision}
 }
 
 func randomID() (string, error) {

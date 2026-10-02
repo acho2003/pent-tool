@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -64,12 +65,26 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(plan)
 }
 
+// buildAssessmentPlan builds the plan for a preview (and for saved-plan
+// revalidation), where no per-scan loopback allowlist exists.
 func (s *Server) buildAssessmentPlan(cfg assessment.AssessmentConfig) scanner.AssessmentPlan {
+	return s.buildAssessmentPlanForScan(cfg, nil)
+}
+
+// buildAssessmentPlanForScan builds the plan with the request's per-scan
+// loopback allowlist, so preview and start run the same scope guard.
+func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, allowLoopbackPorts []int) scanner.AssessmentPlan {
 	credentialAvailability := map[string]bool{}
+	credentialRevisions := map[string]string{}
 	if vault, err := s.openCredentialVault(); err == nil {
 		for _, binding := range cfg.Access {
 			if strings.TrimSpace(binding.CredentialID) == "" {
 				continue
+			}
+			// Non-secret revision metadata: rotating a bound credential makes
+			// an accepted plan stale.
+			if revision, revErr := vault.RevisionOf(binding.CredentialID); revErr == nil {
+				credentialRevisions[binding.CredentialID] = strconv.Itoa(revision)
 			}
 			for _, targetID := range binding.TargetIDs {
 				key := targetID + "\x00" + string(binding.Kind) + "\x00" + binding.CredentialID
@@ -87,7 +102,8 @@ func (s *Server) buildAssessmentPlan(cfg assessment.AssessmentConfig) scanner.As
 			unavailableReasons["masscan"] = reason
 		}
 	}
-	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), UnavailabilityReasons: unavailableReasons, CredentialAvailability: credentialAvailability})
+	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), UnavailabilityReasons: unavailableReasons, CredentialAvailability: credentialAvailability, ToolVersions: s.toolVersions, CredentialRevisions: credentialRevisions})
+	plan.Errors = append(plan.Errors, s.assessmentScopeProblems(cfg, allowLoopbackPorts)...)
 	if len(plan.Errors) == 0 {
 		normalized := plan.Config
 		bindings := append([]assessment.APIDefinitionBinding(nil), normalized.APIDefinitions...)
@@ -119,6 +135,28 @@ func (s *Server) buildAssessmentPlan(cfg assessment.AssessmentConfig) scanner.As
 		}
 	}
 	return plan
+}
+
+// assessmentScopeProblems runs the self-listener / local-target guard over
+// every network target and every approved origin. It honours the global
+// AllowLocalTargets opt-in and the per-scan loopback allowlist, and never
+// exposes the dashboard listener.
+func (s *Server) assessmentScopeProblems(cfg assessment.AssessmentConfig, allowLoopbackPorts []int) []assessment.Problem {
+	var problems []assessment.Problem
+	for _, target := range cfg.Targets {
+		switch target.Kind {
+		case assessment.KindDomain, assessment.KindURL, assessment.KindIP, assessment.KindCIDR, assessment.KindHost:
+			if s.isBlockedTargetForScan(target.Value, allowLoopbackPorts) {
+				problems = append(problems, assessment.Problem{Code: "target.scope_blocked", Message: fmt.Sprintf("assessment target %q is local, internal, or the Xalgorix listener and is outside scan policy", target.ID), Blocking: true})
+			}
+		}
+	}
+	for _, origin := range cfg.ApprovedOrigins {
+		if s.isBlockedTargetForScan(origin.Origin(), allowLoopbackPorts) {
+			problems = append(problems, assessment.Problem{Code: "target.scope_blocked", Message: fmt.Sprintf("approved origin %s of target %q is local, internal, or the Xalgorix listener and is outside scan policy", origin.Origin(), origin.TargetID), Blocking: true})
+		}
+	}
+	return problems
 }
 
 func (s *Server) assessmentScannerAvailability() map[string]bool {

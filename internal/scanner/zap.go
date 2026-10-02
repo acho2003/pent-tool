@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 // zapDomXSSPluginID is ZAP's DOM XSS active scan rule (from the "domxss"
@@ -68,30 +69,112 @@ func quarantineZAPService(serviceURL, reason string) {
 	zapServiceState.Unlock()
 }
 
+// applicationContextRegex is the ZAP context (and replacer) regex for the
+// application at rawURL: its origin and path boundary. The origin is normalized
+// by assessment.ParseApprovedOrigin, the same normalizer AppScope uses, and a
+// default port matches whether or not ZAP's URL spells it out
+// (https://a/x and https://a:443/x are the same request target).
 func applicationContextRegex(rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" {
 		return "", fmt.Errorf("invalid application URL for ZAP context")
 	}
-	host := u.Hostname()
-	port := u.Port()
-	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
-		port = ""
+	origin, err := assessment.ParseApprovedOrigin("", rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid application URL for ZAP context")
 	}
-	authority := host
-	if port != "" {
-		authority = net.JoinHostPort(host, port)
-	} else if strings.Contains(host, ":") {
-		authority = "[" + host + "]"
-	}
-	origin := regexp.QuoteMeta(strings.ToLower(u.Scheme) + "://" + strings.ToLower(authority))
-	path := strings.TrimSuffix(u.EscapedPath(), "/")
 	pathRule := `(?:/.*)?`
-	if path != "" {
-		pathRule = regexp.QuoteMeta(path) + `(?:/.*)?`
+	if prefix := strings.TrimSuffix(origin.PathPrefix, "/"); prefix != "" {
+		pathRule = regexp.QuoteMeta((&url.URL{Path: prefix}).EscapedPath()) + `(?:/.*)?`
 	}
-	return "^" + origin + pathRule + `(?:\?.*)?$`, nil
+	return "^" + zapOriginPattern(origin) + pathRule + `(?:\?.*)?$`, nil
 }
+
+// zapOriginPattern matches a normalized origin in a ZAP URL, with the default
+// port optional.
+func zapOriginPattern(o assessment.ApprovedOrigin) string {
+	host := o.Host
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	pattern := regexp.QuoteMeta(o.Scheme + "://" + host)
+	port := o.Port
+	if port == 0 {
+		port = zapDefaultPort(o.Scheme)
+	}
+	if port == zapDefaultPort(o.Scheme) {
+		return pattern + "(?::" + strconv.Itoa(port) + ")?"
+	}
+	return pattern + regexp.QuoteMeta(":"+strconv.Itoa(port))
+}
+
+func zapDefaultPort(scheme string) int {
+	if scheme == "http" {
+		return 80
+	}
+	return 443
+}
+
+// zapExclusionRegexes translates scope exclusions into full-URL ZAP regexes,
+// reusing Exclusion.PathRegex for the path. ZAP cannot exclude by method, so a
+// method-bound exclusion is applied to every method (fail closed); the second
+// result reports whether that happened. An exclusion bound to a target with no
+// origin in this scope applies to nothing here and is skipped.
+func zapExclusionRegexes(scope *assessment.AppScope) ([]string, bool) {
+	if scope == nil {
+		return nil, false
+	}
+	var out []string
+	widened := false
+	for _, e := range scope.Exclusions() {
+		var origins []string
+		switch {
+		case e.Origin != "":
+			o, err := assessment.ParseApprovedOrigin("", e.Origin)
+			if err != nil {
+				continue
+			}
+			origins = append(origins, zapOriginPattern(o))
+		case e.TargetID != "":
+			for _, o := range scope.Origins() {
+				if o.TargetID == e.TargetID {
+					origins = append(origins, zapOriginPattern(o))
+				}
+			}
+			if len(origins) == 0 {
+				continue
+			}
+		default:
+			origins = append(origins, `https?://[^/?#]+`)
+		}
+		path := strings.TrimSuffix(strings.TrimPrefix(e.PathRegex(), "(?i)^"), "$")
+		pattern := `(?i)^(?:` + strings.Join(origins, "|") + `)` + path + `(?:[?#].*)?$`
+		if !slices.Contains(out, pattern) {
+			out = append(out, pattern)
+		}
+		if e.Method != "" {
+			widened = true
+		}
+	}
+	return out, widened
+}
+
+// zapRateOptions converts the single configured request rate into ZAP's
+// active-scan options: one thread per host with a delay between its requests,
+// rounded up so the daemon never exceeds rps.
+func zapRateOptions(rps int) (delayMS, threadsPerHost int) {
+	if rps <= 0 {
+		return 0, 0
+	}
+	return (1000 + rps - 1) / rps, 1
+}
+
+// zapAuthInterval is how often a long ZAP job re-verifies its session.
+var zapAuthInterval = time.Minute
+
+// errZAPSessionLost marks a failed session verification, as opposed to a
+// daemon error while installing renewed headers.
+var errZAPSessionLost = errors.New("authenticated session expired or verification failed")
 
 type zapRunner struct{}
 
@@ -117,6 +200,13 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	if req.TypedAssessment && (strings.TrimSpace(req.TargetAuth) != "" || strings.EqualFold(req.AuthKind, "form login")) && req.AuthRefresh == nil {
 		return failedServiceRun("zap", req, "authenticated assessment requires an active session verifier", emit)
+	}
+	// A typed job carries its approved scope; ZAP never starts on an
+	// application outside it.
+	if req.TypedAssessment && req.AppScope != nil {
+		if ok, reason := req.AppScope.Allows(target); !ok {
+			return failedServiceRun("zap", req, "ZAP target is outside the approved application scope: "+reason, emit)
+		}
 	}
 	release, err := acquireZAPServiceLease(ctx, cfg.ZAPURL)
 	if err != nil {
@@ -213,6 +303,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if _, err := call("/JSON/core/view/version/", url.Values{}); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
+	exclusionRegexes, widened := zapExclusionRegexes(req.AppScope)
 	contextName, contextID, scopeRegex := "", "", ""
 	if req.TypedAssessment {
 		var err error
@@ -247,8 +338,67 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		if _, err := call("/JSON/context/action/includeInContext/", url.Values{"contextName": {contextName}, "regex": {scopeRegex}}); err != nil {
 			return finishServiceFailure(run, fmt.Errorf("scope ZAP context to the submitted application: %w", err), secrets, cfg.MaxOutputBytes, emit)
 		}
+		for _, regex := range exclusionRegexes {
+			if _, err := call("/JSON/context/action/excludeFromContext/", url.Values{"contextName": {contextName}, "regex": {regex}}); err != nil {
+				return finishServiceFailure(run, fmt.Errorf("exclude configured routes from the ZAP context: %w", err), secrets, cfg.MaxOutputBytes, emit)
+			}
+		}
 		if _, err := call("/JSON/context/action/setContextInScope/", url.Values{"contextName": {contextName}, "booleanInScope": {"true"}}); err != nil {
 			return finishServiceFailure(run, fmt.Errorf("enable target context scope: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+	}
+	// Configured exclusions also bind the spider and the active scan on every
+	// path, legacy included. Both lists are daemon-global, so the prior entries
+	// are captured and put back afterwards; a scan that cannot install its
+	// exclusions does not run.
+	if len(exclusionRegexes) > 0 {
+		if widened {
+			logLine("ZAP cannot exclude by HTTP method; method-specific exclusions are applied to every method")
+		}
+		for _, list := range []string{"spider", "ascan"} {
+			prior, err := call("/JSON/"+list+"/view/excludedFromScan/", url.Values{})
+			if err != nil {
+				return finishServiceFailure(run, fmt.Errorf("read ZAP %s exclusions: %w", list, err), secrets, cfg.MaxOutputBytes, emit)
+			}
+			previous, ok := zapStringList(prior, "excludedFromScan")
+			if !ok {
+				return finishServiceFailure(run, fmt.Errorf("ZAP did not report its %s exclusions; refusing to change daemon-global exclusions", list), secrets, cfg.MaxOutputBytes, emit)
+			}
+			defer func() {
+				err := zapPost(cfg, "/JSON/"+list+"/action/clearExcludedFromScan/", url.Values{})
+				for _, regex := range previous {
+					if err != nil {
+						break
+					}
+					err = zapPost(cfg, "/JSON/"+list+"/action/excludeFromScan/", url.Values{"regex": {regex}})
+				}
+				if err != nil {
+					quarantineZAPService(cfg.ZAPURL, "restore "+list+" exclusions: "+err.Error())
+					logLine("ZAP cleanup failed; daemon quarantined: " + err.Error())
+				}
+			}()
+			for _, regex := range exclusionRegexes {
+				if _, err := call("/JSON/"+list+"/action/excludeFromScan/", url.Values{"regex": {regex}}); err != nil {
+					return finishServiceFailure(run, fmt.Errorf("apply configured exclusions to ZAP %s: %w", list, err), secrets, cfg.MaxOutputBytes, emit)
+				}
+			}
+		}
+		logLine(fmt.Sprintf("ZAP exclusions applied to context, spider and active scan: %d route pattern(s)", len(exclusionRegexes)))
+	}
+	// The configured request rate becomes ZAP's active-scan delay with one
+	// thread per host. These options are daemon-global and restored after the
+	// scan. A typed job refuses to run unthrottled; a legacy job logs and keeps
+	// its historical behavior.
+	if delayMS, threads := zapRateOptions(cfg.RateRPS); delayMS > 0 {
+		restore, err := zapApplyRate(cfg, call, delayMS, threads, req.TypedAssessment, logLine)
+		if restore != nil {
+			defer restore()
+		}
+		if err != nil {
+			if req.TypedAssessment {
+				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+			}
+			logLine("could not apply ZAP rate limit (continuing): " + err.Error())
 		}
 	}
 	// Apply configured scan and per-target authentication headers through
@@ -303,7 +453,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	// Check authentication at stage boundaries and while waiting on long ZAP
 	// jobs. A refreshed cookie replaces its scoped daemon rule in this lease.
-	authMonitor := &zapAuthMonitor{current: headers, refresh: req.AuthRefresh, interval: time.Minute}
+	authMonitor := &zapAuthMonitor{current: headers, refresh: req.AuthRefresh, interval: zapAuthInterval}
 	checkAuth := func() error {
 		initialCheck := authMonitor.next.IsZero()
 		verificationDue := req.AuthRefresh != nil && (initialCheck || !time.Now().Before(authMonitor.next))
@@ -337,9 +487,20 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			if req.AuthRefresh != nil {
 				logLine("Authentication error: session verification failed; authenticated ZAP scan stopped")
 			}
+			// Record the session outcome structurally. A session that verified
+			// earlier in this run and is now rejected expired mid-scan; one
+			// rejected at the first check failed verification.
+			if errors.Is(err, errZAPSessionLost) {
+				run.AuthState, run.GapKind = assessment.StateExpired, GapAuthExpired
+				if initialCheck {
+					run.AuthState, run.GapKind = assessment.StateFailed, GapAuthFailed
+				}
+				run.AuthCheckedAt = time.Now().UTC().Format(time.RFC3339)
+			}
 			return err
 		}
 		if verificationDue {
+			run.AuthState, run.AuthCheckedAt = assessment.StateVerified, time.Now().UTC().Format(time.RFC3339)
 			if initialCheck {
 				method := "HTTP headers"
 				if req.AuthKind == "form login" {
@@ -370,7 +531,27 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if maxChildren <= 0 {
 		maxChildren = DefaultWebProfile(ProfileGentle).MaxEndpoints
 	}
-	if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {followRedirects}}); err != nil {
+	// seedRefusal is why a URL must not be seeded: outside a typed job's
+	// approved scope, or matching a configured exclusion. Seeding sends a GET.
+	seedRefusal := func(method, rawURL string) string {
+		if req.AppScope == nil {
+			return ""
+		}
+		if req.TypedAssessment {
+			if ok, reason := req.AppScope.Allows(rawURL); !ok {
+				return reason
+			}
+		}
+		for _, m := range []string{method, http.MethodGet} {
+			if excluded, reason := req.AppScope.Excluded(m, rawURL); excluded {
+				return "excluded: " + reason
+			}
+		}
+		return ""
+	}
+	if refusal := seedRefusal(http.MethodGet, target); refusal != "" {
+		logLine("ZAP did not pre-seed the target: " + refusal)
+	} else if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {followRedirects}}); err != nil {
 		logLine("ZAP could not pre-seed the target (continuing to spider): " + err.Error())
 	} else {
 		logLine("ZAP seeded target into scan tree: " + target)
@@ -401,6 +582,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				run.APIEndpointResults = append(run.APIEndpointResults, result)
 				continue
 			}
+			if refusal := seedRefusal(endpoint.Method, operationURL); refusal != "" {
+				result.Status, result.Reason = "skipped", refusal
+				run.APIEndpointResults = append(run.APIEndpointResults, result)
+				continue
+			}
 			if _, seedErr := call("/JSON/core/action/accessUrl/", url.Values{"url": {operationURL}, "followRedirects": {"false"}}); seedErr != nil {
 				result.Status, result.Reason = "failed", "ZAP could not seed this operation into the scoped scan tree"
 			} else {
@@ -421,6 +607,10 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		for _, endpoint := range endpointTargets {
 			if seeded >= maxChildren {
 				break
+			}
+			if refusal := seedRefusal(http.MethodGet, endpoint); refusal != "" {
+				logLine("ZAP skipped a discovered URL: " + refusal)
+				continue
 			}
 			if err := checkAuth(); err != nil {
 				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
@@ -565,6 +755,64 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	return run
 }
 
+// zapApplyRate reads ZAP's active-scan delay and threads-per-host, installs
+// the configured rate and returns the restore for the prior values. A failed
+// restore quarantines a dedicated (typed) daemon, like the DOM XSS restore: the
+// next job would inherit this throttle or a half-restored one. A shared legacy
+// daemon only logs it. restore is nil when nothing was changed.
+func zapApplyRate(cfg Config, call zapCallFunc, delayMS, threads int, quarantine bool, log func(string)) (func(), error) {
+	delayView, err := call("/JSON/ascan/view/optionDelayInMs/", url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("read ZAP active-scan delay: %w", err)
+	}
+	threadView, err := call("/JSON/ascan/view/optionThreadPerHost/", url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("read ZAP active-scan threads per host: %w", err)
+	}
+	priorDelay, delayErr := strconv.Atoi(valueString(delayView, "DelayInMs"))
+	priorThreads, threadErr := strconv.Atoi(valueString(threadView, "ThreadPerHost"))
+	if delayErr != nil || threadErr != nil || priorDelay < 0 || priorThreads < 1 {
+		return nil, errors.New("ZAP did not report its active-scan rate options; refusing to change daemon-global options")
+	}
+	restore := func() {
+		err := zapPost(cfg, "/JSON/ascan/action/setOptionDelayInMs/", url.Values{"Integer": {strconv.Itoa(priorDelay)}})
+		if err == nil {
+			err = zapPost(cfg, "/JSON/ascan/action/setOptionThreadPerHost/", url.Values{"Integer": {strconv.Itoa(priorThreads)}})
+		}
+		if err != nil && quarantine {
+			quarantineZAPService(cfg.ZAPURL, "restore active-scan rate options: "+err.Error())
+			log("ZAP cleanup failed; daemon quarantined: " + err.Error())
+		} else if err != nil {
+			log("could not restore ZAP active-scan rate options: " + err.Error())
+		}
+	}
+	if _, err := call("/JSON/ascan/action/setOptionDelayInMs/", url.Values{"Integer": {strconv.Itoa(delayMS)}}); err != nil {
+		return restore, fmt.Errorf("set ZAP active-scan delay: %w", err)
+	}
+	if _, err := call("/JSON/ascan/action/setOptionThreadPerHost/", url.Values{"Integer": {strconv.Itoa(threads)}}); err != nil {
+		return restore, fmt.Errorf("set ZAP active-scan threads per host: %w", err)
+	}
+	log(fmt.Sprintf("ZAP active-scan rate limited: %d ms delay, %d thread(s) per host (configured %d req/s)", delayMS, threads, cfg.RateRPS))
+	return restore, nil
+}
+
+// zapStringList reads a JSON string array such as excludedFromScan.
+func zapStringList(response map[string]any, key string) ([]string, bool) {
+	items, ok := response[key].([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, text)
+	}
+	return out, true
+}
+
 func zapScannerEnabled(response map[string]any, id string) (bool, bool) {
 	items, ok := response["scanners"].([]any)
 	if !ok {
@@ -605,7 +853,7 @@ func (m *zapAuthMonitor) check(ctx context.Context, replace func([]string) error
 	}
 	next, err := m.refresh(ctx, append([]string(nil), m.current...))
 	if err != nil || len(next) != len(m.current) {
-		return errors.New("authenticated session expired or verification failed")
+		return errZAPSessionLost
 	}
 	if !slices.Equal(next, m.current) {
 		if err := replace(next); err != nil {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -13,12 +14,17 @@ import (
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/xalgord/xalgorix/v4/internal/storage"
 )
 
+// ScannerConfig maps operator config into the scanner pipeline config. It stays
+// a package-level function (no live ScopeGuard) for CLI callers that have no
+// dashboard listener identity; the server wraps it via (*Server).ScannerConfig
+// to add the execution-time scope guard.
 func ScannerConfig(cfg *config.Config) scanner.Config {
 	return scanner.Config{
 		NucleiPath: cfg.NucleiPath, NucleiTemplatesDir: cfg.NucleiTemplatesDir, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
-		SubfinderPath: cfg.SubfinderPath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, KatanaPath: cfg.KatanaPath, KatanaChromePath: cfg.BrowserPath, DalfoxPath: cfg.DalfoxPath, WapitiPath: cfg.WapitiPath, KubeBenchPath: cfg.KubeBenchPath, ProwlerPath: cfg.ProwlerPath, ScoutSuitePath: cfg.ScoutSuitePath, SSHPath: cfg.SSHPath, TestsslPath: cfg.TestsslPath,
+		SubfinderPath: cfg.SubfinderPath, AmassPath: cfg.AmassPath, DNSXPath: cfg.DNSXPath, GauPath: cfg.GauPath, WaybackurlsPath: cfg.WaybackurlsPath, SSLyzePath: cfg.SSLyzePath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, KatanaPath: cfg.KatanaPath, KatanaChromePath: cfg.BrowserPath, DalfoxPath: cfg.DalfoxPath, WapitiPath: cfg.WapitiPath, KubeBenchPath: cfg.KubeBenchPath, ProwlerPath: cfg.ProwlerPath, ScoutSuitePath: cfg.ScoutSuitePath, SSHPath: cfg.SSHPath, TestsslPath: cfg.TestsslPath,
 		SemgrepPath: cfg.SemgrepPath, GitleaksPath: cfg.GitleaksPath, OsvPath: cfg.OsvPath,
 		ZAPURL: cfg.ZAPURL, ZAPAPIKey: cfg.ZAPAPIKey, ZAPDedicated: cfg.ZAPDedicated, GVMHost: cfg.GVMHost, GVMPort: cfg.GVMPort, GVMSocket: cfg.GVMSocket, GVMUser: cfg.GVMUsername, GVMPass: cfg.GVMPassword,
 		RateRPS: int(cfg.RateLimitRPS), MaxWorkers: cfg.MaxWorkers, ScanHeaders: append([]string(nil), cfg.ScanHeaders...), MaxOutputBytes: cfg.ScannerMaxOutputBytes,
@@ -27,13 +33,40 @@ func ScannerConfig(cfg *config.Config) scanner.Config {
 		NucleiTimeout: time.Duration(cfg.NucleiTimeoutSec) * time.Second, ZAPTimeout: time.Duration(cfg.ZAPTimeoutSec) * time.Second,
 		OpenVASTimeout: time.Duration(cfg.OpenVASTimeoutSec) * time.Second, TrivyTimeout: time.Duration(cfg.TrivyTimeoutSec) * time.Second, VulsTimeout: time.Duration(cfg.VulsTimeoutSec) * time.Second,
 		SubfinderTimeout: time.Duration(cfg.SubfinderTimeoutSec) * time.Second,
-		HttpxTimeout:     time.Duration(cfg.HttpxTimeoutSec) * time.Second,
-		NmapTimeout:      time.Duration(cfg.NmapTimeoutSec) * time.Second,
-		TestsslTimeout:   time.Duration(cfg.TestsslTimeoutSec) * time.Second,
-		SemgrepTimeout:   time.Duration(cfg.SemgrepTimeoutSec) * time.Second,
-		GitleaksTimeout:  time.Duration(cfg.GitleaksTimeoutSec) * time.Second,
-		OsvTimeout:       time.Duration(cfg.OsvTimeoutSec) * time.Second,
+		AmassTimeout:     time.Duration(cfg.AmassTimeoutSec) * time.Second, DNSXTimeout: time.Duration(cfg.DNSXTimeoutSec) * time.Second, GauTimeout: time.Duration(cfg.GauTimeoutSec) * time.Second, WaybackurlsTimeout: time.Duration(cfg.WaybackurlsTimeoutSec) * time.Second, SSLyzeTimeout: time.Duration(cfg.SSLyzeTimeoutSec) * time.Second,
+		HttpxTimeout:    time.Duration(cfg.HttpxTimeoutSec) * time.Second,
+		NmapTimeout:     time.Duration(cfg.NmapTimeoutSec) * time.Second,
+		TestsslTimeout:  time.Duration(cfg.TestsslTimeoutSec) * time.Second,
+		SemgrepTimeout:  time.Duration(cfg.SemgrepTimeoutSec) * time.Second,
+		GitleaksTimeout: time.Duration(cfg.GitleaksTimeoutSec) * time.Second,
+		OsvTimeout:      time.Duration(cfg.OsvTimeoutSec) * time.Second,
 	}
+}
+
+// ScannerConfig returns the pipeline config with an execution-time scope guard
+// wired in (DNS-rebinding defence). The planner/preview checks hosts up front,
+// but DNS can change between preview and execution, so the guard re-runs the
+// self-listener/local-target check on both the raw URL and the addresses the
+// host actually resolved to. Legacy scans carry no per-scan loopback allowlist,
+// so pass nil (strict default: all loopback is self).
+func (s *Server) ScannerConfig(cfg *config.Config) scanner.Config {
+	sc := ScannerConfig(cfg)
+	sc.ScopeGuard = func(rawURL string, resolved []string) (bool, string) {
+		if s.isBlockedTargetForScan(rawURL, nil) {
+			return true, "scope guard: target is the scanner host or dashboard listener"
+		}
+		for _, addr := range resolved {
+			addr = strings.TrimSpace(addr)
+			if addr == "" {
+				continue
+			}
+			if s.isBlockedTargetForScan(addr, nil) {
+				return true, "scope guard: resolved address " + addr + " is the scanner host or dashboard listener"
+			}
+		}
+		return false, ""
+	}
+	return sc
 }
 
 func (s *Server) executeDeterministicScanSession(sess *scanSession) {
@@ -69,7 +102,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 		}
 	}
 
-	pipeline := scanner.NewPipeline(ScannerConfig(sess.cfg))
+	pipeline := scanner.NewPipeline(s.ScannerConfig(sess.cfg))
 	emit := func(evt scanner.Event) {
 		ws := WSEvent{Type: evt.Type, Scanner: evt.Scanner, Stream: evt.Stream, Sequence: evt.Sequence, Output: evt.Output, Content: evt.Output, Target: sess.target, AgentID: sess.id, Timestamp: time.Now().Format(time.RFC3339Nano)}
 		if evt.Type == "scanner_progress" {
@@ -212,26 +245,36 @@ func upsertScannerRun(runs *[]scanner.Run, run scanner.Run) {
 	*runs = append(*runs, run)
 }
 
-// runDeterministicWildcard performs tool-based discovery without an LLM, then
-// invokes the same five-scanner session for every normalized host in order.
-func (s *Server) runDeterministicWildcard(ctx context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
-	root := hostOnlyWeb(target)
-	hosts := []string{root}
-	dir, _ := s.scanDirForResume(req, target)
-	_ = os.MkdirAll(dir, 0o700)
-	discoveryPath := filepath.Join(dir, "subfinder.txt")
-	if req.IsResume && req.ResumeDiscoveryDone && len(req.ResumeSubdomains) > 0 {
-		hosts = append([]string(nil), req.ResumeSubdomains...)
-	} else if p, err := exec.LookPath("subfinder"); err == nil && root != "" {
-		cmd := exec.CommandContext(ctx, p, "-silent", "-d", root, "-o", discoveryPath)
-		cmd.Dir = dir
-		if output, err := cmd.CombinedOutput(); err != nil {
-			s.broadcastToInstance(req.InstanceID, WSEvent{Type: "scanner_failed", Scanner: "discovery", Content: err.Error(), Output: string(output), Target: target, Timestamp: time.Now().Format(time.RFC3339Nano)})
-		}
-		if data, err := os.ReadFile(discoveryPath); err == nil {
-			hosts = append(hosts, strings.Fields(string(data))...)
-		}
-	}
+// Wildcard candidate provenance/labels. Discovered hosts are candidates, not
+// authorized targets: the typed path never fans out to them, and the operator
+// must re-preview and accept them before they become scope (UI in I4.T5).
+const (
+	wildcardCandidateProvenance = "subfinder" // discovery source for fanned-out hosts
+	wildcardCandidateLabel      = "legacy wildcard candidate"
+	wildcardRootProvenance      = "requested" // the originally-requested root host
+)
+
+// wildcardCandidate records a host surfaced by a legacy wildcard scan, so the
+// operator can review discovered hosts without them silently becoming scope.
+type wildcardCandidate struct {
+	Host       string `json:"host"`
+	Provenance string `json:"provenance"`
+	Label      string `json:"label"`
+	Root       bool   `json:"root,omitempty"` // true for the originally-requested root host
+}
+
+// subfinderCommand builds the passive subdomain-discovery command. It runs the
+// operator-configured subfinder binary (so runtime pins apply) rather than a
+// bare PATH lookup, and passes -duc so subfinder's own auto-update stays
+// disabled during a scan (spec 5).
+func subfinderCommand(ctx context.Context, subfinderPath, root, outputPath, dir string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, subfinderPath, "-silent", "-duc", "-d", root, "-o", outputPath)
+	cmd.Dir = dir
+	return cmd
+}
+
+// normalizeWildcardHosts lowercases, trims, dedupes and sorts hosts.
+func normalizeWildcardHosts(hosts []string) []string {
 	seen := map[string]bool{}
 	var normalized []string
 	for _, h := range hosts {
@@ -242,6 +285,79 @@ func (s *Server) runDeterministicWildcard(ctx context.Context, scanCfg *config.C
 		}
 	}
 	sort.Strings(normalized)
+	return normalized
+}
+
+// discoverWildcardHosts returns the normalized host list for a legacy wildcard
+// scan. On resume it reuses the persisted subdomains verbatim (never re-running
+// discovery); otherwise it runs the configured subfinder and merges its output
+// with the root host.
+func (s *Server) discoverWildcardHosts(ctx context.Context, scanCfg *config.Config, req ScanRequest, root, dir string) []string {
+	hosts := []string{root}
+	if req.IsResume && req.ResumeDiscoveryDone && len(req.ResumeSubdomains) > 0 {
+		hosts = append([]string(nil), req.ResumeSubdomains...)
+	} else if scanCfg.SubfinderPath != "" && root != "" {
+		discoveryPath := filepath.Join(dir, "subfinder.txt")
+		cmd := subfinderCommand(ctx, scanCfg.SubfinderPath, root, discoveryPath, dir)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			s.broadcastToInstance(req.InstanceID, WSEvent{Type: "scanner_failed", Scanner: "discovery", Content: err.Error(), Output: string(output), Target: root, Timestamp: time.Now().Format(time.RFC3339Nano)})
+		}
+		if data, err := os.ReadFile(discoveryPath); err == nil {
+			hosts = append(hosts, strings.Fields(string(data))...)
+		}
+	}
+	return normalizeWildcardHosts(hosts)
+}
+
+// wildcardCandidates builds candidate records for the normalized host list. The
+// root host is marked as requested; every other host is a subfinder-provenance
+// candidate labelled "legacy wildcard candidate".
+func wildcardCandidates(root string, normalized []string) []wildcardCandidate {
+	rootHost := strings.ToLower(strings.TrimSpace(root))
+	candidates := make([]wildcardCandidate, 0, len(normalized))
+	for _, h := range normalized {
+		c := wildcardCandidate{Host: h, Provenance: wildcardCandidateProvenance, Label: wildcardCandidateLabel}
+		if h == rootHost {
+			c.Provenance = wildcardRootProvenance
+			c.Root = true
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates
+}
+
+// writeWildcardCandidates persists the candidate host list beside the scan so a
+// later re-preview (I4.T5) can offer them for acceptance.
+func writeWildcardCandidates(dir, root string, normalized []string) error {
+	data, err := json.MarshalIndent(wildcardCandidates(root, normalized), "", "  ")
+	if err != nil {
+		return err
+	}
+	return storage.WriteAtomic(filepath.Join(dir, "candidates.json"), data)
+}
+
+// newWildcardSubdomainSession builds the per-host scan session for a legacy
+// wildcard fan-out. Credentials are deliberately NOT forwarded: discovered hosts
+// are candidates, and the spec forbids sending credentials to discovered sibling
+// hosts, so every wildcard session is credential-free.
+func (s *Server) newWildcardSubdomainSession(ctx context.Context, scanCfg *config.Config, req ScanRequest, parentTarget, host, subDir string, resumed bool) *scanSession {
+	return &scanSession{id: filepath.Base(subDir), target: host, parentTarget: parentTarget, scanDir: subDir, cfg: scanCfg, server: s, name: req.Name, userInstruction: "", genReport: true, resetState: !resumed, instanceID: req.InstanceID, scanMode: "wildcard", scanners: req.Scanners, severityFilter: req.SeverityFilter, companyName: req.CompanyName, logoPath: req.LogoPath, ctx: ctx, artifact: req.Artifact, vulsSSHHost: req.VulsSSHHost, assessment: req.Assessment, profile: req.Profile}
+}
+
+// runDeterministicWildcard performs tool-based discovery without an LLM, records
+// the discovered hosts as candidates, then invokes the same five-scanner session
+// for every normalized host in order. This is the explicitly-requested legacy
+// wildcard path (scan_mode=wildcard); the typed assessment path never fans out.
+func (s *Server) runDeterministicWildcard(ctx context.Context, scanCfg *config.Config, req ScanRequest, target string, idx, total int) {
+	root := hostOnlyWeb(target)
+	dir, _ := s.scanDirForResume(req, target)
+	_ = os.MkdirAll(dir, 0o700)
+	normalized := s.discoverWildcardHosts(ctx, scanCfg, req, root, dir)
+	// Record discovered hosts as candidates (not authorized targets) with their
+	// discovery provenance, so a later re-preview can offer them for acceptance.
+	if err := writeWildcardCandidates(dir, root, normalized); err != nil {
+		log.Printf("[scanner] wildcard candidate record failed: %v", err)
+	}
 	startIndex := 0
 	if req.IsResume && req.ResumeDiscoveryDone {
 		startIndex = clampInt(req.ResumeSubIndex, 0, len(normalized))
@@ -254,7 +370,7 @@ func (s *Server) runDeterministicWildcard(ctx context.Context, scanCfg *config.C
 		}
 		subDir, resumed := s.scanDirForWildcardSubdomainResume(req, h, subIdx)
 		s.saveQueueState(idx, req, queueProgress{ActiveTarget: target, ActiveScanDir: dir, ActiveScanID: filepath.Base(dir), WildcardDiscoveryDone: true, WildcardSubdomains: append([]string(nil), normalized...), WildcardSubIndex: subIdx, WildcardActiveTarget: h, WildcardActiveScanDir: subDir, WildcardActiveScanID: filepath.Base(subDir)})
-		sess := &scanSession{id: filepath.Base(subDir), target: h, parentTarget: target, scanDir: subDir, cfg: scanCfg, server: s, name: req.Name, userInstruction: "", genReport: true, resetState: !resumed, instanceID: req.InstanceID, scanMode: "wildcard", scanners: req.Scanners, severityFilter: req.SeverityFilter, companyName: req.CompanyName, logoPath: req.LogoPath, targetAuth: req.TargetAuth, ctx: ctx, artifact: req.Artifact, vulsSSHHost: req.VulsSSHHost, assessment: req.Assessment, profile: req.Profile}
+		sess := s.newWildcardSubdomainSession(ctx, scanCfg, req, target, h, subDir, resumed)
 		s.broadcastToInstance(req.InstanceID, WSEvent{Type: "target_started", Content: fmt.Sprintf("Scanning wildcard target %d/%d: %s", subIdx+1, len(normalized), h), Target: h, ParentTarget: target, SubTargetIndex: subIdx + 1, SubTargetTotal: len(normalized)})
 		s.executeScanSession(sess)
 		s.saveQueueState(idx, req, queueProgress{ActiveTarget: target, ActiveScanDir: dir, ActiveScanID: filepath.Base(dir), WildcardDiscoveryDone: true, WildcardSubdomains: append([]string(nil), normalized...), WildcardSubIndex: subIdx + 1})

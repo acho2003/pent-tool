@@ -83,12 +83,16 @@ done
 	if err := os.WriteFile(tool, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
+	katana := filepath.Join(dir, "katana-fixture")
+	if err := os.WriteFile(katana, []byte("#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then\n    shift\n    mkdir -p \"$(dirname \"$1\")\"\n    printf '%s\\n' '{\"request\":{\"method\":\"GET\",\"endpoint\":\"https://192.0.2.1/\"}}' > \"$1\"\n  fi\n  shift\ndone\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	configPath := filepath.Join(dir, "assessment.json")
 	assessmentJSON := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://192.0.2.1/"}]}`
 	if err := os.WriteFile(configPath, []byte(assessmentJSON), 0600); err != nil {
 		t.Fatal(err)
 	}
-	appConfig := &config.Config{DataDir: filepath.Join(dir, "data"), NucleiPath: tool, RateLimitRPS: 2, ScannerMaxOutputBytes: 1 << 20, NucleiTimeoutSec: 30}
+	appConfig := &config.Config{DataDir: filepath.Join(dir, "data"), NucleiPath: tool, KatanaPath: katana, RateLimitRPS: 2, ScannerMaxOutputBytes: 1 << 20, NucleiTimeoutSec: 30}
 	var output bytes.Buffer
 	err := executeAssessmentCLI(cliArgs{assessmentConfig: configPath}, appConfig, &output)
 	if err != nil {
@@ -98,10 +102,10 @@ done
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON result: %v\n%s", err, output.String())
 	}
-	if result.State != "complete" || len(result.Runs) != 1 || result.Runs[0].Scanner != "nuclei" || result.Runs[0].Status != "completed" || len(result.Findings) != 1 || result.Findings[0].Title != "Fixture XSS" {
+	if result.State != "complete" || len(result.Runs) != 2 || result.Runs[0].Scanner != "katana" || result.Runs[0].Status != "completed" || result.Runs[1].Scanner != "nuclei" || result.Runs[1].Status != "completed" || len(result.Findings) != 1 || result.Findings[0].Title != "Fixture XSS" {
 		t.Fatalf("unexpected CLI assessment result: %+v", result)
 	}
-	if !strings.HasPrefix(result.Runs[0].Scope, "app:") || result.Plan.Fingerprint == "" {
+	if !strings.HasPrefix(result.Runs[1].Scope, "app:") || result.Plan.Fingerprint == "" {
 		t.Fatalf("assessment output lost application scope or plan identity: %+v", result)
 	}
 }

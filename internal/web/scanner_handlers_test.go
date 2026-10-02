@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
@@ -683,5 +684,129 @@ func TestIsScanScopesPath(t *testing.T) {
 		if got := isScanScopesPath(path); got != want {
 			t.Errorf("isScanScopesPath(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+// previewPlanProblems posts cfg to the preview endpoint and returns the
+// response status and plan problem codes.
+func previewPlanProblems(t *testing.T, s *Server, cfg assessment.AssessmentConfig) (int, []string) {
+	t.Helper()
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	s.handleAssessmentPlan(rr, httptest.NewRequest(http.MethodPost, "/api/assessments/plan", strings.NewReader(string(body))))
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	var plan struct {
+		Errors []assessment.Problem `json:"errors"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode plan: %v body=%s", err, rr.Body.String())
+	}
+	codes := make([]string, 0, len(plan.Errors))
+	for _, p := range plan.Errors {
+		codes = append(codes, p.Code)
+	}
+	return rr.Code, codes
+}
+
+func approvedOriginConfig(origins ...string) assessment.AssessmentConfig {
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Profile: "web-gentle",
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindIP, Value: "192.0.2.10"}},
+	}
+	for _, raw := range origins {
+		o, err := assessment.ParseApprovedOrigin("app", raw)
+		if err != nil {
+			panic(err)
+		}
+		cfg.ApprovedOrigins = append(cfg.ApprovedOrigins, o)
+	}
+	return cfg
+}
+
+func TestPlanPreviewBlocksLocalOrListenerOrigin(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.port = 9137
+	status, codes := previewPlanProblems(t, s, approvedOriginConfig("http://192.0.2.10:8080/"))
+	if slices.Contains(codes, "target.scope_blocked") {
+		t.Fatalf("public approved origin was scope-blocked: status=%d codes=%v", status, codes)
+	}
+	for _, local := range []string{"http://127.0.0.1:8080/", "http://localhost:3000/app", "http://127.0.0.1:9137/"} {
+		status, codes := previewPlanProblems(t, s, approvedOriginConfig("http://192.0.2.10:8080/", local))
+		if status != http.StatusUnprocessableEntity || !slices.Contains(codes, "target.scope_blocked") {
+			t.Fatalf("approved origin %s must be scope-blocked at preview: status=%d codes=%v", local, status, codes)
+		}
+	}
+	// A local target value is blocked at preview too, not only at start.
+	cfg := approvedOriginConfig()
+	cfg.Targets[0].Value = "127.0.0.1"
+	if status, codes := previewPlanProblems(t, s, cfg); status != http.StatusUnprocessableEntity || !slices.Contains(codes, "target.scope_blocked") {
+		t.Fatalf("local target must be scope-blocked at preview: status=%d codes=%v", status, codes)
+	}
+}
+
+func TestPlanPreviewHonoursAllowLocalTargets(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.port = 9137
+	s.cfg.AllowLocalTargets = true // XALGORIX_ALLOW_LOCAL_TARGETS=true
+	if _, codes := previewPlanProblems(t, s, approvedOriginConfig("http://127.0.0.1:8080/")); slices.Contains(codes, "target.scope_blocked") {
+		t.Fatalf("lab origin must be allowed when local targets are enabled: %v", codes)
+	}
+	// The dashboard listener stays out of scope even with the opt-in.
+	if _, codes := previewPlanProblems(t, s, approvedOriginConfig("http://127.0.0.1:9137/")); !slices.Contains(codes, "target.scope_blocked") {
+		t.Fatalf("listener origin must stay blocked with local targets enabled: %v", codes)
+	}
+	// The per-scan loopback allowlist reaches the same guard at start.
+	s.cfg.AllowLocalTargets = false
+	cfg := approvedOriginConfig("http://127.0.0.1:8080/")
+	if plan := s.buildAssessmentPlanForScan(cfg, []int{8080}); slices.ContainsFunc(plan.Errors, func(p assessment.Problem) bool { return p.Code == "target.scope_blocked" }) {
+		t.Fatalf("allowlisted loopback port was blocked: %+v", plan.Errors)
+	}
+	if plan := s.buildAssessmentPlan(cfg); !slices.ContainsFunc(plan.Errors, func(p assessment.Problem) bool { return p.Code == "target.scope_blocked" }) {
+		t.Fatalf("preview without the allowlist must block loopback: %+v", plan.Errors)
+	}
+}
+
+func TestPlanFingerprintIncludesToolVersionsAndCredentialRevision(t *testing.T) {
+	s := newTestServer(t, nil)
+	keyPath := filepath.Join(t.TempDir(), "credential.key")
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	vault, err := s.credentialVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := credentials.Record{Name: "app headers", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"app"}, Values: map[string]string{"Authorization": "Bearer one"}}
+	meta, err := vault.Create(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication}, Profile: "web-gentle",
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+		Access:  []assessment.AccessBinding{{TargetIDs: []string{"app"}, Kind: assessment.AccessApplicationHeaders, CredentialID: meta.ID, VerifyURL: "https://app.example.test/me", VerifyMarker: "Account"}},
+	}
+	s.toolVersions = map[string]string{"nuclei": "v3.11.1", "nuclei-templates": "abc"}
+	base := s.buildAssessmentPlan(cfg).Fingerprint
+	if base == "" || base != s.buildAssessmentPlan(cfg).Fingerprint {
+		t.Fatal("fingerprint must be stable for unchanged inputs")
+	}
+	s.toolVersions = map[string]string{"nuclei": "v3.11.1", "nuclei-templates": "def"}
+	templates := s.buildAssessmentPlan(cfg).Fingerprint
+	if templates == base {
+		t.Fatal("template upgrade did not change the plan fingerprint")
+	}
+	record.Values = map[string]string{"Authorization": "Bearer two"}
+	if _, err := vault.Replace(meta.ID, record); err != nil {
+		t.Fatal(err)
+	}
+	if rotated := s.buildAssessmentPlan(cfg).Fingerprint; rotated == templates {
+		t.Fatal("credential rotation did not change the plan fingerprint")
 	}
 }

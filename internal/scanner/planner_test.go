@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"encoding/json"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"slices"
 	"strings"
@@ -288,5 +289,299 @@ func TestPlanFingerprintBindsAvailabilityDecisionsAndConditionalJobState(t *test
 	}
 	if !foundConditional {
 		t.Fatalf("missing conditional subfinder job: %+v", available.Jobs)
+	}
+}
+
+func TestPlanJobsCarryStageAndDependencies(t *testing.T) {
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork, assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "domain", Kind: assessment.KindDomain, Value: "example.test"}}, SubdomainDiscovery: true}
+	plan := PlanAssessment(PlanInput{Config: cfg})
+	byScanner := map[string]PlanJob{}
+	for _, job := range plan.Jobs {
+		if job.Stage == "" {
+			t.Errorf("job %s has no stage", job.ID)
+		}
+		byScanner[job.Scanner] = job
+	}
+	want := map[string]string{"subfinder": StageDiscovery, "nmap": StageReachability, "nuclei": StageTemplates, "testssl": StageTLS, "zap": StageDAST, "openvas": StageDAST}
+	for id, stage := range want {
+		job, ok := byScanner[id]
+		if !ok {
+			t.Fatalf("missing %s job: %+v", id, plan.Jobs)
+		}
+		if job.Stage != stage {
+			t.Errorf("%s stage = %q, want %q", id, job.Stage, stage)
+		}
+	}
+	subfinderID := byScanner["subfinder"].ID
+	if len(byScanner["subfinder"].Dependencies) != 0 {
+		t.Errorf("subfinder must have no prerequisites: %v", byScanner["subfinder"].Dependencies)
+	}
+	for _, id := range []string{"testssl"} {
+		if got := byScanner[id].Dependencies; !slices.Equal(got, []string{subfinderID}) {
+			t.Errorf("%s dependencies = %v, want [%s]", id, got, subfinderID)
+		}
+	}
+	for _, id := range []string{"nuclei", "zap"} {
+		crawlID := byScanner["katana"].ID
+		if got := byScanner[id].Dependencies; !slices.Equal(got, []string{crawlID}) {
+			t.Errorf("%s dependencies = %v, want [%s]", id, got, crawlID)
+		}
+	}
+	// Network/host scanners are outside the web workflow; the ladder orders them
+	// but adds no prerequisites their adapters do not consume.
+	for _, id := range []string{"nmap", "openvas"} {
+		if got := byScanner[id].Dependencies; len(got) != 0 {
+			t.Errorf("%s dependencies = %v, want none", id, got)
+		}
+	}
+}
+
+func TestStageDependenciesSkipEmptyStagesAndStayTargetBound(t *testing.T) {
+	jobs := []PlanJob{
+		{ID: "zap:a:zap", Scanner: "zap", TargetID: "a"},
+		{ID: "katana:a:katana", Scanner: "katana", TargetID: "a"},
+		{ID: "httpx:a:httpx", Scanner: "httpx", TargetID: "a"},
+		{ID: "testssl:a:testssl", Scanner: "testssl", TargetID: "a"},
+		{ID: "nuclei:a:nuclei", Scanner: "nuclei", TargetID: "a"},
+		{ID: "dalfox:a:dalfox", Scanner: "dalfox", TargetID: "a"},
+		{ID: "httpx:b:httpx", Scanner: "httpx", TargetID: "b"},
+		{ID: "zap:b:zap", Scanner: "zap", TargetID: "b"},
+	}
+	assignStages(jobs)
+	got := map[string][]string{}
+	for _, job := range jobs {
+		got[job.ID] = job.Dependencies
+	}
+	want := map[string][]string{
+		"httpx:a:httpx":     nil,
+		"katana:a:katana":   {"httpx:a:httpx"},
+		"nuclei:a:nuclei":   {"katana:a:katana"},
+		"zap:a:zap":         {"katana:a:katana"},
+		"dalfox:a:dalfox":   {"katana:a:katana"},
+		"testssl:a:testssl": {"httpx:a:httpx"},
+		"httpx:b:httpx":     nil,
+		"zap:b:zap":         {"httpx:b:httpx"},
+	}
+	for id, deps := range want {
+		if !slices.Equal(got[id], deps) {
+			t.Errorf("%s dependencies = %v, want %v", id, got[id], deps)
+		}
+	}
+}
+
+func TestPlanJobsSortedByStageTopologyDeterministic(t *testing.T) {
+	targets := []assessment.Target{{ID: "domain", Kind: assessment.KindDomain, Value: "example.test"}, {ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}}
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork, assessment.TypeWebApplication}, Targets: targets, SubdomainDiscovery: true, ScannerSelection: assessment.ScannerSelection{Mode: "custom", Variants: []string{"subfinder", "nmap", "nuclei", "zap", "testssl", "dalfox", "wapiti"}}}
+	avail := map[string]bool{"dalfox": true, "wapiti": true}
+	plan := PlanAssessment(PlanInput{Config: cfg, Availability: avail})
+	if len(plan.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", plan.Errors)
+	}
+	position := map[string]int{}
+	for i, job := range plan.Jobs {
+		position[job.ID] = i
+	}
+	for i, job := range plan.Jobs {
+		for _, dep := range job.Dependencies {
+			if p, ok := position[dep]; !ok || p >= i {
+				t.Errorf("job %s at %d depends on %s at %d (ok=%v)", job.ID, i, dep, p, ok)
+			}
+		}
+		if i > 0 {
+			prev := plan.Jobs[i-1]
+			if r, pr := stageRank(job.Stage), stageRank(prev.Stage); r < pr || (r == pr && job.ID < prev.ID) {
+				t.Errorf("jobs not in stage/ID order: %s(%s) after %s(%s)", job.ID, job.Stage, prev.ID, prev.Stage)
+			}
+		}
+	}
+	if position["subfinder:domain:subfinder"] > position["zap:domain:zap"] || position["nmap:domain:nmap"] > position["zap:app:zap"] {
+		t.Fatalf("discovery/reachability must run before DAST: %v", position)
+	}
+	if position["zap:app:zap"] > position["dalfox:app:dalfox"] {
+		t.Fatalf("validation must follow DAST: %v", position)
+	}
+
+	reordered := cfg
+	reordered.Targets = []assessment.Target{targets[1], targets[0]}
+	reordered.ScannerSelection.Variants = []string{"wapiti", "dalfox", "testssl", "zap", "nuclei", "nmap", "subfinder"}
+	again := PlanAssessment(PlanInput{Config: reordered, Availability: avail})
+	var a, b []string
+	for _, job := range plan.Jobs {
+		a = append(a, job.ID)
+	}
+	for _, job := range again.Jobs {
+		b = append(b, job.ID)
+	}
+	if !slices.Equal(a, b) {
+		t.Fatalf("job order depends on input order:\n%v\n%v", a, b)
+	}
+}
+
+func TestPlanFingerprintBindsToolVersionsAndCredentialRevisions(t *testing.T) {
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication},
+		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+		Access:  []assessment.AccessBinding{{TargetIDs: []string{"app"}, Kind: assessment.AccessBearerToken, CredentialID: "cred-1"}},
+	}
+	creds := map[string]bool{"app\x00BEARER_TOKEN\x00cred-1": true}
+	base := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: creds, ToolVersions: map[string]string{"zap": "2.15.0"}, CredentialRevisions: map[string]string{"cred-1": "1"}})
+	same := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: creds, ToolVersions: map[string]string{"zap": "2.15.0"}, CredentialRevisions: map[string]string{"cred-1": "1"}})
+	if base.Fingerprint != same.Fingerprint {
+		t.Fatal("identical inputs produced different fingerprints")
+	}
+	tool := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: creds, ToolVersions: map[string]string{"zap": "2.16.0"}, CredentialRevisions: map[string]string{"cred-1": "1"}})
+	if tool.Fingerprint == base.Fingerprint {
+		t.Fatal("tool version change must change the plan fingerprint")
+	}
+	rotated := PlanAssessment(PlanInput{Config: cfg, CredentialAvailability: creds, ToolVersions: map[string]string{"zap": "2.15.0"}, CredentialRevisions: map[string]string{"cred-1": "2"}})
+	if rotated.Fingerprint == base.Fingerprint {
+		t.Fatal("credential revision change must change the plan fingerprint")
+	}
+	// Inputs that fail validation still bind the revisions they were planned with.
+	invalid := cfg
+	invalid.Targets = nil
+	e1 := PlanAssessment(PlanInput{Config: invalid, ToolVersions: map[string]string{"zap": "2.15.0"}})
+	e2 := PlanAssessment(PlanInput{Config: invalid, ToolVersions: map[string]string{"zap": "2.16.0"}})
+	if len(e1.Errors) == 0 || e1.Fingerprint == e2.Fingerprint {
+		t.Fatalf("error-path fingerprint ignores tool versions: %+v", e1.Errors)
+	}
+	data, _ := json.Marshal(base)
+	if strings.Contains(string(data), "2.15.0") || strings.Contains(string(data), "tool_versions") || strings.Contains(string(data), "credential_revisions") {
+		t.Fatalf("fingerprint-only inputs leaked into the plan JSON: %s", data)
+	}
+}
+
+func TestPlanFingerprintStableWithinRegistryV4WhenNewFieldsEmpty(t *testing.T) {
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}}}
+	nilMaps := PlanAssessment(PlanInput{Config: cfg})
+	emptyMaps := PlanAssessment(PlanInput{Config: cfg, ToolVersions: map[string]string{}, CredentialRevisions: map[string]string{}})
+	if nilMaps.RegistryVersion != "4" || nilMaps.Fingerprint != emptyMaps.Fingerprint {
+		t.Fatalf("empty fingerprint inputs changed the fingerprint: %q vs %q (registry %q)", nilMaps.Fingerprint, emptyMaps.Fingerprint, nilMaps.RegistryVersion)
+	}
+	if got := planFingerprint(nilMaps, nil, nil); got != nilMaps.Fingerprint {
+		t.Fatalf("recomputed fingerprint %q != %q", got, nilMaps.Fingerprint)
+	}
+}
+
+func TestRegistryVersionIsFour(t *testing.T) {
+	if PlanRegistryVersion != "4" {
+		t.Fatalf("PlanRegistryVersion = %q, want 4", PlanRegistryVersion)
+	}
+	plan := PlanAssessment(PlanInput{Config: assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "h", Kind: assessment.KindIP, Value: "192.0.2.1"}}}})
+	if plan.RegistryVersion != "4" {
+		t.Fatalf("plan registry version = %q", plan.RegistryVersion)
+	}
+}
+
+func TestDiscoveryProvidersSelectInAutoModeWithoutCustomDemotion(t *testing.T) {
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication},
+		Targets:            []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
+		DiscoveryProviders: &assessment.DiscoveryProviders{TLS: assessment.ProviderSSLyze, Historical: assessment.ProviderWaybackurls},
+	}
+	plan := PlanAssessment(PlanInput{Config: cfg})
+	if len(plan.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", plan.Errors)
+	}
+	if plan.Config.ScannerSelection.Mode != "auto" {
+		t.Fatalf("provider selection switched mode to %q", plan.Config.ScannerSelection.Mode)
+	}
+	var testssl, sslyze, wayback *PlanDecision
+	for i := range plan.Decisions {
+		d := &plan.Decisions[i]
+		if d.TargetID != "app" {
+			continue
+		}
+		switch d.Scanner {
+		case "testssl":
+			testssl = d
+		case "sslyze":
+			sslyze = d
+		case "waybackurls":
+			wayback = d
+		case "nuclei", "zap":
+			if d.State != PlanSelected || d.ReasonCode == "selection.customized" {
+				t.Errorf("auto-mode scanner %s demoted by provider selection: %+v", d.Scanner, d)
+			}
+		}
+	}
+	if testssl == nil || testssl.State != PlanSkipped || testssl.ReasonCode != "selection.provider_alternative" {
+		t.Fatalf("testssl not skipped as provider alternative: %+v", testssl)
+	}
+	if sslyze == nil || sslyze.State != PlanUnavailable || wayback == nil || wayback.State != PlanUnavailable {
+		t.Fatalf("unregistered chosen providers must surface as unavailable: sslyze=%+v wayback=%+v", sslyze, wayback)
+	}
+	for _, job := range plan.Jobs {
+		if job.Scanner == "testssl" {
+			t.Fatalf("testssl job planned although sslyze was chosen: %+v", job)
+		}
+	}
+	if !slices.ContainsFunc(plan.Jobs, func(j PlanJob) bool { return j.Scanner == "zap" }) {
+		t.Fatalf("auto-mode zap job missing: %+v", plan.Jobs)
+	}
+
+	cfg.DiscoveryProviders = &assessment.DiscoveryProviders{TLS: assessment.ProviderTestssl}
+	explicit := PlanAssessment(PlanInput{Config: cfg})
+	if !slices.ContainsFunc(explicit.Jobs, func(j PlanJob) bool { return j.Scanner == "testssl" && j.State == PlanSelected }) {
+		t.Fatalf("explicit testssl provider not planned: %+v", explicit.Jobs)
+	}
+	if slices.ContainsFunc(explicit.Jobs, func(j PlanJob) bool { return j.Scanner == "sslyze" }) {
+		t.Fatalf("unchosen TLS alternative must not run: %+v", explicit.Jobs)
+	}
+}
+
+func TestProviderSelectionsMarkAlternatives(t *testing.T) {
+	chosen, replaced := providerSelections(&assessment.DiscoveryProviders{Subdomain: []string{"amass"}, Historical: "waybackurls", TLS: "sslyze"})
+	for _, id := range []string{"amass", "waybackurls", "sslyze"} {
+		if !chosen[id] {
+			t.Errorf("%s not chosen", id)
+		}
+	}
+	if replaced["subfinder"] != "amass" || replaced["gau"] != "waybackurls" || replaced["testssl"] != "sslyze" {
+		t.Fatalf("alternatives = %v", replaced)
+	}
+	if c, r := providerSelections(nil); len(c) != 0 || len(r) != 0 {
+		t.Fatalf("nil providers selected %v / %v", c, r)
+	}
+}
+
+func TestRegistryWebDefinitionsCarryStagePolicySupportAndOutputFormat(t *testing.T) {
+	formats := map[string]bool{"jsonl": true, "json": true, "text": true, "xml": true}
+	policies := map[string]bool{PolicyGetHeadOnly: true, PolicyExclusions: true, PolicyRateLimited: true, PolicyScopeRegex: true, PolicyWriteCapable: true, PolicyOASTDisabled: true}
+	seen := 0
+	for _, def := range ScannerRegistry() {
+		if def.Group != GroupWebAPI {
+			continue
+		}
+		seen++
+		if def.Stage == "" || def.Stage != stageForScanner(def.ID) || stageRank(def.Stage) < 0 {
+			t.Errorf("%s stage = %q", def.ID, def.Stage)
+		}
+		if !formats[def.OutputFormat] {
+			t.Errorf("%s output format = %q", def.ID, def.OutputFormat)
+		}
+		if def.PolicySupport == nil || !slices.IsSorted(def.PolicySupport) {
+			t.Errorf("%s policy support must be set and sorted: %v", def.ID, def.PolicySupport)
+		}
+		for _, p := range def.PolicySupport {
+			if !policies[p] {
+				t.Errorf("%s has unknown policy %q", def.ID, p)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no web/API registry entries")
+	}
+	if d, _ := RegistryEntry("zap"); d.Stage != StageDAST || !slices.Contains(d.PolicySupport, PolicyWriteCapable) || !slices.Contains(d.PolicySupport, PolicyExclusions) {
+		t.Fatalf("zap metadata = %+v", d)
+	}
+	if d, _ := RegistryEntry("katana"); d.Stage != StageCrawl || d.OutputFormat != "jsonl" || !slices.Contains(d.PolicySupport, PolicyScopeRegex) {
+		t.Fatalf("katana metadata = %+v", d)
+	}
+	data, _ := json.Marshal(ScannerDefinition{ID: "x"})
+	for _, key := range []string{"\"stage\"", "policy_support", "output_format"} {
+		if strings.Contains(string(data), key) {
+			t.Fatalf("empty metadata must be omitted: %s", data)
+		}
 	}
 }

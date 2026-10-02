@@ -267,12 +267,12 @@ func TestPrepareAssessmentAuthenticationReportsFormLoginReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	reason := plan.Capabilities[0].Reason
-	if plan.Capabilities[0].State != assessment.StateUnavailable || !strings.Contains(reason, "form login was rejected (HTTP 401)") || strings.Contains(reason, "not-the-password") {
+	if plan.Capabilities[0].State != assessment.StateFailed || !strings.Contains(reason, "form login was rejected (HTTP 401)") || strings.Contains(reason, "not-the-password") {
 		t.Fatalf("capability reason should explain the rejection without secrets: %q", reason)
 	}
 }
 
-func TestFormSessionRenewsOnceAndStopsOnSecondExpiry(t *testing.T) {
+func TestSessionRenewalBoundedCount(t *testing.T) {
 	var generation atomic.Int32
 	var logins atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -302,39 +302,106 @@ func TestFormSessionRenewsOnceAndStopsOnSecondExpiry(t *testing.T) {
 	}))
 	defer server.Close()
 	s := newTestServer(t, nil)
-	keyPath := t.TempDir() + "/credential.key"
-	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
-	vault, err := s.credentialVault()
-	if err != nil {
-		t.Fatal(err)
-	}
+	vault := authTestVault(t, s)
 	meta, err := vault.Create(credentials.Record{Name: "renew", Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, Values: map[string]string{"login_url": server.URL + "/app/login", "username": "operator", "password": "renew-secret"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan := &scanner.AssessmentPlan{Config: assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: server.URL + "/app"}}, Access: []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, CredentialID: meta.ID, VerifyURL: server.URL + "/app/verify", VerifyMarker: "private marker"}}}, Capabilities: []assessment.CapabilityEvidence{{Capability: assessment.CapAuthWeb, TargetID: "app", State: assessment.StateAvailable}}}
 	headers, err := s.prepareAssessmentAuthentication(context.Background(), plan)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || plan.Capabilities[0].State != assessment.StateVerified {
+		t.Fatalf("form session was not verified: %+v err=%v", plan.Capabilities[0], err)
 	}
 	refreshers, err := s.assessmentAuthRefreshers(plan, headers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	current := headers["app"]
-	if _, err := refreshers["app"](context.Background(), current); err != nil {
+	if _, err := refreshers["app"](context.Background(), current); err != nil || logins.Load() != 1 {
+		t.Fatalf("a live session was renewed: logins=%d err=%v", logins.Load(), err)
+	}
+	// A multi-stage workflow may lose its session several times; each loss up
+	// to the bound gets a fresh login.
+	for renewal := 1; renewal <= maxSessionRenewals; renewal++ {
+		generation.Add(1)
+		renewed, err := refreshers["app"](context.Background(), current)
+		if err != nil || renewed[0] != fmt.Sprintf("Cookie: session=%d", renewal) || logins.Load() != int32(1+renewal) {
+			t.Fatalf("renewal %d failed: headers=%v logins=%d err=%v", renewal, renewed, logins.Load(), err)
+		}
+		current = renewed
+	}
+	generation.Add(1)
+	_, err = refreshers["app"](context.Background(), current)
+	if err == nil || !strings.Contains(err.Error(), "authenticated session") || strings.Contains(err.Error(), "renew-secret") || logins.Load() != int32(1+maxSessionRenewals) {
+		t.Fatalf("renewals did not stop after %d: logins=%d err=%v", maxSessionRenewals, logins.Load(), err)
+	}
+	if _, err := refreshers["app"](context.Background(), current); err == nil || logins.Load() != int32(1+maxSessionRenewals) {
+		t.Fatalf("an exhausted renewal budget logged in again: logins=%d err=%v", logins.Load(), err)
+	}
+}
+
+func TestFormLoginNegativeControlWithCSRF(t *testing.T) {
+	var publicMarker atomic.Bool
+	var anonymousVerify atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/login":
+			if r.Method == http.MethodGet {
+				_, _ = w.Write([]byte(`<form method="post" action="/app/login"><input type="hidden" name="csrf" value="token"><input name="username"><input name="password" type="password"></form>`))
+				return
+			}
+			if r.PostFormValue("csrf") != "token" || r.PostFormValue("password") != "csrf-secret" {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "opaque", Path: "/app"})
+			http.Redirect(w, r, "/app/verify", http.StatusSeeOther)
+		case "/app/verify":
+			if cookie, err := r.Cookie("session"); err != nil || cookie.Value != "opaque" {
+				anonymousVerify.Add(1)
+				if publicMarker.Load() {
+					_, _ = w.Write([]byte("Account dashboard"))
+					return
+				}
+				// Unauthenticated visitors bounce to the sign-in form.
+				http.Redirect(w, r, "/app/login", http.StatusFound)
+				return
+			}
+			_, _ = w.Write([]byte("Account dashboard"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	s := newTestServer(t, nil)
+	vault := authTestVault(t, s)
+	meta, err := vault.Create(credentials.Record{Name: "csrf", Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, Values: map[string]string{"login_url": server.URL + "/app/login", "username": "operator", "password": "csrf-secret", "csrf_field": "csrf"}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	generation.Add(1)
-	renewed, err := refreshers["app"](context.Background(), current)
-	if err != nil || renewed[0] != "Cookie: session=1" || logins.Load() != 2 {
-		t.Fatalf("first expiry did not renew once: headers=%v logins=%d err=%v", renewed, logins.Load(), err)
+	newPlan := func() *scanner.AssessmentPlan {
+		return &scanner.AssessmentPlan{
+			Config:       assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: server.URL + "/app"}}, Access: []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}, CredentialID: meta.ID, VerifyURL: server.URL + "/app/verify", VerifyMarker: "Account dashboard"}}},
+			Capabilities: []assessment.CapabilityEvidence{{Capability: assessment.CapAuthWeb, TargetID: "app", State: assessment.StateAvailable}},
+			Jobs:         []scanner.PlanJob{{Scanner: "zap", TargetID: "app", State: scanner.PlanSelected}},
+		}
 	}
-	generation.Add(1)
-	if _, err := refreshers["app"](context.Background(), renewed); err == nil || strings.Contains(err.Error(), "renew-secret") || logins.Load() != 2 {
-		t.Fatalf("second expiry did not stop securely: logins=%d err=%v", logins.Load(), err)
+	plan := newPlan()
+	headers, err := s.prepareAssessmentAuthentication(context.Background(), plan)
+	if err != nil || len(headers["app"]) != 1 || headers["app"][0] != "Cookie: session=opaque" || plan.Capabilities[0].State != assessment.StateVerified || !strings.Contains(plan.Capabilities[0].Reason, "negative control") || plan.Jobs[0].ExecutionMode != "authenticated" {
+		t.Fatalf("CSRF form login did not verify with a negative control: headers=%v plan=%+v err=%v", headers, plan, err)
+	}
+	if anonymousVerify.Load() != 1 {
+		t.Fatalf("negative control ran %d times, want once", anonymousVerify.Load())
+	}
+	publicMarker.Store(true)
+	plan = newPlan()
+	headers, err = s.prepareAssessmentAuthentication(context.Background(), plan)
+	if err != nil || len(headers["app"]) != 0 || plan.Capabilities[0].State != assessment.StateFailed || plan.Jobs[0].State != scanner.PlanSkipped {
+		t.Fatalf("a public success marker verified the form login: headers=%v plan=%+v err=%v", headers, plan, err)
+	}
+	encoded, _ := json.Marshal(plan)
+	if strings.Contains(string(encoded), "csrf-secret") || strings.Contains(string(encoded), "session=opaque") {
+		t.Fatal("form password or session cookie entered the assessment plan")
 	}
 }

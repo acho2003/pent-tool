@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
@@ -63,28 +64,72 @@ func buildFindingsSnapshot(rec *ScanRecord, scanDir string) (*scanner.FindingsSn
 	return snapshot, errs
 }
 
+// rebuildFindingsSnapshot re-derives the snapshot from stored scanner output.
+// It never contacts targets: SPA/wildcard fallback validation runs only at
+// scan finalisation (validateScanFallback) and is reused here from
+// fallback-validation.json.
 func rebuildFindingsSnapshot(rec *ScanRecord, scanDir string, persist bool) (*scanner.FindingsSnapshot, []error) {
 	snapshot, errs := buildFindingsSnapshot(rec, scanDir)
 	if snapshot == nil {
 		return nil, errs
 	}
-	if persist {
-		for _, validation := range scanner.ValidateSPAFallback(context.Background(), snapshot) {
-			for i := range snapshot.UniqueFindings {
-				if snapshot.UniqueFindings[i].Fingerprint == validation.Fingerprint && snapshot.UniqueFindings[i].Status == scanner.StatusPotential {
-					snapshot.UniqueFindings[i].Status = scanner.StatusLikelyFalsePositive
-					snapshot.UniqueFindings[i].ValidationReason = validation.Reason
-				}
-			}
-		}
-		snapshot.RecomputeSummary()
+	if validations, ok := scanner.LoadFallbackValidations(scanDir); ok {
+		scanner.ApplyFallbackValidations(snapshot, validations)
 	}
+	snapshot.RecomputeSummary()
 	if persist {
 		if err := scanner.SaveFindingsSnapshot(scanDir, snapshot); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return snapshot, errs
+}
+
+// validateScanFallback is the scan-finalisation step that probes suspicious
+// findings for SPA/wildcard fallback responses. It must be called with the
+// scan session's context, the assessment budget and the pipeline's
+// ScopeGuard, after scanner runs are stored on rec and before the report is
+// generated. Every GET is confined to fallbackValidationScope(rec); results
+// are persisted so later rebuilds and report regeneration need no network.
+func validateScanFallback(ctx context.Context, rec *ScanRecord, scanDir string, budget *scanner.AssessmentBudget, guard func(rawURL string, resolved []string) (bool, string)) error {
+	snapshot, _ := buildFindingsSnapshot(rec, scanDir)
+	if snapshot == nil {
+		return fmt.Errorf("findings snapshot unavailable")
+	}
+	results := scanner.ValidateSPAFallback(ctx, snapshot, scanner.FallbackValidationOptions{Scope: fallbackValidationScope(rec), Budget: budget, ScopeGuard: guard})
+	return scanner.SaveFallbackValidations(scanDir, results)
+}
+
+// fallbackValidationScope is the request boundary of fallback validation: the
+// union of the typed assessment's per-target scopes (approved origins plus
+// exclusions), or, for a legacy scan, the boundary derived from its target.
+// It never extends beyond what the scan itself was authorized to contact.
+func fallbackValidationScope(rec *ScanRecord) assessment.AppScope {
+	if rec == nil {
+		return assessment.AppScope{}
+	}
+	var cfg assessment.AssessmentConfig
+	switch {
+	case rec.AssessmentPlan != nil:
+		cfg = rec.AssessmentPlan.Config
+	case rec.Assessment != nil:
+		cfg = assessment.Normalize(*rec.Assessment)
+	default:
+		target := strings.TrimSpace(rec.Target)
+		kind := assessment.KindHost
+		if strings.Contains(target, "://") {
+			kind = assessment.KindURL
+		}
+		cfg = assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "scan", Kind: kind, Value: target}}}
+	}
+	var origins []assessment.ApprovedOrigin
+	var exclusions []assessment.Exclusion
+	for _, target := range cfg.Targets {
+		scope := assessment.AppScopeForTarget(cfg, target.ID)
+		origins = append(origins, scope.Origins()...)
+		exclusions = append(exclusions, scope.Exclusions()...)
+	}
+	return assessment.NewAppScope(origins, exclusions...)
 }
 
 func normalizedVulnsForEntry(entry scanEntry) []VulnSummary {

@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 func TestZAPAuthMonitorRenewsAndStopsOnFailure(t *testing.T) {
@@ -111,6 +113,16 @@ type fakeZAP struct {
 	removeContextFails bool
 	domXSSEnabled      string
 	accessedURLs       []string
+	contextExcludes    []string
+	spiderExcludes     []string // daemon state: spider excludedFromScan
+	ascanExcludes      []string // daemon state: ascan excludedFromScan
+	delayInMs          string   // daemon state: ascan optionDelayInMs ("" = 0)
+	threadPerHost      string   // daemon state: ascan optionThreadPerHost ("" = 2)
+	delayDuringScan    string
+	threadsDuringScan  string
+	spiderExclDuring   []string
+	ascanExclDuring    []string
+	restoreDelayFails  bool
 }
 
 func (f *fakeZAP) record(path string) {
@@ -128,6 +140,11 @@ func (f *fakeZAP) called(path string) bool {
 		}
 	}
 	return false
+}
+
+// called0 is called without taking the lock; the caller holds f.mu.
+func (f *fakeZAP) called0(path string) bool {
+	return slices.Contains(f.paths, path)
 }
 
 func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -209,10 +226,77 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"scanners": []any{map[string]any{"id": zapDomXSSPluginID, "enabled": state}}})
 		return
+	case "/JSON/context/action/excludeFromContext/":
+		f.mu.Lock()
+		f.contextExcludes = append(f.contextExcludes, r.URL.Query().Get("regex"))
+		f.mu.Unlock()
+	case "/JSON/spider/view/excludedFromScan/":
+		f.mu.Lock()
+		list := append([]string{}, f.spiderExcludes...)
+		f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"excludedFromScan": list})
+		return
+	case "/JSON/spider/action/excludeFromScan/":
+		f.mu.Lock()
+		f.spiderExcludes = append(f.spiderExcludes, r.URL.Query().Get("regex"))
+		f.mu.Unlock()
+	case "/JSON/spider/action/clearExcludedFromScan/":
+		f.mu.Lock()
+		f.spiderExcludes = nil
+		f.mu.Unlock()
+	case "/JSON/ascan/view/excludedFromScan/":
+		f.mu.Lock()
+		list := append([]string{}, f.ascanExcludes...)
+		f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"excludedFromScan": list})
+		return
+	case "/JSON/ascan/action/excludeFromScan/":
+		f.mu.Lock()
+		f.ascanExcludes = append(f.ascanExcludes, r.URL.Query().Get("regex"))
+		f.mu.Unlock()
+	case "/JSON/ascan/action/clearExcludedFromScan/":
+		f.mu.Lock()
+		f.ascanExcludes = nil
+		f.mu.Unlock()
+	case "/JSON/ascan/view/optionDelayInMs/":
+		f.mu.Lock()
+		value := f.delayInMs
+		f.mu.Unlock()
+		if value == "" {
+			value = "0"
+		}
+		body = map[string]string{"DelayInMs": value}
+	case "/JSON/ascan/view/optionThreadPerHost/":
+		f.mu.Lock()
+		value := f.threadPerHost
+		f.mu.Unlock()
+		if value == "" {
+			value = "2"
+		}
+		body = map[string]string{"ThreadPerHost": value}
+	case "/JSON/ascan/action/setOptionDelayInMs/":
+		f.mu.Lock()
+		restoring := f.called0("/JSON/ascan/action/scan/")
+		fails := f.restoreDelayFails && restoring
+		if !fails {
+			f.delayInMs = r.URL.Query().Get("Integer")
+		}
+		f.mu.Unlock()
+		if fails {
+			http.Error(w, `{"code":"internal_error"}`, http.StatusInternalServerError)
+			return
+		}
+	case "/JSON/ascan/action/setOptionThreadPerHost/":
+		f.mu.Lock()
+		f.threadPerHost = r.URL.Query().Get("Integer")
+		f.mu.Unlock()
 	case "/JSON/ascan/action/scan/":
 		f.mu.Lock()
 		f.activeContext = r.URL.Query().Get("contextId")
 		f.activeInScopeOnly = r.URL.Query().Get("inScopeOnly")
+		f.delayDuringScan, f.threadsDuringScan = f.delayInMs, f.threadPerHost
+		f.spiderExclDuring = append([]string(nil), f.spiderExcludes...)
+		f.ascanExclDuring = append([]string(nil), f.ascanExcludes...)
 		f.mu.Unlock()
 		if f.ascanNoTree {
 			http.Error(w, `{"code":"url_not_found","message":"URL Not Found in the Scan Tree"}`, http.StatusBadRequest)
@@ -646,5 +730,267 @@ func TestZAPClearErrorWhenNoPagesFound(t *testing.T) {
 		Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
 	if run.Status != "failed" || !strings.Contains(run.Reason, "no reachable pages") {
 		t.Fatalf("empty scan tree must read clearly: status=%q reason=%q", run.Status, run.Reason)
+	}
+}
+
+func TestZAPContextRegexNormalizesDefaultPort(t *testing.T) {
+	cases := []struct {
+		target string
+		match  []string
+		reject []string
+	}{
+		{"https://Example.test/Portal/", []string{"https://example.test/Portal", "https://example.test:443/Portal/page", "https://example.test/Portal/page?q=1"}, []string{"https://example.test:8443/Portal/page", "http://example.test/Portal/page", "https://example.test/PortalElse", "https://example.test:4430/Portal/page"}},
+		{"https://example.test:443/", []string{"https://example.test/", "https://example.test:443/any", "https://example.test"}, []string{"https://example.test:8443/any", "https://example.test.evil/any"}},
+		{"http://example.test:80/app", []string{"http://example.test/app/x", "http://example.test:80/app"}, []string{"http://example.test:8080/app", "https://example.test/app"}},
+		{"https://[::1]:8443/api", []string{"https://[::1]:8443/api/v1"}, []string{"https://[::1]/api/v1", "https://[::1]:443/api/v1"}},
+	}
+	for _, tc := range cases {
+		pattern, err := applicationContextRegex(tc.target)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.target, err)
+		}
+		compiled := regexp.MustCompile(pattern)
+		for _, u := range tc.match {
+			if !compiled.MatchString(u) {
+				t.Errorf("%s: regex %q rejects in-scope %q", tc.target, pattern, u)
+			}
+		}
+		for _, u := range tc.reject {
+			if compiled.MatchString(u) {
+				t.Errorf("%s: regex %q accepts out-of-scope %q", tc.target, pattern, u)
+			}
+		}
+	}
+	for _, bad := range []string{"ftp://example.test/", "https://user:pw@example.test/", "https://example.test/#frag", "/relative"} {
+		if _, err := applicationContextRegex(bad); err == nil {
+			t.Errorf("invalid application URL %q accepted", bad)
+		}
+	}
+	// The typed run installs the same port-normalized regex as its context.
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true"}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
+	run := zapRunner{}.Run(t.Context(), Request{Target: "https://app.example.test/", ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true}, cfg, nil)
+	if run.Status != "completed" {
+		t.Fatalf("typed run = %+v", run)
+	}
+	fake.mu.Lock()
+	contextRegex := fake.contextRegex
+	fake.mu.Unlock()
+	if re := regexp.MustCompile(contextRegex); !re.MatchString("https://app.example.test:443/login") || !re.MatchString("https://app.example.test/login") {
+		t.Fatalf("ZAP context regex %q does not normalize the default port", contextRegex)
+	}
+}
+
+func zapTestScope(t *testing.T, target string, exclusions ...assessment.Exclusion) *assessment.AppScope {
+	t.Helper()
+	origin, err := assessment.ParseApprovedOrigin("app", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin}, exclusions...)
+	return &scope
+}
+
+func anyRegexMatches(t *testing.T, patterns []string, u string) bool {
+	t.Helper()
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			t.Fatalf("invalid ZAP exclusion regex %q: %v", p, err)
+		}
+		if re.MatchString(u) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestZAPExclusionsAppliedToContextSpiderAndScan(t *testing.T) {
+	exclusions := []assessment.Exclusion{
+		{PathPattern: "/Portal/admin", Reason: "operator: admin console"},
+		{PathPattern: "/Portal/logout*"},
+		{Method: "DELETE", PathPattern: "/Portal/api/users"},
+		{Origin: "https://other.example.test", PathPattern: "/Portal/billing"},
+	}
+	check := func(t *testing.T, label string, patterns []string) {
+		t.Helper()
+		for _, excluded := range []string{
+			"https://app.example.test/Portal/admin",
+			"https://app.example.test:443/Portal/ADMIN/users?x=1",
+			"https://app.example.test/Portal/logout-now",
+			"https://app.example.test/Portal/api/users",
+		} {
+			if !anyRegexMatches(t, patterns, excluded) {
+				t.Errorf("%s exclusions %q do not cover %q", label, patterns, excluded)
+			}
+		}
+		for _, allowed := range []string{
+			"https://app.example.test/Portal/administrator",
+			"https://app.example.test/Portal/",
+			"https://app.example.test/Portal/billing",
+			"https://app.example.test/Portal/search?next=/Portal/admin",
+		} {
+			if anyRegexMatches(t, patterns, allowed) {
+				t.Errorf("%s exclusions %q wrongly cover %q", label, patterns, allowed)
+			}
+		}
+	}
+
+	t.Run("typed", func(t *testing.T) {
+		fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true"}
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		target := "https://app.example.test/Portal/"
+		req := Request{Target: target, ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true, AppScope: zapTestScope(t, target, exclusions...),
+			EndpointTargets: []string{"https://app.example.test/Portal/admin/panel", "https://app.example.test/Portal/search?q=1"}}
+		cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 10, MaxOutputBytes: 1 << 20}
+		run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+		if run.Status != "completed" {
+			t.Fatalf("typed run = %+v", run)
+		}
+		fake.mu.Lock()
+		contextExcludes := append([]string(nil), fake.contextExcludes...)
+		spiderDuring, ascanDuring := fake.spiderExclDuring, fake.ascanExclDuring
+		spiderAfter, ascanAfter := fake.spiderExcludes, fake.ascanExcludes
+		accessed := append([]string(nil), fake.accessedURLs...)
+		fake.mu.Unlock()
+		check(t, "context", contextExcludes)
+		check(t, "spider", spiderDuring)
+		check(t, "active scan", ascanDuring)
+		if len(spiderAfter) != 0 || len(ascanAfter) != 0 {
+			t.Errorf("daemon-global exclusions were left behind: spider=%v ascan=%v", spiderAfter, ascanAfter)
+		}
+		if slices.Contains(accessed, "https://app.example.test/Portal/admin/panel") {
+			t.Errorf("excluded endpoint was seeded into ZAP: %v", accessed)
+		}
+		if !slices.Contains(accessed, "https://app.example.test/Portal/search?q=1") {
+			t.Errorf("allowed endpoint was not seeded: %v", accessed)
+		}
+	})
+
+	t.Run("legacy", func(t *testing.T) {
+		fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, spiderExcludes: []string{"^prior-spider$"}, ascanExcludes: []string{"^prior-ascan$"}}
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		target := "https://app.example.test/Portal/"
+		req := Request{Target: target, ScanDir: t.TempDir(), AppScope: zapTestScope(t, target, exclusions...)}
+		cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
+		run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+		if run.Status != "completed" {
+			t.Fatalf("legacy run = %+v", run)
+		}
+		fake.mu.Lock()
+		spiderDuring, ascanDuring := fake.spiderExclDuring, fake.ascanExclDuring
+		spiderAfter, ascanAfter := fake.spiderExcludes, fake.ascanExcludes
+		fake.mu.Unlock()
+		check(t, "spider", spiderDuring)
+		check(t, "active scan", ascanDuring)
+		if !slices.Contains(spiderDuring, "^prior-spider$") || !slices.Contains(ascanDuring, "^prior-ascan$") {
+			t.Errorf("existing daemon exclusions were dropped during the scan: spider=%v ascan=%v", spiderDuring, ascanDuring)
+		}
+		if !slices.Equal(spiderAfter, []string{"^prior-spider$"}) || !slices.Equal(ascanAfter, []string{"^prior-ascan$"}) {
+			t.Errorf("daemon exclusions not restored: spider=%v ascan=%v", spiderAfter, ascanAfter)
+		}
+	})
+
+	t.Run("no exclusions leaves daemon lists alone", func(t *testing.T) {
+		fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir()}, Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+		if run.Status != "completed" || fake.called("/JSON/spider/action/clearExcludedFromScan/") || fake.called("/JSON/ascan/action/excludeFromScan/") {
+			t.Fatalf("scan without exclusions touched daemon exclusion state: %+v %v", run, fake.paths)
+		}
+	})
+}
+
+func TestZAPRateDelayFromRateRPSRestored(t *testing.T) {
+	for _, tc := range []struct {
+		rps   int
+		delay string
+	}{{4, "250"}, {3, "334"}, {150, "7"}, {2000, "1"}} {
+		fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true", delayInMs: "15", threadPerHost: "4"}
+		srv := httptest.NewServer(fake)
+		cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, RateRPS: tc.rps, MaxOutputBytes: 1 << 20}
+		run := zapRunner{}.Run(t.Context(), Request{Target: "https://app.example.test/", ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true}, cfg, nil)
+		fake.mu.Lock()
+		during, threads, after, threadsAfter := fake.delayDuringScan, fake.threadsDuringScan, fake.delayInMs, fake.threadPerHost
+		fake.mu.Unlock()
+		srv.Close()
+		if run.Status != "completed" {
+			t.Fatalf("rps=%d run = %+v", tc.rps, run)
+		}
+		if during != tc.delay || threads != "1" {
+			t.Errorf("rps=%d: active scan ran with delay=%q threadPerHost=%q, want %s/1", tc.rps, during, threads, tc.delay)
+		}
+		if after != "15" || threadsAfter != "4" {
+			t.Errorf("rps=%d: daemon rate options not restored: delay=%q threadPerHost=%q", tc.rps, after, threadsAfter)
+		}
+	}
+
+	// RateRPS unset keeps the daemon's options untouched.
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+	srv := httptest.NewServer(fake)
+	run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir()}, Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+	srv.Close()
+	if run.Status != "completed" || fake.called("/JSON/ascan/action/setOptionDelayInMs/") {
+		t.Fatalf("rate options changed without a configured rate: %+v", run)
+	}
+
+	// A failed restore of daemon-global options quarantines a dedicated daemon.
+	fake = &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true", restoreDelayFails: true}
+	srv = httptest.NewServer(fake)
+	defer srv.Close()
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, RateRPS: 5, MaxOutputBytes: 1 << 20}
+	run = zapRunner{}.Run(t.Context(), Request{Target: "https://app.example.test/", ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true}, cfg, nil)
+	if run.Status != "completed" || !ZAPServiceQuarantined(srv.URL) {
+		t.Fatalf("rate restore failure did not quarantine the daemon: run=%+v quarantined=%t", run, ZAPServiceQuarantined(srv.URL))
+	}
+}
+
+func TestZAPSessionLossRecordsAuthExpiredStructurally(t *testing.T) {
+	previous := zapAuthInterval
+	zapAuthInterval = 0
+	t.Cleanup(func() { zapAuthInterval = previous })
+	newRun := func(t *testing.T, refresh func(context.Context, []string) ([]string, error)) Run {
+		t.Helper()
+		fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true"}
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
+		req := Request{Target: "https://example.test/app/", ScanDir: t.TempDir(), Scope: "app:one", TypedAssessment: true, TargetAuth: "Cookie: session-secret", AuthKind: "form login", AuthRefresh: refresh}
+		return runAttempt(t.Context(), zapRunner{}, req, cfg, nil)
+	}
+
+	checks := 0
+	expired := newRun(t, func(ctx context.Context, current []string) ([]string, error) {
+		checks++
+		if checks > 2 {
+			return nil, fmt.Errorf("private-password rejected")
+		}
+		return current, nil
+	})
+	if expired.Status != "failed" || expired.AuthState != assessment.StateExpired || expired.GapKind != GapAuthExpired {
+		t.Fatalf("mid-scan session loss not recorded structurally: status=%s auth=%q gap=%q reason=%q", expired.Status, expired.AuthState, expired.GapKind, expired.Reason)
+	}
+	if _, err := time.Parse(time.RFC3339, expired.AuthCheckedAt); err != nil {
+		t.Errorf("AuthCheckedAt %q is not RFC 3339: %v", expired.AuthCheckedAt, err)
+	}
+	if !strings.Contains(expired.Reason, "authenticated session") || strings.Contains(expired.Reason, "private-password") {
+		t.Errorf("expiry reason unsafe or missing legacy wording: %q", expired.Reason)
+	}
+
+	rejected := newRun(t, func(ctx context.Context, current []string) ([]string, error) {
+		return nil, fmt.Errorf("rejected")
+	})
+	if rejected.Status != "failed" || rejected.AuthState != assessment.StateFailed || rejected.GapKind != GapAuthFailed {
+		t.Fatalf("initial verification failure must be auth failed, not expired: auth=%q gap=%q", rejected.AuthState, rejected.GapKind)
+	}
+
+	verified := newRun(t, func(ctx context.Context, current []string) ([]string, error) { return current, nil })
+	if verified.Status != "completed" || verified.AuthState != assessment.StateVerified || verified.GapKind != "" || verified.AuthCheckedAt == "" {
+		t.Fatalf("active session not recorded as verified: status=%s auth=%q gap=%q checked=%q", verified.Status, verified.AuthState, verified.GapKind, verified.AuthCheckedAt)
 	}
 }

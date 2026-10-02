@@ -1,6 +1,8 @@
 package ratelimit_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -81,5 +83,32 @@ func TestWaitReturnsWithinReasonableTime(t *testing.T) {
 		// ok
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Wait blocked for more than 500 ms at 100 rps")
+	}
+}
+
+// TestLimiterWaitCtxHonoursCancellation verifies WaitCtx returns the context
+// error instead of blocking for a token.
+func TestLimiterWaitCtxHonoursCancellation(t *testing.T) {
+	l := ratelimit.New(1, 1)
+	url := "https://example.com"
+	if err := l.WaitCtx(context.Background(), url); err != nil {
+		t.Fatalf("first token should be available: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := l.WaitCtx(ctx, url); err == nil {
+		t.Fatal("WaitCtx should fail when the next token is beyond the deadline")
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatal("WaitCtx blocked past cancellation")
+	}
+	cancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	if err := l.WaitCtx(cancelled, "https://other.example"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitCtx on cancelled ctx = %v, want context.Canceled", err)
+	}
+	if err := ratelimit.New(0, 1).WaitCtx(context.Background(), url); err != nil {
+		t.Fatalf("disabled limiter WaitCtx = %v", err)
 	}
 }

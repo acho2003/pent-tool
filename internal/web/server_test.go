@@ -2625,3 +2625,102 @@ func TestHandleRestart_DefaultSchedulesWhenBusy(t *testing.T) {
 		t.Fatalf("scanner should report busy (idle=false), got: %s", got)
 	}
 }
+
+func TestFlatRequestWithApprovedOriginsDetectedAsCanonical(t *testing.T) {
+	var req ScanRequest
+	if err := json.Unmarshal([]byte(`{"approved_origins":[{"target_id":"app","scheme":"https","host":"app.example.test","port":8443}],"targets":["app.example.test"]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Assessment == nil || len(req.Assessment.ApprovedOrigins) != 1 || req.Assessment.ApprovedOrigins[0].Port != 8443 {
+		t.Fatalf("flat approved_origins was not decoded as a canonical assessment: %+v", req.Assessment)
+	}
+	// Each new flat field, sent next to a nested assessment, is ambiguous and
+	// must be rejected instead of silently dropped.
+	for _, field := range []string{
+		`"approved_origins":[{"target_id":"app","scheme":"https","host":"app.example.test"}]`,
+		`"exclusions":[{"path_pattern":"/logout"}]`,
+		`"test_environment":true`,
+		`"discovery_providers":{"subdomain":["subfinder"]}`,
+		`"manual_seeds":["https://app.example.test/start"]`,
+	} {
+		var dual ScanRequest
+		if err := json.Unmarshal([]byte(`{`+field+`,"assessment":{"assessment_mode":"BLACK_BOX"}}`), &dual); err == nil {
+			t.Errorf("flat %s next to a nested assessment must be rejected", field)
+		}
+	}
+	// Legacy non-assessment requests stay legacy.
+	var legacy ScanRequest
+	if err := json.Unmarshal([]byte(`{"targets":["example.test"],"scan_mode":"single"}`), &legacy); err != nil || legacy.Assessment != nil {
+		t.Fatalf("legacy request changed shape: %+v err=%v", legacy.Assessment, err)
+	}
+}
+
+func TestSaveScanRecordAtomicLeavesNoPartialFile(t *testing.T) {
+	s := newTestServer(t, nil)
+	scanDir := t.TempDir()
+	path := filepath.Join(scanDir, "scan.json")
+	s.saveScanRecordTo(&ScanRecord{ID: "scan-1", Target: "example.test", Status: "running"}, scanDir)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A successful save replaces scan.json by rename, never by truncating
+	// the live file in place.
+	s.saveScanRecordTo(&ScanRecord{ID: "scan-1", Target: "example.test", Status: "finished"}, scanDir)
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Fatal("scan.json was rewritten in place; a crash could leave it truncated")
+	}
+	if after.Mode().Perm() != 0o600 {
+		t.Fatalf("scan.json mode = %v, want 0600", after.Mode().Perm())
+	}
+	previous, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a write failure: the directory refuses new files, so the
+	// temp file cannot be created. The previous record must survive intact.
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if err := os.Chmod(scanDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(scanDir, 0o700) })
+	s.saveScanRecordTo(&ScanRecord{ID: "scan-1", Target: "example.test", Status: "failed", Events: []WSEvent{{Type: "error", Content: strings.Repeat("x", 4096)}}}, scanDir)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, previous) {
+		t.Fatalf("failed save changed scan.json:\n%s", got)
+	}
+	var rec ScanRecord
+	if err := json.Unmarshal(got, &rec); err != nil || rec.Status != "finished" {
+		t.Fatalf("previous scan.json is not intact: status=%q err=%v", rec.Status, err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(scanDir, "scan.json.tmp.*")); len(matches) != 0 {
+		t.Fatalf("failed save left temp files: %v", matches)
+	}
+
+	// Queue state uses the same atomic replace.
+	_ = os.Chmod(scanDir, 0o700)
+	queuePath := s.queueStatePathForInstance("inst-1")
+	s.saveQueueState(0, ScanRequest{InstanceID: "inst-1", Targets: []string{"a.example.test"}})
+	qBefore, err := os.Stat(queuePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.saveQueueState(1, ScanRequest{InstanceID: "inst-1", Targets: []string{"a.example.test", "b.example.test"}})
+	qAfter, err := os.Stat(queuePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(qBefore, qAfter) {
+		t.Fatal("queue state was rewritten in place; a crash could leave it truncated")
+	}
+}

@@ -1,8 +1,10 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -76,6 +78,80 @@ func TestBuildDalfox_BoundedRunOverDiscoveredURLs(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "scanner-output", "dalfox", "targets.txt"))
 	if err != nil || string(data) == "" {
 		t.Fatalf("target list not written: %v", err)
+	}
+}
+
+// One worker and a per-request delay rounded up from RateRPS keep Dalfox at or
+// below the profile rate; parameter mining and headless verification (whose
+// browser requests bypass both the delay and the scope gate) are disabled.
+func TestDalfoxSkipsMiningSingleWorkerDelayFromRate(t *testing.T) {
+	for _, tc := range []struct {
+		rate  int
+		delay string
+	}{{rate: 2, delay: "500"}, {rate: 3, delay: "334"}, {rate: 10, delay: "100"}, {rate: 5000, delay: "1"}} {
+		spec := buildDalfox(Request{Target: "https://app.test/", ScanDir: t.TempDir(), WebEndpoints: []string{"https://app.test/s?q=1"}},
+			Config{DalfoxPath: "dalfox", DalfoxTimeout: time.Minute, RateRPS: tc.rate})
+		if spec.notApp != "" {
+			t.Fatalf("unexpected notApp: %s", spec.notApp)
+		}
+		if w := argValues(spec.args, "--worker"); !slices.Equal(w, []string{"1"}) {
+			t.Fatalf("rate %d: --worker = %v, want exactly one worker", tc.rate, w)
+		}
+		if d := argValues(spec.args, "--delay"); !slices.Equal(d, []string{tc.delay}) {
+			t.Fatalf("rate %d: --delay = %v, want %s", tc.rate, d, tc.delay)
+		}
+		for _, flag := range []string{"--skip-mining-all", "--skip-headless", "--skip-bav"} {
+			if !hasArg(spec.args, flag) {
+				t.Fatalf("rate %d: missing %s in %v", tc.rate, flag, spec.args)
+			}
+		}
+		for _, forbidden := range []string{"-b", "--blind", "--follow-redirects", "-F", "--found-action", "--multicast", "--mass"} {
+			if hasArg(spec.args, forbidden) {
+				t.Fatalf("rate %d: forbidden flag %s in %v", tc.rate, forbidden, spec.args)
+			}
+		}
+	}
+}
+
+func TestDalfoxCompletedRunRecordsHeadlessLimitation(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-dalfox")
+	script := "#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then shift; out=$1; fi; shift; done\nprintf '[]' > \"$out\"\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Target: "https://app.test/", ScanDir: dir, WebEndpoints: []string{"https://app.test/s?q=1"}}
+	run := dalfoxRunner{}.Run(context.Background(), req, Config{DalfoxPath: bin, DalfoxTimeout: time.Minute, RateRPS: 2}, nil)
+	if run.Status != "completed" || len(run.Limitations) != 1 || run.Limitations[0].Kind != LimitationHeadlessExcluded {
+		t.Fatalf("completed Dalfox run = %+v", run)
+	}
+}
+
+// Dalfox carries only the verified, target-bound session of a typed
+// assessment. Operator scan headers and an unverified legacy TargetAuth are
+// never forwarded.
+func TestDalfoxSendsVerifiedAuthHeadersOnly(t *testing.T) {
+	cfg := Config{DalfoxPath: "dalfox", DalfoxTimeout: time.Minute, ScanHeaders: []string{"X-Operator: static"}}
+	base := Request{Target: "https://app.test/", WebEndpoints: []string{"https://app.test/s?q=1"}}
+
+	anonymous := base
+	anonymous.ScanDir, anonymous.TypedAssessment = t.TempDir(), true
+	if h := argValues(buildDalfox(anonymous, cfg).args, "-H"); len(h) != 0 {
+		t.Fatalf("anonymous typed run sent headers %v", h)
+	}
+
+	legacy := base
+	legacy.ScanDir, legacy.TargetAuth = t.TempDir(), "Cookie: sid=legacy"
+	if h := argValues(buildDalfox(legacy, cfg).args, "-H"); len(h) != 0 {
+		t.Fatalf("unverified legacy TargetAuth forwarded as %v", h)
+	}
+
+	verified := base
+	verified.ScanDir, verified.TypedAssessment = t.TempDir(), true
+	verified.TargetAuth = "Cookie: sid=abc123\n\nAuthorization: Bearer tok-456\n"
+	want := []string{"Cookie: sid=abc123", "Authorization: Bearer tok-456"}
+	if h := argValues(buildDalfox(verified, cfg).args, "-H"); !slices.Equal(h, want) {
+		t.Fatalf("verified headers = %v, want %v", h, want)
 	}
 }
 
