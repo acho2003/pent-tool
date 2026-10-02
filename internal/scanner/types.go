@@ -139,29 +139,30 @@ type RunLimitation struct {
 }
 
 type Run struct {
-	Scanner            string              `json:"scanner"`
-	Authenticated      bool                `json:"authenticated,omitempty"`
-	Variant            string              `json:"variant,omitempty"`
-	AssessmentTypes    []assessment.Type   `json:"assessment_types,omitempty"`
-	PlanFingerprint    string              `json:"plan_fingerprint,omitempty"`
-	AttemptID          string              `json:"attempt_id,omitempty"`
-	Scope              string              `json:"scope,omitempty"`
-	Target             string              `json:"target"`
-	Status             string              `json:"status"`
-	StartedAt          string              `json:"started_at,omitempty"`
-	FinishedAt         string              `json:"finished_at,omitempty"`
-	ExitCode           int                 `json:"exit_code,omitempty"`
-	Reason             string              `json:"reason,omitempty"`
-	StdoutPath         string              `json:"stdout_path,omitempty"`
-	StderrPath         string              `json:"stderr_path,omitempty"`
-	TranscriptPath     string              `json:"transcript_path,omitempty"`
-	ArtifactPath       string              `json:"artifact_path,omitempty"`
-	DNSResolution      *DNSResolution      `json:"dns_resolution,omitempty"`
-	CandidateHosts     []string            `json:"candidate_hosts,omitempty"`
-	HTTPObservations   []HTTPObservation   `json:"http_observations,omitempty"`
-	Checksum           string              `json:"checksum,omitempty"`
-	Truncated          bool                `json:"truncated,omitempty"`
-	APIEndpointResults []APIEndpointResult `json:"api_endpoint_results,omitempty"`
+	Scanner              string                `json:"scanner"`
+	Authenticated        bool                  `json:"authenticated,omitempty"`
+	Variant              string                `json:"variant,omitempty"`
+	AssessmentTypes      []assessment.Type     `json:"assessment_types,omitempty"`
+	PlanFingerprint      string                `json:"plan_fingerprint,omitempty"`
+	AttemptID            string                `json:"attempt_id,omitempty"`
+	Scope                string                `json:"scope,omitempty"`
+	Target               string                `json:"target"`
+	Status               string                `json:"status"`
+	StartedAt            string                `json:"started_at,omitempty"`
+	FinishedAt           string                `json:"finished_at,omitempty"`
+	ExitCode             int                   `json:"exit_code,omitempty"`
+	Reason               string                `json:"reason,omitempty"`
+	StdoutPath           string                `json:"stdout_path,omitempty"`
+	StderrPath           string                `json:"stderr_path,omitempty"`
+	TranscriptPath       string                `json:"transcript_path,omitempty"`
+	ArtifactPath         string                `json:"artifact_path,omitempty"`
+	DNSResolution        *DNSResolution        `json:"dns_resolution,omitempty"`
+	CandidateHosts       []string              `json:"candidate_hosts,omitempty"`
+	HTTPObservations     []HTTPObservation     `json:"http_observations,omitempty"`
+	HistoricalCandidates []HistoricalCandidate `json:"historical_candidates,omitempty"`
+	Checksum             string                `json:"checksum,omitempty"`
+	Truncated            bool                  `json:"truncated,omitempty"`
+	APIEndpointResults   []APIEndpointResult   `json:"api_endpoint_results,omitempty"`
 	// Progress is a scanner-reported 0–100 completion of ProgressStage while
 	// the run is in flight (OpenVAS task progress, ZAP spider/active scan).
 	// Only scanners with a native progress signal set it.

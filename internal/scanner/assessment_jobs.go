@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "httpx" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "httpx" || id == "gau" || id == "waybackurls" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -108,6 +108,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["dnsx"] = dnsxRunner{}
 	byName["subfinder"] = subfinderRunner{}
 	byName["httpx"] = httpxRunner{}
+	byName["gau"] = historicalRunner{provider: "gau"}
+	byName["waybackurls"] = historicalRunner{provider: "waybackurls"}
 	completed := make(map[string]Run)
 	for _, run := range existing {
 		if run.Terminal() {
@@ -137,6 +139,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	// touching the target. The runtime inventory refines scanner inputs but never
 	// changes the accepted assessment plan or its fingerprint.
 	surfaces := map[string]*AttackSurface{}
+	pendingHistory := map[string][]HistoricalCandidate{}
 	preCrawlRuns := map[string]Run{}
 	explicitCrawl := map[string]bool{}
 	for _, job := range plan.Jobs {
@@ -228,6 +231,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		MergeOpenAPIEndpoints(surface, inventoryTarget, apiEndpoints)
+		MergeHistoricalCandidates(surface, pendingHistory[target.ID])
 		surfaces[target.ID] = surface
 		_ = SaveAttackSurface(scanDir, surface)
 	}
@@ -493,6 +497,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		run.AssessmentTypes = jobAssessmentTypes(job)
 		run.PlanFingerprint = plan.Fingerprint
 		run.AttemptID = attemptID
+		if (job.Scanner == "gau" || job.Scanner == "waybackurls") && run.Status == "completed" {
+			if surface == nil {
+				pendingHistory[job.TargetID] = append(pendingHistory[job.TargetID], run.HistoricalCandidates...)
+			} else {
+				MergeHistoricalCandidates(surface, run.HistoricalCandidates)
+			}
+		}
 		CompleteEndpointCoverage(surface, job.Scanner, run)
 		_ = SaveAttackSurface(scanDir, surface)
 		appendOutcome(job, run)
