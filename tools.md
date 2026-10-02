@@ -14,12 +14,7 @@ Optional scanners are off unless selected; availability reflects whether the
 tool binary (and any required credential) is present.
 
 | Group | Scanners |
-|---|---|
-| **Web & API** | subfinder, httpx, katana, nuclei, zap, testssl, nikto*, dalfox*, wapiti* |
-| **Network & servers** | nmap, masscan*, openvas, vuls, lynis |
-| **Cloud** | prowler*, scoutsuite* |
-| **Kubernetes** | kube-bench* |
-| **Source, dependencies & containers** | trivy, semgrep, gitleaks, osv |
+c
 
 `*` = optional / opt-in.
 
