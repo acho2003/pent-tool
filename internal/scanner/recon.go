@@ -378,19 +378,6 @@ func loadReconScopes(scanDir string) ([]Scope, bool) {
 // file is absent or empty, e.g. a single-host scan with no recon evidence.
 func LoadReconScopes(scanDir string) ([]Scope, bool) { return loadReconScopes(scanDir) }
 
-// subfinderRunner is a descriptor stub for subfinder within the recon phase.
-type subfinderRunner struct{}
-
-func (subfinderRunner) Name() string { return "subfinder" }
-
-func (subfinderRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "subfinder", Summary: "Subdomain enumeration of the submitted domain", Phase: PhaseRecon, Weight: WeightLight}
-}
-
-func (subfinderRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
-	return notApplicableRun("subfinder", req, cfg, "recon runs via the recon phase", emit)
-}
-
 // httpxRunner is a descriptor stub for httpx within the recon phase.
 type httpxRunner struct{}
 

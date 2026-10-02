@@ -181,12 +181,12 @@ func TestRunAssessmentJobsUsesExactApplicationURLAndChecksumResume(t *testing.T)
 }
 
 func TestTypedPlannerAdapterAvailabilityExcludesLegacyReconStubs(t *testing.T) {
-	for _, id := range []string{"subfinder", "httpx"} {
+	for _, id := range []string{"httpx"} {
 		if HasAssessmentRunner(id) {
 			t.Fatalf("%s unexpectedly has a direct typed assessment adapter", id)
 		}
 	}
-	for _, id := range []string{"nmap", "nuclei", "zap", "testssl", "trivy", "semgrep", "gitleaks", "osv", "masscan", "nikto", "lynis"} {
+	for _, id := range []string{"subfinder", "nmap", "nuclei", "zap", "testssl", "trivy", "semgrep", "gitleaks", "osv", "masscan", "nikto", "lynis"} {
 		if !HasAssessmentRunner(id) {
 			t.Fatalf("%s should have a typed assessment adapter", id)
 		}

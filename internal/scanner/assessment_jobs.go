@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -106,6 +106,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["scoutsuite"] = scoutSuiteRunner{}
 	byName["lynis"] = lynisRunner{}
 	byName["dnsx"] = dnsxRunner{}
+	byName["subfinder"] = subfinderRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
 		if run.Terminal() {
@@ -371,6 +372,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if job.State == PlanConditional {
 			reason := ""
 			switch {
+			case job.Scanner == "subfinder" && targetKinds[job.TargetID] == assessment.KindDomain && plan.Config.SubdomainDiscovery:
+				// The accepted opt-in is the preparation condition. Results are
+				// candidates only and never mutate this plan's approved origins.
 			case targetKinds[job.TargetID] == assessment.KindRepository:
 				// Source scanners read a local checkout; the run keeps reporting
 				// the repository URL so coverage still matches the planned job.
