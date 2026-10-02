@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "httpx" || id == "gau" || id == "waybackurls" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "gau" || id == "waybackurls" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -107,6 +107,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["lynis"] = lynisRunner{}
 	byName["dnsx"] = dnsxRunner{}
 	byName["subfinder"] = subfinderRunner{}
+	byName["amass"] = amassRunner{}
 	byName["httpx"] = httpxRunner{}
 	byName["gau"] = historicalRunner{provider: "gau"}
 	byName["waybackurls"] = historicalRunner{provider: "waybackurls"}
@@ -377,7 +378,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if job.State == PlanConditional {
 			reason := ""
 			switch {
-			case job.Scanner == "subfinder" && targetKinds[job.TargetID] == assessment.KindDomain && plan.Config.SubdomainDiscovery:
+			case (job.Scanner == "subfinder" || job.Scanner == "amass") && targetKinds[job.TargetID] == assessment.KindDomain && plan.Config.SubdomainDiscovery:
 				// The accepted opt-in is the preparation condition. Results are
 				// candidates only and never mutate this plan's approved origins.
 			case targetKinds[job.TargetID] == assessment.KindRepository:
