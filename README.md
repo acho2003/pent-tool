@@ -49,6 +49,12 @@ mkdir -p secrets && openssl rand -out secrets/xalgorix-credential.key 32
 docker compose up -d --build
 ```
 
+
+The app image uses a pinned Debian slim base with only integrated scanner clients
+and their dependencies. It excludes the broad Kali toolbox, unused scanners,
+wordlists, and runtime compilers. ZAP and Greenbone remain separate services in
+the default stack. See [runtime inventory and verification](runtime/README.md).
+
 The default Xalgorix service now runs without `privileged: true`. Typed Nmap
 uses TCP connect mode. Masscan's raw-packet adapter requires `NET_ADMIN` and
 `NET_RAW`; preflight marks it unavailable with a capability reason unless the

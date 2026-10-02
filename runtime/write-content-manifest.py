@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ def manifest(lock, version_reader, package_list):
     tools = {}
     for name, wanted in {**lock["required"], **lock["optional"]}.items():
         observed = version_reader(name)
-        tools[name] = {"pinned": wanted, "available": observed is not None, "version_output": observed}
+        tools[name] = {"pinned": wanted, "available": observed is not None, "version_output": observed, "version_source": lock.get("version_sources", {}).get(name, "CLI version command")}
     missing = [name for name in lock["required"] if not tools[name]["available"]]
     if missing:
         raise RuntimeError("required scanner binaries missing: " + ", ".join(missing))
@@ -26,19 +27,21 @@ def manifest(lock, version_reader, package_list):
     }
 
 
-def installed_version(name):
+def installed_version(name, args=None, exit_codes=(0,), env_overrides=None, command=None):
     path = shutil.which(name)
     if path is None:
         return None
     try:
-        result = subprocess.run((path, "--version"), capture_output=True, text=True, timeout=15, check=False)
+        result = subprocess.run(command or (path, *(args or ["--version"])), capture_output=True, text=True, timeout=60, check=False, stdin=subprocess.DEVNULL, env={**os.environ, **(env_overrides or {})})
+        if result.returncode not in exit_codes:
+            return None
         return (result.stdout + result.stderr).strip().splitlines()[:3]
     except (OSError, subprocess.TimeoutExpired):
-        return []
+        return None
 
 
 if __name__ == "__main__":
     lock = json.loads(Path(sys.argv[1]).read_text())
     packages = subprocess.run(("dpkg-query", "-W", "-f=${Package}=${Version}\n"),
                               check=True, capture_output=True, text=True).stdout
-    Path(sys.argv[2]).write_text(json.dumps(manifest(lock, installed_version, packages), indent=2) + "\n")
+    Path(sys.argv[2]).write_text(json.dumps(manifest(lock, lambda name: installed_version(name, lock.get("version_args", {}).get(name), lock.get("version_exit_codes", {}).get(name, [0]), lock.get("version_env", {}).get(name), lock.get("version_commands", {}).get(name)), packages), indent=2) + "\n")

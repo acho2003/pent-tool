@@ -1,8 +1,7 @@
 {
   "schema_version": 1,
-  "review_state": "candidate pins; image build and lab validation pending",
-  "apt_suite": "kali-last-snapshot",
-  "apt_inrelease_sha256": "5bc9a9bf729d7f9a0c360afe66488379a04d809cbaa7ad4fcefe1704266f5f51",
+  "review_state": "slim runtime; validation results recorded in runtime/validation.md",
+  "apt_suite": "bookworm",
   "nuclei_templates_revision": "8b9d065ccb0492d39f7680c908b3030a97ddfe1b",
   "required": {
     "nuclei": "v3.11.1",
@@ -14,11 +13,87 @@
     "subfinder": "v2.16.0",
     "katana": "v1.7.0",
     "gitleaks": "v8.30.1",
-    "testssl.sh": "5b900792f2a6a86135d1151e965c05c59a861e72"
-  },
-  "optional": {
+    "testssl.sh": "5b900792f2a6a86135d1151e965c05c59a861e72",
     "dalfox": "v2.13.0",
-    "feroxbuster": "v2.13.1",
-    "trufflehog": "v3.97.9"
+    "kube-bench": "v0.16.0",
+    "wapiti": "3.3.2",
+    "prowler": "5.44.0",
+    "scout": "5.14.0",
+    "nmap": "7.99",
+    "nikto": "2.6.0",
+    "lynis": "3.1.6",
+    "masscan": "1.3.2"
+  },
+  "optional": {},
+  "runtime_family": "debian-slim",
+  "runtime_image": "debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+  "version_args": {
+    "nuclei": [
+      "-version"
+    ],
+    "httpx": [
+      "-version"
+    ],
+    "subfinder": [
+      "-version"
+    ],
+    "katana": [
+      "-version"
+    ],
+    "osv-scanner": [
+      "--version"
+    ],
+    "dalfox": [
+      "version"
+    ],
+    "kube-bench": [
+      "version"
+    ],
+    "nikto": [
+      "-Version"
+    ],
+    "lynis": [
+      "show",
+      "version"
+    ],
+    "vuls": [
+      "-v"
+    ]
+  },
+  "source_revisions": {
+    "nikto": "69681e2e4213c15b85a90c53b2169ecb2a88fb01",
+    "lynis": "06153321ea50d53a27446084e646d9f43fe46e0e"
+  },
+  "nmap_tarball_sha256": "df512492ffd108e53a27a06f26d8635bbe89e0e569455dc8ffef058c035d51b2",
+  "python_image": "python:3.12-slim-bookworm@sha256:bc01d00b6417e4b1b01c331db3a14054b4be954e571ef8bf5748aaf64b66e941",
+  "version_exit_codes": {
+    "masscan": [
+      0,
+      1
+    ]
+  },
+  "version_env": {
+    "testssl.sh": {
+      "NXDNS": "127.0.0.1:0"
+    },
+    "semgrep": {
+      "SEMGREP_ENABLE_VERSION_CHECK": "0"
+    }
+  },
+  "version_commands": {
+    "semgrep": [
+      "/opt/venvs/semgrep/bin/python",
+      "-c",
+      "from importlib.metadata import version; print(\"semgrep \" + version(\"semgrep\"))"
+    ],
+    "testssl.sh": [
+      "python3",
+      "-c",
+      "from pathlib import Path; import re; print(\"testssl.sh \" + re.search(r'declare -r VERSION=\"([^\"]+)\"', Path(\"/opt/testssl.sh/testssl.sh\").read_text()).group(1))"
+    ]
+  },
+  "version_sources": {
+    "semgrep": "installed Python distribution metadata",
+    "testssl.sh": "version constant in pinned installed script"
   }
 }

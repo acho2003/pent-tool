@@ -4,6 +4,6 @@ Xalgorix runs Nuclei, OWASP ZAP, OpenVAS/Greenbone, Trivy, and Vuls in a fixed s
 
 Report assembly is deterministic and driven only by scanner source records. Every finding retains its source scanner and exact source record ID.
 
-The container includes scanner clients. ZAP and Greenbone are internal authenticated services with persistent feeds and databases.
+The Debian slim container includes integrated scanner clients and runtime dependencies, without the general Kali toolbox or build toolchains. ZAP and Greenbone are internal authenticated services with persistent feeds and databases.
 
 Use only on assets you own or are authorized to test.

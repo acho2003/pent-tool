@@ -13,3 +13,10 @@ webui/dist
 .kiro
 proxies.txt
 *.log
+.env
+secrets
+.playwright-cli
+.superpowers
+.DS_Store
+*.tsbuildinfo
+**/__pycache__
