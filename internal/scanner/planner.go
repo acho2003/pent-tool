@@ -283,6 +283,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 		plan.Coverage = append(plan.Coverage, coverage)
 	}
+	plan.Jobs = expandTLSServiceJobs(cfg, plan.Jobs)
 	assignStages(plan.Jobs)
 	// Every dependency points at a strictly earlier stage, so ordering by stage
 	// rank (ties by job ID) is a deterministic topological order.
