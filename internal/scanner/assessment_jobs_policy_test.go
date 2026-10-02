@@ -2,10 +2,38 @@ package scanner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
+
+func TestAssessmentJobsDoNotCrawlBeforeDNSPrerequisite(t *testing.T) {
+	dir := t.TempDir()
+	dnsx := filepath.Join(dir, "dnsx")
+	katana := filepath.Join(dir, "katana")
+	marker := filepath.Join(dir, "crawled")
+	if err := os.WriteFile(dnsx, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(katana, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := assessment.Target{ID: "app", Kind: assessment.KindDomain, Value: "app.example.test"}
+	plan := AssessmentPlan{Config: assessment.AssessmentConfig{Targets: []assessment.Target{target}}, Fingerprint: "sha256:dns-before-crawl", Jobs: []PlanJob{
+		{ID: "dns", Scanner: "dnsx", TargetID: target.ID, Target: target.Value, State: PlanSelected, Stage: StageDNS},
+		{ID: "crawl", Scanner: "katana", TargetID: target.ID, Target: target.Value, State: PlanSelected, Stage: StageCrawl, Dependencies: []string{"dns"}},
+	}}
+	p := &Pipeline{Config: Config{DNSXPath: dnsx, KatanaPath: katana}, Runners: []Runner{}}
+	runs := p.RunAssessmentJobs(t.Context(), plan, filepath.Join(dir, "scan"), nil, nil)
+	if len(runs) != 2 || runs[0].Status != "failed" || runs[1].GapKind != GapPrerequisiteFailed {
+		t.Fatalf("prerequisite did not gate crawl: %+v", runs)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("Katana was launched before DNS result: %v", err)
+	}
+}
 
 type assessmentPolicyProbe struct {
 	requests []Request

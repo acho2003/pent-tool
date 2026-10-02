@@ -124,8 +124,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	webDeadlines := map[string]time.Time{}
 	repoCheckouts := map[string]repoCheckout{}
 	targetKinds := map[string]assessment.TargetKind{}
+	targetByID := map[string]assessment.Target{}
 	for _, target := range plan.Config.Targets {
 		targetKinds[target.ID] = target.Kind
+		targetByID[target.ID] = target
 	}
 
 	// Web discovery builds one normalized inventory per target. A valid snapshot
@@ -140,11 +142,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			explicitCrawl[job.TargetID] = true
 		}
 	}
-	for _, target := range plan.Config.Targets {
+	prepareSurface := func(target assessment.Target) {
 		switch target.Kind {
 		case assessment.KindURL, assessment.KindDomain, assessment.KindHost:
 		default:
-			continue
+			return
 		}
 		crawlScope := "discovery:" + target.ID
 		authBound := assessmentWebAuthBound(plan.Config.Access, target.ID)
@@ -152,7 +154,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			if err := p.refreshAssessmentWebAuth(ctx, target.ID); err != nil {
 				// A requested authenticated crawl must not quietly become a
 				// public crawl when a cookie has expired or login failed.
-				continue
+				return
 			}
 			authVerified[target.ID] = true
 		}
@@ -246,6 +248,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			continue
 		}
 		if job.Scanner == "auth" {
+			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err == nil {
+				authVerified[job.TargetID] = true
+			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			run := Run{Scanner: "auth", Target: job.Target, Scope: scope, Status: "completed", StartedAt: now, FinishedAt: now, AuthState: assessment.StateVerified, AuthCheckedAt: now, PlanFingerprint: plan.Fingerprint, Variant: job.Variant}
 			if !authVerified[job.TargetID] {
@@ -261,6 +266,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				run.GapKind = GapToolUnavailable
 				appendOutcome(job, run)
 				continue
+			}
+			if target, found := targetByID[job.TargetID]; found {
+				prepareSurface(target)
 			}
 			run, ok := preCrawlRuns[job.TargetID]
 			if !ok {
