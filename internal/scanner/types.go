@@ -156,6 +156,7 @@ type Run struct {
 	StderrPath         string              `json:"stderr_path,omitempty"`
 	TranscriptPath     string              `json:"transcript_path,omitempty"`
 	ArtifactPath       string              `json:"artifact_path,omitempty"`
+	DNSResolution      *DNSResolution      `json:"dns_resolution,omitempty"`
 	Checksum           string              `json:"checksum,omitempty"`
 	Truncated          bool                `json:"truncated,omitempty"`
 	APIEndpointResults []APIEndpointResult `json:"api_endpoint_results,omitempty"`

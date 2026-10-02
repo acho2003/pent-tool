@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" {
+	if id == "auth" || id == "katana" || id == "dnsx" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -105,6 +105,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["prowler"] = prowlerRunner{}
 	byName["scoutsuite"] = scoutSuiteRunner{}
 	byName["lynis"] = lynisRunner{}
+	byName["dnsx"] = dnsxRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
 		if run.Terminal() {
