@@ -98,3 +98,21 @@ func TestParseOpenAPIHeadIsSafeReadOperation(t *testing.T) {
 		t.Fatalf("POST became eligible without approval: %+v", endpoints[1])
 	}
 }
+
+func TestParseOpenAPIResolvesLocalParameterReferences(t *testing.T) {
+	data := []byte(`{"openapi":"3.1.0","components":{"parameters":{"Id":{"name":"id","in":"query","required":true,"schema":{"type":"string"}}}},"paths":{"/items":{"get":{"parameters":[{"$ref":"#/components/parameters/Id"}]}}}}`)
+	got, err := ParseOpenAPI(data, "https://example.test")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("operations=%+v err=%v", got, err)
+	}
+	if got[0].Resolved || got[0].Eligible {
+		t.Fatalf("required referenced input was guessed: %+v", got[0])
+	}
+}
+
+func TestParseOpenAPIRejectsCyclicPathReferences(t *testing.T) {
+	data := []byte(`{"openapi":"3.1.0","paths":{"/items":{"$ref":"#/components/pathItems/A"}},"components":{"pathItems":{"A":{"$ref":"#/components/pathItems/A"}}}}`)
+	if _, err := ParseOpenAPI(data, "https://example.test"); err == nil {
+		t.Fatal("cyclic path reference accepted")
+	}
+}

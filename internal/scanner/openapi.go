@@ -123,14 +123,20 @@ func ParseOpenAPI(data []byte, origin string) ([]APIEndpoint, error) {
 			return nil, fmt.Errorf("OpenAPI path %q must start with '/'", path)
 		}
 		raw := paths[path]
-		operations, _ := raw.(map[string]any)
+		operations, err := resolveOpenAPIObject(doc, raw)
+		if err != nil {
+			return nil, fmt.Errorf("path %q: %w", path, err)
+		}
 		for _, method := range verbs {
 			operationValue, ok := operations[strings.ToLower(method)]
 			if !ok {
 				continue
 			}
-			operation, _ := operationValue.(map[string]any)
-			resolved, reason := openAPIOperationResolved(path, operations, operation)
+			operation, err := resolveOpenAPIObject(doc, operationValue)
+			if err != nil {
+				return nil, fmt.Errorf("%s %s: %w", method, path, err)
+			}
+			resolved, reason := openAPIOperationResolved(path, operations, operation, doc)
 			eligible := resolved && (method == "GET" || method == "HEAD")
 			if resolved && !eligible {
 				reason = "operation method is not yet supported by the safe request adapter"
@@ -195,14 +201,41 @@ func resolveJSONPointer(root any, pointer string) (any, bool) {
 	return current, true
 }
 
-func openAPIOperationResolved(path string, pathItem, operation map[string]any) (bool, string) {
+func resolveOpenAPIObject(root map[string]any, value any) (map[string]any, error) {
+	seen := map[string]bool{}
+	for depth := 0; depth < 128; depth++ {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("OpenAPI reference is not an object")
+		}
+		ref, hasRef := object["$ref"].(string)
+		if !hasRef {
+			return object, nil
+		}
+		if !strings.HasPrefix(ref, "#/") || seen[ref] {
+			return nil, fmt.Errorf("cyclic or non-local OpenAPI reference %q", ref)
+		}
+		seen[ref] = true
+		resolved, ok := resolveJSONPointer(root, strings.TrimPrefix(ref, "#"))
+		if !ok {
+			return nil, fmt.Errorf("unresolved OpenAPI reference %q", ref)
+		}
+		value = resolved
+	}
+	return nil, fmt.Errorf("OpenAPI reference chain is too deep")
+}
+
+func openAPIOperationResolved(path string, pathItem, operation, root map[string]any) (bool, string) {
 	if strings.Contains(path, "{") || strings.Contains(path, "}") {
 		return false, "path parameters have no supplied values"
 	}
 	for _, params := range []any{pathItem["parameters"], operation["parameters"]} {
 		list, _ := params.([]any)
 		for _, raw := range list {
-			param, _ := raw.(map[string]any)
+			param, err := resolveOpenAPIObject(root, raw)
+			if err != nil {
+				return false, "parameter reference cannot be resolved safely: " + err.Error()
+			}
 			if required, _ := param["required"].(bool); required {
 				return false, "required parameter value is not materialized by this adapter"
 			}
