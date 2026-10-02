@@ -32,7 +32,7 @@ type APIEndpointResult struct {
 }
 
 func apiEndpointURL(applicationURL string, endpoint APIEndpoint) (string, error) {
-	if !endpoint.Eligible || !endpoint.Resolved || endpoint.Method != "GET" {
+	if !endpoint.Eligible || !endpoint.Resolved || (endpoint.Method != "GET" && endpoint.Method != "HEAD") {
 		return "", fmt.Errorf("operation is not eligible for the safe profile")
 	}
 	operationPath, err := url.PathUnescape(endpoint.Path)
@@ -131,7 +131,7 @@ func ParseOpenAPI(data []byte, origin string) ([]APIEndpoint, error) {
 			}
 			operation, _ := operationValue.(map[string]any)
 			resolved, reason := openAPIOperationResolved(path, operations, operation)
-			eligible := resolved && method == "GET"
+			eligible := resolved && (method == "GET" || method == "HEAD")
 			if resolved && !eligible {
 				reason = "operation method is not yet supported by the safe request adapter"
 			}

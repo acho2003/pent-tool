@@ -82,3 +82,19 @@ func TestParseOpenAPIRejectsNonLocalReferenceForms(t *testing.T) {
 		}
 	}
 }
+
+func TestParseOpenAPIHeadIsSafeReadOperation(t *testing.T) {
+	endpoints, err := ParseOpenAPI([]byte(`{"openapi":"3.1.0","paths":{"/health":{"head":{},"post":{}}}}`), "https://example.test/app")
+	if err != nil || len(endpoints) != 2 {
+		t.Fatalf("endpoints=%+v err=%v", endpoints, err)
+	}
+	if endpoints[0].Method != "HEAD" || !endpoints[0].Eligible {
+		t.Fatalf("HEAD was not eligible: %+v", endpoints[0])
+	}
+	if _, err := apiEndpointURL("https://example.test/app", endpoints[0]); err != nil {
+		t.Fatalf("HEAD URL: %v", err)
+	}
+	if endpoints[1].Eligible {
+		t.Fatalf("POST became eligible without approval: %+v", endpoints[1])
+	}
+}
