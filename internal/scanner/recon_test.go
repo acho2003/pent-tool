@@ -37,7 +37,7 @@ func TestCandidateHostsStripsSchemeAndPort(t *testing.T) {
 }
 
 func TestParseHttpxLive(t *testing.T) {
-	jsonl := `{"url":"https://a.example.com","host":"a.example.com","port":443,"scheme":"https"}` + "\n" +
+	jsonl := `{"url":"https://a.example.com","host":"a.example.com","port":443,"scheme":"https","status_code":200,"content_type":"text/html","title":"Example","tech":["nginx"],"location":"https://a.example.com/home"}` + "\n" +
 		`{"url":"http://b.example.com","host":"b.example.com","port":80,"scheme":"http"}` + "\n"
 	dir := t.TempDir()
 	p := filepath.Join(dir, "httpx.jsonl")
@@ -50,6 +50,9 @@ func TestParseHttpxLive(t *testing.T) {
 	}
 	if res[0].Host != "a.example.com" || !res[0].TLS || res[0].Scheme != "https" || res[0].Port != "443" {
 		t.Fatalf("unexpected result[0]: %+v", res[0])
+	}
+	if res[0].StatusCode != 200 || res[0].ContentType != "text/html" || res[0].Title != "Example" || len(res[0].Technologies) != 1 || res[0].Technologies[0] != "nginx" || res[0].RedirectURL != "https://a.example.com/home" {
+		t.Fatalf("httpx metadata was lost: %+v", res[0])
 	}
 	if res[1].TLS {
 		t.Fatalf("result[1] TLS should be false for http scheme: %+v", res[1])

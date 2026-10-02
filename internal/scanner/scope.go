@@ -34,6 +34,7 @@ type HostEvidence struct {
 	Technologies []string
 	OpenPorts    []Port
 	LiveURLs     []string
+	RedirectURLs []string
 	TLS          bool
 	// WebEndpoints is the legacy flattened compatibility view. New runs persist
 	// and dispatch the normalized AttackSurface instead.

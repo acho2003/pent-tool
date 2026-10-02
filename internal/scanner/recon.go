@@ -64,6 +64,11 @@ func candidateHosts(target string) []string {
 type httpxResult struct {
 	URL, Host, Port, Scheme string
 	TLS                     bool
+	StatusCode              int
+	ContentType             string
+	Title                   string
+	Technologies            []string
+	RedirectURL             string
 }
 
 // parseSubfinderHosts reads subfinder JSONL output ({"host":"..."} per line)
@@ -112,17 +117,22 @@ func parseHttpxLive(path string) []httpxResult {
 			continue
 		}
 		var v struct {
-			URL    string      `json:"url"`
-			Host   string      `json:"host"`
-			Port   json.Number `json:"port"` // real httpx emits an int; older/mock output a string
-			Scheme string      `json:"scheme"`
+			URL          string      `json:"url"`
+			Host         string      `json:"host"`
+			Port         json.Number `json:"port"` // real httpx emits an int; older/mock output a string
+			Scheme       string      `json:"scheme"`
+			StatusCode   int         `json:"status_code"`
+			ContentType  string      `json:"content_type"`
+			Title        string      `json:"title"`
+			Technologies []string    `json:"tech"`
+			RedirectURL  string      `json:"location"`
 		}
 		if err := json.Unmarshal([]byte(line), &v); err != nil {
 			continue
 		}
 		// httpx does not emit a reliable top-level tls bool (only a tls object
 		// under -tls-grab); scheme is the dependable https signal.
-		out = append(out, httpxResult{URL: v.URL, Host: v.Host, Port: v.Port.String(), Scheme: v.Scheme, TLS: v.Scheme == "https"})
+		out = append(out, httpxResult{URL: v.URL, Host: v.Host, Port: v.Port.String(), Scheme: v.Scheme, TLS: v.Scheme == "https", StatusCode: v.StatusCode, ContentType: v.ContentType, Title: v.Title, Technologies: v.Technologies, RedirectURL: v.RedirectURL})
 	}
 	return out
 }
@@ -190,7 +200,7 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 	httpxArtifact := filepath.Join(req.ScanDir, "scanner-output", "httpx", "httpx.jsonl")
 	httpxSpec := commandSpec{
 		path:     cfg.HttpxPath,
-		args:     []string{"-silent", "-json", "-l", inputPath, "-o", httpxArtifact},
+		args:     []string{"-silent", "-json", "-status-code", "-content-type", "-title", "-tech-detect", "-location", "-duc", "-l", inputPath, "-o", httpxArtifact},
 		artifact: httpxArtifact,
 		timeout:  cfg.HttpxTimeout,
 		prepare: func() error {
@@ -239,6 +249,22 @@ func runRecon(ctx context.Context, req Request, cfg Config, emit EmitFunc) (scop
 			}
 			if r.TLS {
 				s.Evidence.TLS = true
+			}
+			if r.StatusCode != 0 {
+				s.Evidence.HTTPStatus = r.StatusCode
+			}
+			if r.ContentType != "" {
+				s.Evidence.ContentType = r.ContentType
+			}
+			if r.Title != "" {
+				s.Evidence.Title = r.Title
+			}
+			s.Evidence.Technologies = append(s.Evidence.Technologies, r.Technologies...)
+			if r.RedirectURL != "" {
+				if redirect, err := url.Parse(r.RedirectURL); err == nil && redirect.Host != "" && redirect.User == nil {
+					redirect.RawQuery, redirect.Fragment = "", ""
+					s.Evidence.RedirectURLs = append(s.Evidence.RedirectURLs, redirect.String())
+				}
 			}
 		}
 
