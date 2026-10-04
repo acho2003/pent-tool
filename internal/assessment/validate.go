@@ -320,8 +320,10 @@ func Validate(cfg AssessmentConfig) []Problem {
 		apiDefinitionIDs[binding.DefinitionID] = true
 	}
 	apiType := false
+	webOrAPIType := false
 	for _, typ := range cfg.Types {
 		apiType = apiType || typ == TypeAPI
+		webOrAPIType = webOrAPIType || typ == TypeAPI || typ == TypeWebApplication
 	}
 	seenOperationInputs := map[string]bool{}
 	for _, input := range cfg.APIOperationInputs {
@@ -333,8 +335,8 @@ func Validate(cfg AssessmentConfig) []Problem {
 			probs = append(probs, blocking("api_input.operation.duplicate", "an API operation can have only one input record per definition"))
 		}
 		seenOperationInputs[key] = true
-		if !apiType {
-			probs = append(probs, blocking("api_input.type_required", "API operation inputs require the API assessment type"))
+		if !webOrAPIType {
+			probs = append(probs, blocking("api_input.type_required", "API operation inputs require WEB_APPLICATION or API assessment coverage"))
 		}
 		for _, values := range []map[string]string{input.PathParams, input.Query} {
 			for name, value := range values {

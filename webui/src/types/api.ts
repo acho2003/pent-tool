@@ -105,6 +105,7 @@ export interface AssessmentConfig {
   discovery_providers?: { subdomain?: string[]; historical?: "gau" | "waybackurls"; tls?: "testssl" | "sslyze" };
   exclusions?: Array<{ target_id?: string; origin?: string; method?: string; path_pattern: string; reason?: string }>;
   api_definitions?: Array<{ target_id: string; definition_id: string }>;
+  api_operation_inputs?: Array<{ definition_id: string; operation_id: string; path_params?: Record<string, string>; query?: Record<string, string>; request_body_ref?: string }>;
   access?: Array<{ target_ids: string[]; kind: string; credential_id: string; verify_url?: string; verify_marker?: string }>;
   scanner_selection?: { mode?: "auto" | "custom"; variants?: string[] };
 }
@@ -115,7 +116,7 @@ export interface AssessmentPlan {
   decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
   jobs: Array<{ id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; assessment_types?: AssessmentType[]; variant: string; execution_mode?: string; reason?: string }>;
   coverage: Array<{ type: AssessmentType; state: string; reason: string }>;
-  api_endpoints?: Array<{ method: string; path: string; origin?: string; target_id?: string; source: string; resolved: boolean; eligible: boolean; reason?: string; parameters?: Array<{ name: string; location: string; required?: boolean; schema_type?: string }>; request_body_required?: boolean; request_body_content_types?: string[]; security_schemes?: string[]; spec_servers?: string[] }>;
+  api_endpoints?: Array<{ method: string; path: string; origin?: string; target_id?: string; definition_id?: string; operation_id?: string; missing_inputs?: string[]; source: string; resolved: boolean; eligible: boolean; reason?: string; parameters?: Array<{ name: string; location: string; required?: boolean; schema_type?: string }>; request_body_required?: boolean; request_body_content_types?: string[]; security_schemes?: string[]; spec_servers?: string[] }>;
   warnings?: Array<{ code: string; message: string; blocking: boolean }>;
   errors?: Array<{ code: string; message: string; blocking: boolean }>;
   fingerprint: string;
