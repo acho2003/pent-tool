@@ -41,8 +41,9 @@ The preview lists each method and path, required parameter locations, request
 body media types, security scheme names, and declared servers. Safe GET and
 HEAD operations are eligible only when their required inputs are resolved.
 Unresolved operations and state-changing methods remain visible with a reason
-and are not dispatched. The current release does not yet accept per-operation
-path/query values or request-body fixtures, so operations that need them remain
+and are not dispatched. Assessment configuration now accepts per-operation
+path/query values and content-addressed request-body references, but runtime
+materialization is still in progress, so operations needing those inputs remain
 unmaterialized.
 
 Request-body fixtures can be stored independently of scan configuration with

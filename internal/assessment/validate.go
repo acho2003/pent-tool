@@ -1,6 +1,7 @@
 package assessment
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -56,6 +57,8 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 	for i, ab := range cfg.Access {
 		nb := ab
 		nb.Kind = AccessKind(strings.ToUpper(strings.TrimSpace(string(ab.Kind))))
+		nb.Identity = strings.TrimSpace(ab.Identity)
+		nb.Role = strings.TrimSpace(ab.Role)
 		out.Access[i] = nb
 	}
 	seenDefinitions := map[string]bool{}
@@ -78,6 +81,46 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 			out.APIDefinitions = append(out.APIDefinitions, binding)
 		}
 	}
+
+	out.APIOperationInputs = make([]APIOperationInput, 0, len(cfg.APIOperationInputs))
+	for _, input := range cfg.APIOperationInputs {
+		input.DefinitionID = strings.TrimSpace(input.DefinitionID)
+		input.OperationID = strings.TrimSpace(input.OperationID)
+		input.RequestBodyRef = strings.ToLower(strings.TrimSpace(input.RequestBodyRef))
+		input.PathParams = normalizeInputMap(input.PathParams)
+		input.Query = normalizeInputMap(input.Query)
+		out.APIOperationInputs = append(out.APIOperationInputs, input)
+	}
+	sort.Slice(out.APIOperationInputs, func(i, j int) bool {
+		a, b := out.APIOperationInputs[i], out.APIOperationInputs[j]
+		return a.DefinitionID+"\x00"+a.OperationID < b.DefinitionID+"\x00"+b.OperationID
+	})
+	out.WriteApprovals = append([]WriteApproval(nil), cfg.WriteApprovals...)
+	for i := range out.WriteApprovals {
+		a := &out.WriteApprovals[i]
+		a.TargetID = strings.TrimSpace(a.TargetID)
+		a.Method = strings.ToUpper(strings.TrimSpace(a.Method))
+		a.Path = strings.TrimSpace(a.Path)
+		a.OperationID = strings.TrimSpace(a.OperationID)
+		a.FixtureRef = strings.ToLower(strings.TrimSpace(a.FixtureRef))
+		a.CleanupRef = strings.ToLower(strings.TrimSpace(a.CleanupRef))
+	}
+	sort.Slice(out.WriteApprovals, func(i, j int) bool {
+		a, b := out.WriteApprovals[i], out.WriteApprovals[j]
+		return a.TargetID+"\x00"+a.Method+"\x00"+a.Path < b.TargetID+"\x00"+b.Method+"\x00"+b.Path
+	})
+	out.AuthorizationExpectations = append([]AuthorizationExpectation(nil), cfg.AuthorizationExpectations...)
+	for i := range out.AuthorizationExpectations {
+		e := &out.AuthorizationExpectations[i]
+		e.OperationID = strings.TrimSpace(e.OperationID)
+		e.Identity = strings.TrimSpace(e.Identity)
+		e.Expect = strings.ToLower(strings.TrimSpace(e.Expect))
+		e.ResourceFixtureRef = strings.ToLower(strings.TrimSpace(e.ResourceFixtureRef))
+	}
+	sort.Slice(out.AuthorizationExpectations, func(i, j int) bool {
+		a, b := out.AuthorizationExpectations[i], out.AuthorizationExpectations[j]
+		return a.OperationID+"\x00"+a.Identity < b.OperationID+"\x00"+b.Identity
+	})
 
 	mode := strings.ToLower(strings.TrimSpace(out.ScannerSelection.Mode))
 	if mode == "" {
@@ -107,6 +150,26 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 	}
 	sort.Strings(out.ManualSeeds)
 	return out
+}
+
+func normalizeInputMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		key = strings.TrimSpace(key)
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func validFixtureRef(ref string) bool {
+	decoded, err := hex.DecodeString(ref)
+	return err == nil && len(decoded) == 32
 }
 
 // normalizeDiscoveryProviders lower-cases provider names, sorts and dedupes the
@@ -212,6 +275,12 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if len(ab.TargetIDs) == 0 {
 			probs = append(probs, blocking("access.unbound", fmt.Sprintf("access binding %q lists no target_ids", ab.Kind)))
 		}
+		if ab.Identity != "" && strings.TrimSpace(ab.CredentialID) == "" {
+			probs = append(probs, blocking("access.identity.credential_required", fmt.Sprintf("test identity %q requires a credential binding", ab.Identity)))
+		}
+		if len(ab.Identity) > 128 || len(ab.Role) > 128 || strings.ContainsAny(ab.Identity+ab.Role, "\r\n\x00") {
+			probs = append(probs, blocking("access.identity.invalid", "identity and role labels must be at most 128 printable characters"))
+		}
 		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin {
 			if strings.TrimSpace(ab.CredentialID) != "" {
 				if strings.TrimSpace(ab.VerifyURL) == "" || strings.TrimSpace(ab.VerifyMarker) == "" {
@@ -241,6 +310,128 @@ func Validate(cfg AssessmentConfig) []Problem {
 					}
 				}
 			}
+		}
+	}
+	apiDefinitionIDs := map[string]bool{}
+	for _, id := range cfg.APIDefinitionIDs {
+		apiDefinitionIDs[id] = true
+	}
+	for _, binding := range cfg.APIDefinitions {
+		apiDefinitionIDs[binding.DefinitionID] = true
+	}
+	apiType := false
+	for _, typ := range cfg.Types {
+		apiType = apiType || typ == TypeAPI
+	}
+	seenOperationInputs := map[string]bool{}
+	for _, input := range cfg.APIOperationInputs {
+		key := input.DefinitionID + "\x00" + input.OperationID
+		if input.DefinitionID == "" || input.OperationID == "" || !apiDefinitionIDs[input.DefinitionID] {
+			probs = append(probs, blocking("api_input.operation.invalid", "API operation inputs must reference a configured definition and operation ID"))
+		}
+		if seenOperationInputs[key] {
+			probs = append(probs, blocking("api_input.operation.duplicate", "an API operation can have only one input record per definition"))
+		}
+		seenOperationInputs[key] = true
+		if !apiType {
+			probs = append(probs, blocking("api_input.type_required", "API operation inputs require the API assessment type"))
+		}
+		for _, values := range []map[string]string{input.PathParams, input.Query} {
+			for name, value := range values {
+				if strings.TrimSpace(name) == "" || len(name) > 256 || len(value) > 4096 || strings.ContainsAny(name+value, "\r\n\x00") {
+					probs = append(probs, blocking("api_input.value.invalid", "API path/query names and values must be bounded and contain no control characters"))
+					break
+				}
+			}
+		}
+		if input.RequestBodyRef != "" && !validFixtureRef(input.RequestBodyRef) {
+			probs = append(probs, blocking("api_input.fixture.invalid", "request_body_ref must be a SHA-256 API fixture reference"))
+		}
+	}
+	seenWriteApproval := map[string]bool{}
+	for _, approval := range cfg.WriteApprovals {
+		key := approval.TargetID + "\x00" + approval.Method + "\x00" + approval.Path
+		if !cfg.TestEnvironment || cfg.Mode == ModeBlackBox {
+			probs = append(probs, blocking("api_write.test_environment_required", "API write approvals require a non-Black-Box test environment"))
+		}
+		if !apiType || !ids[approval.TargetID] || approval.OperationID == "" {
+			probs = append(probs, blocking("api_write.operation.invalid", "write approval requires the API type, a known target, and an operation ID"))
+		}
+		boundToTarget := false
+		for _, binding := range cfg.APIDefinitions {
+			boundToTarget = boundToTarget || binding.TargetID == approval.TargetID
+		}
+		if len(cfg.APIDefinitionIDs) > 0 && len(cfg.Targets) == 1 && cfg.Targets[0].ID == approval.TargetID {
+			boundToTarget = true
+		}
+		if !boundToTarget {
+			probs = append(probs, blocking("api_write.definition_required", "write approval target must have a bound API definition"))
+		}
+		if approval.Method != "POST" && approval.Method != "PUT" && approval.Method != "PATCH" && approval.Method != "DELETE" {
+			probs = append(probs, blocking("api_write.method.invalid", "write approval method must be POST, PUT, PATCH, or DELETE"))
+		}
+		if !strings.HasPrefix(approval.Path, "/") || strings.ContainsAny(approval.Path, "?#\r\n\x00") {
+			probs = append(probs, blocking("api_write.path.invalid", "write approval path must be an absolute path without query or fragment"))
+		}
+		for _, target := range cfg.Targets {
+			if target.ID != approval.TargetID {
+				continue
+			}
+			scope := AppScopeForTarget(cfg, target.ID)
+			inScope := false
+			for _, origin := range scope.Origins() {
+				prefix := strings.TrimSuffix(origin.PathPrefix, "/")
+				if prefix == "/" {
+					prefix = ""
+				}
+				requestURL := origin.Origin() + prefix + approval.Path
+				if ok, _ := scope.Allows(requestURL); ok {
+					inScope = true
+					if excluded, _ := scope.Excluded(approval.Method, requestURL); excluded {
+						probs = append(probs, blocking("api_write.excluded", fmt.Sprintf("write approval %s %s is excluded by application policy", approval.Method, approval.Path)))
+					}
+				}
+			}
+			if !inScope {
+				probs = append(probs, blocking("api_write.out_of_scope", fmt.Sprintf("write approval path %q is outside target %q application scope", approval.Path, approval.TargetID)))
+			}
+		}
+		if !validFixtureRef(approval.FixtureRef) {
+			probs = append(probs, blocking("api_write.fixture.required", "write approval requires a SHA-256 request fixture reference"))
+		}
+		if approval.Method == "POST" && !validFixtureRef(approval.CleanupRef) {
+			probs = append(probs, blocking("api_write.cleanup.required", "POST write approvals require a declared cleanup fixture reference"))
+		}
+		if seenWriteApproval[key] {
+			probs = append(probs, blocking("api_write.duplicate", "duplicate write approval for the same target, method, and path"))
+		}
+		seenWriteApproval[key] = true
+	}
+	boundIdentities := map[string]bool{}
+	for _, binding := range cfg.Access {
+		if binding.Identity != "" {
+			boundIdentities[binding.Identity] = true
+		}
+	}
+	expectationIdentities := map[string]map[string]bool{}
+	for _, expectation := range cfg.AuthorizationExpectations {
+		if expectation.OperationID == "" || expectation.Identity == "" || (expectation.Expect != "allow" && expectation.Expect != "deny") || !validFixtureRef(expectation.ResourceFixtureRef) {
+			probs = append(probs, blocking("api_authorization_expectation.invalid", "authorization expectations require an operation ID, identity, allow/deny outcome, and resource fixture reference"))
+		}
+		if !boundIdentities[expectation.Identity] {
+			probs = append(probs, blocking("api_authorization_expectation.identity_unknown", fmt.Sprintf("authorization expectation identity %q has no credential binding", expectation.Identity)))
+		}
+		if expectationIdentities[expectation.OperationID] == nil {
+			expectationIdentities[expectation.OperationID] = map[string]bool{}
+		}
+		expectationIdentities[expectation.OperationID][expectation.Identity] = true
+		if !apiType {
+			probs = append(probs, blocking("api_authorization_expectation.type_required", "authorization expectations require the API assessment type"))
+		}
+	}
+	for operationID, identities := range expectationIdentities {
+		if len(identities) < 2 {
+			probs = append(probs, blocking("api_authorization_expectation.two_identities", fmt.Sprintf("authorization operation %q requires expectations for two distinct identities", operationID)))
 		}
 	}
 	if len(cfg.APIDefinitionIDs) > 0 && len(cfg.APIDefinitions) > 0 {

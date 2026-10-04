@@ -184,6 +184,8 @@ type AccessBinding struct {
 	TargetIDs    []string   `json:"target_ids"`
 	Kind         AccessKind `json:"kind"`
 	CredentialID string     `json:"credential_id,omitempty"`
+	Identity     string     `json:"identity,omitempty"`
+	Role         string     `json:"role,omitempty"`
 	VerifyURL    string     `json:"verify_url,omitempty"`
 	VerifyMarker string     `json:"verify_marker,omitempty"`
 	// NegativeMarker is the text whose presence on an anonymous request proves
@@ -212,18 +214,51 @@ type APIDefinitionBinding struct {
 	DefinitionID string `json:"definition_id"`
 }
 
+// APIOperationInput supplies explicit values for one OpenAPI operation. Bodies
+// are referenced by content hash so scan records never duplicate fixture data.
+type APIOperationInput struct {
+	DefinitionID   string            `json:"definition_id"`
+	OperationID    string            `json:"operation_id"`
+	PathParams     map[string]string `json:"path_params,omitempty"`
+	Query          map[string]string `json:"query,omitempty"`
+	RequestBodyRef string            `json:"request_body_ref,omitempty"`
+}
+
+// WriteApproval opts one operation into a single, non-retried write attempt.
+// Fixture and cleanup are content-addressed references, not inline bodies.
+type WriteApproval struct {
+	TargetID    string `json:"target_id"`
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	OperationID string `json:"operation_id"`
+	FixtureRef  string `json:"fixture_ref"`
+	CleanupRef  string `json:"cleanup_ref"`
+}
+
+// AuthorizationExpectation declares expected access for a supplied test
+// identity against a controlled resource fixture.
+type AuthorizationExpectation struct {
+	OperationID        string `json:"operation_id"`
+	Identity           string `json:"identity"`
+	Expect             string `json:"expect"`
+	ResourceFixtureRef string `json:"resource_fixture_ref"`
+}
+
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
-	Mode               Mode                   `json:"assessment_mode"`
-	Types              []Type                 `json:"assessment_types"`
-	Targets            []Target               `json:"assessment_targets"`
-	Access             []AccessBinding        `json:"access,omitempty"`
-	Profile            string                 `json:"profile,omitempty"`
-	ScannerSelection   ScannerSelection       `json:"scanner_selection,omitempty"`
-	APIDefinitionIDs   []string               `json:"api_definition_ids,omitempty"`
-	APIDefinitions     []APIDefinitionBinding `json:"api_definitions,omitempty"`
-	SubdomainDiscovery bool                   `json:"subdomain_discovery,omitempty"`
+	Mode                      Mode                       `json:"assessment_mode"`
+	Types                     []Type                     `json:"assessment_types"`
+	Targets                   []Target                   `json:"assessment_targets"`
+	Access                    []AccessBinding            `json:"access,omitempty"`
+	Profile                   string                     `json:"profile,omitempty"`
+	ScannerSelection          ScannerSelection           `json:"scanner_selection,omitempty"`
+	APIDefinitionIDs          []string                   `json:"api_definition_ids,omitempty"`
+	APIDefinitions            []APIDefinitionBinding     `json:"api_definitions,omitempty"`
+	APIOperationInputs        []APIOperationInput        `json:"api_operation_inputs,omitempty"`
+	WriteApprovals            []WriteApproval            `json:"write_approvals,omitempty"`
+	AuthorizationExpectations []AuthorizationExpectation `json:"authorization_expectations,omitempty"`
+	SubdomainDiscovery        bool                       `json:"subdomain_discovery,omitempty"`
 	// ApprovedOrigins are the explicit scheme/host/port/path destinations of
 	// each application target. When a target has none, AppScopeForTarget
 	// derives its boundary from Target.Value.

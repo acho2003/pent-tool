@@ -26,9 +26,10 @@ route exclusions, and API coverage separates native per-operation checks from
 ZAP batch-level outcomes. The operator guide documents supported
 behavior and current API limitations. TLS adapters and pinned runtime
 integration are implemented and smoke-tested. A private, content-addressed API
-fixture store is now implemented, but operation-input materialization and
-execution are not yet wired to it. Remaining work includes legacy web routing,
-API fixture materialization, approved writes,
+fixture store and validated API operation-input, write-approval, and
+authorization-expectation config models are implemented. Operation-input
+materialization and execution are not yet wired to them. Remaining work includes
+legacy web routing, API fixture materialization, approved writes,
 two-identity checks, embedded UI refresh, and release validation. Native checks
 currently cover declared-auth enforcement and credentialed CORS only. Sections
 3–7 remain the intended complete workflow.
