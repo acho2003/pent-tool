@@ -41,10 +41,11 @@ The preview lists each method and path, required parameter locations, request
 body media types, security scheme names, and declared servers. Safe GET and
 HEAD operations are eligible only when their required inputs are resolved.
 Unresolved operations and state-changing methods remain visible with a reason
-and are not dispatched. Assessment configuration now accepts per-operation
-path/query values and content-addressed request-body references, but runtime
-materialization is still in progress, so operations needing those inputs remain
-unmaterialized.
+and are not dispatched. Supplied path and query values are materialized only
+for declared OpenAPI parameters; missing values and undeclared inputs remain
+visible and block dispatch. Request-body fixtures can be stored and referenced,
+but body-bearing reads and write execution remain unavailable until their
+dedicated policy stages are complete.
 
 Request-body fixtures can be stored independently of scan configuration with
 `POST /api/api-fixtures` using the raw body and its `Content-Type`. The response

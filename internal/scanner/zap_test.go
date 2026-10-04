@@ -324,7 +324,7 @@ func TestZAPSeedsOnlyEligibleOpenAPIOperationsWithinTargetScope(t *testing.T) {
 	defer srv.Close()
 	target := "https://Example.test:8443/Portal/Case/"
 	req := Request{Target: target, ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true, APIEndpoints: []APIEndpoint{
-		{Method: "GET", Path: "/users", Origin: "https://example.test:8443", Resolved: true, Eligible: true},
+		{Method: "GET", Path: "/users", Origin: "https://example.test:8443", RequestURL: "https://example.test:8443/Portal/Case/users?state=active", Resolved: true, Eligible: true},
 		{Method: "POST", Path: "/orders", Origin: "https://example.test:8443", Resolved: true, Reason: "state-changing operation"},
 		{Method: "GET", Path: "/users/{id}", Origin: "https://example.test:8443", Resolved: false, Reason: "path parameter missing"},
 	}}
@@ -338,7 +338,7 @@ func TestZAPSeedsOnlyEligibleOpenAPIOperationsWithinTargetScope(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	want := "https://example.test:8443/Portal/Case/users"
+	want := "https://example.test:8443/Portal/Case/users?state=active"
 	if !slices.Contains(fake.accessedURLs, want) {
 		t.Errorf("eligible API route %q was not seeded: %v", want, fake.accessedURLs)
 	}

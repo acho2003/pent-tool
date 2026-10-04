@@ -576,7 +576,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				run.APIEndpointResults = append(run.APIEndpointResults, result)
 				continue
 			}
-			operationURL, urlErr := apiEndpointURL(target, endpoint)
+			operationURL := endpoint.RequestURL
+			var urlErr error
+			if operationURL == "" {
+				operationURL, urlErr = apiEndpointURL(target, endpoint)
+			}
 			if urlErr != nil {
 				result.Status, result.Reason = "skipped", urlErr.Error()
 				run.APIEndpointResults = append(run.APIEndpointResults, result)

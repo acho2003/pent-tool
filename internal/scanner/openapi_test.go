@@ -1,6 +1,10 @@
 package scanner
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
+)
 
 func TestParseOpenAPIJSONAndRejectRemoteRefs(t *testing.T) {
 	got, err := ParseOpenAPI([]byte(`{"openapi":"3.0.0","paths":{"/users":{"get":{},"post":{}},"/health":{"parameters":[]}}}`), "https://example.test")
@@ -133,5 +137,53 @@ func TestParseOpenAPIExposesRequiredInputsSecurityAndDeclaredServers(t *testing.
 	post := endpoints[1]
 	if post.Method != "POST" || post.Eligible || !post.RequestBodyRequired || len(post.RequestBodyContentTypes) != 2 || len(post.SecuritySchemes) != 0 {
 		t.Fatalf("write request metadata=%+v", post)
+	}
+}
+
+func TestMaterializeOpenAPIOperationUsesDeclaredValuesAndKeepsTemplate(t *testing.T) {
+	data := []byte(`{"openapi":"3.1.0","paths":{"/items/{itemId}":{"get":{"operationId":"getItem","parameters":[{"name":"itemId","in":"path","required":true,"schema":{"type":"string"}},{"name":"filter","in":"query","required":true,"schema":{"type":"string"}},{"name":"page","in":"query","required":false,"schema":{"type":"integer"}}]}}}}`)
+	endpoints, err := ParseOpenAPI(data, "https://api.example.test/v1")
+	if err != nil || len(endpoints) != 1 {
+		t.Fatalf("parse=%+v err=%v", endpoints, err)
+	}
+	definitionID := "abc"
+	input := assessment.APIOperationInput{DefinitionID: definitionID, OperationID: "getItem", PathParams: map[string]string{"itemId": "42"}, Query: map[string]string{"filter": "new item", "page": "2"}}
+	materialized := MaterializeOpenAPIOperations(endpoints, definitionID, "https://api.example.test/v1", []assessment.APIOperationInput{input})
+	got := materialized[0]
+	if !got.Resolved || !got.Eligible || got.Path != "/items/{itemId}" || got.OperationID != "getItem" || got.RequestURL != "https://api.example.test/v1/items/42?filter=new+item&page=2" {
+		t.Fatalf("operation was not materialized safely: %+v", got)
+	}
+	if len(got.MissingInputs) != 0 {
+		t.Fatalf("unexpected missing inputs: %v", got.MissingInputs)
+	}
+}
+
+func TestMaterializeOpenAPIRequiresAllInputsAndRejectsUndeclaredValues(t *testing.T) {
+	data := []byte(`{"openapi":"3.1.0","paths":{"/items/{itemId}":{"get":{"operationId":"getItem","parameters":[{"name":"itemId","in":"path","required":true},{"name":"filter","in":"query","required":true}]}}}}`)
+	endpoints, err := ParseOpenAPI(data, "https://api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitionID := "abc"
+	missing := MaterializeOpenAPIOperations(endpoints, definitionID, "https://api.example.test", nil)[0]
+	if missing.Resolved || missing.Eligible || len(missing.MissingInputs) != 2 || missing.RequestURL != "" {
+		t.Fatalf("missing inputs were guessed: %+v", missing)
+	}
+	bad := assessment.APIOperationInput{DefinitionID: definitionID, OperationID: "getItem", PathParams: map[string]string{"itemId": "../escape"}, Query: map[string]string{"filter": "all", "admin": "true"}}
+	rejected := MaterializeOpenAPIOperations(endpoints, definitionID, "https://api.example.test", []assessment.APIOperationInput{bad})[0]
+	if rejected.Resolved || rejected.Eligible || len(rejected.MissingInputs) != 2 {
+		t.Fatalf("unsafe/undeclared inputs accepted: %+v", rejected)
+	}
+}
+
+func TestMaterializeOpenAPIDoesNotTreatRequiredHeadersAsSatisfied(t *testing.T) {
+	data := []byte(`{"openapi":"3.1.0","paths":{"/items":{"get":{"operationId":"listItems","parameters":[{"name":"X-Tenant","in":"header","required":true}]}}}}`)
+	endpoints, err := ParseOpenAPI(data, "https://api.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := MaterializeOpenAPIOperations(endpoints, "spec", "https://api.example.test", nil)[0]
+	if got.Resolved || got.Eligible || len(got.MissingInputs) != 1 || got.MissingInputs[0] != "header:X-Tenant" {
+		t.Fatalf("required header was silently omitted: %+v", got)
 	}
 }

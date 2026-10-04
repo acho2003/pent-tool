@@ -27,8 +27,9 @@ ZAP batch-level outcomes. The operator guide documents supported
 behavior and current API limitations. TLS adapters and pinned runtime
 integration are implemented and smoke-tested. A private, content-addressed API
 fixture store and validated API operation-input, write-approval, and
-authorization-expectation config models are implemented. Operation-input
-materialization and execution are not yet wired to them. Remaining work includes
+authorization-expectation config models are implemented. Supplied path and
+query values now materialize safe GET/HEAD operations; request-body fixtures
+and write/identity execution are still pending. Remaining work includes
 legacy web routing, API fixture materialization, approved writes,
 two-identity checks, embedded UI refresh, and release validation. Native checks
 currently cover declared-auth enforcement and credentialed CORS only. Sections
@@ -354,7 +355,8 @@ referenced by content-hash IDs.
 
 ### Versioning and compatibility
 
-- `RegistryVersion` goes "3" -> "4" (I1), "5" (I2), "6" (I3). Each bump
+- `RegistryVersion` goes "3" -> "4" (I1), "5" (I2), "6" (I3 native checks),
+  and "7" when API operation materialization is enabled. Each bump
   invalidates stored plans and schedules **once**. Schedules show `needs_review`
   and are not silently skipped, and paused instances return 409 with a
   re-preview hint. Within a registry version, a config that leaves the new fields
@@ -607,7 +609,7 @@ I5.T1 and I5.T2 were merged into I5.T1. I5.T3 was split into I5.T2 and I5.T3.
 2. I1.T6 file list: applied with wrappers. `AppScopeForTarget` was added to I1.T1.
 3. I2.T1 registry plumbing: applied. `NewPipeline.Runners` is untouched, and execution is wired per adapter task.
 4. I3 materializer and ZAP in parallel: applied both ways. I3.T2 defines every APIEndpoint field and `DispatchRequest`, I1.T5 adds `Request.AppScope`, and ZAP (I3.T5, group C) runs after the materializer (I3.T4, group B).
-5. PlanInput.APIOperations in I3: partly rejected. Hashing materialized operations is redundant, because definition IDs are content hashes and the inputs are already in the hashed config (fidelity 22). planner.go is touched only to bump RegistryVersion to "6" (I3.T8).
+5. PlanInput.APIOperations in I3: partly rejected. Hashing materialized operations is redundant, because definition IDs are content hashes and the inputs are already in the hashed config (fidelity 22). planner.go was first bumped to "6" for native checks and later to "7" when operation materialization became executable.
 6. I4.T1 and I4.T2 in parallel: applied. I4.T2 moves to group B and gains report_ai.go.
 7. client.ts ownership: applied. I4.T4 owns types, client and queries, and scanner-terminal.tsx goes to I4.T6.
 8. HostEvidence in scope.go: applied. The fields move to I2.T1, and I2.T6 moves to group B.
@@ -618,7 +620,7 @@ I5.T1 and I5.T2 were merged into I5.T1. I5.T3 was split into I5.T2 and I5.T3.
 13. I1.T9 split and file reference: applied (I1.T9 in group D, I1.T19 in group H after the executor). The file reference is now deterministic_scan.go.
 14. I1.T10 split: applied (I1.T11, I1.T17, I1.T12, I1.T13, I1.T14). The AssessmentRPS division is dropped (fidelity 9).
 15. I3.T5 split and identities: applied (I3.T6 read-only checks, I3.T7 writes/authz, I3.T11 targeted validation; identities in I3.T1/I3.T9).
-16. RegistryVersion per increment: applied (4/5/6).
+16. RegistryVersion per increment: applied (4/5/6); API operation materialization adds version 7 to invalidate previews created before request inputs could be dispatched.
 17. I2 shippability: applied. The runtime pins move to I2.T10.
 18. Parallel tasks in one package: applied (worktree per task, merge-and-test at group boundaries, prefixed helpers; section 1).
 19. I5.T1 and I5.T2 coupled: applied, merged into I5.T1.

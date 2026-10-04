@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,6 +22,9 @@ type APIEndpoint struct {
 	Path                    string         `json:"path"`
 	Origin                  string         `json:"origin,omitempty"`
 	TargetID                string         `json:"target_id,omitempty"`
+	DefinitionID            string         `json:"definition_id,omitempty"`
+	OperationID             string         `json:"operation_id,omitempty"`
+	MissingInputs           []string       `json:"missing_inputs,omitempty"`
 	Source                  string         `json:"source"`
 	Resolved                bool           `json:"resolved"`
 	Eligible                bool           `json:"eligible"`
@@ -158,11 +162,133 @@ func ParseOpenAPI(data []byte, origin string) ([]APIEndpoint, error) {
 				reason = "operation method is not yet supported by the safe request adapter"
 			}
 			parameters, bodyRequired, bodyTypes, security, servers := openAPIInputMetadata(operations, operation, doc)
-			out = append(out, APIEndpoint{Method: method, Path: path, Origin: origin, Source: "openapi", Resolved: resolved, Eligible: eligible, Reason: reason,
+			operationID, _ := operation["operationId"].(string)
+			if strings.TrimSpace(operationID) == "" {
+				operationID = strings.ToLower(method) + " " + path
+			}
+			out = append(out, APIEndpoint{Method: method, Path: path, Origin: origin, OperationID: operationID, Source: "openapi", Resolved: resolved, Eligible: eligible, Reason: reason,
 				Parameters: parameters, RequestBodyRequired: bodyRequired, RequestBodyContentTypes: bodyTypes, SecuritySchemes: security, SpecServers: servers})
 		}
 	}
 	return out, nil
+}
+
+// MaterializeOpenAPIOperations applies only explicitly supplied values for
+// declared operation parameters. It never guesses values or adds undeclared
+// query parameters. RequestURL is runtime-only; Path remains the canonical
+// OpenAPI template for stable operation identity and reporting.
+func MaterializeOpenAPIOperations(endpoints []APIEndpoint, definitionID, applicationURL string, inputs []assessment.APIOperationInput) []APIEndpoint {
+	byOperation := make(map[string]assessment.APIOperationInput, len(inputs))
+	for _, input := range inputs {
+		if input.DefinitionID == definitionID {
+			byOperation[input.OperationID] = input
+		}
+	}
+	out := append([]APIEndpoint(nil), endpoints...)
+	for i := range out {
+		endpoint := &out[i]
+		endpoint.DefinitionID = definitionID
+		input, hasInput := byOperation[endpoint.OperationID]
+		providedPath, providedQuery := map[string]string{}, map[string]string{}
+		if hasInput {
+			providedPath, providedQuery = input.PathParams, input.Query
+		}
+		pathParams := map[string]bool{}
+		concretePath := regexp.MustCompile(`\{([^{}]+)\}`).ReplaceAllStringFunc(endpoint.Path, func(token string) string {
+			name := strings.TrimSuffix(strings.TrimPrefix(token, "{"), "}")
+			pathParams[name] = true
+			value, ok := providedPath[name]
+			if !ok || value == "" {
+				endpoint.MissingInputs = append(endpoint.MissingInputs, "path:"+name)
+				return token
+			}
+			if strings.ContainsAny(value, "/\\?#%\r\n\x00") || value == "." || value == ".." {
+				endpoint.MissingInputs = append(endpoint.MissingInputs, "invalid path:"+name)
+				return token
+			}
+			return url.PathEscape(value)
+		})
+		for name := range providedPath {
+			if !pathParams[name] {
+				endpoint.MissingInputs = append(endpoint.MissingInputs, "unexpected path parameter:"+name)
+			}
+		}
+		queryParams := map[string]APIParameter{}
+		for _, parameter := range endpoint.Parameters {
+			if parameter.Location == "query" {
+				queryParams[parameter.Name] = parameter
+				if parameter.Required {
+					if value, ok := providedQuery[parameter.Name]; !ok || value == "" {
+						endpoint.MissingInputs = append(endpoint.MissingInputs, "query:"+parameter.Name)
+					}
+				}
+			} else if parameter.Required && parameter.Location != "path" {
+				endpoint.MissingInputs = append(endpoint.MissingInputs, parameter.Location+":"+parameter.Name)
+			}
+		}
+		query := url.Values{}
+		for name, value := range providedQuery {
+			if _, declared := queryParams[name]; !declared {
+				endpoint.MissingInputs = append(endpoint.MissingInputs, "unexpected query parameter:"+name)
+				continue
+			}
+			query.Set(name, value)
+		}
+		sort.Strings(endpoint.MissingInputs)
+		endpoint.MissingInputs = compactStrings(endpoint.MissingInputs)
+		if len(endpoint.MissingInputs) > 0 {
+			endpoint.Resolved, endpoint.Eligible = false, false
+			endpoint.Reason = "required operation inputs are missing or do not match the definition: " + strings.Join(endpoint.MissingInputs, ", ")
+			continue
+		}
+		if strings.Contains(concretePath, "{") || strings.Contains(concretePath, "}") {
+			endpoint.Resolved, endpoint.Eligible = false, false
+			endpoint.Reason = "path parameters have no supplied values"
+			continue
+		}
+		inputGap := strings.HasPrefix(endpoint.Reason, "path parameters have no supplied values") || strings.HasPrefix(endpoint.Reason, "required parameter value is not materialized")
+		if !endpoint.Resolved && !inputGap {
+			continue
+		}
+		if strings.HasPrefix(endpoint.Reason, "request body needs") {
+			continue
+		}
+		if endpoint.Method != "GET" && endpoint.Method != "HEAD" {
+			endpoint.Resolved, endpoint.Eligible = true, false
+			endpoint.Reason = "operation method is not yet supported by the safe request adapter"
+			continue
+		}
+		materialized := *endpoint
+		materialized.Path = concretePath
+		materialized.Resolved, materialized.Eligible, materialized.Reason = true, true, ""
+		requestURL, err := apiEndpointURL(applicationURL, materialized)
+		if err != nil {
+			endpoint.Resolved, endpoint.Eligible, endpoint.Reason = false, false, err.Error()
+			continue
+		}
+		parsed, err := url.Parse(requestURL)
+		if err != nil {
+			endpoint.Resolved, endpoint.Eligible, endpoint.Reason = false, false, "materialized request URL is invalid"
+			continue
+		}
+		parsed.RawQuery = query.Encode()
+		endpoint.RequestURL = parsed.String()
+		endpoint.Resolved, endpoint.Eligible, endpoint.Reason = true, true, ""
+	}
+	return out
+}
+
+func compactStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	out := values[:1]
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func openAPIInputMetadata(pathItem, operation, root map[string]any) ([]APIParameter, bool, []string, []string, []string) {

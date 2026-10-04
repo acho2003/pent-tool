@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/apifixture"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
@@ -106,6 +107,28 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 	plan.Errors = append(plan.Errors, s.assessmentScopeProblems(cfg, allowLoopbackPorts)...)
 	if len(plan.Errors) == 0 {
 		normalized := plan.Config
+		fixtureStore := apifixture.Store{Dir: filepath.Join(s.dataDir, "_api_fixtures")}
+		checkFixture := func(ref, field string) {
+			if ref == "" {
+				return
+			}
+			file, err := fixtureStore.Open(ref)
+			if err != nil {
+				plan.Errors = append(plan.Errors, assessment.Problem{Code: "api_fixture.unavailable", Message: field + " references a fixture that is missing or unavailable", Blocking: true})
+				return
+			}
+			_ = file.Close()
+		}
+		for _, input := range normalized.APIOperationInputs {
+			checkFixture(input.RequestBodyRef, "API request body")
+		}
+		for _, approval := range normalized.WriteApprovals {
+			checkFixture(approval.FixtureRef, "API write")
+			checkFixture(approval.CleanupRef, "API write cleanup")
+		}
+		for _, expectation := range normalized.AuthorizationExpectations {
+			checkFixture(expectation.ResourceFixtureRef, "API authorization expectation")
+		}
 		bindings := append([]assessment.APIDefinitionBinding(nil), normalized.APIDefinitions...)
 		if len(bindings) == 0 && len(normalized.APIDefinitionIDs) > 0 && len(normalized.Targets) == 1 {
 			for _, id := range normalized.APIDefinitionIDs {
@@ -123,6 +146,16 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 				var endpoints []scanner.APIEndpoint
 				endpoints, err = scanner.ParseOpenAPI(definition, target.Value)
 				if err == nil {
+					operationIDs := make(map[string]bool, len(endpoints))
+					for _, endpoint := range endpoints {
+						operationIDs[endpoint.OperationID] = true
+					}
+					for _, input := range normalized.APIOperationInputs {
+						if input.DefinitionID == binding.DefinitionID && !operationIDs[input.OperationID] {
+							plan.Errors = append(plan.Errors, assessment.Problem{Code: "api_input.operation_unknown", Message: fmt.Sprintf("API input refers to unknown operation %q in definition %s", input.OperationID, binding.DefinitionID), Blocking: true})
+						}
+					}
+					endpoints = scanner.MaterializeOpenAPIOperations(endpoints, binding.DefinitionID, target.Value, normalized.APIOperationInputs)
 					for i := range endpoints {
 						endpoints[i].TargetID = binding.TargetID
 					}

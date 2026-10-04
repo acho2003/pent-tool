@@ -966,6 +966,9 @@ func MergeOpenAPIEndpointsScoped(surface *AttackSurface, applicationURL string, 
 }
 
 func openAPIInventoryURL(applicationURL string, endpoint APIEndpoint) (string, error) {
+	if endpoint.RequestURL != "" {
+		return endpoint.RequestURL, nil
+	}
 	if endpoint.Resolved && endpoint.Eligible {
 		if resolved, err := apiEndpointURL(applicationURL, endpoint); err == nil {
 			return resolved, nil

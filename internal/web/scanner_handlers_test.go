@@ -221,6 +221,36 @@ func TestAssessmentPlanBindsUploadedAPIEndpointsToExplicitTargetOrigin(t *testin
 	}
 }
 
+func TestAssessmentPlanMaterializesSuppliedOpenAPIPathAndQueryInputs(t *testing.T) {
+	s := newTestServer(t, nil)
+	spec := `{"openapi":"3.1.0","paths":{"/users/{userId}":{"get":{"operationId":"getUser","parameters":[{"name":"userId","in":"path","required":true},{"name":"filter","in":"query","required":true}]}}}}`
+	upload := httptest.NewRecorder()
+	s.handleAPIDefinitions(upload, httptest.NewRequest(http.MethodPost, "/api/api-definitions", strings.NewReader(spec)))
+	var metadata apiDefinitionMetadata
+	if err := json.Unmarshal(upload.Body.Bytes(), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeAPI},
+		Targets:            []assessment.Target{{ID: "api", Kind: assessment.KindURL, Value: "https://inside.example.test/v1"}},
+		APIDefinitions:     []assessment.APIDefinitionBinding{{TargetID: "api", DefinitionID: metadata.ID}},
+		APIOperationInputs: []assessment.APIOperationInput{{DefinitionID: metadata.ID, OperationID: "getUser", PathParams: map[string]string{"userId": "42"}, Query: map[string]string{"filter": "active"}}},
+	}
+	plan := s.buildAssessmentPlan(cfg)
+	if len(plan.Errors) != 0 || len(plan.APIEndpoints) != 1 {
+		t.Fatalf("plan errors=%+v endpoints=%+v", plan.Errors, plan.APIEndpoints)
+	}
+	endpoint := plan.APIEndpoints[0]
+	if !endpoint.Resolved || !endpoint.Eligible || endpoint.Path != "/users/{userId}" || endpoint.RequestURL != "https://inside.example.test/v1/users/42?filter=active" {
+		t.Fatalf("endpoint input not materialized: %+v", endpoint)
+	}
+	cfg.APIOperationInputs[0].OperationID = "unknown"
+	plan = s.buildAssessmentPlan(cfg)
+	if !slices.ContainsFunc(plan.Errors, func(problem assessment.Problem) bool { return problem.Code == "api_input.operation_unknown" }) {
+		t.Fatalf("unknown input operation was not rejected: %+v", plan.Errors)
+	}
+}
+
 func TestAssessmentPlanUsesBoundCredentialWithoutReturningSecretOrClaimingVerifiedAuth(t *testing.T) {
 	s := newTestServer(t, nil)
 	keyPath := filepath.Join(t.TempDir(), "credential.key")
