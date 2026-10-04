@@ -65,6 +65,7 @@ export default function NewScanPage() {
   const [amassEnrichment, setAmassEnrichment] = useState(false);
   const [historicalProvider, setHistoricalProvider] = useState<"none" | "gau" | "waybackurls">("none");
   const [tlsProvider, setTlsProvider] = useState<"default" | "testssl" | "sslyze">("default");
+  const [excludedRoutesText, setExcludedRoutesText] = useState("");
   const [assessmentPlan, setAssessmentPlan] = useState<AssessmentPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -208,11 +209,18 @@ export default function NewScanPage() {
       setPlanError("Add a target or supported artifact and select a coverage type.");
       return;
     }
-	const authError = authenticationSetupError();
+    const authError = authenticationSetupError();
 	if (authError) {
 	  setPlanError(authError);
 	  return;
 	}
+    let exclusions: Array<{ method?: string; path_pattern: string; reason: string }>;
+    try {
+      exclusions = parseExcludedRoutes(excludedRoutesText);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : "Invalid excluded routes");
+      return;
+    }
     const repoTargetIds = assessmentTargets.filter((target) => target.id.startsWith("artifact-")).map((target) => target.id);
     const planAccess = [
       ...savedAccess.map((access) => ({ target_ids: [access.targetId], kind: access.kind, credential_id: access.credentialId, verify_url: access.verifyURL.trim(), verify_marker: access.verifyMarker })),
@@ -231,6 +239,7 @@ export default function NewScanPage() {
           ...(historicalProvider !== "none" ? { historical: historicalProvider } : {}),
           ...(tlsProvider !== "default" ? { tls: tlsProvider } : {}),
         } : undefined,
+        exclusions: exclusions.length ? exclusions : undefined,
         access: planAccess.length ? planAccess : undefined,
         api_definitions: apiDefinitionId ? [{ target_id: apiTargetId || "target-1", definition_id: apiDefinitionId }] : undefined,
         scanner_selection: optionalAssessmentScanners.length > 0
@@ -417,7 +426,7 @@ export default function NewScanPage() {
 
       {step === 1 && <Card><CardHeader><CardTitle>Choose coverage</CardTitle><p className="text-sm text-muted-foreground">Options reflect your mode and target. The planner will confirm which scanners can provide each type.</p></CardHeader><CardContent className="space-y-4">{coverageOptions.length ? <div className="grid gap-2 sm:grid-cols-2">{coverageOptions.map((type) => { const Icon = TYPE_ICONS[type]; const checked = assessmentTypes.includes(type); return <label key={type} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-muted/20 ${checked ? "border-primary/60 bg-primary/5" : ""}`}><input type="checkbox" checked={checked} onChange={() => toggleAssessmentType(type)} className="mt-1" /><Icon className={`mt-0.5 h-4 w-4 shrink-0 ${checked ? "text-primary" : "text-muted-foreground"}`} aria-hidden /><span><span className="text-sm font-medium">{TYPE_LABELS[type]}</span><span className="mt-1 block text-xs text-muted-foreground">{coverageDescription(type)}</span></span></label>; })}</div> : <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No coverage options match yet. Add an applicable target first, or <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => setStep(2)}>configure a White Box resource input</button>, then return here.</div>}
         {coverageOptions.some((type) => ["WEB_APPLICATION", "API"].includes(type)) && <label className="flex items-start gap-3 rounded-lg border p-3"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-1" /><span className="text-sm">Authorize subdomain discovery<p className="mt-1 text-xs text-muted-foreground">Adds Subfinder for domain targets. Leave off unless you have permission to enumerate subdomains.</p></span></label>}
-        {coverageOptions.some((type) => ["WEB_APPLICATION", "API"].includes(type)) && <Card><CardHeader><CardTitle>Optional web discovery and TLS providers</CardTitle></CardHeader><CardContent className="space-y-4"><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Historical URL provider</Label><Select value={historicalProvider} onValueChange={(value) => { setHistoricalProvider(value as typeof historicalProvider); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Disabled</SelectItem><SelectItem value="gau">gau</SelectItem><SelectItem value="waybackurls">waybackurls</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Queries public archives for URL candidates. Candidates are scoped and revalidated before use.</p></div><div className="space-y-2"><Label>TLS provider</Label><Select value={tlsProvider} onValueChange={(value) => { setTlsProvider(value as typeof tlsProvider); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Default provider</SelectItem><SelectItem value="testssl">testssl.sh</SelectItem><SelectItem value="sslyze">SSLyze</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Select one TLS provider per approved HTTPS service.</p></div></div>{subdomainDiscovery && <label className="flex items-start gap-3 rounded-lg border p-3"><input type="checkbox" checked={amassEnrichment} onChange={(event) => { setAmassEnrichment(event.target.checked); setAssessmentPlan(null); }} className="mt-1" /><span className="text-sm">Add Amass passive enrichment<p className="mt-1 text-xs text-muted-foreground">Runs alongside Subfinder. Results remain candidate evidence and never expand scan scope.</p></span></label>}</CardContent></Card>}
+        {coverageOptions.some((type) => ["WEB_APPLICATION", "API"].includes(type)) && <Card><CardHeader><CardTitle>Optional web discovery and TLS providers</CardTitle></CardHeader><CardContent className="space-y-4"><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>Historical URL provider</Label><Select value={historicalProvider} onValueChange={(value) => { setHistoricalProvider(value as typeof historicalProvider); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Disabled</SelectItem><SelectItem value="gau">gau</SelectItem><SelectItem value="waybackurls">waybackurls</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Queries public archives for URL candidates. Candidates are scoped and revalidated before use.</p></div><div className="space-y-2"><Label>TLS provider</Label><Select value={tlsProvider} onValueChange={(value) => { setTlsProvider(value as typeof tlsProvider); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Default provider</SelectItem><SelectItem value="testssl">testssl.sh</SelectItem><SelectItem value="sslyze">SSLyze</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Select one TLS provider per approved HTTPS service.</p></div></div><div className="space-y-2"><Label htmlFor="excluded-routes">Request exclusions</Label><Textarea id="excluded-routes" value={excludedRoutesText} onChange={(event) => { setExcludedRoutesText(event.target.value); setAssessmentPlan(null); }} placeholder={"GET /logout\n* /admin/delete*"} rows={3} /><p className="text-xs text-muted-foreground">One METHOD /path-pattern per line. Use * as the method to exclude every method on a route.</p></div>{subdomainDiscovery && <label className="flex items-start gap-3 rounded-lg border p-3"><input type="checkbox" checked={amassEnrichment} onChange={(event) => { setAmassEnrichment(event.target.checked); setAssessmentPlan(null); }} className="mt-1" /><span className="text-sm">Add Amass passive enrichment<p className="mt-1 text-xs text-muted-foreground">Runs alongside Subfinder. Results remain candidate evidence and never expand scan scope.</p></span></label>}</CardContent></Card>}
         <details className="rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">Customize optional tools <span className="font-normal text-muted-foreground">({optionalDefinitions.length} applicable)</span></summary><p className="mt-2 text-xs text-muted-foreground">Automatic selection includes the required tools. Select an optional tool only when you want that additional test.</p><div className="mt-3 space-y-2">{optionalDefinitions.map((definition) => <label key={definition.id} className={`flex items-start gap-3 rounded-md border p-3 ${definition.available ? "cursor-pointer" : "opacity-60"}`}><input type="checkbox" checked={optionalAssessmentScanners.includes(definition.id)} disabled={!definition.available} onChange={() => { setOptionalAssessmentScanners((current) => current.includes(definition.id) ? current.filter((id) => id !== definition.id) : [...current, definition.id]); setAssessmentPlan(null); }} className="mt-1" /><span><span className="text-sm font-medium">{definition.name} · {definition.risk} risk · {definition.available ? "available" : "unavailable"}</span><span className="mt-1 block text-xs text-muted-foreground">{definition.summary}</span>{definition.default_selection === "explicit_opt_in" && <span className="mt-1 block text-xs text-amber-300">Explicit opt in required. Selecting this tool records that choice in the plan.</span>}{!definition.available && <span className="mt-1 block text-xs text-muted-foreground">Unavailable: required tool or service is not configured.</span>}</span></label>)}{!optionalDefinitions.length && <p className="text-xs text-muted-foreground">No optional tools apply to the selected coverage and target.</p>}</div></details>
       </CardContent></Card>}
 
@@ -441,6 +450,16 @@ function inferTargetKind(value: string): string {
   if (value.includes("/")) return "CIDR";
   if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) || (/^[0-9a-fA-F:]+$/.test(value) && value.includes(":"))) return "IP";
   return "DOMAIN";
+}
+
+function parseExcludedRoutes(value: string): Array<{ method?: string; path_pattern: string; reason: string }> {
+  return value.split(/\r?\n/).flatMap((raw, index) => {
+    const line = raw.trim();
+    if (!line) return [];
+    const match = line.match(/^(\*|[A-Za-z]+)\s+(\/[^\s?#]*)$/);
+    if (!match) throw new Error(`Excluded route line ${index + 1} must be METHOD /path or * /path.`);
+    return [{ ...(match[1] === "*" ? {} : { method: match[1].toUpperCase() }), path_pattern: match[2], reason: "Operator exclusion" }];
+  });
 }
 
 function artifactTargetKind(kind: string): string {
