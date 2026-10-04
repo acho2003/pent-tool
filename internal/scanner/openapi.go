@@ -27,6 +27,7 @@ type APIEndpoint struct {
 type APIEndpointResult struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
+	Origin string `json:"origin,omitempty"`
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
 }

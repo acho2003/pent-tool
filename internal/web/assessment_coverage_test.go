@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -111,10 +112,17 @@ func TestAssessmentCoverageReflectsAPIOperationSeedOutcomes(t *testing.T) {
 	}
 	record := &ScanRecord{AssessmentPlan: plan, ScannerRuns: []scanner.Run{{
 		Scanner: "zap", PlanFingerprint: plan.Fingerprint, Target: "https://app.example.test/Portal", Status: "completed",
-		APIEndpointResults: []scanner.APIEndpointResult{{Method: "GET", Path: "/health", Status: "seeded"}},
+		APIEndpointResults: []scanner.APIEndpointResult{{Method: "GET", Path: "/health", Origin: "https://app.example.test", Status: "seeded"}},
 	}}}
 	coverage := buildAssessmentCoverage("scan", record, "")
-	if len(coverage.Operations) != 2 || coverage.Operations[0].Status != "seeded" || coverage.Operations[1].Status != "skipped" || coverage.Operations[1].Eligible {
+	if len(coverage.Operations) != 2 || coverage.Operations[0].Status != "batch_completed" || coverage.Operations[1].Status != "skipped" || coverage.Operations[1].Eligible {
 		t.Fatalf("operation coverage=%+v", coverage.Operations)
+	}
+	if coverage.OperationCounts != (assessmentOperationCounts{Discovered: 2, Eligible: 1, Attempted: 1, Completed: 1, Skipped: 1}) {
+		t.Fatalf("operation counts=%+v", coverage.OperationCounts)
+	}
+	lines := assessmentCoverageLines(coverage)
+	if !slices.ContainsFunc(lines, func(line string) bool { return strings.Contains(line, "batch completed 1") }) {
+		t.Fatalf("coverage summary omits batch-only evidence: %v", lines)
 	}
 }

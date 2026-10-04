@@ -43,6 +43,16 @@ type assessmentOperationCoverage struct {
 	Eligible bool   `json:"eligible"`
 }
 
+type assessmentOperationCounts struct {
+	Discovered   int `json:"discovered"`
+	Eligible     int `json:"eligible"`
+	Attempted    int `json:"attempted"`
+	Completed    int `json:"batch_completed"`
+	Failed       int `json:"failed"`
+	Skipped      int `json:"skipped"`
+	NotAttempted int `json:"not_attempted"`
+}
+
 type assessmentCoverageResponse struct {
 	ScanID          string                         `json:"scan_id"`
 	State           string                         `json:"state"`
@@ -54,6 +64,7 @@ type assessmentCoverageResponse struct {
 	Jobs            []assessmentJobCoverage        `json:"jobs,omitempty"`
 	Capabilities    []assessmentCapabilityCoverage `json:"capabilities,omitempty"`
 	Operations      []assessmentOperationCoverage  `json:"api_operations,omitempty"`
+	OperationCounts assessmentOperationCounts      `json:"api_operation_counts"`
 	Gaps            []scanner.PlanDecision         `json:"gaps,omitempty"`
 	Counts          map[string]int                 `json:"counts"`
 	Reason          string                         `json:"reason,omitempty"`
@@ -113,6 +124,10 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 		})
 	}
 	for _, endpoint := range plan.APIEndpoints {
+		coverage.OperationCounts.Discovered++
+		if endpoint.Resolved && endpoint.Eligible {
+			coverage.OperationCounts.Eligible++
+		}
 		operation := assessmentOperationCoverage{
 			TargetID: endpoint.TargetID, Method: endpoint.Method, Path: endpoint.Path, Origin: endpoint.Origin,
 			Status: "inventoried_not_executed", Reason: "operation is inventoried but has not been submitted to ZAP", Eligible: endpoint.Eligible,
@@ -137,8 +152,20 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 				}
 				found := false
 				for _, result := range run.APIEndpointResults {
-					if result.Method == endpoint.Method && result.Path == endpoint.Path {
+					if result.Method == endpoint.Method && result.Path == endpoint.Path && (endpoint.Origin == "" || result.Origin == endpoint.Origin) {
 						operation.Status, operation.Reason, found = result.Status, result.Reason, true
+						if result.Status == "seeded" {
+							if run.Status == "completed" {
+								operation.Status = "batch_completed"
+								operation.Reason = "Operation was seeded into the scoped ZAP batch; ZAP does not report per-operation completion."
+							} else if run.Status == "running" {
+								operation.Status = "attempted"
+								operation.Reason = "Operation was seeded into a ZAP batch that is still running."
+							} else {
+								operation.Status = "incomplete"
+								operation.Reason = "Operation was seeded, but the ZAP batch did not complete."
+							}
+						}
 						break
 					}
 				}
@@ -150,6 +177,20 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 				}
 				break
 			}
+		}
+		switch operation.Status {
+		case "attempted":
+			coverage.OperationCounts.Attempted++
+		case "batch_completed":
+			coverage.OperationCounts.Attempted++
+			coverage.OperationCounts.Completed++
+		case "failed", "incomplete":
+			coverage.OperationCounts.Attempted++
+			coverage.OperationCounts.Failed++
+		case "skipped":
+			coverage.OperationCounts.Skipped++
+		default:
+			coverage.OperationCounts.NotAttempted++
 		}
 		coverage.Operations = append(coverage.Operations, operation)
 	}
@@ -205,7 +246,7 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 		}
 		if typeCoverage.Type == assessment.TypeAPI {
 			for _, operation := range coverage.Operations {
-				if operation.Status != "tested" {
+				if operation.Status != "batch_completed" {
 					hasGap = true
 					break
 				}

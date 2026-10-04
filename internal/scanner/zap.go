@@ -562,7 +562,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			if err := checkAuth(); err != nil {
 				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 			}
-			result := APIEndpointResult{Method: endpoint.Method, Path: endpoint.Path}
+			result := APIEndpointResult{Method: endpoint.Method, Path: endpoint.Path, Origin: endpoint.Origin}
 			if !endpoint.Eligible || !endpoint.Resolved {
 				result.Status, result.Reason = "skipped", endpoint.Reason
 				if result.Reason == "" {

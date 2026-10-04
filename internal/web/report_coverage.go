@@ -125,6 +125,7 @@ func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
 		"Mode: " + string(coverage.Mode),
 		"Profile: " + coverage.Profile,
 		"Plan fingerprint: " + coverage.PlanFingerprint,
+		fmt.Sprintf("API operations: discovered %d, eligible %d, attempted %d, batch completed %d, failed %d, skipped %d, not attempted %d.", coverage.OperationCounts.Discovered, coverage.OperationCounts.Eligible, coverage.OperationCounts.Attempted, coverage.OperationCounts.Completed, coverage.OperationCounts.Failed, coverage.OperationCounts.Skipped, coverage.OperationCounts.NotAttempted),
 	}
 	for _, typ := range coverage.TypeCoverage {
 		lines = append(lines, fmt.Sprintf("Type %s: %s - %s", typ.Type, typ.State, typ.Reason))
