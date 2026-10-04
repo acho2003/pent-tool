@@ -27,7 +27,8 @@ ZAP batch-level outcomes. The operator guide documents supported
 behavior and current API limitations. TLS adapters and pinned runtime
 integration are implemented and smoke-tested. A private, content-addressed API
 fixture store and validated API operation-input, write-approval, and
-authorization-expectation config models are implemented. Supplied path and
+authorization-expectation config models are implemented. POST approvals now
+require an explicit, in-scope, non-excluded cleanup request. Supplied path and
 query values now materialize safe GET/HEAD operations; request-body fixtures
 and write/identity execution are still pending. Remaining work includes
 legacy web routing, API fixture materialization, approved writes,

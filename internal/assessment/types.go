@@ -227,12 +227,14 @@ type APIOperationInput struct {
 // WriteApproval opts one operation into a single, non-retried write attempt.
 // Fixture and cleanup are content-addressed references, not inline bodies.
 type WriteApproval struct {
-	TargetID    string `json:"target_id"`
-	Method      string `json:"method"`
-	Path        string `json:"path"`
-	OperationID string `json:"operation_id"`
-	FixtureRef  string `json:"fixture_ref"`
-	CleanupRef  string `json:"cleanup_ref"`
+	TargetID      string `json:"target_id"`
+	Method        string `json:"method"`
+	Path          string `json:"path"`
+	OperationID   string `json:"operation_id"`
+	FixtureRef    string `json:"fixture_ref"`
+	CleanupMethod string `json:"cleanup_method,omitempty"`
+	CleanupPath   string `json:"cleanup_path,omitempty"`
+	CleanupRef    string `json:"cleanup_ref"`
 }
 
 // AuthorizationExpectation declares expected access for a supplied test

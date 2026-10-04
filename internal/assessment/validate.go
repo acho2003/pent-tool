@@ -103,6 +103,8 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		a.Path = strings.TrimSpace(a.Path)
 		a.OperationID = strings.TrimSpace(a.OperationID)
 		a.FixtureRef = strings.ToLower(strings.TrimSpace(a.FixtureRef))
+		a.CleanupMethod = strings.ToUpper(strings.TrimSpace(a.CleanupMethod))
+		a.CleanupPath = strings.TrimSpace(a.CleanupPath)
 		a.CleanupRef = strings.ToLower(strings.TrimSpace(a.CleanupRef))
 	}
 	sort.Slice(out.WriteApprovals, func(i, j int) bool {
@@ -397,12 +399,42 @@ func Validate(cfg AssessmentConfig) []Problem {
 			if !inScope {
 				probs = append(probs, blocking("api_write.out_of_scope", fmt.Sprintf("write approval path %q is outside target %q application scope", approval.Path, approval.TargetID)))
 			}
+			if approval.CleanupPath != "" && approval.CleanupMethod != "" {
+				cleanupInScope := false
+				for _, origin := range scope.Origins() {
+					prefix := strings.TrimSuffix(origin.PathPrefix, "/")
+					if prefix == "/" {
+						prefix = ""
+					}
+					cleanupURL := origin.Origin() + prefix + approval.CleanupPath
+					if ok, _ := scope.Allows(cleanupURL); ok {
+						cleanupInScope = true
+						if excluded, _ := scope.Excluded(approval.CleanupMethod, cleanupURL); excluded {
+							probs = append(probs, blocking("api_write.cleanup_excluded", fmt.Sprintf("cleanup %s %s is excluded by application policy", approval.CleanupMethod, approval.CleanupPath)))
+						}
+					}
+				}
+				if !cleanupInScope {
+					probs = append(probs, blocking("api_write.cleanup_out_of_scope", fmt.Sprintf("cleanup path %q is outside target %q application scope", approval.CleanupPath, approval.TargetID)))
+				}
+			}
 		}
 		if !validFixtureRef(approval.FixtureRef) {
 			probs = append(probs, blocking("api_write.fixture.required", "write approval requires a SHA-256 request fixture reference"))
 		}
-		if approval.Method == "POST" && !validFixtureRef(approval.CleanupRef) {
-			probs = append(probs, blocking("api_write.cleanup.required", "POST write approvals require a declared cleanup fixture reference"))
+		if approval.Method == "POST" && (!validFixtureRef(approval.CleanupRef) || approval.CleanupMethod == "" || approval.CleanupPath == "") {
+			probs = append(probs, blocking("api_write.cleanup.required", "POST write approvals require an explicit cleanup method, path, and fixture reference"))
+		}
+		if approval.CleanupMethod != "" || approval.CleanupPath != "" || approval.CleanupRef != "" {
+			if approval.CleanupMethod != "DELETE" && approval.CleanupMethod != "PUT" && approval.CleanupMethod != "PATCH" {
+				probs = append(probs, blocking("api_write.cleanup_method.invalid", "cleanup method must be DELETE, PUT, or PATCH"))
+			}
+			if !strings.HasPrefix(approval.CleanupPath, "/") || strings.ContainsAny(approval.CleanupPath, "?#\r\n\x00") {
+				probs = append(probs, blocking("api_write.cleanup_path.invalid", "cleanup path must be an absolute path without query or fragment"))
+			}
+			if approval.CleanupRef != "" && !validFixtureRef(approval.CleanupRef) {
+				probs = append(probs, blocking("api_write.cleanup_fixture.invalid", "cleanup_ref must be a SHA-256 API fixture reference"))
+			}
 		}
 		if seenWriteApproval[key] {
 			probs = append(probs, blocking("api_write.duplicate", "duplicate write approval for the same target, method, and path"))

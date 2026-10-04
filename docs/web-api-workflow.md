@@ -45,7 +45,9 @@ and are not dispatched. Supplied path and query values are materialized only
 for declared OpenAPI parameters; missing values and undeclared inputs remain
 visible and block dispatch. Request-body fixtures can be stored and referenced,
 but body-bearing reads and write execution remain unavailable until their
-dedicated policy stages are complete.
+dedicated policy stages are complete. POST approvals must name a cleanup method,
+path, and fixture; the cleanup destination is checked against the same scope and
+exclusions as the write request.
 
 Request-body fixtures can be stored independently of scan configuration with
 `POST /api/api-fixtures` using the raw body and its `Content-Type`. The response

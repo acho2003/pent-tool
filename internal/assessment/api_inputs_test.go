@@ -17,14 +17,14 @@ func apiInputConfig() AssessmentConfig {
 func TestNormalizeAPIInputsAndApprovalsDeterministically(t *testing.T) {
 	cfg := apiInputConfig()
 	cfg.APIOperationInputs = []APIOperationInput{{DefinitionID: " " + strings.Repeat("a", 64), OperationID: " list ", Query: map[string]string{" q ": "value"}, PathParams: map[string]string{" id ": "42"}, RequestBodyRef: strings.Repeat("B", 64)}}
-	cfg.WriteApprovals = []WriteApproval{{TargetID: " app ", Method: "post", Path: " /items ", OperationID: " create ", FixtureRef: strings.Repeat("C", 64), CleanupRef: strings.Repeat("D", 64)}}
+	cfg.WriteApprovals = []WriteApproval{{TargetID: " app ", Method: "post", Path: " /items ", OperationID: " create ", FixtureRef: strings.Repeat("C", 64), CleanupMethod: "delete", CleanupPath: " /items/test-item ", CleanupRef: strings.Repeat("D", 64)}}
 	got := Normalize(cfg)
 	input := got.APIOperationInputs[0]
 	if input.DefinitionID != strings.Repeat("a", 64) || input.OperationID != "list" || input.Query["q"] != "value" || input.PathParams["id"] != "42" || input.RequestBodyRef != strings.Repeat("b", 64) {
 		t.Fatalf("input not normalized: %+v", input)
 	}
 	approval := got.WriteApprovals[0]
-	if approval.Method != "POST" || approval.FixtureRef != strings.Repeat("c", 64) || approval.CleanupRef != strings.Repeat("d", 64) {
+	if approval.Method != "POST" || approval.FixtureRef != strings.Repeat("c", 64) || approval.CleanupMethod != "DELETE" || approval.CleanupPath != "/items/test-item" || approval.CleanupRef != strings.Repeat("d", 64) {
 		t.Fatalf("approval not normalized: %+v", approval)
 	}
 	encoded, err := json.Marshal(got)
@@ -40,7 +40,7 @@ func TestValidateAPIInputsAndWriteApprovals(t *testing.T) {
 	valid := apiInputConfig()
 	valid.APIOperationInputs = []APIOperationInput{{DefinitionID: strings.Repeat("a", 64), OperationID: "list", PathParams: map[string]string{"id": "42"}}}
 	valid.TestEnvironment = true
-	valid.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupRef: strings.Repeat("c", 64)}}
+	valid.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupMethod: "DELETE", CleanupPath: "/items/test-item", CleanupRef: strings.Repeat("c", 64)}}
 	if probs := Validate(Normalize(valid)); len(probs) != 0 {
 		t.Fatalf("valid API inputs/approval rejected: %+v", probs)
 	}
@@ -57,17 +57,22 @@ func TestValidateAPIInputsAndWriteApprovals(t *testing.T) {
 			c.APIOperationInputs = []APIOperationInput{{DefinitionID: strings.Repeat("a", 64), OperationID: "read", Query: map[string]string{"q": "x\r\nInjected: y"}}}
 		}, "api_input.value.invalid"},
 		{"write without test environment", func(c *AssessmentConfig) {
-			c.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupRef: strings.Repeat("c", 64)}}
+			c.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupMethod: "DELETE", CleanupPath: "/items/test-item", CleanupRef: strings.Repeat("c", 64)}}
 		}, "api_write.test_environment_required"},
 		{"write without cleanup", func(c *AssessmentConfig) {
 			c.TestEnvironment = true
-			c.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64)}}
+			c.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupRef: strings.Repeat("c", 64)}}
 		}, "api_write.cleanup.required"},
 		{"write excluded", func(c *AssessmentConfig) {
 			c.TestEnvironment = true
 			c.Exclusions = []Exclusion{{TargetID: "app", Method: "POST", PathPattern: "/v1/items"}}
-			c.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupRef: strings.Repeat("c", 64)}}
+			c.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupMethod: "DELETE", CleanupPath: "/items/test-item", CleanupRef: strings.Repeat("c", 64)}}
 		}, "api_write.excluded"},
+		{"cleanup excluded", func(c *AssessmentConfig) {
+			c.TestEnvironment = true
+			c.Exclusions = []Exclusion{{TargetID: "app", Method: "DELETE", PathPattern: "/v1/items/*"}}
+			c.WriteApprovals = []WriteApproval{{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create", FixtureRef: strings.Repeat("b", 64), CleanupMethod: "DELETE", CleanupPath: "/items/test-item", CleanupRef: strings.Repeat("c", 64)}}
+		}, "api_write.cleanup_excluded"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
