@@ -280,6 +280,39 @@ func TestEndpointEligibleRefusesPlaceholderPath(t *testing.T) {
 	}
 }
 
+func TestScopedOpenAPIMergeKeepsOperationsVisibleWithoutExpandingScope(t *testing.T) {
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{{Scheme: "https", Host: "example.test", PathPrefix: "/app"}})
+	surface := NewSeedAttackSurface("app:test", "https://example.test/app/")
+	MergeOpenAPIEndpointsScoped(surface, "https://example.test/app/", []APIEndpoint{
+		{Method: "GET", Path: "/users/{id}", Source: "openapi", Resolved: false, Reason: "path parameter value was not supplied"},
+		{Method: "POST", Path: "/users", Source: "openapi", Resolved: true, Eligible: false, Reason: "operation method is not yet supported"},
+		{Method: "GET", Path: "/admin", Origin: "https://other.example.test", Source: "openapi", Resolved: true, Eligible: true},
+	}, &scope)
+	if len(surface.Endpoints) != 4 { // seed plus each API operation
+		t.Fatalf("inventory endpoints=%+v", surface.Endpoints)
+	}
+	byPath := make(map[string]AttackSurfaceEndpoint)
+	for _, endpoint := range surface.Endpoints {
+		if endpoint.Sources[0] == "seed" {
+			continue
+		}
+		byPath[endpoint.Path] = endpoint
+	}
+	placeholder := byPath["/app/users/{id}"]
+	if placeholder.State != EndpointStateUnmaterialized || placeholder.StateReason != "path parameter value was not supplied" || len(placeholder.Provenance) == 0 || placeholder.Provenance[0].Tool != "openapi" {
+		t.Fatalf("placeholder operation missing review state/provenance: %+v", placeholder)
+	}
+	for _, target := range DispatchTargetsScoped(surface, "zap", 100, &scope, nil) {
+		if strings.Contains(target, "users") || strings.Contains(target, "other.example.test") {
+			t.Fatalf("unmaterialized or foreign operation dispatched: %v", target)
+		}
+	}
+	foreign := byPath["/admin"]
+	if foreign.State != EndpointStateOutOfScope {
+		t.Fatalf("foreign OpenAPI server state=%q reason=%q", foreign.State, foreign.StateReason)
+	}
+}
+
 func TestDispatchTargetsScopedReservesGlobalEndpointCap(t *testing.T) {
 	surface := NewSeedAttackSurface("app:test", "https://example.test/")
 	byID := map[string]int{}

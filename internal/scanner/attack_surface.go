@@ -24,8 +24,9 @@ const (
 	// AttackSurfaceClassifierVersion is bumped whenever eligibility semantics
 	// change, so cached snapshots are re-parsed from their raw JSONL (without
 	// contacting the target) instead of being reused. v2: endpoint State,
-	// exclusions and placeholder refusal.
-	AttackSurfaceClassifierVersion = 2
+	// exclusions and placeholder refusal. v3: retain scoped OpenAPI operations
+	// that still need explicit inputs.
+	AttackSurfaceClassifierVersion = 3
 )
 
 // Endpoint states. An empty State (seeds, OpenAPI merges, the legacy parse and
@@ -38,6 +39,7 @@ const (
 	EndpointStateExcluded             = "excluded"
 	EndpointStateStatic               = "static"
 	EndpointStateHistoricalUnverified = "historical_unverified"
+	EndpointStateUnmaterialized       = "unmaterialized"
 	EndpointStateUnreachable          = "unreachable"
 	EndpointStateUnauthorized         = "unauthorized"
 )
@@ -917,4 +919,79 @@ func MergeOpenAPIEndpoints(surface *AttackSurface, applicationURL string, endpoi
 			mergeSurfaceEndpoint(surface, byID, ep)
 		}
 	}
+}
+
+// MergeOpenAPIEndpointsScoped keeps API operations visible in the shared
+// inventory while requiring explicit scope and materialization before any
+// operation can be dispatched. Placeholder operations are represented for
+// review but remain non-dispatchable until inputs are supplied.
+func MergeOpenAPIEndpointsScoped(surface *AttackSurface, applicationURL string, endpoints []APIEndpoint, scope *assessment.AppScope) {
+	if surface == nil {
+		return
+	}
+	byID := make(map[string]int, len(surface.Endpoints))
+	for i := range surface.Endpoints {
+		byID[surface.Endpoints[i].ID] = i
+	}
+	for _, endpoint := range endpoints {
+		resolved, err := openAPIInventoryURL(applicationURL, endpoint)
+		if err != nil {
+			continue
+		}
+		params := endpointParameters(resolved)
+		ep, ok := normalizeAttackSurfaceEndpoint(resolved, endpoint.Method, endpoint.Source, time.Now().UTC().Format(time.RFC3339Nano), 0, "application/json", params, false, false)
+		if !ok {
+			continue
+		}
+		ep.Provenance = []EndpointProvenance{{Tool: "openapi", Source: endpoint.Source, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}}
+		allowed, reason := true, ""
+		if scope != nil {
+			allowed, reason = scope.Allows(ep.URL)
+			stampEndpointState(&ep, *scope, allowed, reason)
+		}
+		if allowed && (scope == nil || ep.State == EndpointStateInScope) && (!endpoint.Resolved || !endpoint.Eligible) {
+			ep.State = EndpointStateUnmaterialized
+			ep.StateReason = endpoint.Reason
+			if ep.StateReason == "" {
+				ep.StateReason = "operation requires explicit inputs or approval before dispatch"
+			}
+		}
+		mergeSurfaceEndpoint(surface, byID, ep)
+	}
+}
+
+func openAPIInventoryURL(applicationURL string, endpoint APIEndpoint) (string, error) {
+	if endpoint.Resolved && endpoint.Eligible {
+		if resolved, err := apiEndpointURL(applicationURL, endpoint); err == nil {
+			return resolved, nil
+		} else if endpoint.Origin == "" {
+			return "", err
+		}
+	}
+	base, err := url.Parse(applicationURL)
+	if err != nil || base.Host == "" || base.User != nil {
+		return "", fmt.Errorf("invalid application URL")
+	}
+	if endpoint.Path == "" || !strings.HasPrefix(endpoint.Path, "/") || strings.ContainsAny(endpoint.Path, "?#\\") {
+		return "", fmt.Errorf("invalid API operation path")
+	}
+	operationPath, err := url.PathUnescape(endpoint.Path)
+	if err != nil {
+		return "", fmt.Errorf("invalid API operation path")
+	}
+	for _, segment := range strings.Split(operationPath, "/") {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("API operation path escapes application boundary")
+		}
+	}
+	if endpoint.Origin != "" {
+		origin, parseErr := url.Parse(endpoint.Origin)
+		if parseErr != nil || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" {
+			return "", fmt.Errorf("invalid API operation origin")
+		}
+		base.Scheme, base.Host, base.Path = origin.Scheme, origin.Host, origin.Path
+	}
+	base.Path = strings.TrimSuffix(base.Path, "/") + "/" + strings.TrimLeft(operationPath, "/")
+	base.RawPath, base.RawQuery, base.Fragment = "", "", ""
+	return base.String(), nil
 }

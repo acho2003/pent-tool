@@ -158,8 +158,8 @@ func TestCompleteEndpointCoverageRecordsBatchCompletedForBatchAdapters(t *testin
 }
 
 func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
-	if AttackSurfaceClassifierVersion != 2 {
-		t.Fatalf("classifier version = %d, want 2", AttackSurfaceClassifierVersion)
+	if AttackSurfaceClassifierVersion != 3 {
+		t.Fatalf("classifier version = %d, want 3", AttackSurfaceClassifierVersion)
 	}
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "results.jsonl")

@@ -232,7 +232,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				apiEndpoints = append(apiEndpoints, endpoint)
 			}
 		}
-		MergeOpenAPIEndpoints(surface, inventoryTarget, apiEndpoints)
+		MergeOpenAPIEndpointsScoped(surface, inventoryTarget, apiEndpoints, appScopes[target.ID])
 		MergeHistoricalCandidates(surface, pendingHistory[target.ID])
 		surfaces[target.ID] = surface
 		_ = SaveAttackSurface(scanDir, surface)

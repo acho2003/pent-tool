@@ -18,11 +18,13 @@ budget, journal-gated resume, stage records, Katana, Nuclei, adapter and ZAP
 policy are implemented with tests. The typed executor promotes auth, DNSX,
 HTTPX, Katana, Subfinder, Amass, and optional archive providers into stage
 jobs; it blocks a crawl when its prerequisites fail. Discovery evidence does
-not expand accepted origins. OpenAPI GET/HEAD eligibility and local reference
-resolution are implemented. Remaining work includes legacy web routing,
-SSLyze/per-service TLS, sample request and API fixture materialization, native
-API checks and approved writes, UI/report coverage, runtime pins, and release
-validation. Sections 3–7 remain the intended complete workflow.
+not expand accepted origins. OpenAPI GET/HEAD eligibility, local reference
+resolution, and scoped inventory visibility are implemented; unresolved
+operations remain non-dispatchable. TLS adapters and pinned runtime integration
+are implemented and smoke-tested. Remaining work includes legacy web routing,
+request and API fixture materialization, native API checks and approved writes,
+UI/report coverage, and release validation. Sections 3–7 remain the intended
+complete workflow.
 
 Required hierarchy (same house pattern as the capability-planner plan):
 
