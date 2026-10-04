@@ -116,3 +116,22 @@ func TestParseOpenAPIRejectsCyclicPathReferences(t *testing.T) {
 		t.Fatal("cyclic path reference accepted")
 	}
 }
+
+func TestParseOpenAPIExposesRequiredInputsSecurityAndDeclaredServers(t *testing.T) {
+	data := []byte(`{"openapi":"3.1.0","servers":[{"url":"https://api.example.test/v2"}],"security":[{"bearerAuth":[]}],"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},"parameters":{"Filter":{"name":"filter","in":"query","required":true,"schema":{"type":"string"}}},"requestBodies":{"CreateItem":{"required":true,"content":{"application/json":{"schema":{"type":"object"}},"application/xml":{"schema":{"type":"object"}}}}}},"paths":{"/items":{"get":{"parameters":[{"$ref":"#/components/parameters/Filter"}]},"post":{"requestBody":{"$ref":"#/components/requestBodies/CreateItem"},"security":[]}}}}`)
+	endpoints, err := ParseOpenAPI(data, "https://approved.example.test/app")
+	if err != nil || len(endpoints) != 2 {
+		t.Fatalf("endpoints=%+v err=%v", endpoints, err)
+	}
+	get := endpoints[0]
+	if get.Method != "GET" || get.Resolved || len(get.Parameters) != 1 || get.Parameters[0] != (APIParameter{Name: "filter", Location: "query", Required: true, SchemaType: "string"}) {
+		t.Fatalf("required query metadata=%+v", get)
+	}
+	if len(get.SecuritySchemes) != 1 || get.SecuritySchemes[0] != "bearerAuth" || len(get.SpecServers) != 1 || get.SpecServers[0] != "https://api.example.test/v2" || get.Origin != "https://approved.example.test/app" {
+		t.Fatalf("server/security mapping metadata=%+v", get)
+	}
+	post := endpoints[1]
+	if post.Method != "POST" || post.Eligible || !post.RequestBodyRequired || len(post.RequestBodyContentTypes) != 2 || len(post.SecuritySchemes) != 0 {
+		t.Fatalf("write request metadata=%+v", post)
+	}
+}

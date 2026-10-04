@@ -14,14 +14,26 @@ import (
 const MaxOpenAPISpecBytes = 5 << 20
 
 type APIEndpoint struct {
-	Method   string `json:"method"`
-	Path     string `json:"path"`
-	Origin   string `json:"origin,omitempty"`
-	TargetID string `json:"target_id,omitempty"`
-	Source   string `json:"source"`
-	Resolved bool   `json:"resolved"`
-	Eligible bool   `json:"eligible"`
-	Reason   string `json:"reason,omitempty"`
+	Method                  string         `json:"method"`
+	Path                    string         `json:"path"`
+	Origin                  string         `json:"origin,omitempty"`
+	TargetID                string         `json:"target_id,omitempty"`
+	Source                  string         `json:"source"`
+	Resolved                bool           `json:"resolved"`
+	Eligible                bool           `json:"eligible"`
+	Reason                  string         `json:"reason,omitempty"`
+	Parameters              []APIParameter `json:"parameters,omitempty"`
+	RequestBodyRequired     bool           `json:"request_body_required,omitempty"`
+	RequestBodyContentTypes []string       `json:"request_body_content_types,omitempty"`
+	SecuritySchemes         []string       `json:"security_schemes,omitempty"`
+	SpecServers             []string       `json:"spec_servers,omitempty"`
+}
+
+type APIParameter struct {
+	Name       string `json:"name"`
+	Location   string `json:"location"`
+	Required   bool   `json:"required,omitempty"`
+	SchemaType string `json:"schema_type,omitempty"`
 }
 
 type APIEndpointResult struct {
@@ -142,10 +154,124 @@ func ParseOpenAPI(data []byte, origin string) ([]APIEndpoint, error) {
 			if resolved && !eligible {
 				reason = "operation method is not yet supported by the safe request adapter"
 			}
-			out = append(out, APIEndpoint{Method: method, Path: path, Origin: origin, Source: "openapi", Resolved: resolved, Eligible: eligible, Reason: reason})
+			parameters, bodyRequired, bodyTypes, security, servers := openAPIInputMetadata(operations, operation, doc)
+			out = append(out, APIEndpoint{Method: method, Path: path, Origin: origin, Source: "openapi", Resolved: resolved, Eligible: eligible, Reason: reason,
+				Parameters: parameters, RequestBodyRequired: bodyRequired, RequestBodyContentTypes: bodyTypes, SecuritySchemes: security, SpecServers: servers})
 		}
 	}
 	return out, nil
+}
+
+func openAPIInputMetadata(pathItem, operation, root map[string]any) ([]APIParameter, bool, []string, []string, []string) {
+	parametersByKey := map[string]APIParameter{}
+	for _, listValue := range []any{pathItem["parameters"], operation["parameters"]} {
+		list, _ := listValue.([]any)
+		for _, raw := range list {
+			parameter, err := resolveOpenAPIObject(root, raw)
+			if err != nil {
+				continue
+			}
+			name, _ := parameter["name"].(string)
+			location, _ := parameter["in"].(string)
+			if name == "" || location == "" {
+				continue
+			}
+			required, _ := parameter["required"].(bool)
+			schemaType := ""
+			if schema, err := resolveOpenAPIObject(root, parameter["schema"]); err == nil {
+				schemaType, _ = schema["type"].(string)
+			}
+			if schemaType == "" {
+				schemaType, _ = parameter["type"].(string) // Swagger 2.0
+			}
+			key := strings.ToLower(location) + "\x00" + name
+			prior := parametersByKey[key]
+			parametersByKey[key] = APIParameter{Name: name, Location: location, Required: prior.Required || required, SchemaType: schemaType}
+		}
+	}
+	parameters := make([]APIParameter, 0, len(parametersByKey))
+	for _, parameter := range parametersByKey {
+		parameters = append(parameters, parameter)
+	}
+	sort.Slice(parameters, func(i, j int) bool {
+		if parameters[i].Location == parameters[j].Location {
+			return parameters[i].Name < parameters[j].Name
+		}
+		return parameters[i].Location < parameters[j].Location
+	})
+	bodyRequired, bodyTypes := false, []string{}
+	if body, err := resolveOpenAPIObject(root, operation["requestBody"]); err == nil {
+		bodyRequired, _ = body["required"].(bool)
+		if content, ok := body["content"].(map[string]any); ok {
+			for contentType := range content {
+				bodyTypes = append(bodyTypes, contentType)
+			}
+		}
+	} else {
+		for _, parameter := range parameters {
+			if parameter.Location == "body" || parameter.Location == "formData" {
+				bodyRequired = bodyRequired || parameter.Required
+			}
+		}
+	}
+	sort.Strings(bodyTypes)
+	securitySource := root["security"]
+	if value, exists := operation["security"]; exists {
+		securitySource = value
+	}
+	securitySet := map[string]bool{}
+	if requirements, ok := securitySource.([]any); ok {
+		for _, raw := range requirements {
+			if requirement, ok := raw.(map[string]any); ok {
+				for name := range requirement {
+					securitySet[name] = true
+				}
+			}
+		}
+	}
+	security := make([]string, 0, len(securitySet))
+	for name := range securitySet {
+		security = append(security, name)
+	}
+	sort.Strings(security)
+	servers := []string{}
+	if value, exists := operation["servers"]; exists {
+		servers = openAPIServerURLs(value)
+	} else if value, exists := pathItem["servers"]; exists {
+		servers = openAPIServerURLs(value)
+	} else if value, exists := root["servers"]; exists {
+		servers = openAPIServerURLs(value)
+	}
+	if len(servers) == 0 {
+		if host, ok := root["host"].(string); ok && host != "" { // Swagger 2.0
+			scheme := "https"
+			if schemes, ok := root["schemes"].([]any); ok && len(schemes) > 0 {
+				if first, ok := schemes[0].(string); ok && first != "" {
+					scheme = first
+				}
+			}
+			basePath, _ := root["basePath"].(string)
+			servers = []string{scheme + "://" + host + basePath}
+		}
+	}
+	return parameters, bodyRequired, bodyTypes, security, servers
+}
+
+func openAPIServerURLs(value any) []string {
+	list, _ := value.([]any)
+	seen := map[string]bool{}
+	var out []string
+	for _, raw := range list {
+		server, _ := raw.(map[string]any)
+		serverURL, _ := server["url"].(string)
+		serverURL = strings.TrimSpace(serverURL)
+		if serverURL != "" && !seen[serverURL] {
+			seen[serverURL] = true
+			out = append(out, serverURL)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func validateLocalRefs(value, root any, depth int) error {

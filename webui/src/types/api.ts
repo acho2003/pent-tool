@@ -114,7 +114,7 @@ export interface AssessmentPlan {
   decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
   jobs: Array<{ id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; assessment_types?: AssessmentType[]; variant: string; execution_mode?: string; reason?: string }>;
   coverage: Array<{ type: AssessmentType; state: string; reason: string }>;
-  api_endpoints?: Array<{ method: string; path: string; origin?: string; target_id?: string; source: string; resolved: boolean; eligible: boolean; reason?: string }>;
+  api_endpoints?: Array<{ method: string; path: string; origin?: string; target_id?: string; source: string; resolved: boolean; eligible: boolean; reason?: string; parameters?: Array<{ name: string; location: string; required?: boolean; schema_type?: string }>; request_body_required?: boolean; request_body_content_types?: string[]; security_schemes?: string[]; spec_servers?: string[] }>;
   warnings?: Array<{ code: string; message: string; blocking: boolean }>;
   errors?: Array<{ code: string; message: string; blocking: boolean }>;
   fingerprint: string;
@@ -276,6 +276,7 @@ export interface AssessmentCoverage {
   jobs?: Array<{ id: string; scanner: string; variant: string; target_id: string; target: string; assessment_types?: AssessmentType[]; planned_state: string; status: string; reason?: string; has_artifact: boolean; artifact_state: string }>;
   capabilities?: Array<{ capability: string; target_id?: string; state: string; reason: string }>;
   api_operations?: Array<{ target_id: string; method: string; path: string; origin?: string; status: string; reason: string; eligible: boolean }>;
+  api_operation_counts?: { discovered: number; eligible: number; attempted: number; batch_completed: number; failed: number; skipped: number; not_attempted: number };
   gaps?: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string }>;
   counts: Record<string, number>;
   reason?: string;

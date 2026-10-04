@@ -20,10 +20,13 @@ HTTPX, Katana, Subfinder, Amass, and optional archive providers into stage
 jobs; it blocks a crawl when its prerequisites fail. Discovery evidence does
 not expand accepted origins. OpenAPI GET/HEAD eligibility, local reference
 resolution, and scoped inventory visibility are implemented; unresolved
-operations remain non-dispatchable. TLS adapters and pinned runtime integration
-are implemented and smoke-tested. Remaining work includes legacy web routing,
-request and API fixture materialization, native API checks and approved writes,
-UI/report coverage, and release validation. Sections 3–7 remain the intended
+operations remain non-dispatchable. Preview exposes parameter, body, security,
+and declared-server requirements. The setup form selects discovery providers,
+and API coverage reports batch-level outcomes without implying per-operation
+completion. TLS adapters and pinned runtime integration are implemented and
+smoke-tested. Remaining work includes legacy web routing, request and API
+fixture materialization, native API checks and approved writes, workflow docs,
+embedded UI refresh, and release validation. Sections 3–7 remain the intended
 complete workflow.
 
 Required hierarchy (same house pattern as the capability-planner plan):
