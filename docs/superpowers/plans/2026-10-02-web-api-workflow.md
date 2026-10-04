@@ -25,8 +25,10 @@ and declared-server requirements. The setup form selects discovery providers,
 route exclusions, and API coverage separates native per-operation checks from
 ZAP batch-level outcomes. The operator guide documents supported
 behavior and current API limitations. TLS adapters and pinned runtime
-integration are implemented and smoke-tested. Remaining work includes legacy
-web routing, request and API fixture materialization, approved writes,
+integration are implemented and smoke-tested. A private, content-addressed API
+fixture store is now implemented, but operation-input materialization and
+execution are not yet wired to it. Remaining work includes legacy web routing,
+API fixture materialization, approved writes,
 two-identity checks, embedded UI refresh, and release validation. Native checks
 currently cover declared-auth enforcement and credentialed CORS only. Sections
 3–7 remain the intended complete workflow.

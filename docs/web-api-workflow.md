@@ -45,6 +45,15 @@ and are not dispatched. The current release does not yet accept per-operation
 path/query values or request-body fixtures, so operations that need them remain
 unmaterialized.
 
+Request-body fixtures can be stored independently of scan configuration with
+`POST /api/api-fixtures` using the raw body and its `Content-Type`. The response
+contains a flat `ref`, `size_bytes`, and `content_type`; scan configuration
+should retain only `ref`. Fixtures are content-addressed, limited to 1 MiB, and
+stored with owner-only filesystem permissions. `GET /api/api-fixtures/{ref}`
+retrieves a fixture for the authenticated dashboard client and disables caching.
+The endpoint does not itself approve or execute an API operation; operation
+materialization and write approvals remain separate policy steps.
+
 Application credentials are stored in the encrypted credential vault and
 bound to targets. For authenticated work, configure a protected verification
 URL and a response marker; the assessment verifies access before authenticated
