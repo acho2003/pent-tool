@@ -23,7 +23,8 @@ def main():
     for name in lock['required']:
         if not shutil.which(name):
             raise RuntimeError(f'missing scanner: {name}')
-        run([name, *lock.get('version_args', {}).get(name, ['--version'])], codes=lock.get('version_exit_codes', {}).get(name, [0]), env={**os.environ, **lock.get('version_env', {}).get(name, {})})
+        command = lock.get('version_commands', {}).get(name) or [name, *lock.get('version_args', {}).get(name, ['--version'])]
+        run(command, codes=lock.get('version_exit_codes', {}).get(name, [0]), env={**os.environ, **lock.get('version_env', {}).get(name, {})})
         print(f'OK {name}', flush=True)
     if not Path('/opt/kube-bench/cfg/config.yaml').is_file():
         raise RuntimeError('kube-bench benchmark configuration missing')

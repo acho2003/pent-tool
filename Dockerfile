@@ -47,6 +47,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build GOEXPERIMENT=jsonv2 go install -v -p 1 -ldflags="-s -w" github.com/future-architect/vuls/cmd/vuls@v0.41.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/httpx/cmd/httpx@v1.12.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/dnsx/cmd/dnsx@v1.3.1
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/lc/gau/v2/cmd/gau@v2.2.4
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/tomnomnom/waybackurls@v0.1.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/katana/cmd/katana@v1.7.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/zricethezav/gitleaks/v8@v8.30.1
 # Pinned to osv-scanner v1: buildOSV uses the v1 CLI form (bare invocation with
@@ -70,6 +74,7 @@ COPY --from=webui /src/internal/web/static ./internal/web/static
 ARG VERSION=docker
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/xalgorix ./cmd/xalgorix/
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/go-buildinfo ./runtime/go-buildinfo.go
 
 # Pinned Debian runtime; Python scanner environments use the same Debian ABI.
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS debian-base
@@ -91,6 +96,8 @@ RUN python3 -m venv --without-pip /opt/venvs/prowler \
     && python3 -m pip --python /opt/venvs/prowler install --no-compile 'prowler==5.44.0'
 RUN python3 -m venv --without-pip /opt/venvs/scoutsuite \
     && python3 -m pip --python /opt/venvs/scoutsuite install --no-compile 'scoutsuite==5.14.0'
+RUN python3 -m venv --without-pip /opt/venvs/sslyze \
+    && python3 -m pip --python /opt/venvs/sslyze install --no-compile 'sslyze==6.3.1'
 # Export only the interpreter/stdlib and scanner environments, not installers.
 RUN python3 -m pip uninstall -y pip setuptools wheel \
     && rm -rf /usr/local/include /usr/local/lib/pkgconfig /usr/local/share/man
@@ -160,6 +167,7 @@ RUN ldconfig \
     && ln -s /opt/venvs/wapiti/bin/wapiti /usr/local/bin/wapiti \
     && ln -s /opt/venvs/prowler/bin/prowler /usr/local/bin/prowler \
     && ln -s /opt/venvs/scoutsuite/bin/scout /usr/local/bin/scout \
+    && ln -s /opt/venvs/sslyze/bin/sslyze /usr/local/bin/sslyze \
     && ln -s /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh \
     && printf '#!/bin/sh\ncd /opt/lynis\nexec ./lynis "$@"\n' > /usr/bin/lynis \
     && chmod +x /usr/bin/lynis \
@@ -169,6 +177,7 @@ RUN ldconfig \
 COPY runtime/content-lock.json /usr/local/share/xalgorix/content-lock.json
 COPY runtime/write-content-manifest.py /usr/local/bin/write-content-manifest.py
 COPY runtime/smoke-test.py /usr/local/share/xalgorix/smoke-test.py
+COPY --from=gobuild /out/go-buildinfo /usr/local/bin/go-buildinfo
 RUN --network=none python3 /usr/local/bin/write-content-manifest.py /usr/local/share/xalgorix/content-lock.json \
       /usr/local/share/xalgorix/content-manifest.json
 ENV XALGORIX_BIND=0.0.0.0 \

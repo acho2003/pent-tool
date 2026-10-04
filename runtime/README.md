@@ -18,9 +18,10 @@ Distribution package revisions and Chromium follow Debian bookworm updates.
 and the runtime base. The build writes
 `/usr/local/share/xalgorix/content-manifest.json` with the available binaries,
 observed version output and provenance, and a digest/count of installed Debian
-packages. Semgrep versions come from installed Python distribution metadata;
-testssl versions come from its pinned installed script. Their full CLI startup
-checks run in the offline smoke test, avoiding build-network-dependent probes.
+packages. Semgrep and SSLyze versions come from installed Python distribution
+metadata; testssl versions come from its pinned installed script, and
+waybackurls uses its Go module build metadata. Full CLI startup checks run in
+the offline smoke test, avoiding build-network-dependent probes.
 Python transitive dependencies and Debian repositories are not fully archived;
 this is not a claim of bit-for-bit reproducibility.
 

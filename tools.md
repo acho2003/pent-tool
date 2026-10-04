@@ -14,7 +14,14 @@ Optional scanners are off unless selected; availability reflects whether the
 tool binary (and any required credential) is present.
 
 | Group | Scanners |
-c
+|---|---|
+| Web / API | Nuclei, OWASP ZAP, Nikto*, Wapiti*, Dalfox* |
+| Network / discovery | Subfinder*, Amass*, DNSX, HTTPX, Katana, Nmap, Masscan* |
+| Historical URL discovery | gau*, waybackurls* (select one provider) |
+| TLS | testssl.sh, SSLyze* |
+| Source / dependency | Semgrep, Gitleaks, OSV-Scanner, Trivy |
+| Host / infrastructure | Vuls, Lynis, Greenbone/OpenVAS |
+| Cloud / Kubernetes | Prowler*, Scout Suite*, kube-bench* |
 
 `*` = optional / opt-in.
 
@@ -38,6 +45,8 @@ and `XALGORIX_KUBEBENCH_PATH`.
 Chromium supports Katana's browser crawl. Git clones source repositories; SSH
 supports host audits. Bash, OpenSSL, Perl, DNS helpers, Python, and shared
 libraries support scanner execution. Nuclei templates are pinned scan content.
+DNSX, Amass, gau, waybackurls, and SSLyze are included for the typed web/API
+workflow; passive discovery providers remain opt-in and never add scan scope.
 
 ZAP and Greenbone/OpenVAS run in the existing separate Compose services. Their
 images, feeds, and databases are retained. Xalgorix communicates with Greenbone
