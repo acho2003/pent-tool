@@ -740,6 +740,11 @@ func endpointEligibleInScope(ep AttackSurfaceEndpoint, scannerName string, scope
 	switch scannerName {
 	case "nuclei":
 		return true, ""
+	case "apichecks":
+		if ep.Kind == "api" {
+			return true, ""
+		}
+		return false, "endpoint is not classified as an API operation"
 	case "zap":
 		if ep.Kind == "api" || ep.HasParameters || ep.HasForm || ep.Sensitive {
 			return true, ""

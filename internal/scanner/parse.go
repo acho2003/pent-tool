@@ -170,6 +170,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseNuclei(run.ArtifactPath)
 	case "zap":
 		return parseZAP(run.ArtifactPath)
+	case "apichecks":
+		return parseAPIChecks(run.ArtifactPath)
 	case "openvas":
 		return parseOpenVAS(run.ArtifactPath)
 	case "trivy":

@@ -106,6 +106,8 @@ const (
 	GapPrerequisiteFailed GapKind = "prerequisite_failed"
 	// GapToolUnavailable: the scanner binary or service is not available.
 	GapToolUnavailable GapKind = "tool_unavailable"
+	// GapRequestFailed: the native request adapter could not complete one or more requests.
+	GapRequestFailed GapKind = "request_failed"
 	// GapExcluded: the work was excluded by scope, exclusions or policy.
 	GapExcluded GapKind = "excluded"
 	// GapEmptyInput: the scanner had nothing to test (no endpoints, no files).

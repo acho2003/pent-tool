@@ -59,7 +59,10 @@ was individually exercised. Failed, skipped, and unattempted operations remain
 visible. A completed tool process alone is not evidence that every requested
 route or assessment type was tested.
 
-The current API workflow does not yet provide operation-specific request
-fixtures, native API authorization/CORS/schema checks, approved write
-workflows, or two-identity authorization checks. It also does not test
-GraphQL, SOAP, gRPC, WebSockets, broad fuzzing, or inferred business workflows.
+The current native API checks cover only unauthenticated access to operations
+that declare security schemes and credentialed CORS origin reflection. They do
+not yet provide operation-specific request fixtures, configured authorization
+expectations, information-disclosure checks, response content-type or schema
+validation, approved write workflows, or two-identity authorization checks. It
+also does not test GraphQL, SOAP, gRPC, WebSockets, broad fuzzing, or inferred
+business workflows.

@@ -14,6 +14,9 @@ import (
 const MaxOpenAPISpecBytes = 5 << 20
 
 type APIEndpoint struct {
+	// RequestURL is a runtime-only concrete candidate from the already scoped
+	// inventory. OpenAPI plans use Path/Origin and do not serialize sample URLs.
+	RequestURL              string         `json:"-"`
 	Method                  string         `json:"method"`
 	Path                    string         `json:"path"`
 	Origin                  string         `json:"origin,omitempty"`

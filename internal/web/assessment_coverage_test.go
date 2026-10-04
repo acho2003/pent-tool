@@ -118,11 +118,26 @@ func TestAssessmentCoverageReflectsAPIOperationSeedOutcomes(t *testing.T) {
 	if len(coverage.Operations) != 2 || coverage.Operations[0].Status != "batch_completed" || coverage.Operations[1].Status != "skipped" || coverage.Operations[1].Eligible {
 		t.Fatalf("operation coverage=%+v", coverage.Operations)
 	}
-	if coverage.OperationCounts != (assessmentOperationCounts{Discovered: 2, Eligible: 1, Attempted: 1, Completed: 1, Skipped: 1}) {
+	if coverage.OperationCounts != (assessmentOperationCounts{Discovered: 2, Eligible: 1, Attempted: 1, BatchCompleted: 1, Skipped: 1}) {
 		t.Fatalf("operation counts=%+v", coverage.OperationCounts)
 	}
 	lines := assessmentCoverageLines(coverage)
 	if !slices.ContainsFunc(lines, func(line string) bool { return strings.Contains(line, "batch completed 1") }) {
 		t.Fatalf("coverage summary omits batch-only evidence: %v", lines)
+	}
+}
+
+func TestAssessmentCoverageMarksNativeAPIChecksPerOperation(t *testing.T) {
+	plan := &scanner.AssessmentPlan{
+		Config:       assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}}, Types: []assessment.Type{assessment.TypeAPI}},
+		Jobs:         []scanner.PlanJob{{ID: "apichecks:app", Scanner: "apichecks", Variant: "apichecks", TargetID: "app", Target: "https://app.example.test/", State: scanner.PlanSelected, AssessmentTypes: []assessment.Type{assessment.TypeAPI}}},
+		Coverage:     []scanner.TypeCoverage{{Type: assessment.TypeAPI, State: "planned"}},
+		APIEndpoints: []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/api/items", Origin: "https://app.example.test", Resolved: true, Eligible: true}},
+		Fingerprint:  "sha256:native-api-checks",
+	}
+	record := &ScanRecord{ID: "native-api", Status: "finished", AssessmentPlan: plan, ScannerRuns: []scanner.Run{{Scanner: "apichecks", Variant: "apichecks", Target: "https://app.example.test/", PlanFingerprint: plan.Fingerprint, Status: "completed", APIEndpointResults: []scanner.APIEndpointResult{{Method: "GET", Path: "/api/items", Origin: "https://app.example.test", Status: "checked"}}}}}
+	coverage := buildAssessmentCoverage(record.ID, record, "")
+	if coverage.Operations[0].Status != "tested" || coverage.OperationCounts.Completed != 1 || coverage.OperationCounts.BatchCompleted != 0 || coverage.TypeCoverage[0].State != "complete" {
+		t.Fatalf("native API operation coverage=%+v counts=%+v type=%+v jobs=%+v", coverage.Operations, coverage.OperationCounts, coverage.TypeCoverage, coverage.Jobs)
 	}
 }

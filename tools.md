@@ -15,7 +15,7 @@ tool binary (and any required credential) is present.
 
 | Group | Scanners |
 |---|---|
-| Web / API | Nuclei, OWASP ZAP, Nikto*, Wapiti*, Dalfox* |
+| Web / API | Native API checks, Nuclei, OWASP ZAP, Nikto*, Wapiti*, Dalfox* |
 | Network / discovery | Subfinder*, Amass*, DNSX, HTTPX, Katana, Nmap, Masscan* |
 | Historical URL discovery | gau*, waybackurls* (select one provider) |
 | TLS | testssl.sh, SSLyze* |

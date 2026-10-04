@@ -44,13 +44,14 @@ type assessmentOperationCoverage struct {
 }
 
 type assessmentOperationCounts struct {
-	Discovered   int `json:"discovered"`
-	Eligible     int `json:"eligible"`
-	Attempted    int `json:"attempted"`
-	Completed    int `json:"batch_completed"`
-	Failed       int `json:"failed"`
-	Skipped      int `json:"skipped"`
-	NotAttempted int `json:"not_attempted"`
+	Discovered     int `json:"discovered"`
+	Eligible       int `json:"eligible"`
+	Attempted      int `json:"attempted"`
+	Completed      int `json:"completed"`
+	BatchCompleted int `json:"batch_completed"`
+	Failed         int `json:"failed"`
+	Skipped        int `json:"skipped"`
+	NotAttempted   int `json:"not_attempted"`
 }
 
 type assessmentCoverageResponse struct {
@@ -147,14 +148,17 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 				}
 			}
 			for _, run := range record.ScannerRuns {
-				if run.Scanner != "zap" || run.Target != targetValue || run.PlanFingerprint != plan.Fingerprint {
+				if (run.Scanner != "zap" && run.Scanner != "apichecks") || run.Target != targetValue || run.PlanFingerprint != plan.Fingerprint {
 					continue
 				}
 				found := false
 				for _, result := range run.APIEndpointResults {
 					if result.Method == endpoint.Method && result.Path == endpoint.Path && (endpoint.Origin == "" || result.Origin == endpoint.Origin) {
 						operation.Status, operation.Reason, found = result.Status, result.Reason, true
-						if result.Status == "seeded" {
+						if run.Scanner == "apichecks" && result.Status == "checked" {
+							operation.Status = "tested"
+							operation.Reason = "Native read-only API checks completed for this operation."
+						} else if result.Status == "seeded" {
 							if run.Status == "completed" {
 								operation.Status = "batch_completed"
 								operation.Reason = "Operation was seeded into the scoped ZAP batch; ZAP does not report per-operation completion."
@@ -182,6 +186,9 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 		case "attempted":
 			coverage.OperationCounts.Attempted++
 		case "batch_completed":
+			coverage.OperationCounts.Attempted++
+			coverage.OperationCounts.BatchCompleted++
+		case "tested":
 			coverage.OperationCounts.Attempted++
 			coverage.OperationCounts.Completed++
 		case "failed", "incomplete":
@@ -246,7 +253,7 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 		}
 		if typeCoverage.Type == assessment.TypeAPI {
 			for _, operation := range coverage.Operations {
-				if operation.Status != "batch_completed" {
+				if operation.Status != "batch_completed" && operation.Status != "tested" {
 					hasGap = true
 					break
 				}

@@ -1,6 +1,10 @@
 package scanner
 
-import "github.com/xalgord/xalgorix/v4/internal/assessment"
+import (
+	"slices"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
+)
 
 type Phase string
 
@@ -138,6 +142,8 @@ func stageForScanner(id string) string {
 		return StageTLS
 	case "dalfox":
 		return StageValidation
+	case "apichecks":
+		return StageValidation
 	default:
 		return StageDAST
 	}
@@ -171,7 +177,7 @@ func Catalog() []ToolInfo {
 	defs := ScannerRegistry()
 	out := make([]ToolInfo, 0, 12)
 	for _, d := range defs {
-		if !d.Available {
+		if !d.Available || (d.Category != PhaseRecon && !slices.Contains(OrderedNames, d.ID)) {
 			continue
 		}
 		out = append(out, ToolInfo{Name: d.Name, Phase: d.Category, Selectable: d.Selectable, Summary: d.Summary})

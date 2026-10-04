@@ -277,7 +277,7 @@ export interface AssessmentCoverage {
   jobs?: Array<{ id: string; scanner: string; variant: string; target_id: string; target: string; assessment_types?: AssessmentType[]; planned_state: string; status: string; reason?: string; has_artifact: boolean; artifact_state: string }>;
   capabilities?: Array<{ capability: string; target_id?: string; state: string; reason: string }>;
   api_operations?: Array<{ target_id: string; method: string; path: string; origin?: string; status: string; reason: string; eligible: boolean }>;
-  api_operation_counts?: { discovered: number; eligible: number; attempted: number; batch_completed: number; failed: number; skipped: number; not_attempted: number };
+  api_operation_counts?: { discovered: number; eligible: number; attempted: number; completed: number; batch_completed: number; failed: number; skipped: number; not_attempted: number };
   gaps?: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string }>;
   counts: Record<string, number>;
   reason?: string;

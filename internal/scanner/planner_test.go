@@ -450,11 +450,11 @@ func TestPlanFingerprintBindsToolVersionsAndCredentialRevisions(t *testing.T) {
 	}
 }
 
-func TestPlanFingerprintStableWithinRegistryV5WhenNewFieldsEmpty(t *testing.T) {
+func TestPlanFingerprintStableWithinRegistryV6WhenNewFieldsEmpty(t *testing.T) {
 	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}}}
 	nilMaps := PlanAssessment(PlanInput{Config: cfg})
 	emptyMaps := PlanAssessment(PlanInput{Config: cfg, ToolVersions: map[string]string{}, CredentialRevisions: map[string]string{}})
-	if nilMaps.RegistryVersion != "5" || nilMaps.Fingerprint != emptyMaps.Fingerprint {
+	if nilMaps.RegistryVersion != "6" || nilMaps.Fingerprint != emptyMaps.Fingerprint {
 		t.Fatalf("empty fingerprint inputs changed the fingerprint: %q vs %q (registry %q)", nilMaps.Fingerprint, emptyMaps.Fingerprint, nilMaps.RegistryVersion)
 	}
 	if got := planFingerprint(nilMaps, nil, nil); got != nilMaps.Fingerprint {
@@ -462,14 +462,29 @@ func TestPlanFingerprintStableWithinRegistryV5WhenNewFieldsEmpty(t *testing.T) {
 	}
 }
 
-func TestRegistryVersionIsFive(t *testing.T) {
-	if PlanRegistryVersion != "5" {
-		t.Fatalf("PlanRegistryVersion = %q, want 5", PlanRegistryVersion)
+func TestRegistryVersionIsSix(t *testing.T) {
+	if PlanRegistryVersion != "6" {
+		t.Fatalf("PlanRegistryVersion = %q, want 6", PlanRegistryVersion)
 	}
 	plan := PlanAssessment(PlanInput{Config: assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "h", Kind: assessment.KindIP, Value: "192.0.2.1"}}}})
-	if plan.RegistryVersion != "5" {
+	if plan.RegistryVersion != "6" {
 		t.Fatalf("plan registry version = %q", plan.RegistryVersion)
 	}
+}
+
+func TestAPIPlanIncludesNativeChecksAfterInventory(t *testing.T) {
+	plan := PlanAssessment(PlanInput{Config: assessment.AssessmentConfig{Mode: assessment.ModeBlackBox,
+		Types: []assessment.Type{assessment.TypeAPI}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://api.example.test/"}}}})
+	for _, job := range plan.Jobs {
+		if job.Scanner != "apichecks" {
+			continue
+		}
+		if job.State != PlanSelected || job.Stage != StageValidation || !HasAssessmentRunner("apichecks") || !slices.Contains(job.Dependencies, "katana:app:katana") {
+			t.Fatalf("native API check job is not ordered after inventory: %+v", job)
+		}
+		return
+	}
+	t.Fatalf("API plan has no native checks job: %+v", plan.Jobs)
 }
 
 func TestDiscoveryProvidersSelectInAutoModeWithoutCustomDemotion(t *testing.T) {
