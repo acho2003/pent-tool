@@ -102,6 +102,7 @@ export interface AssessmentConfig {
   assessment_targets: AssessmentTarget[];
   profile?: string;
   subdomain_discovery?: boolean;
+  discovery_providers?: { subdomain?: string[]; historical?: "gau" | "waybackurls"; tls?: "testssl" | "sslyze" };
   api_definitions?: Array<{ target_id: string; definition_id: string }>;
   access?: Array<{ target_ids: string[]; kind: string; credential_id: string; verify_url?: string; verify_marker?: string }>;
   scanner_selection?: { mode?: "auto" | "custom"; variants?: string[] };
