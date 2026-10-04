@@ -172,6 +172,10 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseZAP(run.ArtifactPath)
 	case "apichecks":
 		return parseAPIChecks(run.ArtifactPath)
+	case "apiwrites":
+		// The write adapter artifact records operation and cleanup status, not
+		// scanner findings. Findings are reported only by verification adapters.
+		return nil, nil
 	case "openvas":
 		return parseOpenVAS(run.ArtifactPath)
 	case "trivy":

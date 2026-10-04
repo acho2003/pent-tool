@@ -44,16 +44,18 @@ var (
 // carries userinfo, query or fragment; FixtureRef and CleanupRef name stored
 // fixtures, never their contents.
 type WriteJournalEntry struct {
-	OperationID string     `json:"operation_id"`
-	JobID       string     `json:"job_id,omitempty"`
-	Method      string     `json:"method"`
-	RedactedURL string     `json:"redacted_url"`
-	FixtureRef  string     `json:"fixture_ref,omitempty"`
-	CleanupRef  string     `json:"cleanup_ref,omitempty"`
-	State       WriteState `json:"state"`
-	IntentAt    string     `json:"intent_at,omitempty"`
-	SentAt      string     `json:"sent_at,omitempty"`
-	CleanupAt   string     `json:"cleanup_at,omitempty"`
+	OperationID   string     `json:"operation_id"`
+	JobID         string     `json:"job_id,omitempty"`
+	Method        string     `json:"method"`
+	RedactedURL   string     `json:"redacted_url"`
+	FixtureRef    string     `json:"fixture_ref,omitempty"`
+	CleanupMethod string     `json:"cleanup_method,omitempty"`
+	CleanupURL    string     `json:"cleanup_url,omitempty"`
+	CleanupRef    string     `json:"cleanup_ref,omitempty"`
+	State         WriteState `json:"state"`
+	IntentAt      string     `json:"intent_at,omitempty"`
+	SentAt        string     `json:"sent_at,omitempty"`
+	CleanupAt     string     `json:"cleanup_at,omitempty"`
 }
 
 // Unresolved reports whether the entry's outcome is unknown: an intent with no
@@ -62,7 +64,7 @@ type WriteJournalEntry struct {
 func (e WriteJournalEntry) Unresolved() bool {
 	switch e.State {
 	case WriteStateSent:
-		return e.CleanupRef != ""
+		return e.CleanupMethod != "" || e.CleanupURL != "" || e.CleanupRef != ""
 	case WriteStateCleanupDone, WriteStateCleanupFailed:
 		return false
 	default:
@@ -159,6 +161,10 @@ func (j *WriteJournal) RecordIntent(entry WriteJournalEntry) error {
 	}
 	entry.Method = strings.ToUpper(strings.TrimSpace(entry.Method))
 	entry.RedactedURL = RedactURL(entry.RedactedURL)
+	entry.CleanupMethod = strings.ToUpper(strings.TrimSpace(entry.CleanupMethod))
+	if entry.CleanupURL != "" {
+		entry.CleanupURL = RedactURL(entry.CleanupURL)
+	}
 	entry.State = WriteStateIntent
 	entry.IntentAt, entry.SentAt, entry.CleanupAt = journalNow(), "", ""
 	return j.commitLocked(append(slices.Clone(j.entries), entry))

@@ -43,11 +43,15 @@ HEAD operations are eligible only when their required inputs are resolved.
 Unresolved operations and state-changing methods remain visible with a reason
 and are not dispatched. Supplied path and query values are materialized only
 for declared OpenAPI parameters; missing values and undeclared inputs remain
-visible and block dispatch. Request-body fixtures can be stored and referenced,
-but body-bearing reads and write execution remain unavailable until their
-dedicated policy stages are complete. POST approvals must name a cleanup method,
-path, and fixture; the cleanup destination is checked against the same scope and
-exclusions as the write request.
+visible and block dispatch. Read request-body fixtures can be stored and
+referenced, though body-bearing reads are not dispatched. In a declared test
+environment, explicit API write approvals can dispatch POST, PUT, PATCH, or
+DELETE requests with content-addressed body fixtures where required. Each
+approval must match a bound OpenAPI operation and name a cleanup method and
+path; POST cleanup must use DELETE, while DELETE cleanup must use PUT with a
+restore fixture. Write and cleanup requests use the same target scope and
+exclusion checks. The executor records intent before sending and never replays
+an approval already in the journal; an uncertain write outcome blocks reruns.
 
 Request-body fixtures can be stored independently of scan configuration with
 `POST /api/api-fixtures` using the raw body and its `Content-Type`. The response
@@ -56,7 +60,11 @@ should retain only `ref`. Fixtures are content-addressed, limited to 1 MiB, and
 stored with owner-only filesystem permissions. `GET /api/api-fixtures/{ref}`
 retrieves a fixture for the authenticated dashboard client and disables caching.
 The endpoint does not itself approve or execute an API operation; operation
-materialization and write approvals remain separate policy steps.
+materialization and write approvals remain separate policy steps. Configure
+`write_approvals` in the scan config using `target_id`, `operation_id`, the
+OpenAPI `method` and `path`, fixture reference and content type, plus the
+cleanup method/path and any required cleanup fixture. Review the scan preview
+before starting.
 
 Application credentials are stored in the encrypted credential vault and
 bound to targets. For authenticated work, configure a protected verification
@@ -72,10 +80,10 @@ was individually exercised. Failed, skipped, and unattempted operations remain
 visible. A completed tool process alone is not evidence that every requested
 route or assessment type was tested.
 
-The current native API checks cover only unauthenticated access to operations
-that declare security schemes and credentialed CORS origin reflection. They do
-not yet provide operation-specific request fixtures, configured authorization
-expectations, information-disclosure checks, response content-type or schema
-validation, approved write workflows, or two-identity authorization checks. It
-also does not test GraphQL, SOAP, gRPC, WebSockets, broad fuzzing, or inferred
+The current native API checks cover unauthenticated access to operations that
+declare security schemes, credentialed CORS origin reflection, and explicitly
+approved, journaled writes with declared cleanup. They do not yet provide
+configured authorization expectations, information-disclosure checks, response
+content-type or schema validation, or two-identity authorization checks. It also
+does not test GraphQL, SOAP, gRPC, WebSockets, broad fuzzing, or inferred
 business workflows.

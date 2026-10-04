@@ -251,6 +251,27 @@ func TestAssessmentPlanMaterializesSuppliedOpenAPIPathAndQueryInputs(t *testing.
 	}
 }
 
+func TestAssessmentPlanRejectsWriteApprovalNotInBoundOpenAPI(t *testing.T) {
+	s := newTestServer(t, nil)
+	spec := `{"openapi":"3.0.0","paths":{"/items":{"post":{"operationId":"createItem"}}}}`
+	upload := httptest.NewRecorder()
+	s.handleAPIDefinitions(upload, httptest.NewRequest(http.MethodPost, "/api/api-definitions", strings.NewReader(spec)))
+	var metadata apiDefinitionMetadata
+	if err := json.Unmarshal(upload.Body.Bytes(), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	cfg := assessment.AssessmentConfig{
+		Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeAPI}, TestEnvironment: true,
+		Targets:        []assessment.Target{{ID: "api", Kind: assessment.KindURL, Value: "https://inside.example.test/v1"}},
+		APIDefinitions: []assessment.APIDefinitionBinding{{TargetID: "api", DefinitionID: metadata.ID}},
+		WriteApprovals: []assessment.WriteApproval{{TargetID: "api", Method: http.MethodPost, Path: "/items", OperationID: "differentOperation", FixtureRef: strings.Repeat("a", 64), ContentType: "application/json", CleanupMethod: http.MethodDelete, CleanupPath: "/items/1"}},
+	}
+	plan := s.buildAssessmentPlan(cfg)
+	if !slices.ContainsFunc(plan.Errors, func(problem assessment.Problem) bool { return problem.Code == "api_write.operation_unknown" }) {
+		t.Fatalf("unknown write operation was not rejected: %+v", plan.Errors)
+	}
+}
+
 func TestAssessmentPlanUsesBoundCredentialWithoutReturningSecretOrClaimingVerifiedAuth(t *testing.T) {
 	s := newTestServer(t, nil)
 	keyPath := filepath.Join(t.TempDir(), "credential.key")

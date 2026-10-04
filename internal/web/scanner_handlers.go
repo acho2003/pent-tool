@@ -155,6 +155,21 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 							plan.Errors = append(plan.Errors, assessment.Problem{Code: "api_input.operation_unknown", Message: fmt.Sprintf("API input refers to unknown operation %q in definition %s", input.OperationID, binding.DefinitionID), Blocking: true})
 						}
 					}
+					for _, approval := range normalized.WriteApprovals {
+						if approval.TargetID != binding.TargetID {
+							continue
+						}
+						matched := false
+						for _, endpoint := range endpoints {
+							if endpoint.OperationID == approval.OperationID && strings.EqualFold(endpoint.Method, approval.Method) && endpoint.Path == approval.Path {
+								matched = true
+								break
+							}
+						}
+						if !matched {
+							plan.Errors = append(plan.Errors, assessment.Problem{Code: "api_write.operation_unknown", Message: fmt.Sprintf("API write approval does not match an operation in definition %s", binding.DefinitionID), Blocking: true})
+						}
+					}
 					endpoints = scanner.MaterializeOpenAPIOperations(endpoints, binding.DefinitionID, target.Value, normalized.APIOperationInputs)
 					for i := range endpoints {
 						endpoints[i].TargetID = binding.TargetID

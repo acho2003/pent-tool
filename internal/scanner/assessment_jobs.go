@@ -22,7 +22,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "gau" || id == "waybackurls" || id == "sslyze" || id == "apichecks" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "gau" || id == "waybackurls" || id == "sslyze" || id == "apichecks" || id == "apiwrites" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -113,6 +113,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["waybackurls"] = historicalRunner{provider: "waybackurls"}
 	byName["sslyze"] = sslyzeRunner{}
 	byName["apichecks"] = apiChecksRunner{}
+	byName["apiwrites"] = apiWritesRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
 		if run.Terminal() {
@@ -250,6 +251,20 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			Profile: plan.Config.Profile, TypedAssessment: true,
 			AppScope: appScopes[job.TargetID],
 		}
+		if job.Scanner == "apiwrites" {
+			req.TestEnvironment = plan.Config.TestEnvironment
+			req.APIFixtureDir = p.Config.APIFixtureDir
+			for _, endpoint := range plan.APIEndpoints {
+				if endpoint.TargetID == job.TargetID {
+					req.APIOperationEndpoints = append(req.APIOperationEndpoints, endpoint)
+				}
+			}
+			for _, approval := range plan.Config.WriteApprovals {
+				if approval.TargetID == job.TargetID {
+					req.WriteApprovals = append(req.WriteApprovals, approval)
+				}
+			}
+		}
 		if reason := failedAssessmentDependency(job, jobOutcomes); reason != "" {
 			run := plannedJobNotRun(job, req, plan.Fingerprint, reason, emit)
 			run.GapKind, run.Stage = GapPrerequisiteFailed, job.Stage
@@ -300,7 +315,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
 			continue
 		}
-		if assessmentWebAuthBound(plan.Config.Access, job.TargetID) && (job.Scanner == "zap" || job.Scanner == "nuclei") {
+		if assessmentWebAuthBound(plan.Config.Access, job.TargetID) && (job.Scanner == "zap" || job.Scanner == "nuclei" || job.Scanner == "apiwrites") {
 			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err != nil {
 				run := plannedJobNotRun(job, req, plan.Fingerprint, "authenticated scan skipped: session verification failed", emit)
 				run.AuthState, run.GapKind = assessment.StateFailed, GapAuthFailed
@@ -329,7 +344,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, old)
 			continue
 		}
-		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && (job.Scanner == "zap" || job.Scanner == "nuclei") {
+		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && (job.Scanner == "zap" || job.Scanner == "nuclei" || job.Scanner == "apiwrites") {
 			req.TargetAuth = strings.Join(headers, "\n")
 			if job.Scanner == "zap" {
 				req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]

@@ -76,8 +76,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 7: API operation input materialization).
-const PlanRegistryVersion = "7"
+// schedules (version 8: journaled API write execution).
+const PlanRegistryVersion = "8"
 
 type AssessmentPlan struct {
 	Config          assessment.AssessmentConfig     `json:"config"`
@@ -240,6 +240,20 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			}
 			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: "katana", TargetID: target.ID, State: state, ReasonCode: "workflow.crawl", Reason: "Endpoint discovery stage; authentication is verified before crawling when configured."})
 			plan.Jobs = append(plan.Jobs, PlanJob{ID: "katana:" + target.ID + ":katana", State: state, Scanner: "katana", TargetID: target.ID, Target: target.Value, Variant: "katana", Stage: StageCrawl})
+		}
+	}
+	writeTargets := map[string]bool{}
+	for _, approval := range cfg.WriteApprovals {
+		if writeTargets[approval.TargetID] {
+			continue
+		}
+		writeTargets[approval.TargetID] = true
+		for _, target := range cfg.Targets {
+			if target.ID != approval.TargetID {
+				continue
+			}
+			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: "apiwrites", TargetID: target.ID, Types: []assessment.Type{assessment.TypeAPI}, State: PlanSelected, ReasonCode: "api_write.explicit_approval", Reason: "State-changing requests are limited to explicitly approved operations in the declared test environment."})
+			plan.Jobs = append(plan.Jobs, PlanJob{ID: "apiwrites:" + target.ID + ":apiwrites", State: PlanSelected, Scanner: "apiwrites", TargetID: target.ID, Target: target.Value, AssessmentType: assessment.TypeAPI, AssessmentTypes: []assessment.Type{assessment.TypeAPI}, Variant: "apiwrites", Stage: StageWrite})
 		}
 	}
 	plan.Decisions = append(plan.Decisions, unregisteredProviderDecisions(cfg)...)

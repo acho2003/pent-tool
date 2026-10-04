@@ -98,10 +98,11 @@ const (
 	StageTLS          = "tls"
 	StageDAST         = "dast"
 	StageValidation   = "validation"
+	StageWrite        = "write_validation"
 	StageResults      = "results"
 )
 
-var stageOrder = []string{StageScope, StageDiscovery, StageDNS, StageReachability, StageAuth, StageCrawl, StageInventory, StagePassive, StageTemplates, StageTLS, StageDAST, StageValidation, StageResults}
+var stageOrder = []string{StageScope, StageDiscovery, StageDNS, StageReachability, StageAuth, StageCrawl, StageInventory, StagePassive, StageTemplates, StageTLS, StageDAST, StageValidation, StageWrite, StageResults}
 
 // stagePrerequisites names the stages whose outputs a stage consumes. When a
 // prerequisite stage has no job for the target, its own prerequisites stand in
@@ -118,7 +119,8 @@ var stagePrerequisites = map[string][]string{
 	StageTLS:          {StageReachability},
 	StageDAST:         {StageInventory},
 	StageValidation:   {StageInventory},
-	StageResults:      {StagePassive, StageTemplates, StageTLS, StageDAST, StageValidation},
+	StageWrite:        {StageValidation},
+	StageResults:      {StagePassive, StageTemplates, StageTLS, StageDAST, StageValidation, StageWrite},
 }
 
 // stageForScanner maps a registry ID onto the workflow stage ladder. Network,
@@ -144,6 +146,8 @@ func stageForScanner(id string) string {
 		return StageValidation
 	case "apichecks":
 		return StageValidation
+	case "apiwrites":
+		return StageWrite
 	default:
 		return StageDAST
 	}

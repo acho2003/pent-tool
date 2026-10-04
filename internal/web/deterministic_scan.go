@@ -51,6 +51,7 @@ func ScannerConfig(cfg *config.Config) scanner.Config {
 // so pass nil (strict default: all loopback is self).
 func (s *Server) ScannerConfig(cfg *config.Config) scanner.Config {
 	sc := ScannerConfig(cfg)
+	sc.APIFixtureDir = filepath.Join(s.dataDir, "_api_fixtures")
 	sc.ScopeGuard = func(rawURL string, resolved []string) (bool, string) {
 		if s.isBlockedTargetForScan(rawURL, nil) {
 			return true, "scope guard: target is the scanner host or dashboard listener"

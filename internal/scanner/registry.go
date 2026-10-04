@@ -87,7 +87,7 @@ var webScannerMetadata = map[string]struct {
 var scannerGroups = map[string]string{
 	"auth":      GroupWebAPI,
 	"subfinder": GroupWebAPI, "amass": GroupWebAPI, "dnsx": GroupWebAPI, "gau": GroupWebAPI, "waybackurls": GroupWebAPI, "sslyze": GroupWebAPI, "httpx": GroupWebAPI, "katana": GroupWebAPI,
-	"nuclei": GroupWebAPI, "zap": GroupWebAPI, "apichecks": GroupWebAPI, "testssl": GroupWebAPI,
+	"nuclei": GroupWebAPI, "zap": GroupWebAPI, "apichecks": GroupWebAPI, "apiwrites": GroupWebAPI, "testssl": GroupWebAPI,
 	"nikto": GroupWebAPI, "dalfox": GroupWebAPI, "wapiti": GroupWebAPI,
 	"nmap": GroupNetwork, "masscan": GroupNetwork, "openvas": GroupNetwork,
 	"vuls": GroupNetwork, "lynis": GroupNetwork,

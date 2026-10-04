@@ -3,6 +3,7 @@ package assessment
 import (
 	"encoding/hex"
 	"fmt"
+	"mime"
 	"net/netip"
 	"net/url"
 	"sort"
@@ -103,9 +104,11 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		a.Path = strings.TrimSpace(a.Path)
 		a.OperationID = strings.TrimSpace(a.OperationID)
 		a.FixtureRef = strings.ToLower(strings.TrimSpace(a.FixtureRef))
+		a.ContentType = strings.TrimSpace(a.ContentType)
 		a.CleanupMethod = strings.ToUpper(strings.TrimSpace(a.CleanupMethod))
 		a.CleanupPath = strings.TrimSpace(a.CleanupPath)
 		a.CleanupRef = strings.ToLower(strings.TrimSpace(a.CleanupRef))
+		a.CleanupContentType = strings.TrimSpace(a.CleanupContentType)
 	}
 	sort.Slice(out.WriteApprovals, func(i, j int) bool {
 		a, b := out.WriteApprovals[i], out.WriteApprovals[j]
@@ -419,11 +422,20 @@ func Validate(cfg AssessmentConfig) []Problem {
 				}
 			}
 		}
-		if !validFixtureRef(approval.FixtureRef) {
-			probs = append(probs, blocking("api_write.fixture.required", "write approval requires a SHA-256 request fixture reference"))
+		if approval.Method != "DELETE" && !validFixtureRef(approval.FixtureRef) {
+			probs = append(probs, blocking("api_write.fixture.required", "POST/PUT/PATCH approvals require a SHA-256 request fixture reference"))
 		}
-		if approval.Method == "POST" && (!validFixtureRef(approval.CleanupRef) || approval.CleanupMethod == "" || approval.CleanupPath == "") {
-			probs = append(probs, blocking("api_write.cleanup.required", "POST write approvals require an explicit cleanup method, path, and fixture reference"))
+		if approval.Method != "DELETE" && approval.ContentType == "" {
+			probs = append(probs, blocking("api_write.content_type.required", "POST/PUT/PATCH approvals require the request fixture content type"))
+		}
+		if approval.CleanupMethod == "" || approval.CleanupPath == "" {
+			probs = append(probs, blocking("api_write.cleanup.required", "write approvals require an explicit cleanup method and path"))
+		}
+		if approval.Method == "POST" && approval.CleanupMethod != "DELETE" {
+			probs = append(probs, blocking("api_write.cleanup_method.invalid", "POST cleanup must use DELETE"))
+		}
+		if approval.Method == "DELETE" && approval.CleanupMethod != "PUT" {
+			probs = append(probs, blocking("api_write.cleanup_method.invalid", "DELETE cleanup must use PUT to restore the controlled resource"))
 		}
 		if approval.CleanupMethod != "" || approval.CleanupPath != "" || approval.CleanupRef != "" {
 			if approval.CleanupMethod != "DELETE" && approval.CleanupMethod != "PUT" && approval.CleanupMethod != "PATCH" {
@@ -434,6 +446,22 @@ func Validate(cfg AssessmentConfig) []Problem {
 			}
 			if approval.CleanupRef != "" && !validFixtureRef(approval.CleanupRef) {
 				probs = append(probs, blocking("api_write.cleanup_fixture.invalid", "cleanup_ref must be a SHA-256 API fixture reference"))
+			}
+			if (approval.CleanupMethod == "PUT" || approval.CleanupMethod == "PATCH") && !validFixtureRef(approval.CleanupRef) {
+				probs = append(probs, blocking("api_write.cleanup_fixture.required", "PUT/PATCH cleanup requires a SHA-256 cleanup body fixture"))
+			}
+			if (approval.CleanupMethod == "PUT" || approval.CleanupMethod == "PATCH") && approval.CleanupContentType == "" {
+				probs = append(probs, blocking("api_write.cleanup_content_type.required", "PUT/PATCH cleanup requires the cleanup fixture content type"))
+			}
+		}
+		if approval.ContentType != "" {
+			if _, _, err := mime.ParseMediaType(approval.ContentType); err != nil {
+				probs = append(probs, blocking("api_write.content_type.invalid", "write content_type must be a valid media type"))
+			}
+		}
+		if approval.CleanupContentType != "" {
+			if _, _, err := mime.ParseMediaType(approval.CleanupContentType); err != nil {
+				probs = append(probs, blocking("api_write.cleanup_content_type.invalid", "cleanup_content_type must be a valid media type"))
 			}
 		}
 		if seenWriteApproval[key] {

@@ -94,6 +94,13 @@ type Request struct {
 	// TestEnvironment records that the operator declared the target a test
 	// environment. It informs builders; it never enables writes on its own.
 	TestEnvironment bool `json:"-"`
+	// WriteApprovals are target-filtered, previewed approvals. Only apiwrites
+	// consumes them, after prerequisites pass and with a persistent write journal.
+	WriteApprovals []assessment.WriteApproval `json:"-"`
+	// APIFixtureDir is the private content-addressed fixture store used by the
+	// native approved-write adapter.
+	APIFixtureDir         string        `json:"-"`
+	APIOperationEndpoints []APIEndpoint `json:"-"`
 }
 
 // GapKind classifies why planned coverage did not happen. It is a stable
@@ -297,7 +304,11 @@ type Config struct {
 	// execution time, so this package can refuse a URL without importing the
 	// web layer. resolved holds the addresses the URL's host resolved to, when
 	// known. Nil means no extra guard. Runtime-only.
-	ScopeGuard func(rawURL string, resolved []string) (blocked bool, reason string) `json:"-"`
+	ScopeGuard    func(rawURL string, resolved []string) (blocked bool, reason string) `json:"-"`
+	APIFixtureDir string                                                               `json:"-"`
+	// APIOperationEndpoints is a target-filtered immutable OpenAPI inventory
+	// supplied to the approved-write adapter for operation matching.
+	APIOperationEndpoints []APIEndpoint `json:"-"`
 	// Budget is the assessment-wide rate, endpoint and time budget shared by
 	// every scanner and target of one assessment. RateRPS remains the single
 	// rate source; Budget enforces it across callers. Nil means no shared
