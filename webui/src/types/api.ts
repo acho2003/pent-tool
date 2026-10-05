@@ -333,6 +333,7 @@ export interface ScanFinding {
 }
 
 export interface FindingObservation {
+  evidence_completeness?: string;
   id: string;
   scanner: string;
   title: string;

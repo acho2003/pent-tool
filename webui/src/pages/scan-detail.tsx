@@ -1280,7 +1280,7 @@ function FindingDetailsDialog({
                   observation.resource && `Resource: ${observation.resource}`,
                 ].filter(Boolean) as string[];
                 return <article key={observation.id} className="space-y-2 rounded-md border p-3">
-                  <div className="flex flex-wrap items-center gap-2 text-xs"><Badge variant="outline">{observation.scanner}</Badge>{observation.source_id && <span className="break-all font-mono text-muted-foreground">{observation.source_id}</span>}</div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs"><Badge variant="outline">{observation.scanner}</Badge><Badge variant="outline">{observation.evidence_completeness === "request_response" ? "Request/response recorded" : observation.evidence ? "Scanner output excerpt" : observation.evidence_reference ? "Scanner reference only" : "Evidence not provided"}{observation.evidence_completeness === "partial" ? " · partial" : ""}</Badge>{observation.source_id && <span className="break-all font-mono text-muted-foreground">{observation.source_id}</span>}</div>
                   <p className="text-sm font-medium">{observation.title}</p>
                   <div className="space-y-1 text-xs">{locations.length ? locations.map((location) => <p key={location} className="break-all font-mono">{location}</p>) : <p className="text-muted-foreground">Location: Not provided by scanner.</p>}</div>
                   {observation.description && <p className="text-sm text-muted-foreground">{observation.description}</p>}

@@ -407,3 +407,21 @@ func TestScannerCoverageGapsIncludesIncompleteRunsAndRedactsTargets(t *testing.T
 		t.Fatal("coverage gaps leaked credentials or included a completed scanner")
 	}
 }
+
+func TestEvidenceAvailabilityLabelsRecordedContent(t *testing.T) {
+	cases := []struct {
+		item reportEvidenceItem
+		want string
+	}{
+		{reportEvidenceItem{}, "Not provided by scanner"},
+		{reportEvidenceItem{EvidenceReference: "output.json#1"}, "Scanner reference only"},
+		{reportEvidenceItem{Evidence: "matched"}, "Scanner output excerpt"},
+		{reportEvidenceItem{EvidenceCompleteness: "request_response", Evidence: "request"}, "Request/response recorded by scanner"},
+		{reportEvidenceItem{EvidenceCompleteness: "partial", Evidence: "matched"}, "Scanner output excerpt (partial)"},
+	}
+	for _, tc := range cases {
+		if got := evidenceAvailabilityLabel(tc.item); got != tc.want {
+			t.Errorf("label=%q want %q", got, tc.want)
+		}
+	}
+}

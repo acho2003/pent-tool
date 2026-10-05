@@ -14,7 +14,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-const reportPromptVersion = "scanner-report-v4"
+const reportPromptVersion = "scanner-report-v5"
 
 type reportManifest struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -82,23 +82,24 @@ type reportFinding struct {
 }
 
 type reportEvidenceItem struct {
-	Scanner           string `json:"scanner,omitempty"`
-	SourceID          string `json:"source_id,omitempty"`
-	EvidenceReference string `json:"evidence_reference,omitempty"`
-	Target            string `json:"target,omitempty"`
-	Endpoint          string `json:"endpoint,omitempty"`
-	Method            string `json:"method,omitempty"`
-	Parameter         string `json:"parameter,omitempty"`
-	ParameterLocation string `json:"parameter_location,omitempty"`
-	SourceLocation    string `json:"source_location,omitempty"`
-	Package           string `json:"package,omitempty"`
-	PackageVersion    string `json:"package_version,omitempty"`
-	Protocol          string `json:"protocol,omitempty"`
-	Port              string `json:"port,omitempty"`
-	Container         string `json:"container,omitempty"`
-	Resource          string `json:"resource,omitempty"`
-	Description       string `json:"description,omitempty"`
-	Evidence          string `json:"evidence,omitempty"`
+	EvidenceCompleteness string `json:"evidence_completeness,omitempty"`
+	Scanner              string `json:"scanner,omitempty"`
+	SourceID             string `json:"source_id,omitempty"`
+	EvidenceReference    string `json:"evidence_reference,omitempty"`
+	Target               string `json:"target,omitempty"`
+	Endpoint             string `json:"endpoint,omitempty"`
+	Method               string `json:"method,omitempty"`
+	Parameter            string `json:"parameter,omitempty"`
+	ParameterLocation    string `json:"parameter_location,omitempty"`
+	SourceLocation       string `json:"source_location,omitempty"`
+	Package              string `json:"package,omitempty"`
+	PackageVersion       string `json:"package_version,omitempty"`
+	Protocol             string `json:"protocol,omitempty"`
+	Port                 string `json:"port,omitempty"`
+	Container            string `json:"container,omitempty"`
+	Resource             string `json:"resource,omitempty"`
+	Description          string `json:"description,omitempty"`
+	Evidence             string `json:"evidence,omitempty"`
 }
 
 // GenerateCLIReport runs the same report-only AI and deterministic fallback
@@ -234,7 +235,7 @@ func reportFindingsToVulns(in []reportFinding) []VulnSummary {
 
 func evidenceItemFromObservation(o scanner.RawObservation) reportEvidenceItem {
 	o = sanitizeFindingObservation(o)
-	return reportEvidenceItem{Scanner: o.Scanner, SourceID: o.SourceID, EvidenceReference: o.EvidenceReference, Target: o.Target, Endpoint: o.Endpoint, Method: o.Method, Parameter: o.Parameter, ParameterLocation: o.ParameterLocation, SourceLocation: o.SourceLocation, Package: o.Package, PackageVersion: o.PackageVersion, Protocol: o.Protocol, Port: o.Port, Container: o.Container, Resource: o.Resource, Description: o.Description, Evidence: o.Evidence}
+	return reportEvidenceItem{EvidenceCompleteness: o.EvidenceCompleteness, Scanner: o.Scanner, SourceID: o.SourceID, EvidenceReference: o.EvidenceReference, Target: o.Target, Endpoint: o.Endpoint, Method: o.Method, Parameter: o.Parameter, ParameterLocation: o.ParameterLocation, SourceLocation: o.SourceLocation, Package: o.Package, PackageVersion: o.PackageVersion, Protocol: o.Protocol, Port: o.Port, Container: o.Container, Resource: o.Resource, Description: o.Description, Evidence: o.Evidence}
 }
 
 func sanitizeFindingEndpoints(in []scanner.FindingEndpoint) []scanner.FindingEndpoint {
@@ -267,6 +268,7 @@ func renderFindingEvidence(f reportFinding) string {
 		if item.SourceID != "" {
 			b.WriteString("; source: " + sanitizeEvidenceText(item.SourceID))
 		}
+		b.WriteString("\nEvidence available: " + evidenceAvailabilityLabel(item))
 		b.WriteString("\nLocation: " + evidenceLocation(item))
 		if item.EvidenceReference != "" {
 			b.WriteString("\nEvidence reference: " + sanitizeEvidenceText(item.EvidenceReference))
@@ -348,4 +350,20 @@ func reportEvidenceRefs(f reportFinding) string {
 		lines = append(lines, fmt.Sprintf("Evidence reference (%s): %s", s.Scanner, s.EvidenceRef))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func evidenceAvailabilityLabel(item reportEvidenceItem) string {
+	label := "Not provided by scanner"
+	if item.Evidence != "" {
+		label = "Scanner output excerpt"
+	} else if item.EvidenceReference != "" {
+		label = "Scanner reference only"
+	}
+	if item.EvidenceCompleteness == "request_response" {
+		label = "Request/response recorded by scanner"
+	}
+	if item.EvidenceCompleteness == "partial" {
+		label += " (partial)"
+	}
+	return label
 }
