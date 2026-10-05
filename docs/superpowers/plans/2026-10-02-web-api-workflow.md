@@ -575,7 +575,7 @@ I5.T1 and I5.T2 were merged into I5.T1. I5.T3 was split into I5.T2 and I5.T3.
 20. Lab historical stub: partly rejected. A proxy/endpoint override in production code is not added, to avoid a new outbound-redirection setting. Applied: fake gau/waybackurls binaries through the configured paths (I5.T3) and a credential gate (I5.T4).
 21. Promotion before executors exist: applied. I1.T4 adds no jobs, and promotion happens in I1.T18 and I2.T9.
 22. Coverage state and batch_completed: applied with the new gap kinds (I1.T5), `batch_completed` (I1.T6) and a structured state (I4.T1).
-23. Amass pinning: applied in I2.T10 (exact pin, flags verified with that version's `-h`, nassl wheels recorded) and I2.T4 (parser matched). All five tools are required per runtime/README.md.
+23. Amass pinning: initially applied in I2.T10 as v5.1.1, but the adapter used the standalone v4 `-o` contract and v5 requires its engine service. Updated the runtime pin to v4.2.0, verified its `enum -h` exposes the adapter flags, and retained the passive candidate parser. Amass remains required per runtime/README.md.
 24. `-duc` in Go builders: applied in I1.T9, I1.T12, I2.T2, I2.T4 and I2.T6 (legacy recon too), and removed from the runtime task. Nuclei already passes `-duc -dut`.
 25. PolicySupport/OutputFormat: applied in I1.T4 (field and existing entries) and I2.T1 (new entries).
 26. Historical revalidation scope: applied in I2.T3 (`Allows`/`Excluded`/ScopeGuard checked first, shared limiter, no redirects, archived `/logout` never fetched).
@@ -602,7 +602,7 @@ I5.T1 and I5.T2 were merged into I5.T1. I5.T3 was split into I5.T2 and I5.T3.
 18. Registry metadata: applied (same as coverage 25).
 19. Preview guard: applied. `isBlockedTargetForScan` is reused with `allowLoopbackPorts`, and the duplicate runMultiScan loop is removed (I1.T7).
 20. Repo hygiene: applied (premise rewritten, `git add -f`/TempDir rule, `-duc` in builders, `PYTHONDONTWRITEBYTECODE`).
-21. Amass and dnsx flags: applied in I2.T10/I2.T4 (pin and `-h` verification) and I2.T2 (random-label wildcard probe).
+21. Amass and dnsx flags: applied in I2.T10/I2.T4 (pin and `-h` verification); Amass is pinned to v4.2.0 because v5.1.1 removed the adapter's `-o` CLI contract and requires a separately managed engine. DNSX includes the random-label wildcard probe (I2.T2).
 22. OpenAPI: applied. I3.T8 materializes at preview with no extra fingerprint input, and I3.T2 handles Swagger 2.0 host/basePath/schemes and body/formData parameters.
 
 **Sequencing lens**

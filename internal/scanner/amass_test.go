@@ -21,7 +21,7 @@ func TestAmassPassiveCandidatesStayWithinSubmittedDomain(t *testing.T) {
 		t.Fatalf("Amass candidates: %+v", run)
 	}
 	args, err := os.ReadFile(argsPath)
-	if err != nil || !strings.Contains(string(args), "-passive") || strings.Contains(string(args), "-active") {
+	if err != nil || !strings.Contains(string(args), "-passive") || !strings.Contains(string(args), "-o\n") || strings.Contains(string(args), "-active") {
 		t.Fatalf("Amass was not passive: %q err=%v", args, err)
 	}
 }

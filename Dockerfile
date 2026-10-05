@@ -48,7 +48,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/httpx/cmd/httpx@v1.12.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/dnsx/cmd/dnsx@v1.3.1
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/owasp-amass/amass/v5/cmd/amass@v5.1.1
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/owasp-amass/amass/v4/cmd/amass@v4.2.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/lc/gau/v2/cmd/gau@v2.2.4
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/tomnomnom/waybackurls@v0.1.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build go install -v -p 1 -ldflags="-s -w" github.com/projectdiscovery/katana/cmd/katana@v1.7.0
