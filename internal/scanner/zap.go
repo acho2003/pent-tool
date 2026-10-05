@@ -185,7 +185,7 @@ func (zapRunner) Descriptor() Descriptor {
 }
 
 func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) (final Run) {
-	if req.StructuredDispatch && len(req.EndpointTargets) == 0 {
+	if req.StructuredDispatch && len(req.EndpointTargets) == 0 && len(req.InputRequests) == 0 {
 		return notApplicableRun("zap", req, cfg, "ZAP has no dispatcher-approved API, parameter, form, or sensitive endpoint to test", emit)
 	}
 	target, ok := normalizedWebTarget(req.Target)
@@ -298,10 +298,18 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		if err := json.Unmarshal(body, &out); err != nil {
 			return nil, err
 		}
+		if code := valueString(out, "code"); code != "" && code != "<nil>" {
+			return nil, fmt.Errorf("ZAP API %s", code)
+		}
 		return out, nil
 	}
 	if _, err := call("/JSON/core/view/version/", url.Values{}); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
+	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+		if err := verifyZAPAddons(call); err != nil {
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		}
 	}
 	var recording *RecordingGateway
 	if UnifiedWorkflowEnabled() && req.TypedAssessment {
@@ -310,6 +318,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			return finishServiceFailure(run, fmt.Errorf("ZAP recording gateway unavailable"), secrets, cfg.MaxOutputBytes, emit)
 		}
 		run.CoverageEventsPath = recording.EventPath
+		secrets = append(secrets, recording.password)
 		recording.SetPhase("seeding")
 		restore, installErr := configureZAPGateway(cfg, call, recording)
 		if installErr != nil {
@@ -545,6 +554,14 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
 
+	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+		run.DefinitionImports = zapImportDefinitions(cctx, cfg, req, contextID)
+		for _, result := range run.DefinitionImports {
+			if result.Status == "failed" {
+				run.Completeness = "partial"
+			}
+		}
+	}
 	// Best-effort: seed the target into ZAP's Sites tree before crawling, so a
 	// site the spider can't harvest links from (a JS app, or one with no crawlable
 	// anchors) still gets a node for the active scan. accessUrl is not fatal: it
@@ -570,7 +587,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				return reason
 			}
 		}
-		for _, m := range []string{method, http.MethodGet} {
+		for _, m := range []string{method} {
 			if excluded, reason := req.AppScope.Excluded(m, rawURL); excluded {
 				return "excluded: " + reason
 			}
@@ -578,17 +595,8 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return ""
 	}
 	seedRequest := func(method, rawURL string) error {
-		if method == "" || method == http.MethodGet {
-			_, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {rawURL}, "followRedirects": {followRedirects}})
-			return err
-		}
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return err
-		}
-		request := method + " " + u.RequestURI() + " HTTP/1.1\r\nHost: " + u.Host + "\r\n\r\n"
-		_, err = call("/JSON/core/action/sendRequest/", url.Values{"request": {request}, "followRedirects": {"false"}})
-		return err
+		input := ScannerRequestInput{Method: method, URL: rawURL, Selected: true}
+		return zapSeedRequest(cctx, cfg, call, input)
 	}
 	if refusal := seedRefusal(http.MethodGet, target); refusal != "" {
 		logLine("ZAP did not pre-seed the target: " + refusal)
@@ -646,44 +654,51 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// endpoints ZAP's own spider may not reach (JS apps, unlinked routes). These
 	// URLs are already FQDN-scoped by the crawl. Bounded by the same web-endpoint
 	// budget and best-effort per URL — a seed failure is logged, not fatal.
-	endpointTargets := requestEndpointTargets(req)
-	if len(endpointTargets) > 0 {
-		seeded := 0
-		for _, endpoint := range endpointTargets {
-			if seeded >= maxChildren {
-				break
+	inputs := zapSelectedRequests(req)
+	seeded := 0
+	for _, input := range inputs {
+		submission := EndpointSubmission{EndpointID: input.EndpointID, Method: input.Method, URL: SafeTelemetryURL(input.URL), At: time.Now().UTC().Format(time.RFC3339Nano)}
+		refusal := seedRefusal(input.Method, input.URL)
+		if seeded >= maxChildren {
+			refusal = "web request budget exhausted before seeding"
+		}
+		if !input.Selected {
+			refusal = input.Reason
+			if refusal == "" {
+				refusal = "request was not selected"
 			}
-			method := req.EndpointMethods[endpoint]
-			if method == "" {
-				method = http.MethodGet
-			}
-			if refusal := seedRefusal(method, endpoint); refusal != "" {
-				logLine("ZAP skipped a discovered URL: " + refusal)
-				continue
-			}
-			if err := checkAuth(); err != nil {
-				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
-			}
-			submission := EndpointSubmission{Method: method, URL: SafeTelemetryURL(endpoint), At: time.Now().UTC().Format(time.RFC3339Nano)}
-			for _, input := range req.InputRequests {
-				if input.URL == endpoint && input.Method == method {
-					submission.EndpointID = input.EndpointID
-				}
-			}
-			if seedErr := seedRequest(method, endpoint); seedErr == nil {
-				seeded++
-				submission.Status = "acknowledged"
-			} else {
-				submission.Status = "failed"
-				submission.Reason = "ZAP rejected request seeding"
-				run.Completeness = "partial"
-				logLine("ZAP seed failed for " + SafeTelemetryURL(endpoint))
-			}
+		}
+		if input.Method != http.MethodGet && input.Method != http.MethodHead && input.Method != http.MethodOptions {
+			refusal = "state-changing request requires an approved operation and fixture"
+		}
+		if input.BodyDigest != "" && input.Body == "" {
+			refusal = "request body replay data unavailable"
+		}
+		if refusal != "" {
+			submission.Status, submission.Reason = "skipped", refusal
 			run.Submissions = append(run.Submissions, submission)
+			continue
 		}
-		if seeded > 0 {
-			logLine(fmt.Sprintf("ZAP seeded %d katana-discovered URLs into the scan tree", seeded))
+		if err := checkAuth(); err != nil {
+			submission.Status, submission.Reason = "failed", "authentication checkpoint failed before submission"
+			run.Submissions = append(run.Submissions, submission)
+			for _, pending := range inputs[len(run.Submissions):] {
+				run.Submissions = append(run.Submissions, EndpointSubmission{EndpointID: pending.EndpointID, Method: pending.Method, URL: SafeTelemetryURL(pending.URL), Status: "skipped", Reason: "authentication failed before submission", At: time.Now().UTC().Format(time.RFC3339Nano)})
+			}
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 		}
+		if seedErr := zapSeedRequest(cctx, cfg, call, input); seedErr == nil {
+			seeded++
+			submission.Status = "acknowledged"
+		} else {
+			submission.Status, submission.Reason = "failed", "ZAP rejected request seeding"
+			run.Completeness = "partial"
+			logLine("ZAP seed failed for " + SafeTelemetryURL(input.URL))
+		}
+		run.Submissions = append(run.Submissions, submission)
+	}
+	if seeded > 0 {
+		logLine(fmt.Sprintf("ZAP acknowledged %d inventory request submissions", seeded))
 	}
 
 	// Legacy scans retain ZAP's crawler. Structured dispatch deliberately does

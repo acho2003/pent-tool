@@ -10,14 +10,15 @@ import (
 )
 
 type ScannerRequestInput struct {
-	EndpointID  string `json:"endpoint_id"`
-	URL         string `json:"url"`
-	Method      string `json:"method"`
-	ContentType string `json:"content_type,omitempty"`
-	BodyDigest  string `json:"body_digest,omitempty"`
-	Selected    bool   `json:"selected"`
-	Reason      string `json:"reason,omitempty"`
-	Body        string `json:"-"`
+	InventoryScope string `json:"inventory_scope,omitempty"`
+	EndpointID     string `json:"endpoint_id"`
+	URL            string `json:"url"`
+	Method         string `json:"method"`
+	ContentType    string `json:"content_type,omitempty"`
+	BodyDigest     string `json:"body_digest,omitempty"`
+	Selected       bool   `json:"selected"`
+	Reason         string `json:"reason,omitempty"`
+	Body           string `json:"-"`
 }
 type EndpointSubmission struct {
 	EndpointID  string `json:"endpoint_id"`
@@ -43,14 +44,30 @@ func SafeTelemetryURL(raw string) string {
 		return "[invalid URL]"
 	}
 	u.User = nil
-	q := u.Query()
-	for key := range q {
-		lower := strings.ToLower(key)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") || strings.Contains(lower, "session") || strings.Contains(lower, "key") || lower == "code" || lower == "authorization" {
-			q[key] = []string{"[REDACTED]"}
+	parts := strings.Split(u.RawQuery, "&")
+	for i, part := range parts {
+		key, _, hasValue := strings.Cut(part, "=")
+		name, decodeErr := url.QueryUnescape(key)
+		if decodeErr != nil {
+			parts[i] = "[invalid parameter omitted]"
+			continue
+		}
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") || strings.Contains(lower, "session") || strings.Contains(lower, "key") || strings.Contains(lower, "signature") || strings.Contains(lower, "credential") || lower == "sig" || lower == "jwt" || lower == "code" || lower == "authorization" {
+			parts[i] = key + "=" + url.QueryEscape("[REDACTED]")
+		} else if hasValue {
+			if _, err := url.QueryUnescape(part); err != nil {
+				parts[i] = key + "=" + url.QueryEscape("[invalid value omitted]")
+			}
 		}
 	}
-	u.RawQuery = q.Encode()
+	u.RawQuery = strings.Join(parts, "&")
+	fragment := strings.ToLower(u.Fragment)
+	if strings.Contains(fragment, "token=") || strings.Contains(fragment, "secret=") || strings.Contains(fragment, "password=") || strings.Contains(fragment, "session=") {
+		u.Fragment = "[REDACTED]"
+		u.RawFragment = ""
+	}
+
 	return u.String()
 }
 func BuildScannerInputs(surface *AttackSurface, req Request, scanner string) []ScannerRequestInput {
@@ -63,7 +80,7 @@ func BuildScannerInputs(surface *AttackSurface, req Request, scanner string) []S
 		return inputs
 	}
 	for _, ep := range surface.Endpoints {
-		input := ScannerRequestInput{EndpointID: ep.ID, URL: ep.URL, Method: ep.Method, ContentType: ep.RequestContentType, BodyDigest: ep.BodyDigest, Selected: selected[ep.URL]}
+		input := ScannerRequestInput{InventoryScope: surface.Scope, EndpointID: ep.ID, URL: ep.URL, Method: ep.Method, ContentType: ep.RequestContentType, BodyDigest: ep.BodyDigest, Selected: selected[ep.URL]}
 		for _, c := range ep.ScannerCoverage {
 			if c.Scanner == scanner {
 				input.Reason = c.Reason

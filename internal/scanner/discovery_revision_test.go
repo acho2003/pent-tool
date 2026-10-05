@@ -27,3 +27,26 @@ func TestDiscoveryRequiresFreshExplicitApprovalAndIsolatesCredentials(t *testing
 		t.Fatal(err)
 	}
 }
+
+func TestAcceptedRevisionCannotBeOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	revision := DiscoveryRevision{ParentFingerprint: "parent", PreviewFingerprint: "preview", Plan: AssessmentPlan{Fingerprint: "accepted"}}
+	if err := SaveDiscoveryRevision(dir, revision); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadDiscoveryRevision(dir, "accepted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDiscoveryRevision(dir, revision); err != nil {
+		t.Fatal("duplicate approval should be idempotent", err)
+	}
+	revision.ParentFingerprint = "changed"
+	if err := SaveDiscoveryRevision(dir, revision); err == nil {
+		t.Fatal("accepted revision overwritten")
+	}
+	after, err := LoadDiscoveryRevision(dir, "accepted")
+	if err != nil || after.ParentFingerprint != saved.ParentFingerprint || after.AcceptedAt != saved.AcceptedAt {
+		t.Fatal(after, err)
+	}
+}

@@ -187,6 +187,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),
 			AppScope:   appScopes[target.ID],
 		}
+		if authBound {
+			crawlReq.AuthRefresh = p.Config.AssessmentAuthRefresh[target.ID]
+		}
 		spec := buildKatana(crawlReq, p.Config)
 		surface, valid := LoadAttackSurface(scanDir, inventoryScope, spec.artifact)
 		if valid && authBound && !attackSurfaceObservedWithAuth(surface) {
@@ -236,7 +239,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		MergeKatanaRedirectTargets(surface, spec.artifact, crawlReq.AppScope, crawlReq.TargetAuth != "")
 		if UnifiedWorkflowEnabled() && p.Config.WebBrowser {
+			if authBound && !authVerified[target.ID] {
+				return
+			}
 			browserReq := crawlReq
+			browserReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
 			browserReq.Target = inventoryTarget
 			browserReq.ScanDir = filepath.Join(crawlReq.ScanDir, "browser")
 			browserRun := DiscoverBrowser(ctx, browserReq, p.Config)

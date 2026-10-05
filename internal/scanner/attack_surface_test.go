@@ -158,8 +158,8 @@ func TestCompleteEndpointCoverageRecordsBatchCompletedForBatchAdapters(t *testin
 }
 
 func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
-	if AttackSurfaceClassifierVersion != 4 {
-		t.Fatalf("classifier version = %d, want 4", AttackSurfaceClassifierVersion)
+	if AttackSurfaceClassifierVersion != 5 {
+		t.Fatalf("classifier version = %d, want 5", AttackSurfaceClassifierVersion)
 	}
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "results.jsonl")
@@ -173,12 +173,12 @@ func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
 	// Simulate a snapshot cached by the previous classifier with the same
 	// source checksum: it must not be reused, so the caller re-parses the raw
 	// JSONL (no network) under the new eligibility semantics.
-	surface.ClassifierVersion = 1
+	surface.ClassifierVersion = 4
 	if err := SaveAttackSurface(dir, surface); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := LoadAttackSurface(dir, "app:test", raw); ok {
-		t.Fatal("classifier v1 snapshot was reused")
+		t.Fatal("classifier v4 snapshot was reused")
 	}
 	reparsed, err := ParseKatanaAttackSurface(raw, "app:test", "https://example.test", false)
 	if err != nil || reparsed.ClassifierVersion != AttackSurfaceClassifierVersion {

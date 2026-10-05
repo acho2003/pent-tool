@@ -2,8 +2,11 @@ package scanner
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"io"
@@ -95,5 +98,71 @@ func TestOutputLimitKeepsCompleteJSONRecords(t *testing.T) {
 	var value any
 	if json.Unmarshal(data, &value) != nil || len(data) > 110 {
 		t.Fatalf("invalid bounded report %s", data)
+	}
+}
+
+func TestGatewayBindsHostToApprovedURL(t *testing.T) {
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "forged.test" {
+			t.Error("forged authority forwarded")
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer fixture.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", fixture.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	g, err := NewRecordingGateway(t.Context(), Request{Target: fixture.URL, ScanDir: t.TempDir(), AppScope: &scope}, Config{}, "nuclei")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	request, _ := http.NewRequest("GET", fixture.URL, nil)
+	request.Host = "forged.test"
+	request.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(g.username+":"+g.password)))
+	response := httptest.NewRecorder()
+	g.ServeHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatal(response.Code)
+	}
+}
+
+func TestGatewayAttributesOnlyTheExactBodyVariant(t *testing.T) {
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }))
+	defer fixture.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", fixture.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	first := sha256.Sum256([]byte("first"))
+	second := sha256.Sum256([]byte("second"))
+	req := Request{Target: fixture.URL, ScanDir: t.TempDir(), AppScope: &scope, InputRequests: []ScannerRequestInput{{EndpointID: "first", URL: fixture.URL + "/", Method: "GET", BodyDigest: hex.EncodeToString(first[:]), Selected: true}, {EndpointID: "second", URL: fixture.URL + "/", Method: "GET", BodyDigest: hex.EncodeToString(second[:]), Selected: true}}}
+	gateway, err := NewRecordingGateway(t.Context(), req, Config{}, "zap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, _ := url.Parse(gateway.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+	request, _ := http.NewRequest("GET", fixture.URL, strings.NewReader("first"))
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	gateway.Close()
+	events, err := ReadCoverageEvents(gateway.EventPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Kind == "observed" {
+			found = true
+			if len(event.EndpointIDs) != 1 || event.EndpointIDs[0] != "first" {
+				t.Fatal("body variants conflated", event)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing observed request")
 	}
 }

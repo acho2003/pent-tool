@@ -59,3 +59,25 @@ func TestEveryOneOf684RequestsHasInputDisposition(t *testing.T) {
 		}
 	}
 }
+
+func TestProofDrilldownMatchesCountsAndUsesInventoryScope(t *testing.T) {
+	surface := NewSeedAttackSurface("host:app", "https://app.test/?q=1")
+	req := Request{EndpointTargets: []string{surface.Endpoints[0].URL}, ScanDir: t.TempDir()}
+	req.InputRequests = BuildScannerInputs(surface, req, "zap")
+	path, err := SaveScannerInputs(req, "zap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := BuildCoverageProof([]AttackSurface{*surface}, []Run{{Scanner: "zap", Scope: "app:app", AttemptID: "attempt", InputManifestPath: path, Submissions: []EndpointSubmission{{EndpointID: surface.Endpoints[0].ID, Status: "acknowledged"}}}})
+	if len(proof.Scanners) != 1 || proof.Scanners[0].Selected != 1 || proof.Scanners[0].Acknowledged != 1 {
+		t.Fatal(proof.Scanners)
+	}
+	for metric, count := range map[string]int{"discovered": proof.Discovered, "seeds": proof.Seeds, "approved": proof.Approved, "eligible": proof.Eligible, "zap:selected": proof.Scanners[0].Selected, "zap:acknowledged": proof.Scanners[0].Acknowledged, "zap:unknown": proof.Scanners[0].Unknown} {
+		if len(proof.Items[metric]) != count {
+			t.Fatalf("%s count=%d items=%v", metric, count, proof.Items[metric])
+		}
+	}
+	if proof.Items["zap:acknowledged"][0].Scope != "host:app" {
+		t.Fatal("lost inventory relationship")
+	}
+}

@@ -15,7 +15,10 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"net/url"
 )
 
 // browserRequestAllowed is shared by browser discovery and request recording.
@@ -29,6 +32,20 @@ func browserRequestAllowed(req Request, cfg Config, method, rawURL string) error
 	}
 	if excluded, reason := req.AppScope.Excluded(method, rawURL); excluded {
 		return fmt.Errorf("excluded: %s", reason)
+	}
+	if parsed, err := url.Parse(rawURL); err == nil {
+		query := strings.TrimSpace(parsed.Query().Get("query"))
+		if strings.HasPrefix(query, "{") || strings.HasPrefix(query, "query ") || strings.HasPrefix(query, "query(") || strings.HasPrefix(query, "mutation") || strings.HasPrefix(query, "subscription") {
+			document, err := parser.ParseQuery(&ast.Source{Input: query})
+			if err != nil {
+				return fmt.Errorf("GraphQL query is invalid")
+			}
+			for _, operation := range document.Operations {
+				if operation.Operation != ast.Query {
+					return fmt.Errorf("GraphQL writes require explicit operation approval")
+				}
+			}
+		}
 	}
 	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
 		return fmt.Errorf("state-changing browser request requires explicit operation approval")
@@ -67,6 +84,39 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	var authMu sync.Mutex
+	lastAuthCheck := time.Time{}
+	var authFailure error
+	verifyAuth := func() error {
+		authMu.Lock()
+		defer authMu.Unlock()
+		if authFailure != nil {
+			return authFailure
+		}
+		if req.TargetAuth == "" {
+			return nil
+		}
+		if req.AuthRefresh == nil {
+			authFailure = fmt.Errorf("browser authentication requires a runtime verifier")
+			return authFailure
+		}
+		if time.Since(lastAuthCheck) < 30*time.Second {
+			return nil
+		}
+		headers, err := req.AuthRefresh(ctx, strings.Split(req.TargetAuth, "\n"))
+		if err != nil {
+			authFailure = fmt.Errorf("browser authentication checkpoint failed")
+			return authFailure
+		}
+		req.TargetAuth = strings.Join(headers, "\n")
+		lastAuthCheck = time.Now()
+		return nil
+	}
+	if err := verifyAuth(); err != nil {
+		markAuthExpired(&run)
+		run.Reason = err.Error()
+		return
+	}
 	profileDir, err := os.MkdirTemp(req.ScanDir, "browser-profile-")
 	if err != nil {
 		run.Status, run.Reason = "failed", err.Error()
@@ -87,6 +137,8 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	defer browser.Close()
 	var mu sync.Mutex
+	var workers sync.WaitGroup
+	closing := false
 	encoder := json.NewEncoder(f)
 	observed := map[string]bool{}
 	count := 0
@@ -106,7 +158,21 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	bound, _ := assessment.ParseApprovedOrigin("", req.Target)
 	err = router.Add("*", "", func(h *rod.Hijack) {
+		mu.Lock()
+		if closing {
+			mu.Unlock()
+			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+			return
+		}
+		workers.Add(1)
+		mu.Unlock()
+		defer workers.Done()
 		rawURL, method := h.Request.URL().String(), h.Request.Method()
+		if err := verifyAuth(); err != nil {
+			cancel()
+			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+			return
+		}
 		if err := browserRequestAllowed(req, cfg, method, rawURL); err != nil {
 			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 			return
@@ -129,8 +195,17 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		origin, _ := assessment.ParseApprovedOrigin("", rawURL)
 		sameOrigin := origin.Scheme == bound.Scheme && origin.Host == bound.Host && origin.Port == bound.Port
+		authMu.Lock()
+		boundHeaders := req.TargetAuth
+		authMu.Unlock()
+		for _, header := range strings.Split(boundHeaders, "\n") {
+			name, _, ok := strings.Cut(header, ":")
+			if ok {
+				h.Request.Req().Header.Del(strings.TrimSpace(name))
+			}
+		}
 		if sameOrigin {
-			for _, header := range strings.Split(req.TargetAuth, "\n") {
+			for _, header := range strings.Split(boundHeaders, "\n") {
 				name, value, ok := strings.Cut(header, ":")
 				if ok {
 					h.Request.Req().Header.Set(strings.TrimSpace(name), strings.TrimSpace(value))
@@ -165,7 +240,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		h.Response.SetBody(body)
 		// Bodies/credentials are not copied into public discovery artifacts.
-		row := map[string]any{"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "request": map[string]any{"endpoint": rawURL, "method": method, "source": "browser", "headers": map[string]string{"content-type": h.Request.Header("Content-Type")}}, "response": map[string]any{"status_code": response.StatusCode, "headers": map[string]string{"content-type": response.Header.Get("Content-Type")}}}
+		row := map[string]any{"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "request": map[string]any{"endpoint": rawURL, "method": method, "source": "browser", "headers": map[string]string{"content-type": h.Request.Req().Header.Get("Content-Type")}}, "response": map[string]any{"status_code": response.StatusCode, "headers": map[string]string{"content-type": response.Header.Get("Content-Type")}}}
 		record(row)
 		mu.Lock()
 		observed[rawURL] = true
@@ -176,7 +251,19 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		return
 	}
 	go router.Run()
-	defer router.Stop()
+	var stopOnce sync.Once
+	stopWorkers := func() {
+		stopOnce.Do(func() {
+			mu.Lock()
+			closing = true
+			mu.Unlock()
+			_ = router.Stop()
+			cancel()
+			workers.Wait()
+			client.CloseIdleConnections()
+		})
+	}
+	defer stopWorkers()
 	type entry struct {
 		url   string
 		depth int
@@ -200,6 +287,9 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		if err == nil {
 			err = page.WaitLoad()
+			if err == nil {
+				page.WaitRequestIdle(300*time.Millisecond, nil, nil, nil)()
+			}
 		}
 		if err == nil {
 			result, e := page.Eval(`() => JSON.stringify({links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),forms:Array.from(document.forms).map(f=>({action:f.action,method:f.method,fields:Array.from(f.elements).filter(e=>e.name).map(e=>({name:e.name}))}))})`)
@@ -233,12 +323,22 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		pageCancel()
 	}
+	timedOut := ctx.Err() != nil
+	stopWorkers()
 	mu.Lock()
 	defer mu.Unlock()
 	run.Status = "completed"
-	run.Authenticated = req.TargetAuth != ""
+	authMu.Lock()
+	run.Authenticated = req.TargetAuth != "" && authFailure == nil
+	if authFailure != nil {
+		markAuthExpired(&run)
+		run.Reason = authFailure.Error()
+		authMu.Unlock()
+		return
+	}
+	authMu.Unlock()
 	run.Completeness = "complete"
-	if ctx.Err() != nil || partial {
+	if timedOut || partial {
 		run.Outcome, run.Completeness, run.Reason = "PARTIAL", "partial", "browser discovery reached a request, response-size, navigation, depth or time limit"
 	}
 	if count == 0 {

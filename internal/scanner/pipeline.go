@@ -753,6 +753,14 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		}
 		return finalizeRun(run)
 	}
+	if name == "nuclei" && UnifiedWorkflowEnabled() && req.TypedAssessment && cfg.NucleiTemplatesDir != "" {
+		path, err := saveNucleiTemplateInventory(ctx, req, cfg)
+		if err != nil {
+			run.Status, run.Reason = "failed", err.Error()
+			return finalizeRun(run)
+		}
+		run.TemplateInventoryPath = path
+	}
 	if emit != nil {
 		emit(Event{Type: "scanner_started", Scanner: name, Run: run})
 	}
@@ -813,7 +821,7 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	}
 	authDone := make(chan struct{})
 	authResult := make(chan error, 1)
-	monitorAuth := req.TargetAuth != "" && req.AuthRefresh != nil && (name == "wapiti" || name == "dalfox" || name == "nuclei")
+	monitorAuth := req.TargetAuth != "" && req.AuthRefresh != nil && (name == "wapiti" || name == "dalfox" || name == "nuclei" || name == "katana")
 	if monitorAuth {
 		go monitorCommandAuth(cmdCtx, req, cancel, authDone, authResult)
 	}
@@ -917,9 +925,15 @@ func readCapped(path string, max int64) string {
 	return string(data)
 }
 
+// BuildRevision is populated by release builds when Git metadata is unavailable.
+var BuildRevision string
+
 func finalizeRun(run Run) Run {
 	if run.ApplicationRevision == "" {
 		run.ApplicationRevision = "unknown"
+		if BuildRevision != "" {
+			run.ApplicationRevision = BuildRevision
+		}
 		if info, ok := debug.ReadBuildInfo(); ok {
 			dirty := false
 			for _, setting := range info.Settings {
@@ -935,8 +949,28 @@ func finalizeRun(run Run) Run {
 			}
 		}
 	}
+	if run.ExecutionOutcome == "" {
+		switch run.Status {
+		case "completed":
+			run.ExecutionOutcome = "SUCCESS"
+		case "failed":
+			run.ExecutionOutcome = "FAILED"
+		case "cancelled":
+			run.ExecutionOutcome = "CANCELLED"
+		case "not_applicable", "skipped":
+			run.ExecutionOutcome = "NOT_RUN"
+		}
+	}
+	if run.ParserOutcome == "" && run.Terminal() {
+		run.ParserOutcome = "NOT_TRACKED"
+	}
+	if run.Completeness == "" && run.Terminal() {
+		run.Completeness = "unknown"
+	}
 	if run.Outcome == "" {
 		switch {
+		case run.Scanner == "testssl" && strings.HasPrefix(run.Reason, "no reachable TLS service"):
+			run.Outcome = "TARGET_UNREACHABLE"
 		case run.AuthState == "failed" || run.AuthState == "expired":
 			run.Outcome = "AUTH_FAILED"
 		case strings.Contains(run.Reason, "timeout") || strings.Contains(run.Reason, "time budget"):
@@ -958,7 +992,7 @@ func finalizeRun(run Run) Run {
 // a scanner run into one stable digest.
 func CalculateChecksum(run Run) string {
 	h := sha256.New()
-	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath, run.TranscriptPath, run.InputManifestPath, run.CoverageEventsPath} {
+	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath, run.TranscriptPath, run.InputManifestPath, run.CoverageEventsPath, run.TemplateInventoryPath} {
 		if path == "" {
 			continue
 		}

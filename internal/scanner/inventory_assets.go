@@ -31,12 +31,13 @@ type InventoryService struct {
 	EvidenceRef string `json:"evidence_reference,omitempty"`
 }
 type InventoryDefinition struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind"`
-	URL         string `json:"url,omitempty"`
-	State       string `json:"state"`
-	EvidenceRef string `json:"evidence_reference,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	CandidateOrigins []string `json:"candidate_origins,omitempty"`
+	ID               string   `json:"id"`
+	Kind             string   `json:"kind"`
+	URL              string   `json:"url,omitempty"`
+	State            string   `json:"state"`
+	EvidenceRef      string   `json:"evidence_reference,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
 }
 
 func inventoryID(parts ...string) string {

@@ -53,3 +53,35 @@ func TestDiscoverAPIsValidatesSchemasAndDoesNotFollowExternalRedirect(t *testing
 		t.Fatalf("hits=%d endpoints=%+v definitions=%+v", outsideHits, endpoints, surface.Definitions)
 	}
 }
+
+func TestHistoricalMaterializedGraphQLWithoutReplayStaysUnresolved(t *testing.T) {
+	endpoints, err := ParseAPIDefinition([]byte(`type Query { ping: String }`), "https://app.test/graphql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints[0].RequestURL = ""
+	surface := NewSeedAttackSurface("app:test", "https://app.test/")
+	MergeOpenAPIEndpointsScoped(surface, "https://app.test/", endpoints, nil)
+	for _, ep := range surface.Endpoints {
+		if ep.Path == "/graphql" && ep.State != EndpointStateUnmaterialized {
+			t.Fatal("historical request details were invented", ep)
+		}
+	}
+}
+
+func TestSchemaExternalServersStayApprovalCandidates(t *testing.T) {
+	origin, _ := assessment.ParseApprovedOrigin("app", "https://app.test/")
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	surface := NewSeedAttackSurface("app:app", "https://app.test/")
+	endpoints := []APIEndpoint{{DefinitionID: "schema", Source: "openapi", Method: "GET", Path: "/ping", Origin: "https://app.test", Eligible: true, Resolved: true, SpecServers: []string{"https://external.test/api/"}}}
+	MergeOpenAPIEndpointsScoped(surface, "https://app.test/", endpoints, &scope)
+	preview := BuildDiscoveryPreview(AssessmentPlan{Fingerprint: "plan", Config: assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.test/"}}}}, nil, []AttackSurface{*surface})
+	if len(preview.Candidates) != 1 || preview.Candidates[0].Value != "https://external.test/api/" {
+		t.Fatal(preview)
+	}
+	for _, ep := range surface.Endpoints {
+		if ep.URL == "https://external.test/api/ping" {
+			t.Fatal("schema server expanded live inventory")
+		}
+	}
+}

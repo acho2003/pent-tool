@@ -93,6 +93,8 @@ services:
       - api.addrs.addr.regex=true
       - -config
       - api.key=${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
+      - -config
+      - api.filexfer=true
     # No shared volume: the engine drives ZAP entirely over its HTTP API and
     # pulls the JSON report back through it, so ZAP never reads or writes the
     # scan directory.

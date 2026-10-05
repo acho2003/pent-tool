@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -26,7 +27,7 @@ const (
 	// contacting the target) instead of being reused. v2: endpoint State,
 	// exclusions and placeholder refusal. v3: retain scoped OpenAPI operations
 	// that still need explicit inputs.
-	AttackSurfaceClassifierVersion = 4
+	AttackSurfaceClassifierVersion = 5
 )
 
 // Endpoint states. An empty State (seeds, OpenAPI merges, the legacy parse and
@@ -214,6 +215,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		}
 		if observedWithAuth {
 			ep.AuthContextID = inventoryID(scope, "target-bound")
+			ep.ID = inventoryID(ep.ID, ep.AuthContextID)
 		}
 		ep.Provenance = []EndpointProvenance{{Tool: "katana", Source: strings.TrimSpace(source), Artifact: artifactName, ObservedAt: timestamp, Authenticated: observedWithAuth}}
 		if appScope != nil {
@@ -394,19 +396,13 @@ func canonicalizeAttackSurfaceURL(raw string) (observed, canonical, route, endpo
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	observedQuery := url.Values{}
 	canonicalParts := make([]string, 0, len(keys))
 	for _, key := range keys {
-		vals := values[key]
-		if len(vals) == 0 {
-			vals = []string{""}
-		}
-		for _, value := range vals {
-			observedQuery.Add(key, value)
-		}
+
 		canonicalParts = append(canonicalParts, url.QueryEscape(key)+"={value}")
 	}
-	u.RawQuery = observedQuery.Encode()
+	// Preserve the encoded query and its original order for replay identity.
+	// The parsed values are only used for the separate grouping key.
 	observed = u.String()
 	u.RawQuery = strings.Join(canonicalParts, "&")
 	canonical = u.String()
@@ -476,6 +472,9 @@ func bodyParameters(body, contentType string) []EndpointParameter {
 func mergeSurfaceEndpoint(surface *AttackSurface, byID map[string]int, incoming AttackSurfaceEndpoint) {
 	if index, exists := byID[incoming.ID]; exists {
 		ep := &surface.Endpoints[index]
+		if incoming.ObservationKind == "observed" {
+			ep.ObservationKind = "observed"
+		}
 		ep.Sources = mergeStrings(ep.Sources, incoming.Sources)
 		ep.Parameters = mergeParameters(append(ep.Parameters, incoming.Parameters...))
 		ep.HasParameters = len(ep.Parameters) > 0
@@ -765,6 +764,9 @@ func endpointEligibleInScope(ep AttackSurfaceEndpoint, scannerName string, scope
 	if ep.Kind == "static" {
 		return false, "static resource is discovery-only"
 	}
+	if ep.Method != "GET" && (scannerName == "nuclei" || scannerName == "wapiti" || scannerName == "dalfox") {
+		return false, "URL-only adapter does not preserve this HTTP method; route the request to ZAP"
+	}
 	switch scannerName {
 	case "nuclei":
 		return true, ""
@@ -974,7 +976,44 @@ func MergeOpenAPIEndpointsScoped(surface *AttackSurface, applicationURL string, 
 	for i := range surface.Endpoints {
 		byID[surface.Endpoints[i].ID] = i
 	}
+	definitionIndex := map[string]int{}
+	for i, definition := range surface.Definitions {
+		definitionIndex[definition.ID] = i
+	}
 	for _, endpoint := range endpoints {
+		if endpoint.DefinitionID == "" {
+			continue
+		}
+		index, known := definitionIndex[endpoint.DefinitionID]
+		if !known {
+			index = len(surface.Definitions)
+			definitionIndex[endpoint.DefinitionID] = index
+			surface.Definitions = append(surface.Definitions, InventoryDefinition{ID: endpoint.DefinitionID, Kind: endpoint.Source, State: "supplied", EvidenceRef: endpoint.DefinitionID})
+		}
+		if scope == nil {
+			continue
+		}
+		for _, server := range endpoint.SpecServers {
+			u, err := url.Parse(server)
+			if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Host == "" || strings.ContainsAny(u.Host, "{}") || (u.Scheme != "http" && u.Scheme != "https") {
+				continue
+			}
+			if allowed, _ := scope.Allows(server); allowed {
+				continue
+			}
+			candidates := surface.Definitions[index].CandidateOrigins
+			if !slices.Contains(candidates, server) {
+				surface.Definitions[index].CandidateOrigins = append(candidates, server)
+			}
+		}
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.Resolved && endpoint.Eligible && endpoint.RequestURL == "" {
+			if _, err := apiEndpointURL(applicationURL, endpoint); err != nil {
+				endpoint.Resolved, endpoint.Eligible = false, false
+				endpoint.Reason = err.Error()
+			}
+		}
 		resolved, err := openAPIInventoryURL(applicationURL, endpoint)
 		if err != nil {
 			continue
@@ -984,7 +1023,8 @@ func MergeOpenAPIEndpointsScoped(surface *AttackSurface, applicationURL string, 
 		if !ok {
 			continue
 		}
-		ep.Provenance = []EndpointProvenance{{Tool: "openapi", Source: endpoint.Source, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}}
+		ep.ObservationKind = "schema"
+		ep.Provenance = []EndpointProvenance{{Tool: endpoint.Source, Source: endpoint.Source, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}}
 		allowed, reason := true, ""
 		if scope != nil {
 			allowed, reason = scope.Allows(ep.URL)

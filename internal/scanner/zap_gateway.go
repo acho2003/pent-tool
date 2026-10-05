@@ -62,7 +62,7 @@ func configureZAPGateway(cfg Config, call zapCallFunc, gateway *RecordingGateway
 		{"/JSON/network/action/setHttpProxyAuthEnabled/", url.Values{"enabled": {"true"}}},
 		{"/JSON/network/action/setHttpProxyEnabled/", url.Values{"enabled": {"true"}}},
 	} {
-		if _, err := call(step.path, step.params); err != nil {
+		if err := zapPost(cfg, step.path, step.params); err != nil {
 			if restoreErr := restore(); restoreErr != nil {
 				quarantineZAPService(cfg.ZAPURL, "recording proxy restore failed")
 			}

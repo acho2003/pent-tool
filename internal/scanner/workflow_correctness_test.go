@@ -85,3 +85,15 @@ func TestCredentialBindingDoesNotAuthorizeAlias(t *testing.T) {
 		t.Fatal(req.EndpointTargets)
 	}
 }
+
+func TestInvalidNativeRecordsCannotBeCleanResults(t *testing.T) {
+	for _, tc := range []struct{ scanner, content string }{{"zap", `{"alerts":null}`}, {"wapiti", `{"vulnerabilities":null}`}, {"nuclei", `{}`}} {
+		path := filepath.Join(t.TempDir(), "results")
+		os.WriteFile(path, []byte(tc.content), 0600)
+		run := Run{Scanner: tc.scanner, Status: "completed", ArtifactPath: path}
+		validateWebResult(&run)
+		if run.Outcome != "PARSER_FAILED" || run.ExecutionOutcome != "SUCCESS" {
+			t.Fatal(run)
+		}
+	}
+}

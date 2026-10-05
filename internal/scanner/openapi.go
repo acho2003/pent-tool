@@ -15,6 +15,7 @@ import (
 const MaxOpenAPISpecBytes = 5 << 20
 
 type APIEndpoint struct {
+	DefinitionSDL string `json:"-"`
 	// RequestURL is a runtime-only concrete candidate from the already scoped
 	// inventory. OpenAPI plans use Path/Origin and do not serialize sample URLs.
 	RequestURL              string         `json:"-"`
@@ -52,6 +53,16 @@ type APIEndpointResult struct {
 }
 
 func apiEndpointURL(applicationURL string, endpoint APIEndpoint) (string, error) {
+	if endpoint.Source == "graphql" && endpoint.RequestURL == "" {
+		return "", fmt.Errorf("materialized GraphQL query is unavailable; reload its definition and explicit inputs")
+	}
+	if endpoint.RequestURL == "" {
+		for _, parameter := range endpoint.Parameters {
+			if parameter.Required {
+				return "", fmt.Errorf("materialized required operation inputs are unavailable")
+			}
+		}
+	}
 	if !endpoint.Eligible || !endpoint.Resolved || (endpoint.Method != "GET" && endpoint.Method != "HEAD") {
 		return "", fmt.Errorf("operation is not eligible for the safe profile")
 	}
@@ -260,6 +271,8 @@ func MaterializeOpenAPIOperations(endpoints []APIEndpoint, definitionID, applica
 		}
 		materialized := *endpoint
 		materialized.Path = concretePath
+		// Required values have just been validated; join only the concrete path.
+		materialized.Parameters = nil
 		materialized.Resolved, materialized.Eligible, materialized.Reason = true, true, ""
 		requestURL, err := apiEndpointURL(applicationURL, materialized)
 		if err != nil {

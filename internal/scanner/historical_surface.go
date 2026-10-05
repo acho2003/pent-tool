@@ -26,6 +26,10 @@ func MergeHistoricalCandidates(surface *AttackSurface, candidates []HistoricalCa
 		if !ok {
 			continue
 		}
+		ep.ObservationKind = "candidate"
+		if candidate.Status > 0 {
+			ep.ObservationKind = "observed"
+		}
 		ep.State, ep.StateReason = candidate.State, candidate.Reason
 		ep.Provenance = []EndpointProvenance{{Tool: candidate.Provider, Source: "archive", ObservedAt: now}}
 		if i, exists := byID[ep.ID]; exists && endpointStateDispatchable(surface.Endpoints[i].State) {

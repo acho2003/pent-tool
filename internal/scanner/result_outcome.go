@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 
 func scannerUsesWebAuth(name string) bool {
 	switch name {
-	case "zap", "nuclei", "wapiti", "dalfox", "apiwrites":
+	case "zap", "nuclei", "wapiti", "dalfox", "apiwrites", "katana":
 		return true
 	}
 	return false
@@ -50,6 +51,36 @@ func validateWebResult(run *Run) {
 					err = fmt.Errorf("required %s field missing", key)
 				}
 			}
+		}
+	}
+	if err == nil && run.Scanner == "nuclei" {
+		for _, line := range bytes.Split(data, []byte("\n")) {
+			if len(bytes.TrimSpace(line)) == 0 {
+				continue
+			}
+			var record map[string]any
+			if json.Unmarshal(line, &record) != nil || strings.TrimSpace(str(record["template-id"])) == "" {
+				err = fmt.Errorf("invalid Nuclei finding record")
+				break
+			}
+		}
+	}
+	if err == nil && (run.Scanner == "zap" || run.Scanner == "wapiti") {
+		var root map[string]json.RawMessage
+		_ = json.Unmarshal(data, &root)
+		key := "alerts"
+		if run.Scanner == "wapiti" {
+			key = "vulnerabilities"
+		} else if _, exists := root[key]; !exists {
+			key = "site"
+		}
+		value := bytes.TrimSpace(root[key])
+		expected := byte('[')
+		if run.Scanner == "wapiti" {
+			expected = '{'
+		}
+		if len(value) == 0 || value[0] != expected {
+			err = fmt.Errorf("invalid %s records", key)
 		}
 	}
 	var findings []Finding

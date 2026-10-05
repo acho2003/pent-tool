@@ -34,7 +34,7 @@ func ParseAPIDefinition(data []byte, origin string) ([]APIEndpoint, error) {
 		return nil, fmt.Errorf("invalid OpenAPI or GraphQL schema")
 	}
 	endpoint := origin
-	if u, e := url.Parse(origin); e == nil && u.Path == "/" {
+	if u, e := url.Parse(origin); e == nil && (u.Path == "/" || u.Path == "") {
 		u.Path = "/graphql"
 		endpoint = u.String()
 	}
@@ -47,7 +47,7 @@ func ParseAPIDefinition(data []byte, origin string) ([]APIEndpoint, error) {
 			if strings.HasPrefix(f.Name, "__") {
 				continue
 			}
-			operation := APIEndpoint{Method: "GET", Origin: origin, OperationID: "query " + f.Name, Source: "graphql", Resolved: true, Eligible: root == schema.Query}
+			operation := APIEndpoint{DefinitionSDL: string(data), DefinitionID: inventoryID(string(data)), Method: "GET", Origin: origin, OperationID: "query " + f.Name, Source: "graphql", Resolved: true, Eligible: root == schema.Query}
 			if u, e := url.Parse(endpoint); e == nil {
 				operation.Path = u.Path
 			}
@@ -186,6 +186,10 @@ func DiscoverAPIs(ctx context.Context, req Request, cfg Config, surface *AttackS
 }
 
 func graphQLIntrospectionEndpoints(data []byte, endpoint string) ([]APIEndpoint, error) {
+	type outputType struct {
+		Kind   string      `json:"kind"`
+		OfType *outputType `json:"ofType"`
+	}
 	type field struct {
 		Name string `json:"name"`
 		Args []struct {
@@ -194,12 +198,7 @@ func graphQLIntrospectionEndpoints(data []byte, endpoint string) ([]APIEndpoint,
 				Kind string `json:"kind"`
 			} `json:"type"`
 		} `json:"args"`
-		Type struct {
-			Kind   string `json:"kind"`
-			OfType *struct {
-				Kind string `json:"kind"`
-			} `json:"ofType"`
-		} `json:"type"`
+		Type outputType `json:"type"`
 	}
 	var result struct {
 		Data struct {
@@ -213,7 +212,7 @@ func graphQLIntrospectionEndpoints(data []byte, endpoint string) ([]APIEndpoint,
 			} `json:"__schema"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(data, &result); err != nil || result.Data.Schema == nil {
+	if err := json.Unmarshal(data, &result); err != nil || result.Data.Schema == nil || result.Data.Schema.Query == nil || len(result.Data.Schema.Query.Fields) == 0 {
 		return nil, fmt.Errorf("GraphQL schema unavailable")
 	}
 	var out []APIEndpoint
@@ -239,17 +238,24 @@ func graphQLIntrospectionEndpoints(data []byte, endpoint string) ([]APIEndpoint,
 			} else {
 				selection := ""
 				kind := f.Type.Kind
-				if f.Type.OfType != nil {
-					kind = f.Type.OfType.Kind
+				inner := &f.Type
+				for depth := 0; (inner.Kind == "LIST" || inner.Kind == "NON_NULL") && inner.OfType != nil && depth < 5; depth++ {
+					inner = inner.OfType
 				}
-				if kind == "OBJECT" || kind == "INTERFACE" || kind == "UNION" || kind == "LIST" {
+				kind = inner.Kind
+				if kind == "OBJECT" || kind == "INTERFACE" || kind == "UNION" {
 					selection = " { __typename }"
 				}
+				if kind == "LIST" || kind == "NON_NULL" || kind == "" {
+					op.Resolved, op.Eligible = false, false
+					op.Reason = "GraphQL output type exceeds the captured schema depth"
+				}
+
 				q := u.Query()
 				q.Set("query", "query { "+f.Name+selection+" }")
 				u.RawQuery = q.Encode()
 				op.RequestURL = u.String()
-				if !op.Resolved {
+				if !op.Resolved && op.Reason == "" {
 					op.Reason = "GraphQL operation requires supplied arguments"
 				}
 			}

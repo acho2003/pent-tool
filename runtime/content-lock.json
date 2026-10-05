@@ -121,5 +121,15 @@
     "testssl.sh": "version constant in pinned installed script",
     "waybackurls": "Go build metadata in the installed binary",
     "sslyze": "installed Python distribution metadata"
+  },
+  "services": {
+    "zap": {
+      "image": "ghcr.io/zaproxy/zaproxy@sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2",
+      "addons": {
+        "network": "0.28.0",
+        "openapi": "56.0.0",
+        "graphql": "0.33.0"
+      }
+    }
   }
 }

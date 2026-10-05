@@ -2,10 +2,12 @@ package scanner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -47,6 +49,10 @@ type RecordingGateway struct {
 	cfg                Config
 	scanner            string
 	server             *http.Server
+	cancel             context.CancelFunc
+	closing            bool
+	connections        map[net.Conn]bool
+	workers            sync.WaitGroup
 	listener           net.Listener
 	client             *http.Client
 	key                *ecdsa.PrivateKey
@@ -71,7 +77,8 @@ func NewRecordingGateway(ctx context.Context, req Request, cfg Config, scanner s
 	if err := os.MkdirAll(req.ScanDir, 0700); err != nil {
 		return nil, err
 	}
-	g := &RecordingGateway{req: req, cfg: cfg, scanner: scanner, certificates: map[string]*tls.Certificate{}, phase: "active_test"}
+	ctx, cancel := context.WithCancel(ctx)
+	g := &RecordingGateway{cancel: cancel, connections: map[net.Conn]bool{}, req: req, cfg: cfg, scanner: scanner, certificates: map[string]*tls.Certificate{}, phase: "active_test"}
 	token := make([]byte, 24)
 	if _, err := rand.Read(token); err != nil {
 		return nil, err
@@ -132,9 +139,18 @@ func NewRecordingGateway(ctx context.Context, req Request, cfg Config, scanner s
 	return g, nil
 }
 func (g *RecordingGateway) Close() error {
+	g.mu.Lock()
+	g.closing = true
+	g.cancel()
+	for conn := range g.connections {
+		_ = conn.Close()
+	}
+	g.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = g.server.Shutdown(ctx)
+	g.workers.Wait()
+	g.client.CloseIdleConnections()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.file != nil {
@@ -166,6 +182,15 @@ func (g *RecordingGateway) authorization(r *http.Request) bool {
 	return r.Header.Get("Proxy-Authorization") == expected
 }
 func (g *RecordingGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	if g.closing {
+		g.mu.Unlock()
+		http.Error(w, "attempt closed", 503)
+		return
+	}
+	g.workers.Add(1)
+	g.mu.Unlock()
+	defer g.workers.Done()
 	if !g.authorization(r) {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="Xalgorix attempt"`)
 		http.Error(w, "proxy authorization required", 407)
@@ -209,7 +234,15 @@ func (g *RecordingGateway) connect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	g.mu.Lock()
+	if g.closing {
+		g.mu.Unlock()
+		conn.Close()
+		return
+	}
+	g.connections[conn] = true
+	g.mu.Unlock()
+	defer func() { conn.Close(); g.mu.Lock(); delete(g.connections, conn); g.mu.Unlock() }()
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
 	io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
 	secure := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*cert}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
@@ -275,17 +308,40 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "assessment budget exhausted", 429)
 		return
 	}
+	var body []byte
+	if r.Body != nil && r.Body != http.NoBody {
+		var err error
+		body, err = io.ReadAll(io.LimitReader(r.Body, (2<<20)+1))
+		_ = r.Body.Close()
+		if err != nil || len(body) > 2<<20 {
+			event.Kind, event.Reason = "blocked", "request body exceeds recording budget"
+			g.record(event)
+			http.Error(w, "request body unavailable", 413)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	bodySum := sha256.Sum256(body)
+	requestOrigin, _ := assessment.ParseApprovedOrigin("", raw)
 	for _, input := range g.req.InputRequests {
 		if !input.Selected || input.Method != r.Method {
 			continue
 		}
 		candidate, e := url.Parse(input.URL)
-		if e == nil && candidate.Scheme == r.URL.Scheme && candidate.Host == r.URL.Host && candidate.EscapedPath() == r.URL.EscapedPath() && candidate.RawQuery == r.URL.RawQuery {
+		candidateOrigin, e2 := assessment.ParseApprovedOrigin("", input.URL)
+		if (len(body) > 0 && input.BodyDigest == "") || (input.BodyDigest != "" && input.BodyDigest != hex.EncodeToString(bodySum[:])) {
+			continue
+		}
+		if input.ContentType != "" && !strings.EqualFold(strings.TrimSpace(input.ContentType), strings.TrimSpace(r.Header.Get("Content-Type"))) {
+			continue
+		}
+		if e == nil && e2 == nil && candidateOrigin.Scheme == requestOrigin.Scheme && candidateOrigin.Host == requestOrigin.Host && candidateOrigin.Port == requestOrigin.Port && candidate.EscapedPath() == r.URL.EscapedPath() && candidate.RawQuery == r.URL.RawQuery && candidate.ForceQuery == r.URL.ForceQuery {
 			event.EndpointIDs = append(event.EndpointIDs, input.EndpointID)
 		}
 	}
 	request := r.Clone(r.Context())
 	request.RequestURI = ""
+	request.Host = request.URL.Host
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Proxy-Connection")
 	bound, _ := assessment.ParseApprovedOrigin("", g.req.Target)

@@ -74,6 +74,13 @@ func runWapitiBatches(ctx context.Context, req Request, cfg Config, emit EmitFun
 			}
 		}
 		if child.AuthState == "expired" {
+			parent.AuthState = "expired"
+			for _, raw := range targets[end:] {
+				parent.Submissions = append(parent.Submissions, wapitiSubmission(req, raw, "skipped", "authentication expired before this batch"))
+			}
+			if end < len(targets) {
+				failures++
+			}
 			break
 		}
 	}

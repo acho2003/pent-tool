@@ -172,6 +172,8 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 					}
 					if len(endpoints) == 0 || endpoints[0].Source != "graphql" {
 						endpoints = scanner.MaterializeOpenAPIOperations(endpoints, binding.DefinitionID, target.Value, normalized.APIOperationInputs)
+					} else {
+						endpoints = scanner.MaterializeGraphQLOperations(definition, endpoints, binding.DefinitionID, normalized.APIOperationInputs)
 					}
 					for i := range endpoints {
 						endpoints[i].TargetID = binding.TargetID

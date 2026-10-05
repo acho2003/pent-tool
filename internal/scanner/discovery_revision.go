@@ -92,6 +92,11 @@ func BuildDiscoveryPreview(plan AssessmentPlan, runs []Run, surfaces []AttackSur
 				}
 			}
 		}
+		for _, definition := range s.Definitions {
+			for _, origin := range definition.CandidateOrigins {
+				add("origin", origin, "schema", definition.EvidenceRef)
+			}
+		}
 		for _, service := range s.Services {
 			if service.Origin != "" {
 				add("origin", service.Origin, "service", service.EvidenceRef)
@@ -166,7 +171,45 @@ func SaveDiscoveryRevision(dir string, revision DiscoveryRevision) error {
 	if err != nil {
 		return err
 	}
-	return storage.WriteAtomic(filepath.Join(dir, "revisions", inventoryID(revision.Plan.Fingerprint)+".json"), b)
+	path := filepath.Join(dir, "revisions", inventoryID(revision.Plan.Fingerprint)+".json")
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".revision-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	if _, err = temporary.Write(b); err == nil {
+		err = temporary.Sync()
+	}
+	closeErr := temporary.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	// An atomic exclusive link publishes a fully written revision. Never rename
+	// over an already accepted plan, including concurrent duplicate approvals.
+	if err = os.Link(temporary.Name(), path); err != nil {
+		if !os.IsExist(err) {
+			return err
+		}
+		previous, loadErr := LoadDiscoveryRevision(dir, revision.Plan.Fingerprint)
+		if loadErr != nil {
+			return loadErr
+		}
+		revision.AcceptedAt = previous.AcceptedAt
+		expected, _ := json.Marshal(revision)
+		actual, _ := json.Marshal(previous)
+		if string(expected) != string(actual) {
+			return fmt.Errorf("accepted revision is immutable")
+		}
+		return nil
+	}
+	if parent, err := os.Open(filepath.Dir(path)); err == nil {
+		defer parent.Close()
+		return parent.Sync()
+	}
+	return nil
 }
 
 func scopeForInventoryJob(job PlanJob) string { return "app:" + job.TargetID }
