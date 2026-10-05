@@ -190,11 +190,25 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	}
 
 	name := "xalgorix-" + filepath.Base(req.ScanDir)
+	portSpec := fmt.Sprintf(`<port_list id="%s"/>`, portListID)
+	if len(req.NetworkPorts) > 0 {
+		var ports []string
+		for _, port := range req.NetworkPorts {
+			if port > 0 && port <= 65535 {
+				ports = append(ports, strconv.Itoa(port))
+			}
+		}
+		if len(ports) == 0 {
+			return fail(fmt.Errorf("approved port policy is empty"))
+		}
+		portSpec = `<port_range>T:` + strings.Join(ports, ",") + `</port_range>`
+		run.NetworkPorts = append([]int(nil), req.NetworkPorts...)
+	}
 	sshCredential := ""
 	if req.GVMSSHCredentialID != "" {
 		sshCredential = fmt.Sprintf(`<ssh_credential id="%s"><port>%d</port></ssh_credential>`, req.GVMSSHCredentialID, req.GVMSSHPort)
 	}
-	targetData, err := call("create-target", fmt.Sprintf(`<create_target><name>%s</name><hosts>%s</hosts>%s<port_list id="%s"/></create_target>`, xmlEscape(name), xmlEscape(host), sshCredential, portListID), 2*time.Minute)
+	targetData, err := call("create-target", fmt.Sprintf(`<create_target><name>%s</name><hosts>%s</hosts>%s%s</create_target>`, xmlEscape(name), xmlEscape(host), sshCredential, portSpec), 2*time.Minute)
 	if err != nil {
 		return fail(err)
 	}

@@ -50,6 +50,7 @@ type Artifact struct {
 }
 
 type Request struct {
+	NetworkPorts    []int                 `json:"-"`
 	AttemptID       string                `json:"-"`
 	PlanFingerprint string                `json:"-"`
 	InputRequests   []ScannerRequestInput `json:"-"`
@@ -152,6 +153,8 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	BatchRuns            []Run                 `json:"batch_runs,omitempty"`
+	NetworkPorts         []int                 `json:"network_ports,omitempty"`
 	InputManifestPath    string                `json:"input_manifest_path,omitempty"`
 	NativeScanIDs        []string              `json:"native_scan_ids,omitempty"`
 	Submissions          []EndpointSubmission  `json:"submissions,omitempty"`

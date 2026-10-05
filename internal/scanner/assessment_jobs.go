@@ -424,6 +424,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		if job.Scanner == "openvas" {
+			if UnifiedWorkflowEnabled() && surface != nil {
+				for _, service := range surface.Services {
+					if service.Host == hostFromTarget(job.Target) && service.Protocol == "tcp" && service.State == "open" {
+						req.NetworkPorts = append(req.NetworkPorts, service.Port)
+					}
+				}
+			}
 			if credential, ok := p.Config.AssessmentGVMSSH[job.TargetID]; ok {
 				req.GVMSSHCredentialID, req.GVMSSHPort = credential.ID, credential.Port
 			} else if p.Config.AssessmentSSHRequested[job.TargetID] {
