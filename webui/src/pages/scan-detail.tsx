@@ -434,7 +434,7 @@ const runGroupLabel = (g: string) => RUN_GROUP_LABELS[g] ?? (g || "Other");
 function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	const [picked, setPicked] = useState<RunKey | null>(null);
 	const [openState, setOpenState] = useState<Record<string, boolean>>({});
-	const [inactiveRun, setInactiveRun] = useState<{ scanner: string; scope: string } | null>(null);
+	const [inactiveRun, setInactiveRun] = useState<{ scanner: string; scope: string; attemptId?: string; lastActivity: number } | null>(null);
 	const stopScan = useStopInstance();
 	const runsRef = useRef(scan.scanner_runs ?? []);
 	const activityRef = useRef(new Map<string, { at: number; signature: string; bytes?: number }>());
@@ -479,7 +479,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 				} catch { /* Old scans may not retain a combined transcript. */ }
 				if (Date.now() - activity.at >= 10 * 60 * 1000 && !promptedRef.current.has(key)) {
 					promptedRef.current.add(key);
-					setInactiveRun({ scanner: run.scanner, scope: run.scope ?? run.target });
+					setInactiveRun({ scanner: run.scanner, scope: run.scope ?? run.target, attemptId: run.attempt_id, lastActivity: activity.at });
 					return;
 				}
 			}
@@ -573,8 +573,8 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		{stopScanner.isError && <p role="alert" className="text-sm text-destructive">Could not stop scanner: {stopScanner.error.message}</p>}
 		<Dialog open={!!inactiveRun} onOpenChange={(open) => { if (!open && inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(open ? inactiveRun : null); }}>
 			<DialogContent>
-				<DialogHeader><DialogTitle>Scanner has shown no progress</DialogTitle><DialogDescription>{inactiveRun?.scanner} at {inactiveRun?.scope} has produced no new output or progress updates for 10 minutes. Stop the assessment, or keep it running and check again later?</DialogDescription></DialogHeader>
-				<DialogFooter><Button variant="outline" onClick={() => { if (inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(null); }}>Keep running</Button><Button variant="destructive" disabled={stopScan.isPending} onClick={() => { stopScan.mutate(scan.instance_id || scan.id); setInactiveRun(null); }}>{stopScan.isPending ? "Stopping…" : "Stop assessment"}</Button></DialogFooter>
+				<DialogHeader><DialogTitle>Scanner has shown no progress</DialogTitle><DialogDescription>{inactiveRun?.scanner} at {inactiveRun?.scope} has produced no new output or progress updates for 10 minutes. Last activity: {inactiveRun ? formatTime(new Date(inactiveRun.lastActivity).toISOString()) : "unknown"}. Stop this scanner, or keep it running?</DialogDescription></DialogHeader>
+				<DialogFooter><Button variant="outline" onClick={() => { if (inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(null); }}>Keep running</Button>{inactiveRun?.attemptId && <Button variant="destructive" disabled={stopScanner.isPending} onClick={() => { stopScanner.mutate(inactiveRun.attemptId!); setInactiveRun(null); }}>Stop this scanner</Button>}<Button variant="destructive" disabled={stopScan.isPending} onClick={() => { stopScan.mutate(scan.instance_id || scan.id); setInactiveRun(null); }}>{stopScan.isPending ? "Stopping…" : "Stop assessment"}</Button></DialogFooter>
 			</DialogContent>
 		</Dialog>
 		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>
