@@ -184,7 +184,7 @@ func (zapRunner) Descriptor() Descriptor {
 	return Descriptor{Name: "zap", Summary: "Spider and active scan of each HTTP/HTTPS host", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightHeavy, Applies: appliesToHost}
 }
 
-func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) (final Run) {
 	if req.StructuredDispatch && len(req.EndpointTargets) == 0 {
 		return notApplicableRun("zap", req, cfg, "ZAP has no dispatcher-approved API, parameter, form, or sensitive endpoint to test", emit)
 	}
@@ -302,6 +302,30 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	if _, err := call("/JSON/core/view/version/", url.Values{}); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
+	var recording *RecordingGateway
+	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+		recording, err = NewRecordingGateway(cctx, req, cfg, "zap")
+		if err != nil {
+			return finishServiceFailure(run, fmt.Errorf("ZAP recording gateway unavailable"), secrets, cfg.MaxOutputBytes, emit)
+		}
+		run.CoverageEventsPath = recording.EventPath
+		recording.SetPhase("seeding")
+		restore, installErr := configureZAPGateway(cfg, call, recording)
+		if installErr != nil {
+			recording.Close()
+			return finishServiceFailure(run, installErr, secrets, cfg.MaxOutputBytes, emit)
+		}
+		defer func() {
+			if err := restore(); err != nil {
+				quarantineZAPService(cfg.ZAPURL, "recording proxy restore failed")
+				final.Status, final.Reason = "failed", "ZAP recording proxy cleanup failed"
+			}
+			if err := recording.Close(); err != nil {
+				final.Status, final.Reason = "failed", "ZAP coverage recording failed"
+			}
+			final = finalizeRun(final)
+		}()
 	}
 	exclusionRegexes, widened := zapExclusionRegexes(req.AppScope)
 	contextName, contextID, scopeRegex := "", "", ""
@@ -738,6 +762,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if err := checkAuth(); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
+	if recording != nil {
+		recording.SetPhase("active_test")
+	}
 	activeTargets := []string{target}
 	if UnifiedWorkflowEnabled() && req.AppScope != nil {
 		activeTargets = nil
@@ -799,7 +826,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if err := redactArtifact(run.ArtifactPath, secrets); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
-	if truncateArtifact(run.ArtifactPath, cfg.MaxOutputBytes) {
+	if boundWebArtifact(run.ArtifactPath, "zap", cfg.MaxOutputBytes) {
 		run.Truncated = true
 		run.Reason = fmt.Sprintf("artifact truncated at configured %d-byte limit", cfg.MaxOutputBytes)
 	}

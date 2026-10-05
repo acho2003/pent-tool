@@ -791,6 +791,17 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	}
 	outW := newOutputWriter(stdout, "stdout", name, cfg.MaxOutputBytes, secrets, &seq, safeEmit)
 	errW := newOutputWriter(stderr, "stderr", name, cfg.MaxOutputBytes, secrets, &seq, safeEmit)
+	if req.GatewayURL != "" {
+		switch name {
+		case "nuclei":
+			spec.args = append(spec.args, "-proxy", req.GatewayURL)
+		case "wapiti":
+			spec.args = append(spec.args, "--proxy", req.GatewayURL)
+		case "dalfox":
+			spec.args = append(spec.args, "--proxy", req.GatewayURL)
+		}
+		spec.env = append(spec.env, "SSL_CERT_FILE="+req.GatewayCAPath, "REQUESTS_CA_BUNDLE="+req.GatewayCAPath)
+	}
 	cmd := exec.CommandContext(cmdCtx, spec.path, spec.args...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = req.ScanDir, outW, errW
 	// Extra environment (e.g. resolved cloud credentials for prowler/scoutsuite)
@@ -805,7 +816,17 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if monitorAuth {
 		go monitorCommandAuth(cmdCtx, req, cancel, authDone, authResult)
 	}
-	err = cmd.Run()
+	err = cmd.Start()
+	if err == nil {
+		if req.Gateway != nil {
+			for _, input := range req.InputRequests {
+				if input.Selected {
+					req.Gateway.record(CoverageEvent{Kind: "submitted", URL: input.URL, Method: input.Method, EndpointIDs: []string{input.EndpointID}, Phase: "routing"})
+				}
+			}
+		}
+		err = cmd.Wait()
+	}
 	close(authDone)
 	var authErr error
 	if monitorAuth {
@@ -850,7 +871,7 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if run.Status == "completed" && spec.partialMarker != "" && strings.Contains(readCapped(run.StdoutPath, 1<<20), spec.partialMarker) {
 		run.Status, run.Reason = "failed", "scanner time budget reached; partial results may be available"
 	}
-	if spec.artifact != "" && truncateArtifact(run.ArtifactPath, cfg.MaxOutputBytes) {
+	if spec.artifact != "" && boundWebArtifact(run.ArtifactPath, name, cfg.MaxOutputBytes) {
 		run.Truncated = true
 	}
 	_ = redactArtifact(run.ArtifactPath, secrets)
@@ -919,7 +940,7 @@ func finalizeRun(run Run) Run {
 // a scanner run into one stable digest.
 func CalculateChecksum(run Run) string {
 	h := sha256.New()
-	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath, run.TranscriptPath} {
+	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath, run.TranscriptPath, run.InputManifestPath, run.CoverageEventsPath} {
 		if path == "" {
 			continue
 		}

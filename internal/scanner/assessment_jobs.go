@@ -553,7 +553,27 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				emit(event)
 			}
 		}
+		var gateway *RecordingGateway
+		if UnifiedWorkflowEnabled() && req.AppScope != nil && (job.Scanner == "nuclei" || job.Scanner == "wapiti" || job.Scanner == "dalfox") {
+			var err error
+			gateway, err = NewRecordingGateway(jobCtx, req, p.Config, job.Scanner)
+			if err != nil {
+				jobCancel()
+				unregisterAttempt()
+				appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "recording gateway unavailable", emit))
+				continue
+			}
+			req.GatewayURL, req.GatewayCAPath, req.Gateway = gateway.URL, gateway.CAPath, gateway
+			req.Secrets = append(req.Secrets, gateway.password)
+		}
 		run := runAttempt(jobCtx, runner, req, p.Config, runEmit)
+		if gateway != nil {
+			run.CoverageEventsPath = gateway.EventPath
+			if err := gateway.Close(); err != nil {
+				run.Status, run.Reason = "failed", "coverage recording failed"
+			}
+		}
+
 		run.InputManifestPath = manifestPath
 		userStopped := jobCtx.Err() == context.Canceled && ctx.Err() == nil
 		budgetExpired := jobCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
@@ -598,6 +618,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				MergeHistoricalCandidates(surface, run.HistoricalCandidates)
 			}
 		}
+		run = finalizeRun(run)
 		CompleteEndpointCoverage(surface, job.Scanner, run)
 		_ = SaveAttackSurface(scanDir, surface)
 		appendOutcome(job, run)

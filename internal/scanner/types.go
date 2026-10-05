@@ -50,6 +50,9 @@ type Artifact struct {
 }
 
 type Request struct {
+	Gateway         *RecordingGateway     `json:"-"`
+	GatewayURL      string                `json:"-"`
+	GatewayCAPath   string                `json:"-"`
 	NetworkPorts    []int                 `json:"-"`
 	AttemptID       string                `json:"-"`
 	PlanFingerprint string                `json:"-"`
@@ -153,6 +156,7 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	CoverageEventsPath   string                `json:"coverage_events_path,omitempty"`
 	BatchRuns            []Run                 `json:"batch_runs,omitempty"`
 	NetworkPorts         []int                 `json:"network_ports,omitempty"`
 	InputManifestPath    string                `json:"input_manifest_path,omitempty"`

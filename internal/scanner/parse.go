@@ -88,7 +88,17 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 		budgetPartial := run.Status == "failed" && (run.Scanner == "nikto" || run.Scanner == "nuclei") &&
 			(strings.Contains(run.Reason, "time budget reached") || strings.Contains(run.Reason, "time budget exhausted"))
 		partialTestssl := run.Scanner == "testssl" && run.Status == "failed"
-		if (run.Status != "completed" && !budgetPartial && !partialTestssl) || run.ArtifactPath == "" {
+		preservedPartial := (run.Status == "failed" || run.Status == "cancelled") && (run.Scanner == "zap" || run.Scanner == "wapiti" || run.Scanner == "dalfox" || run.Scanner == "nuclei") && run.ArtifactPath != "" && run.ParserOutcome != "FAILED" && run.Checksum != ""
+		if preservedPartial {
+			if _, err := os.Stat(run.ArtifactPath); err != nil {
+				preservedPartial = false
+			} else if err := VerifyChecksum(run); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
+
+		if (run.Status != "completed" && !budgetPartial && !partialTestssl && !preservedPartial) || run.ArtifactPath == "" {
 			continue
 		}
 		if partialTestssl {
@@ -117,7 +127,7 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 			if parsed[i].EvidenceCompleteness == "" {
 				parsed[i].EvidenceCompleteness = "artifact"
 			}
-			if partialTestssl {
+			if partialTestssl || preservedPartial || run.Truncated || run.Completeness == "partial" {
 				parsed[i].EvidenceCompleteness = "partial"
 			}
 			if sourceRoot != "" {
