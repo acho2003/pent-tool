@@ -1425,6 +1425,18 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "assessment has no runnable jobs; resolve the plan gaps before starting", http.StatusUnprocessableEntity)
 			return
 		}
+		if req.Assessment.ParentAssessmentID != "" {
+			parentDir, parent := s.findScanByID(req.Assessment.ParentAssessmentID)
+			if parent == nil {
+				http.Error(w, "parent assessment not found", 409)
+				return
+			}
+			revision, err := scanner.LoadDiscoveryRevision(parentDir, plan.Fingerprint)
+			if err != nil || revision.ParentFingerprint != parent.PlanFingerprint || revision.PreviewFingerprint != req.Assessment.ApprovalPreviewFingerprint {
+				http.Error(w, "approved revision is missing or stale", 409)
+				return
+			}
+		}
 		req.PlanFingerprint = plan.Fingerprint
 		req.assessmentPlan = &plan
 	}

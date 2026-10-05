@@ -24,6 +24,7 @@ type DiscoveryCandidate struct {
 	State       string `json:"state"`
 }
 type DiscoveryPreview struct {
+	ApprovedRevision  *DiscoveryRevision   `json:"approved_revision,omitempty"`
 	ParentFingerprint string               `json:"parent_fingerprint"`
 	Fingerprint       string               `json:"fingerprint"`
 	State             string               `json:"state"`
@@ -45,6 +46,11 @@ func BuildDiscoveryPreview(plan AssessmentPlan, runs []Run, surfaces []AttackSur
 	for _, t := range plan.Config.Targets {
 		known[t.Value] = true
 		known[hostFromTarget(t.Value)] = true
+		for _, o := range assessment.AppScopeForTarget(plan.Config, t.ID).Origins() {
+			if o.PathPrefix == "/" {
+				known[o.Origin()] = true
+			}
+		}
 	}
 	for _, o := range plan.Config.ApprovedOrigins {
 		known[o.Origin()] = true
@@ -164,3 +170,36 @@ func SaveDiscoveryRevision(dir string, revision DiscoveryRevision) error {
 }
 
 func scopeForInventoryJob(job PlanJob) string { return "app:" + job.TargetID }
+
+func LoadDiscoveryRevision(dir, fingerprint string) (DiscoveryRevision, error) {
+	var revision DiscoveryRevision
+	data, err := os.ReadFile(filepath.Join(dir, "revisions", inventoryID(fingerprint)+".json"))
+	if err != nil {
+		return revision, err
+	}
+	err = json.Unmarshal(data, &revision)
+	if err == nil && revision.Plan.Fingerprint != fingerprint {
+		return revision, fmt.Errorf("revision fingerprint mismatch")
+	}
+	return revision, err
+}
+func FindApprovedDiscoveryRevision(dir, previewFingerprint string) *DiscoveryRevision {
+	entries, err := os.ReadDir(filepath.Join(dir, "revisions"))
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "revisions", entry.Name()))
+		if err != nil {
+			continue
+		}
+		var revision DiscoveryRevision
+		if json.Unmarshal(data, &revision) == nil && revision.PreviewFingerprint == previewFingerprint {
+			return &revision
+		}
+	}
+	return nil
+}

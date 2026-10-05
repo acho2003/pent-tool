@@ -138,6 +138,8 @@ RUN git init /opt/nuclei-templates \
     && rm -rf /opt/nuclei-templates/.git
 
 FROM debian-base AS runtime
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision=${VCS_REF}
 ENV DEBIAN_FRONTEND=noninteractive
 # Runtime libraries, browser, and helpers required by the retained scanners.
 # masscan retains upstream 1.3.2; other native scanners are copied from source.

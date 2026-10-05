@@ -29,6 +29,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      XALGORIX_UNIFIED_WORKFLOW: ${XALGORIX_UNIFIED_WORKFLOW:-0}
+      XALGORIX_SCANNER_GATEWAY_HOST: xalgorix
       XALGORIX_ZAP_URL: http://zap:8080
       XALGORIX_ZAP_API_KEY: ${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
       XALGORIX_ZAP_DEDICATED: "true"

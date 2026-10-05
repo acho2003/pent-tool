@@ -23,11 +23,14 @@ const graphQLIntrospection = `query XalgorixSchema { __schema { queryType { name
 
 // ParseAPIDefinition supports existing OpenAPI uploads and validated GraphQL SDL.
 func ParseAPIDefinition(data []byte, origin string) ([]APIEndpoint, error) {
+	if len(data) == 0 || len(data) > MaxOpenAPISpecBytes {
+		return nil, fmt.Errorf("API definition size is invalid")
+	}
 	if endpoints, err := ParseOpenAPI(data, origin); err == nil {
 		return endpoints, nil
 	}
 	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "uploaded.graphql", Input: string(data)})
-	if err != nil {
+	if err != nil || schema.Query == nil {
 		return nil, fmt.Errorf("invalid OpenAPI or GraphQL schema")
 	}
 	endpoint := origin

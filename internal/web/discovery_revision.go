@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
@@ -31,6 +32,7 @@ func (s *Server) handleDiscoveryRevision(w http.ResponseWriter, r *http.Request)
 	preview := scanner.BuildDiscoveryPreview(*record.AssessmentPlan, record.ScannerRuns, scanner.LoadAttackSurfaces(dir))
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == http.MethodGet {
+		preview.ApprovedRevision = scanner.FindApprovedDiscoveryRevision(dir, preview.Fingerprint)
 		json.NewEncoder(w).Encode(preview)
 		return
 	}
@@ -59,13 +61,14 @@ func (s *Server) handleDiscoveryRevision(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	cfg.ParentAssessmentID, cfg.ParentPlanFingerprint, cfg.ApprovalPreviewFingerprint = id, record.PlanFingerprint, preview.Fingerprint
 	plan := s.buildAssessmentPlan(cfg)
 	if len(plan.Errors) > 0 {
 		w.WriteHeader(422)
 		json.NewEncoder(w).Encode(plan)
 		return
 	}
-	revision := scanner.DiscoveryRevision{ParentFingerprint: record.PlanFingerprint, PreviewFingerprint: preview.Fingerprint, SelectedIDs: request.SelectedIDs, Plan: plan}
+	revision := scanner.DiscoveryRevision{AcceptedAt: time.Now().UTC().Format(time.RFC3339Nano), ParentFingerprint: record.PlanFingerprint, PreviewFingerprint: preview.Fingerprint, SelectedIDs: request.SelectedIDs, Plan: plan}
 	if err := scanner.SaveDiscoveryRevision(dir, revision); err != nil {
 		http.Error(w, "could not persist approved revision", 500)
 		return

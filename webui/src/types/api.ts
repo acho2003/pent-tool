@@ -99,6 +99,7 @@ export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
 export interface AssessmentTarget { id: string; type: string; value: string; }
 export interface AssessmentConfig {
+ parent_assessment_id?: string; parent_plan_fingerprint?: string; approval_preview_fingerprint?: string;
   assessment_mode: AssessmentMode;
   assessment_types: AssessmentType[];
   assessment_targets: AssessmentTarget[];
@@ -602,6 +603,7 @@ export interface CoverageProof {
   not_tracked: string[]; discovery_gaps: string[];
 }
 export interface DiscoveryPreview {
+ approved_revision?: DiscoveryRevision;
   fingerprint: string; parent_fingerprint: string; state: string;
   candidates: Array<{id: string; kind: string; value: string; source: string; state: string}>;
 }

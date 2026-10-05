@@ -156,6 +156,7 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	ApplicationRevision  string                `json:"application_revision,omitempty"`
 	CoverageEventsPath   string                `json:"coverage_events_path,omitempty"`
 	BatchRuns            []Run                 `json:"batch_runs,omitempty"`
 	NetworkPorts         []int                 `json:"network_ports,omitempty"`

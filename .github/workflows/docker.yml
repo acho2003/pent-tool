@@ -91,6 +91,7 @@ jobs:
           load: true
           tags: xalgorix:ci
           build-args: |
+            VCS_REF=${{ github.sha }}
             VERSION=${{ steps.meta.outputs.version || github.ref_name }}
 
       - name: Verify scanner runtime
@@ -107,4 +108,5 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            VCS_REF=${{ github.sha }}
             VERSION=${{ steps.meta.outputs.version || github.ref_name }}

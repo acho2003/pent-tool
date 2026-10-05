@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { CoverageProof, DiscoveryRevision } from "@/types/api";
@@ -11,6 +11,7 @@ export function WorkflowProof({ scanId, running, proof }: {scanId: string; runni
  const [revision, setRevision] = useState<DiscoveryRevision>();
  const [started, setStarted] = useState("");
  const discovery = useQuery({queryKey:["discovery-preview",scanId,running],queryFn:()=>api.discoveryPreview(scanId),enabled:!!proof?.expanded_enabled,retry:false});
+ useEffect(()=>{if(discovery.data?.approved_revision){setRevision(discovery.data.approved_revision);setSelected(discovery.data.approved_revision.selected_ids)}},[discovery.data]);
  const approval = useMutation({mutationFn:()=>api.approveDiscovery(scanId,discovery.data!.fingerprint,selected),onSuccess:setRevision});
  const start = useMutation({mutationFn:()=>api.startScan({assessment:revision!.plan.config,plan_fingerprint:revision!.plan.fingerprint,targets:revision!.plan.config.assessment_targets.map(t=>t.value)}),onSuccess:r=>setStarted(r.instance_id)});
  if (!proof) return null;

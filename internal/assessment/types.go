@@ -251,18 +251,21 @@ type AuthorizationExpectation struct {
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
-	Mode                      Mode                       `json:"assessment_mode"`
-	Types                     []Type                     `json:"assessment_types"`
-	Targets                   []Target                   `json:"assessment_targets"`
-	Access                    []AccessBinding            `json:"access,omitempty"`
-	Profile                   string                     `json:"profile,omitempty"`
-	ScannerSelection          ScannerSelection           `json:"scanner_selection,omitempty"`
-	APIDefinitionIDs          []string                   `json:"api_definition_ids,omitempty"`
-	APIDefinitions            []APIDefinitionBinding     `json:"api_definitions,omitempty"`
-	APIOperationInputs        []APIOperationInput        `json:"api_operation_inputs,omitempty"`
-	WriteApprovals            []WriteApproval            `json:"write_approvals,omitempty"`
-	AuthorizationExpectations []AuthorizationExpectation `json:"authorization_expectations,omitempty"`
-	SubdomainDiscovery        bool                       `json:"subdomain_discovery,omitempty"`
+	ParentAssessmentID         string                     `json:"parent_assessment_id,omitempty"`
+	ParentPlanFingerprint      string                     `json:"parent_plan_fingerprint,omitempty"`
+	ApprovalPreviewFingerprint string                     `json:"approval_preview_fingerprint,omitempty"`
+	Mode                       Mode                       `json:"assessment_mode"`
+	Types                      []Type                     `json:"assessment_types"`
+	Targets                    []Target                   `json:"assessment_targets"`
+	Access                     []AccessBinding            `json:"access,omitempty"`
+	Profile                    string                     `json:"profile,omitempty"`
+	ScannerSelection           ScannerSelection           `json:"scanner_selection,omitempty"`
+	APIDefinitionIDs           []string                   `json:"api_definition_ids,omitempty"`
+	APIDefinitions             []APIDefinitionBinding     `json:"api_definitions,omitempty"`
+	APIOperationInputs         []APIOperationInput        `json:"api_operation_inputs,omitempty"`
+	WriteApprovals             []WriteApproval            `json:"write_approvals,omitempty"`
+	AuthorizationExpectations  []AuthorizationExpectation `json:"authorization_expectations,omitempty"`
+	SubdomainDiscovery         bool                       `json:"subdomain_discovery,omitempty"`
 	// ApprovedOrigins are the explicit scheme/host/port/path destinations of
 	// each application target. When a target has none, AppScopeForTarget
 	// derives its boundary from Target.Value.

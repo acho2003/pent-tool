@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -917,6 +918,23 @@ func readCapped(path string, max int64) string {
 }
 
 func finalizeRun(run Run) Run {
+	if run.ApplicationRevision == "" {
+		run.ApplicationRevision = "unknown"
+		if info, ok := debug.ReadBuildInfo(); ok {
+			dirty := false
+			for _, setting := range info.Settings {
+				if setting.Key == "vcs.revision" {
+					run.ApplicationRevision = setting.Value
+				}
+				if setting.Key == "vcs.modified" && setting.Value == "true" {
+					dirty = true
+				}
+			}
+			if dirty {
+				run.ApplicationRevision += "+dirty"
+			}
+		}
+	}
 	if run.Outcome == "" {
 		switch {
 		case run.AuthState == "failed" || run.AuthState == "expired":
