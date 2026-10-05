@@ -56,6 +56,7 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid assessment configuration", http.StatusBadRequest)
 		return
 	}
+	cfg = newAssessmentWorkflowConfig(cfg)
 	plan := s.buildAssessmentPlan(cfg)
 	w.Header().Set("Content-Type", "application/json")
 	status := http.StatusOK
@@ -105,6 +106,9 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 	}
 	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), UnavailabilityReasons: unavailableReasons, CredentialAvailability: credentialAvailability, ToolVersions: s.toolVersions, CredentialRevisions: credentialRevisions})
 	plan.Errors = append(plan.Errors, s.assessmentScopeProblems(cfg, allowLoopbackPorts)...)
+	if cfg.WorkflowVersion == "unified-v1" && !scanner.UnifiedWorkflowEnabled() {
+		plan.Errors = append(plan.Errors, assessment.Problem{Code: "workflow.disabled", Message: "The accepted expanded workflow is disabled; enable it to execute this plan", Blocking: true})
+	}
 	if len(plan.Errors) == 0 {
 		normalized := plan.Config
 		fixtureStore := apifixture.Store{Dir: filepath.Join(s.dataDir, "_api_fixtures")}

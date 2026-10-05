@@ -46,6 +46,8 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Assessment != nil {
+			workflowConfig := newAssessmentWorkflowConfig(*req.Assessment)
+			req.Assessment = &workflowConfig
 			plan := s.buildAssessmentPlan(*req.Assessment)
 			if req.PlanFingerprint == "" || req.PlanFingerprint != plan.Fingerprint || len(plan.Errors) > 0 {
 				w.Header().Set("Content-Type", "application/json")
@@ -194,6 +196,8 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Assessment != nil {
+			workflowConfig := newAssessmentWorkflowConfig(*req.Assessment)
+			req.Assessment = &workflowConfig
 			plan := s.buildAssessmentPlan(*req.Assessment)
 			if req.PlanFingerprint == "" || req.PlanFingerprint != plan.Fingerprint || len(plan.Errors) > 0 {
 				w.Header().Set("Content-Type", "application/json")

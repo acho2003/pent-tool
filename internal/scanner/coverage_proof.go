@@ -74,7 +74,7 @@ func ReadCoverageEvents(path string) ([]CoverageEvent, error) {
 	return events, s.Err()
 }
 func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
-	proof := CoverageProof{Items: map[string][]ProofItem{}, ExpandedEnabled: UnifiedWorkflowEnabled(), Definitions: []InventoryDefinition{}, Scanners: []ScannerProof{}, NotTracked: []string{"parameters_tested", "templates_executed", "protected_route_coverage_percent"}}
+	proof := CoverageProof{Items: map[string][]ProofItem{}, Definitions: []InventoryDefinition{}, Scanners: []ScannerProof{}, NotTracked: []string{"parameters_tested", "templates_executed", "protected_route_coverage_percent"}}
 	type sets struct {
 		selected, submitted, ack, exercised, batch, failed, skipped map[string]bool
 		recorded                                                    bool
@@ -92,6 +92,8 @@ func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
 	addItem := func(metric string, item ProofItem) { proof.Items[metric] = append(proof.Items[metric], item) }
 	hosts, services := map[string]bool{}, map[string]bool{}
 	for _, surface := range surfaces {
+		expanded := surface.WorkflowVersion == "unified-v1"
+		proof.ExpandedEnabled = proof.ExpandedEnabled || expanded
 		if surface.ClassifierVersion < 5 {
 			if !slices.Contains(proof.NotTracked, "historical_encoded_query_identity") {
 				proof.NotTracked = append(proof.NotTracked, "historical_encoded_query_identity")
@@ -138,7 +140,7 @@ func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
 				proof.Approved++
 				addItem("approved", item)
 				for _, scanner := range []string{"zap", "nuclei", "wapiti", "dalfox"} {
-					if ok, _ := endpointEligibleForScanner(e, scanner); ok {
+					if ok, _ := endpointEligibleWithPolicy(e, scanner, nil, expanded); ok {
 						proof.Eligible++
 						addItem("eligible", item)
 						break

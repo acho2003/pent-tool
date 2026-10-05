@@ -251,6 +251,7 @@ type AuthorizationExpectation struct {
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
+	WorkflowVersion            string                     `json:"workflow_version,omitempty"`
 	ParentAssessmentID         string                     `json:"parent_assessment_id,omitempty"`
 	ParentPlanFingerprint      string                     `json:"parent_plan_fingerprint,omitempty"`
 	ApprovalPreviewFingerprint string                     `json:"approval_preview_fingerprint,omitempty"`

@@ -115,3 +115,7 @@ Expanded acceptance is not complete merely because these adapter fixtures pass.
 Wapiti POST fuzzing, browser storage access, the complete staged/restart workflow,
 and the full 684-request execution fixture still need acceptance before enabling
 the expanded workflow by default.
+
+New web/API/network plans accepted while rollout is enabled carry `workflow_version: unified-v1`. Saved plans without that marker retain the legacy executor, even if rollout is later enabled. Expanded plans cannot execute while the flag is disabled. Coverage uses the persisted inventory version rather than the current server flag.
+
+Wapiti selection uses the configured assessment endpoint budget for expanded plans and splits the selected inputs into batches of 50. A deterministic assessment fixture routes 684 query inputs through 14 batches and checks distinct submission records; it does not claim that a native scanner exercised all 684 requests.

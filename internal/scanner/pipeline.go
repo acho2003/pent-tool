@@ -382,7 +382,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 			runnerReq := scopeReq
 			if old, ok := byKey[resumeKey(scopeKey, runner.Name())]; ok {
 				if surface != nil {
-					runnerReq.EndpointTargets = DispatchTargets(surface, runner.Name(), endpointDispatchLimit(runner.Name(), p.Config.WebMaxEndpoints))
+					runnerReq.EndpointTargets = dispatchTargetsWithPolicy(surface, runner.Name(), endpointDispatchLimit(runner.Name(), p.Config.WebMaxEndpoints), nil, nil, false)
 					CompleteEndpointCoverage(surface, runner.Name(), old)
 				}
 				results[slot] = old
@@ -404,7 +404,7 @@ func (p *Pipeline) Run(ctx context.Context, req Request, existing []Run, emit Em
 				continue
 			}
 			if surface != nil {
-				runnerReq.EndpointTargets = DispatchTargets(surface, runner.Name(), endpointDispatchLimit(runner.Name(), p.Config.WebMaxEndpoints))
+				runnerReq.EndpointTargets = dispatchTargetsWithPolicy(surface, runner.Name(), endpointDispatchLimit(runner.Name(), p.Config.WebMaxEndpoints), nil, nil, false)
 			}
 			if err := ctx.Err(); err != nil {
 				// Cancellation observed during the walk: fill this and every remaining
@@ -753,7 +753,7 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		}
 		return finalizeRun(run)
 	}
-	if name == "nuclei" && UnifiedWorkflowEnabled() && req.TypedAssessment && cfg.NucleiTemplatesDir != "" {
+	if name == "nuclei" && expandedWorkflowRequest(req) && req.TypedAssessment && cfg.NucleiTemplatesDir != "" {
 		path, err := saveNucleiTemplateInventory(ctx, req, cfg)
 		if err != nil {
 			run.Status, run.Reason = "failed", err.Error()

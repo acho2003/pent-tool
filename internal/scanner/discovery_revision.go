@@ -38,6 +38,10 @@ type DiscoveryRevision struct {
 	Plan               AssessmentPlan `json:"plan"`
 }
 
+func expandedWorkflowRequest(req Request) bool {
+	return UnifiedWorkflowEnabled() && req.WorkflowVersion == "unified-v1"
+}
+
 func UnifiedWorkflowEnabled() bool { return os.Getenv("XALGORIX_UNIFIED_WORKFLOW") == "1" }
 
 func BuildDiscoveryPreview(plan AssessmentPlan, runs []Run, surfaces []AttackSurface) DiscoveryPreview {

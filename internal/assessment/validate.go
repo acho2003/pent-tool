@@ -235,6 +235,9 @@ func internalResourceKind(k TargetKind) bool {
 // and the mode/access policy table (§5). It returns all problems found; callers
 // reject when any problem is Blocking.
 func Validate(cfg AssessmentConfig) []Problem {
+	if cfg.WorkflowVersion != "" && cfg.WorkflowVersion != "unified-v1" {
+		return []Problem{blocking("workflow.version.invalid", "unknown assessment workflow version")}
+	}
 	var probs []Problem
 
 	if !cfg.Mode.Valid() {

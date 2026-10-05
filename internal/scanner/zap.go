@@ -306,13 +306,13 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if _, err := call("/JSON/core/view/version/", url.Values{}); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
-	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+	if expandedWorkflowRequest(req) && req.TypedAssessment {
 		if err := verifyZAPAddons(call); err != nil {
 			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 		}
 	}
 	var recording *RecordingGateway
-	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+	if expandedWorkflowRequest(req) && req.TypedAssessment {
 		recording, err = NewRecordingGateway(cctx, req, cfg, "zap")
 		if err != nil {
 			return finishServiceFailure(run, fmt.Errorf("ZAP recording gateway unavailable"), secrets, cfg.MaxOutputBytes, emit)
@@ -342,7 +342,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.TypedAssessment {
 		var err error
 		scopeRegex, err = applicationContextRegex(target)
-		if UnifiedWorkflowEnabled() && req.AppScope != nil {
+		if expandedWorkflowRequest(req) && req.AppScope != nil {
 			scopeRegex, err = zapApprovedContextRegex(*req.AppScope)
 		}
 		if err != nil {
@@ -554,7 +554,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
 
-	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+	if expandedWorkflowRequest(req) && req.TypedAssessment {
 		run.DefinitionImports = zapImportDefinitions(cctx, cfg, req, contextID)
 		for _, result := range run.DefinitionImports {
 			if result.Status == "failed" {
@@ -781,7 +781,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		recording.SetPhase("active_test")
 	}
 	activeTargets := []string{target}
-	if UnifiedWorkflowEnabled() && req.AppScope != nil {
+	if expandedWorkflowRequest(req) && req.AppScope != nil {
 		activeTargets = nil
 		for _, o := range req.AppScope.Origins() {
 			activeTargets = append(activeTargets, o.Origin()+o.PathPrefix)
@@ -824,11 +824,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
 	exportParams := url.Values{"baseurl": {target}}
-	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+	if expandedWorkflowRequest(req) && req.TypedAssessment {
 		exportParams = url.Values{}
 	}
 	report, err := fetch("/JSON/core/view/alerts/", exportParams, 10*time.Minute)
-	if err == nil && UnifiedWorkflowEnabled() && req.AppScope != nil {
+	if err == nil && expandedWorkflowRequest(req) && req.AppScope != nil {
 		report, err = filterZAPScopeAlerts(report, *req.AppScope)
 	}
 	if err != nil {

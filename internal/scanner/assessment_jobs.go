@@ -54,6 +54,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		return runs
 	}
+	expanded := UnifiedWorkflowEnabled() && plan.Config.WorkflowVersion == "unified-v1"
+	if plan.Config.WorkflowVersion == "unified-v1" && !expanded {
+		return failedAssessmentJobs(plan.Jobs, scanDir, plan.Fingerprint, "accepted expanded workflow is disabled; executor was not changed", emit)
+	}
 	if p == nil {
 		p = NewPipeline(Config{})
 	} else if p.Runners == nil {
@@ -126,10 +130,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	jobOutcomes := make(map[string]Run, len(plan.Jobs))
 	appendOutcome := func(job PlanJob, run Run) {
 		run.Stage = job.Stage
-		if surfaces[job.TargetID] == nil && UnifiedWorkflowEnabled() {
+		run.WorkflowVersion = plan.Config.WorkflowVersion
+		if surfaces[job.TargetID] == nil && expanded {
 			surfaces[job.TargetID] = &AttackSurface{SchemaVersion: AttackSurfaceSchemaVersion, ClassifierVersion: AttackSurfaceClassifierVersion, Scope: scopeForInventoryJob(job), Target: job.Target, Endpoints: []AttackSurfaceEndpoint{}}
 		}
 		if surface := surfaces[job.TargetID]; surface != nil {
+			surface.WorkflowVersion = plan.Config.WorkflowVersion
 			MergeRunAssets(surface, run)
 			_ = SaveAttackSurface(scanDir, surface)
 		}
@@ -181,7 +187,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			inventoryTarget = "http://" + inventoryTarget
 		}
 		crawlReq := Request{
-			Target: target.Value, Scope: crawlScope,
+			Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion,
 			ScanDir: filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),
@@ -238,7 +244,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			surface = NewSeedAttackSurface(inventoryScope, inventoryTarget)
 		}
 		MergeKatanaRedirectTargets(surface, spec.artifact, crawlReq.AppScope, crawlReq.TargetAuth != "")
-		if UnifiedWorkflowEnabled() && p.Config.WebBrowser {
+		if expanded && p.Config.WebBrowser {
 			if authBound && !authVerified[target.ID] {
 				return
 			}
@@ -266,6 +272,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				surface.DiscoveryGaps = append(surface.DiscoveryGaps, browserRun.Reason)
 			}
 		}
+		surface.WorkflowVersion = plan.Config.WorkflowVersion
 		EnsureSeedEndpoint(surface, inventoryTarget)
 		var apiEndpoints []APIEndpoint
 		for _, endpoint := range plan.APIEndpoints {
@@ -274,7 +281,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		MergeOpenAPIEndpointsScoped(surface, inventoryTarget, apiEndpoints, appScopes[target.ID])
-		if UnifiedWorkflowEnabled() {
+		if expanded {
 			crawlReq.Target = inventoryTarget
 			discoveredAPIs[target.ID] = DiscoverAPIs(ctx, crawlReq, p.Config, surface)
 			for i := range discoveredAPIs[target.ID] {
@@ -296,8 +303,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		scope := assessmentJobScope(job)
 		key := assessmentJobRunKey(scope, job.Scanner, job.Variant, plan.Fingerprint)
 		req := Request{
-			Target: job.Target,
-			Scope:  scope,
+			Target: job.Target, WorkflowVersion: plan.Config.WorkflowVersion,
+			Scope: scope,
 			ScanDir: filepath.Join(scanDir, "jobs", stableJobPath(job.TargetID), stableJobPath(plan.Fingerprint),
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
@@ -390,7 +397,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		if old, ok := completed[key]; ok && old.Status == "completed" && (!assessmentWebAuthBound(plan.Config.Access, job.TargetID) || old.Authenticated || !scannerUsesWebAuth(job.Scanner)) && VerifyChecksum(old) == nil {
-			req.EndpointTargets = DispatchTargetsScoped(surface, job.Scanner, endpointDispatchLimit(job.Scanner, p.Config.WebMaxEndpoints), req.AppScope, p.Config.Budget)
+			req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded)
 			CompleteEndpointCoverage(surface, job.Scanner, old)
 			_ = SaveAttackSurface(scanDir, surface)
 			appendOutcome(job, old)
@@ -431,7 +438,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		if job.Scanner == "openvas" {
-			if UnifiedWorkflowEnabled() && surface != nil {
+			if expanded && surface != nil {
 				for _, service := range surface.Services {
 					if service.Host == hostFromTarget(job.Target) && service.Protocol == "tcp" && service.State == "open" {
 						req.NetworkPorts = append(req.NetworkPorts, service.Port)
@@ -489,7 +496,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "planned scanner has no execution adapter", emit))
 			continue
 		}
-		req.EndpointTargets = DispatchTargetsScoped(surface, job.Scanner, endpointDispatchLimit(job.Scanner, p.Config.WebMaxEndpoints), req.AppScope, p.Config.Budget)
+		req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded)
 		if surface != nil {
 			req.EndpointMethods = map[string]string{}
 			for _, ep := range surface.Endpoints {
@@ -561,7 +568,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		var gateway *RecordingGateway
-		if UnifiedWorkflowEnabled() && req.AppScope != nil && (job.Scanner == "nuclei" || job.Scanner == "wapiti" || job.Scanner == "dalfox") {
+		if expanded && req.AppScope != nil && (job.Scanner == "nuclei" || job.Scanner == "wapiti" || job.Scanner == "dalfox") {
 			var err error
 			gateway, err = NewRecordingGateway(jobCtx, req, p.Config, job.Scanner)
 			if err != nil {
@@ -614,6 +621,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		run.Stage = job.Stage
 		run.Target = job.Target
 		run.Scope = scope
+		run.WorkflowVersion = plan.Config.WorkflowVersion
 		run.Variant = job.Variant
 		run.AssessmentTypes = jobAssessmentTypes(job)
 		run.PlanFingerprint = plan.Fingerprint

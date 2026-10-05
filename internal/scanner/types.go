@@ -50,6 +50,7 @@ type Artifact struct {
 }
 
 type Request struct {
+	WorkflowVersion string                `json:"-"`
 	Gateway         *RecordingGateway     `json:"-"`
 	GatewayURL      string                `json:"-"`
 	GatewayCAPath   string                `json:"-"`
@@ -156,6 +157,7 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	WorkflowVersion       string                `json:"workflow_version,omitempty"`
 	TemplateInventoryPath string                `json:"template_inventory_path,omitempty"`
 	DefinitionImports     []DefinitionImport    `json:"definition_imports,omitempty"`
 	ApplicationRevision   string                `json:"application_revision,omitempty"`

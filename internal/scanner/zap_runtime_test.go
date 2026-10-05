@@ -56,7 +56,7 @@ func TestZAPRuntimeGatewayOriginsAndHEAD(t *testing.T) {
 	if err := zapPost(cfg, "/JSON/ascan/action/disableAllScanners/", url.Values{}); err != nil {
 		t.Fatal(err)
 	}
-	req := Request{Target: first + "/", AppScope: &scope, TypedAssessment: true, StructuredDispatch: true, Scope: "app:fixture", ScanDir: t.TempDir(), AttemptID: "native-fixture", InputRequests: []ScannerRequestInput{{EndpointID: "get", URL: first + "/same?x=1&x=2", Method: "GET", Selected: true}, {EndpointID: "head", URL: first + "/same?x=1&x=2", Method: "HEAD", Selected: true}, {EndpointID: "other", URL: second + "/", Method: "GET", Selected: true}}}
+	req := Request{WorkflowVersion: "unified-v1", Target: first + "/", AppScope: &scope, TypedAssessment: true, StructuredDispatch: true, Scope: "app:fixture", ScanDir: t.TempDir(), AttemptID: "native-fixture", InputRequests: []ScannerRequestInput{{EndpointID: "get", URL: first + "/same?x=1&x=2", Method: "GET", Selected: true}, {EndpointID: "head", URL: first + "/same?x=1&x=2", Method: "HEAD", Selected: true}, {EndpointID: "other", URL: second + "/", Method: "GET", Selected: true}}}
 	graphql, err := ParseAPIDefinition([]byte(`type Query { ping: String hidden(id: ID!): String } type Mutation { erase: Boolean }`), first+"/graphql")
 	if err != nil {
 		t.Fatal(err)

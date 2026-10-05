@@ -103,6 +103,7 @@ export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
 export interface AssessmentTarget { id: string; type: string; value: string; }
 export interface AssessmentConfig {
+ workflow_version?: string;
  parent_assessment_id?: string; parent_plan_fingerprint?: string; approval_preview_fingerprint?: string;
   assessment_mode: AssessmentMode;
   assessment_types: AssessmentType[];

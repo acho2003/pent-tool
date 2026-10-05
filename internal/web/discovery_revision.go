@@ -62,6 +62,7 @@ func (s *Server) handleDiscoveryRevision(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	cfg.ParentAssessmentID, cfg.ParentPlanFingerprint, cfg.ApprovalPreviewFingerprint = id, record.PlanFingerprint, preview.Fingerprint
+	cfg = newAssessmentWorkflowConfig(cfg)
 	plan := s.buildAssessmentPlan(cfg)
 	if len(plan.Errors) > 0 {
 		w.WriteHeader(422)

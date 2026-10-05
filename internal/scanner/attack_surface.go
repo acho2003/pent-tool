@@ -119,6 +119,7 @@ type AttackSurfaceEndpoint struct {
 }
 
 type AttackSurface struct {
+	WorkflowVersion   string                  `json:"workflow_version,omitempty"`
 	Hosts             []InventoryHost         `json:"hosts,omitempty"`
 	Services          []InventoryService      `json:"services,omitempty"`
 	Definitions       []InventoryDefinition   `json:"definitions,omitempty"`
@@ -668,6 +669,9 @@ func DispatchTargets(surface *AttackSurface, scannerName string, max int) []stri
 // re-check (legacy) and a nil budget never caps. Every endpoint records the
 // decision and its reason in its scanner coverage.
 func DispatchTargetsScoped(surface *AttackSurface, scannerName string, max int, scope *assessment.AppScope, budget *AssessmentBudget) []string {
+	return dispatchTargetsWithPolicy(surface, scannerName, max, scope, budget, UnifiedWorkflowEnabled())
+}
+func dispatchTargetsWithPolicy(surface *AttackSurface, scannerName string, max int, scope *assessment.AppScope, budget *AssessmentBudget, expanded bool) []string {
 	if surface == nil {
 		return nil
 	}
@@ -676,7 +680,7 @@ func DispatchTargetsScoped(surface *AttackSurface, scannerName string, max int, 
 	var targets []string
 	for i := range surface.Endpoints {
 		ep := &surface.Endpoints[i]
-		eligible, reason := endpointEligibleInScope(*ep, scannerName, scope)
+		eligible, reason := endpointEligibleWithPolicy(*ep, scannerName, scope, expanded)
 		status := "skipped"
 		switch {
 		case !eligible:
@@ -707,8 +711,15 @@ func SkipEndpointCoverage(surface *AttackSurface, scannerName, reason string) {
 }
 
 func endpointDispatchLimit(scannerName string, configured int) int {
+	return endpointDispatchLimitForWorkflow(scannerName, configured, false)
+}
+
+func endpointDispatchLimitForWorkflow(scannerName string, configured int, expanded bool) int {
 	switch scannerName {
 	case "wapiti":
+		if expanded {
+			return configured
+		}
 		if configured <= 0 || configured > wapitiMaxStartURLs {
 			return wapitiMaxStartURLs
 		}
@@ -739,6 +750,9 @@ func endpointEligibleForScanner(ep AttackSurfaceEndpoint, scannerName string) (b
 // endpoints without the traits the scanner needs. A nil scope skips the
 // boundary re-check.
 func endpointEligibleInScope(ep AttackSurfaceEndpoint, scannerName string, scope *assessment.AppScope) (bool, string) {
+	return endpointEligibleWithPolicy(ep, scannerName, scope, UnifiedWorkflowEnabled())
+}
+func endpointEligibleWithPolicy(ep AttackSurfaceEndpoint, scannerName string, scope *assessment.AppScope, expanded bool) (bool, string) {
 	if !endpointStateDispatchable(ep.State) {
 		reason := "endpoint state is " + ep.State
 		if ep.StateReason != "" {
@@ -776,7 +790,7 @@ func endpointEligibleInScope(ep AttackSurfaceEndpoint, scannerName string, scope
 		}
 		return false, "endpoint is not classified as an API operation"
 	case "zap":
-		if UnifiedWorkflowEnabled() {
+		if expanded {
 			return true, ""
 		}
 		if ep.Kind == "api" || ep.HasParameters || ep.HasForm || ep.Sensitive {

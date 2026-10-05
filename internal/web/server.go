@@ -1408,6 +1408,8 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Assessment != nil {
 		req.Assessment.Profile = req.Profile
+		workflowConfig := newAssessmentWorkflowConfig(*req.Assessment)
+		req.Assessment = &workflowConfig
 		plan := s.buildAssessmentPlanForScan(*req.Assessment, req.allowLoopbackPorts)
 		if len(plan.Errors) > 0 {
 			w.Header().Set("Content-Type", "application/json")
