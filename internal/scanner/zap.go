@@ -549,6 +549,19 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 		return ""
 	}
+	seedRequest := func(method, rawURL string) error {
+		if method == "" || method == http.MethodGet {
+			_, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {rawURL}, "followRedirects": {followRedirects}})
+			return err
+		}
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return err
+		}
+		request := method + " " + u.RequestURI() + " HTTP/1.1\r\nHost: " + u.Host + "\r\n\r\n"
+		_, err = call("/JSON/core/action/sendRequest/", url.Values{"request": {request}, "followRedirects": {"false"}})
+		return err
+	}
 	if refusal := seedRefusal(http.MethodGet, target); refusal != "" {
 		logLine("ZAP did not pre-seed the target: " + refusal)
 	} else if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {followRedirects}}); err != nil {
@@ -591,7 +604,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				run.APIEndpointResults = append(run.APIEndpointResults, result)
 				continue
 			}
-			if _, seedErr := call("/JSON/core/action/accessUrl/", url.Values{"url": {operationURL}, "followRedirects": {"false"}}); seedErr != nil {
+			if seedErr := seedRequest(endpoint.Method, operationURL); seedErr != nil {
 				result.Status, result.Reason = "failed", "ZAP could not seed this operation into the scoped scan tree"
 			} else {
 				result.Status = "seeded"
@@ -612,7 +625,11 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			if seeded >= maxChildren {
 				break
 			}
-			if refusal := seedRefusal(http.MethodGet, endpoint); refusal != "" {
+			method := req.EndpointMethods[endpoint]
+			if method == "" {
+				method = http.MethodGet
+			}
+			if refusal := seedRefusal(method, endpoint); refusal != "" {
 				logLine("ZAP skipped a discovered URL: " + refusal)
 				continue
 			}
@@ -752,6 +769,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	run.Status, run.ExitCode, run.FinishedAt = "completed", 0, time.Now().Format(time.RFC3339Nano)
 	run.Progress, run.ProgressStage = 0, ""
+	validateWebResult(&run)
 	run = finalizeRun(run)
 	if emit != nil {
 		emit(Event{Type: "scanner_completed", Scanner: "zap", Run: run})

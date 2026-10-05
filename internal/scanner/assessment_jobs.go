@@ -249,10 +249,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			ScanDir: filepath.Join(scanDir, "jobs", stableJobPath(job.TargetID), stableJobPath(plan.Fingerprint),
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
-			AppScope: appScopes[job.TargetID],
+			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment,
 		}
 		if job.Scanner == "apiwrites" {
-			req.TestEnvironment = plan.Config.TestEnvironment
 			req.APIFixtureDir = p.Config.APIFixtureDir
 			for _, endpoint := range plan.APIEndpoints {
 				if endpoint.TargetID == job.TargetID {
@@ -315,7 +314,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
 			continue
 		}
-		if assessmentWebAuthBound(plan.Config.Access, job.TargetID) && (job.Scanner == "zap" || job.Scanner == "nuclei" || job.Scanner == "apiwrites") {
+		if assessmentWebAuthBound(plan.Config.Access, job.TargetID) && scannerUsesWebAuth(job.Scanner) {
 			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err != nil {
 				run := plannedJobNotRun(job, req, plan.Fingerprint, "authenticated scan skipped: session verification failed", emit)
 				run.AuthState, run.GapKind = assessment.StateFailed, GapAuthFailed
@@ -337,18 +336,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				req.APIEndpoints = append(req.APIEndpoints, endpoint)
 			}
 		}
-		if old, ok := completed[key]; ok && old.Status == "completed" && (!assessmentWebAuthBound(plan.Config.Access, job.TargetID) || old.Authenticated || (job.Scanner != "zap" && job.Scanner != "nuclei")) && VerifyChecksum(old) == nil {
+		if old, ok := completed[key]; ok && old.Status == "completed" && (!assessmentWebAuthBound(plan.Config.Access, job.TargetID) || old.Authenticated || !scannerUsesWebAuth(job.Scanner)) && VerifyChecksum(old) == nil {
 			req.EndpointTargets = DispatchTargetsScoped(surface, job.Scanner, endpointDispatchLimit(job.Scanner, p.Config.WebMaxEndpoints), req.AppScope, p.Config.Budget)
 			CompleteEndpointCoverage(surface, job.Scanner, old)
 			_ = SaveAttackSurface(scanDir, surface)
 			appendOutcome(job, old)
 			continue
 		}
-		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && (job.Scanner == "zap" || job.Scanner == "nuclei" || job.Scanner == "apiwrites") {
+		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && scannerUsesWebAuth(job.Scanner) {
 			req.TargetAuth = strings.Join(headers, "\n")
-			if job.Scanner == "zap" {
-				req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
-			}
+			req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
 			req.AuthKind = "HTTP headers"
 			for _, binding := range plan.Config.Access {
 				if binding.Kind == assessment.AccessFormLogin && slices.Contains(binding.TargetIDs, job.TargetID) {
@@ -433,6 +430,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			continue
 		}
 		req.EndpointTargets = DispatchTargetsScoped(surface, job.Scanner, endpointDispatchLimit(job.Scanner, p.Config.WebMaxEndpoints), req.AppScope, p.Config.Budget)
+		if surface != nil {
+			req.EndpointMethods = map[string]string{}
+			for _, ep := range surface.Endpoints {
+				req.EndpointMethods[ep.URL] = ep.Method
+			}
+		}
+		constrainCredentialTargets(&req, surface, job.Scanner)
 		_ = SaveAttackSurface(scanDir, surface)
 		if err := ctx.Err(); err != nil {
 			run := cancelledRun(job.Scanner, scope, req, err, emit)
@@ -507,7 +511,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				run.Reason = "web profile time budget exhausted; assessment coverage is partial"
 			}
 		}
-		run.Authenticated = req.TargetAuth != "" && run.Status == "completed" && (job.Scanner == "zap" || job.Scanner == "nuclei")
+		run.Authenticated = req.TargetAuth != "" && run.Status == "completed" && scannerUsesWebAuth(job.Scanner)
 		if run.Authenticated && run.AuthState == "" {
 			run.AuthState, run.AuthCheckedAt = assessment.StateVerified, time.Now().UTC().Format(time.RFC3339)
 		}

@@ -55,7 +55,7 @@ const assessmentEndpointCapReason = "assessment endpoint budget exhausted"
 
 // batchEvidenceScanners only report results for the dispatched batch as a
 // whole; a completed run of one of them marks its endpoints batch_completed.
-var batchEvidenceScanners = map[string]bool{"nuclei": true, "wapiti": true, "dalfox": true, "katana": true}
+var batchEvidenceScanners = map[string]bool{"nuclei": true, "wapiti": true, "dalfox": true, "katana": true, "zap": true}
 
 // EndpointProvenance records which tool observed an endpoint, where, and
 // whether the observation was made with an authenticated session.

@@ -75,9 +75,10 @@ type Request struct {
 	// EndpointTargets is the dispatcher-approved subset of the normalized attack
 	// surface for this scanner job. WebEndpoints remains as a compatibility input
 	// for callers/tests that have not yet constructed a structured inventory.
-	EndpointTargets    []string `json:"-"`
-	WebEndpoints       []string `json:"-"`
-	StructuredDispatch bool     `json:"-"`
+	EndpointMethods    map[string]string `json:"-"`
+	EndpointTargets    []string          `json:"-"`
+	WebEndpoints       []string          `json:"-"`
+	StructuredDispatch bool              `json:"-"`
 	// CloudCredential is the resolved, target-bound cloud credential for the cloud
 	// audit adapters (prowler/scoutsuite). Runtime-only; never serialized.
 	CloudCredential CloudCredential `json:"-"`
@@ -148,6 +149,10 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	Outcome              string                `json:"outcome,omitempty"`
+	ExecutionOutcome     string                `json:"execution_outcome,omitempty"`
+	ParserOutcome        string                `json:"parser_outcome,omitempty"`
+	Completeness         string                `json:"completeness,omitempty"`
 	Scanner              string                `json:"scanner"`
 	Authenticated        bool                  `json:"authenticated,omitempty"`
 	Variant              string                `json:"variant,omitempty"`

@@ -39,6 +39,8 @@ type Finding struct {
 	Resource          string  `json:"resource,omitempty"`
 	Description       string  `json:"description,omitempty"`
 	Evidence          string  `json:"evidence,omitempty"`
+	NativeMessageID   string  `json:"native_message_id,omitempty"`
+	Attack            string  `json:"attack,omitempty"`
 	Remediation       string  `json:"remediation,omitempty"`
 	EvidenceRef       string  `json:"evidence_reference"`
 	CVE               string  `json:"cve,omitempty"`
@@ -383,6 +385,9 @@ func parseZAP(path string) ([]Finding, error) {
 		}
 		for j, instance := range instances {
 			im, _ := instance.(map[string]any)
+			if im == nil {
+				im = m
+			}
 			// Grouped report alerts carry their URLs in instances; the alerts view
 			// returns one record per URL instead.
 			endpoint := str(m["url"])
@@ -395,7 +400,7 @@ func parseZAP(path string) ([]Finding, error) {
 			}
 			id := firstNonEmpty(str(m["pluginId"]), str(m["pluginid"]), strconv.Itoa(i))
 			nativeConfidence := firstNonEmpty(str(m["confidence"]), str(m["confidencecode"]))
-			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", RuleID: id, Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Method: str(im["method"]), Parameter: str(im["param"]), Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, Remediation: firstNonEmpty(str(m["solution"]), str(m["remediation"])), CWE: str(m["cweid"]), Confidence: normalizeScannerConfidence("zap", nativeConfidence), NativeConfidence: nativeConfidence})
+			out = append(out, Finding{SourceID: fmt.Sprintf("zap:%s:%d:%s", id, j, endpoint), Scanner: "zap", RuleID: id, Title: firstNonEmpty(str(m["name"]), str(m["alert"]), id), Severity: zapSeverity(firstNonEmpty(str(m["riskdesc"]), str(m["risk"]), str(m["riskcode"]))), Endpoint: endpoint, Method: str(im["method"]), Parameter: str(im["param"]), NativeMessageID: str(m["messageId"]), Attack: str(m["attack"]), Description: firstNonEmpty(str(m["desc"]), str(m["description"])), Evidence: evidence, Remediation: firstNonEmpty(str(m["solution"]), str(m["remediation"])), CWE: str(m["cweid"]), Confidence: normalizeScannerConfidence("zap", nativeConfidence), NativeConfidence: nativeConfidence})
 		}
 	}
 	return out, nil

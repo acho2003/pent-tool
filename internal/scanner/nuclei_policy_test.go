@@ -127,7 +127,7 @@ func TestNucleiRetriesAndTimeoutBounded(t *testing.T) {
 func TestNucleiRunRecordsExcludedCategoriesLimitation(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "nuclei")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"-jle\" ]; then shift; : > \"$1\"; fi; shift; done\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	runner := commandRunner{name: "nuclei", build: buildNuclei}

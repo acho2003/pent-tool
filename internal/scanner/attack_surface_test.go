@@ -134,7 +134,7 @@ func TestCompleteEndpointCoverageRecordsBatchCompletedForBatchAdapters(t *testin
 		}
 		CompleteEndpointCoverage(surface, name, Run{Scanner: name, Status: "completed", FinishedAt: "2026-10-02T00:00:00Z"})
 	}
-	want := map[string]string{"nuclei": EndpointCoverageBatchCompleted, "wapiti": EndpointCoverageBatchCompleted, "dalfox": EndpointCoverageBatchCompleted, "zap": "completed"}
+	want := map[string]string{"nuclei": EndpointCoverageBatchCompleted, "wapiti": EndpointCoverageBatchCompleted, "dalfox": EndpointCoverageBatchCompleted, "zap": EndpointCoverageBatchCompleted}
 	api := surface.Endpoints[byID[ep.ID]]
 	for name, status := range want {
 		var got string

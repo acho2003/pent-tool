@@ -799,7 +799,18 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if len(spec.env) > 0 {
 		cmd.Env = append(os.Environ(), spec.env...)
 	}
+	authDone := make(chan struct{})
+	authResult := make(chan error, 1)
+	monitorAuth := req.TargetAuth != "" && req.AuthRefresh != nil && (name == "wapiti" || name == "dalfox" || name == "nuclei")
+	if monitorAuth {
+		go monitorCommandAuth(cmdCtx, req, cancel, authDone, authResult)
+	}
 	err = cmd.Run()
+	close(authDone)
+	var authErr error
+	if monitorAuth {
+		authErr = <-authResult
+	}
 	run.Truncated = outW.Truncated() || errW.Truncated()
 	run.ExitCode = 0
 	if err != nil {
@@ -849,6 +860,11 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if run.Status == "completed" && len(spec.limitations) > 0 {
 		run.Limitations = append(run.Limitations, spec.limitations...)
 	}
+	if authErr != nil {
+		markAuthExpired(&run)
+		run.Reason = authErr.Error()
+	}
+	validateWebResult(&run)
 	run.FinishedAt = time.Now().Format(time.RFC3339Nano)
 	run = finalizeRun(run)
 	if emit != nil {
@@ -880,6 +896,18 @@ func readCapped(path string, max int64) string {
 }
 
 func finalizeRun(run Run) Run {
+	if run.Outcome == "" {
+		switch {
+		case run.AuthState == "failed" || run.AuthState == "expired":
+			run.Outcome = "AUTH_FAILED"
+		case strings.Contains(run.Reason, "timeout") || strings.Contains(run.Reason, "time budget"):
+			run.Outcome = "TIMEOUT"
+		case run.Status == "failed":
+			run.Outcome = "FAILED"
+		case run.Status == "cancelled":
+			run.Outcome = "PARTIAL"
+		}
+	}
 	if run.FinishedAt == "" {
 		run.FinishedAt = time.Now().Format(time.RFC3339Nano)
 	}
