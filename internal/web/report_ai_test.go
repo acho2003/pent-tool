@@ -390,3 +390,20 @@ func TestFallbackFindingKeepsSeverityUnrated(t *testing.T) {
 		t.Fatalf("unrated flag not carried: %#v", out)
 	}
 }
+
+func TestScannerCoverageGapsIncludesIncompleteRunsAndRedactsTargets(t *testing.T) {
+	text := scannerCoverageGaps([]scanner.Run{
+		{Scanner: "nuclei", Status: "completed"},
+		{Scanner: "zap", Status: "cancelled", Target: "https://example.test/?token=secret-value", Reason: "Stopped by user"},
+		{Scanner: "nikto", Status: "failed", Reason: "timeout"},
+		{Scanner: "wapiti", Status: "skipped", Reason: "prerequisite failed"},
+	})
+	for _, want := range []string{"zap", "cancelled", "Stopped by user", "nikto", "timeout", "wapiti", "prerequisite failed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing coverage detail %q", want)
+		}
+	}
+	if strings.Contains(text, "secret-value") || strings.Contains(text, "nuclei") {
+		t.Fatal("coverage gaps leaked credentials or included a completed scanner")
+	}
+}

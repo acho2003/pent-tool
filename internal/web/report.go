@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-pdf/fpdf"
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
 type reportPalette struct {
@@ -907,6 +908,19 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				setColor(gray)
 			}
 			pdfCellFormat(pdf, 30, 7, strings.ToUpper(strings.ReplaceAll(run.Status, "_", " ")), "", 1, "R", false, 0, "")
+		}
+		if gaps := scannerCoverageGaps(scan.ScannerRuns); gaps != "" {
+			if pdf.GetY() > 230 {
+				pdf.AddPage()
+				pdf.SetY(15)
+			}
+			pdf.Ln(4)
+			pdf.SetFont("Helvetica", "B", 11)
+			setColor(coral)
+			pdfMultiCell(pdf, 190, 6, "Incomplete scanner coverage", "", "L", false)
+			pdf.SetFont("Helvetica", "", 9)
+			setColor(white)
+			pdfMultiCell(pdf, 190, 5, gaps, "", "L", false)
 		}
 		pdf.Ln(4)
 		pdf.SetFont("Helvetica", "", 7)
@@ -1917,4 +1931,19 @@ func pdfMultiCell(pdf *fpdf.Fpdf, w, h float64, txt, borderStr, alignStr string,
 
 func pdfStringWidth(pdf *fpdf.Fpdf, s string) float64 {
 	return pdf.GetStringWidth(cp1252(s))
+}
+
+func scannerCoverageGaps(runs []scanner.Run) string {
+	var lines []string
+	for _, run := range runs {
+		if run.Status == "completed" {
+			continue
+		}
+		location := firstNonBlank(run.Target, run.Scope, "Not provided by scanner")
+		lines = append(lines, fmt.Sprintf("%s @ %s — %s: %s", run.Scanner, sanitizeEvidenceText(sanitizeEvidenceURL(location)), run.Status, sanitizeEvidenceText(firstNonBlank(run.Reason, "Completion was not recorded; this tool does not establish complete coverage."))))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "The following tools did not complete. Their results cannot establish that the affected targets are free of vulnerabilities.\n\n" + strings.Join(lines, "\n\n")
 }

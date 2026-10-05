@@ -14,7 +14,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-const reportPromptVersion = "scanner-report-v3"
+const reportPromptVersion = "scanner-report-v4"
 
 type reportManifest struct {
 	SchemaVersion int                         `json:"schema_version"`
