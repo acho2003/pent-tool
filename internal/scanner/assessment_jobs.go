@@ -150,6 +150,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	// is reused on resume; if only the raw JSONL remains, it is reparsed without
 	// touching the target. The runtime inventory refines scanner inputs but never
 	// changes the accepted assessment plan or its fingerprint.
+	discoveredAPIs := map[string][]APIEndpoint{}
 	pendingHistory := map[string][]HistoricalCandidate{}
 	preCrawlRuns := map[string]Run{}
 	explicitCrawl := map[string]bool{}
@@ -266,6 +267,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		MergeOpenAPIEndpointsScoped(surface, inventoryTarget, apiEndpoints, appScopes[target.ID])
+		if UnifiedWorkflowEnabled() {
+			crawlReq.Target = inventoryTarget
+			discoveredAPIs[target.ID] = DiscoverAPIs(ctx, crawlReq, p.Config, surface)
+			for i := range discoveredAPIs[target.ID] {
+				discoveredAPIs[target.ID][i].TargetID = target.ID
+			}
+			MergeOpenAPIEndpointsScoped(surface, inventoryTarget, discoveredAPIs[target.ID], appScopes[target.ID])
+		}
 		MergeHistoricalCandidates(surface, pendingHistory[target.ID])
 		for _, previous := range results {
 			if previous.Scope == inventoryScope || previous.Target == target.Value {
@@ -367,6 +376,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if surface != nil {
 			req.StructuredDispatch = true
 		}
+		req.APIEndpoints = append(req.APIEndpoints, discoveredAPIs[job.TargetID]...)
 		for _, endpoint := range plan.APIEndpoints {
 			if endpoint.TargetID == job.TargetID {
 				req.APIEndpoints = append(req.APIEndpoints, endpoint)

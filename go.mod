@@ -26,6 +26,7 @@ require (
 	github.com/Mzack9999/go-http-digest-auth-client v0.6.1-0.20220414142836-eb8883508809 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
+	github.com/agnivade/levenshtein v1.1.1 // indirect
 	github.com/akrylysov/pogreb v0.10.2 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
@@ -130,6 +131,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.15 // indirect
 	github.com/tklauser/numcpus v0.10.0 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.11 // indirect
 	github.com/weppos/publicsuffix-go v0.50.3-0.20260104170930-90713dec78f2 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/ysmood/fetchup v0.2.3 // indirect

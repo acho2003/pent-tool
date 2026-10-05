@@ -144,7 +144,7 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 			definition, err := loadAPIDefinition(s.dataDir, binding.DefinitionID)
 			if err == nil {
 				var endpoints []scanner.APIEndpoint
-				endpoints, err = scanner.ParseOpenAPI(definition, target.Value)
+				endpoints, err = scanner.ParseAPIDefinition(definition, target.Value)
 				if err == nil {
 					operationIDs := make(map[string]bool, len(endpoints))
 					for _, endpoint := range endpoints {
@@ -170,7 +170,9 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 							plan.Errors = append(plan.Errors, assessment.Problem{Code: "api_write.operation_unknown", Message: fmt.Sprintf("API write approval does not match an operation in definition %s", binding.DefinitionID), Blocking: true})
 						}
 					}
-					endpoints = scanner.MaterializeOpenAPIOperations(endpoints, binding.DefinitionID, target.Value, normalized.APIOperationInputs)
+					if len(endpoints) == 0 || endpoints[0].Source != "graphql" {
+						endpoints = scanner.MaterializeOpenAPIOperations(endpoints, binding.DefinitionID, target.Value, normalized.APIOperationInputs)
+					}
 					for i := range endpoints {
 						endpoints[i].TargetID = binding.TargetID
 					}

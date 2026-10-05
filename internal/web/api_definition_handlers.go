@@ -32,7 +32,7 @@ func (s *Server) handleAPIDefinitions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "API definition exceeds the 5 MiB upload limit", http.StatusRequestEntityTooLarge)
 		return
 	}
-	endpoints, err := scanner.ParseOpenAPI(body, "")
+	endpoints, err := scanner.ParseAPIDefinition(body, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -80,7 +80,10 @@ func (s *Server) handleAPIDefinitions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read stored API definition", http.StatusInternalServerError)
 		return
 	}
-	format := "yaml"
+	format := "graphql"
+	if _, err := scanner.ParseOpenAPI(body, ""); err == nil {
+		format = "yaml"
+	}
 	if json.Valid(body) {
 		format = "json"
 	}
