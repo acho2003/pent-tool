@@ -65,6 +65,7 @@ type fakeGvmd struct {
 	taskProgress []int
 	polls        int
 	stopFails    bool
+	noPortList   bool
 }
 
 func (f *fakeGvmd) seen(substr string) bool {
@@ -128,6 +129,9 @@ func (f *fakeGvmd) respond(command string) string {
 			`<scanner id="scn-cve"><name>CVE</name></scanner>` +
 			`<scanner id="scn-default"><name>OpenVAS Default</name></scanner></get_scanners_response>`
 	case "get_port_lists":
+		if f.noPortList {
+			return `<get_port_lists_response status="200"/>`
+		}
 		return `<get_port_lists_response status="200">` +
 			`<port_list id="pl-tcp-udp"><name>All IANA assigned TCP and UDP</name></port_list>` +
 			`<port_list id="pl-tcp"><name>All IANA assigned TCP</name></port_list></get_port_lists_response>`
@@ -363,5 +367,37 @@ func TestOpenVASStopsGreenboneTaskWhenCancelled(t *testing.T) {
 	// A cancelled scan must not leave its task scanning in Greenbone.
 	if !fake.seen(`<stop_task task_id="task-1"/>`) {
 		t.Fatal("cancelled OpenVAS run did not stop its Greenbone task")
+	}
+}
+
+func TestOpenVASInlinePortPolicyDoesNotRequireFeedPortList(t *testing.T) {
+	socketDir, err := os.MkdirTemp("", "gmp-policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDir)
+	socket := filepath.Join(socketDir, "gvmd.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Skip(err)
+	}
+	defer listener.Close()
+	fake := &fakeGvmd{noPortList: true}
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go fake.serve(t, connection)
+		}
+	}()
+	cfg := Config{GVMSocket: socket, GVMUser: "admin", GVMPass: "fixture-secret", OpenVASTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}
+	run := openVASRunner{}.Run(t.Context(), Request{Target: "https://example.test/app", ScanDir: t.TempDir(), NetworkPorts: []int{443, 8443, 443}}, cfg, nil)
+	if run.Status != "completed" || !fake.seen("<port_range>T:443,8443</port_range>") || fake.seen("get_port_lists") {
+		t.Fatalf("inline policy depended on default list: %+v", run)
+	}
+	if len(run.NetworkPorts) != 2 {
+		t.Fatal("duplicate policy ports", run.NetworkPorts)
 	}
 }

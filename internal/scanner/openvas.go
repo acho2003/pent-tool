@@ -175,34 +175,34 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 		return fail(fmt.Errorf("Greenbone default scanner not found"))
 	}
 
-	// gvmd rejects create_target unless it carries a port list (or an inline
-	// port range): "One of PORT_LIST and PORT_RANGE are required". Resolve the
-	// built-in "All IANA assigned TCP" list by name, matching how the config and
-	// scanner above are resolved, and fall back to the first list the feed ships
-	// so a renamed default still yields a usable target.
-	portListData, err := call("resolve-port-list", `<get_port_lists filter="name=&quot;All IANA assigned TCP&quot;"/>`, 2*time.Minute)
-	if err != nil {
-		return fail(err)
-	}
-	portListID := xmlIDByExactName(portListData, "port_list", "All IANA assigned TCP")
-	if portListID == "" {
-		return fail(fmt.Errorf("Greenbone port list not found; feed may still be syncing"))
-	}
-
+	// A recorded explicit policy uses an inline range and must not depend on
+	// an unrelated feed-provided default port list being present.
 	name := "xalgorix-" + filepath.Base(req.ScanDir)
-	portSpec := fmt.Sprintf(`<port_list id="%s"/>`, portListID)
+	portSpec := ""
 	if len(req.NetworkPorts) > 0 {
 		var ports []string
+		seen := map[int]bool{}
 		for _, port := range req.NetworkPorts {
-			if port > 0 && port <= 65535 {
+			if port <= 0 || port > 65535 {
+				return fail(fmt.Errorf("approved port policy contains invalid port %d", port))
+			}
+			if !seen[port] {
 				ports = append(ports, strconv.Itoa(port))
+				run.NetworkPorts = append(run.NetworkPorts, port)
+				seen[port] = true
 			}
 		}
-		if len(ports) == 0 {
-			return fail(fmt.Errorf("approved port policy is empty"))
-		}
 		portSpec = `<port_range>T:` + strings.Join(ports, ",") + `</port_range>`
-		run.NetworkPorts = append([]int(nil), req.NetworkPorts...)
+	} else {
+		portListData, err := call("resolve-port-list", `<get_port_lists filter="name=&quot;All IANA assigned TCP&quot;"/>`, 2*time.Minute)
+		if err != nil {
+			return fail(err)
+		}
+		portListID := xmlIDByExactName(portListData, "port_list", "All IANA assigned TCP")
+		if portListID == "" {
+			return fail(fmt.Errorf("Greenbone port list not found; feed may still be syncing"))
+		}
+		portSpec = fmt.Sprintf(`<port_list id="%s"/>`, portListID)
 	}
 	sshCredential := ""
 	if req.GVMSSHCredentialID != "" {
