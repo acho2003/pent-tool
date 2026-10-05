@@ -78,6 +78,37 @@ func TestAssessmentJobsPassScopeAndOneBudgetToAllTargets(t *testing.T) {
 	}
 }
 
+type cancellableAssessmentProbe struct{ started chan struct{} }
+
+func (*cancellableAssessmentProbe) Name() string             { return "cancellable-probe" }
+func (p *cancellableAssessmentProbe) Descriptor() Descriptor { return Descriptor{Name: p.Name()} }
+func (p *cancellableAssessmentProbe) Run(ctx context.Context, req Request, _ Config, emit EmitFunc) Run {
+	close(p.started)
+	<-ctx.Done()
+	return cancelledRun(p.Name(), "", req, ctx.Err(), emit)
+}
+
+func TestAssessmentJobCanCancelIndividualAttempt(t *testing.T) {
+	probe := &cancellableAssessmentProbe{started: make(chan struct{})}
+	registered := make(chan context.CancelFunc, 1)
+	plan := AssessmentPlan{Fingerprint: "sha256:cancel-one", Jobs: []PlanJob{{ID: "job", Scanner: probe.Name(), TargetID: "app", Target: "https://app.example.test/", State: PlanSelected}}}
+	p := &Pipeline{Runners: []Runner{probe}, AttemptControl: func(id string, cancel context.CancelFunc) func() {
+		if id == "" {
+			t.Error("attempt ID is empty")
+		}
+		registered <- cancel
+		return func() {}
+	}}
+	done := make(chan []Run, 1)
+	go func() { done <- p.RunAssessmentJobs(context.Background(), plan, t.TempDir(), nil, nil) }()
+	<-probe.started
+	(<-registered)()
+	runs := <-done
+	if len(runs) != 1 || runs[0].Status != "cancelled" || runs[0].Reason != "scanner stopped by user; partial output and artifacts were retained" {
+		t.Fatalf("individual stop did not produce a cancelled run: %+v", runs)
+	}
+}
+
 func TestAssessmentJobsStopAfterPrerequisiteFailure(t *testing.T) {
 	probe := &assessmentPolicyProbe{}
 	plan := AssessmentPlan{Fingerprint: "sha256:dependencies", Jobs: []PlanJob{

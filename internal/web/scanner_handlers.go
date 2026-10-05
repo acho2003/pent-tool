@@ -326,6 +326,9 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 	var run *scanner.Run
 	for i := range rec.ScannerRuns {
 		candidate := &rec.ScannerRuns[i]
+		if attemptID := r.URL.Query().Get("attempt_id"); attemptID != "" && candidate.AttemptID != attemptID {
+			continue
+		}
 		if candidate.Scanner != name {
 			continue
 		}
@@ -402,6 +405,46 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Next-Offset", strconv.FormatInt(offset+int64(len(data)), 10))
 	w.Header().Set("X-Total-Size", strconv.FormatInt(info.Size(), 10))
 	_, _ = w.Write(data)
+}
+
+// handleStopScannerRun cancels one active assessment attempt while preserving
+// its captured output and artifacts.
+func (s *Server) handleStopScannerRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 6 || parts[0] != "api" || parts[1] != "scans" || parts[3] != "runs" || parts[5] != "stop" {
+		http.Error(w, "invalid scanner stop path", http.StatusBadRequest)
+		return
+	}
+	_, rec := s.findScanByID(parts[2])
+	if rec == nil {
+		http.Error(w, "scan not found", http.StatusNotFound)
+		return
+	}
+	foundRunning := false
+	for _, run := range rec.ScannerRuns {
+		if run.AttemptID == parts[4] && run.Status == "running" {
+			foundRunning = true
+			break
+		}
+	}
+	if !foundRunning {
+		http.Error(w, "active scanner run not found", http.StatusNotFound)
+		return
+	}
+	s.scannerControlMu.Lock()
+	cancel := s.scannerCancels[parts[4]]
+	s.scannerControlMu.Unlock()
+	if cancel == nil {
+		http.Error(w, "scanner run is no longer active", http.StatusConflict)
+		return
+	}
+	cancel()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "stopping"})
 }
 
 // isScanScopesPath reports whether path is exactly /api/scans/{id}/scopes.

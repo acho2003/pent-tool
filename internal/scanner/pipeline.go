@@ -23,6 +23,9 @@ import (
 type Pipeline struct {
 	Config  Config
 	Runners []Runner
+	// AttemptControl registers a cancellation function while an assessment job
+	// is active. The returned function must unregister that attempt.
+	AttemptControl func(string, context.CancelFunc) func()
 	// reconFn discovers host scopes and returns the recon-phase runs. NewPipeline
 	// wires the real runRecon; a hand-built &Pipeline{} leaves it nil, which Run
 	// falls back to singleScopeRecon so tests keep their single implicit scope.

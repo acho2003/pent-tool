@@ -450,8 +450,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, fmt.Sprintf("create job artifact directory: %v", err), emit))
 			continue
 		}
-		jobCtx := ctx
-		jobCancel := func() {}
+		jobCtx, jobCancel := context.WithCancel(ctx)
 		stageDeadline := time.Time{}
 		if req.ApplicationURL != "" && p.Config.WebBudget > 0 {
 			deadline := webDeadlines[job.TargetID]
@@ -469,7 +468,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stageDeadline = time.Now().Add(time.Until(deadline) / time.Duration(pending))
 				deadline = stageDeadline
 			}
+			jobCancel()
 			jobCtx, jobCancel = context.WithDeadline(ctx, deadline)
+		}
+		unregisterAttempt := func() {}
+		if p.AttemptControl != nil {
+			unregisterAttempt = p.AttemptControl(attemptID, jobCancel)
 		}
 		runEmit := emit
 		if emit != nil {
@@ -486,8 +490,15 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		run := runAttempt(jobCtx, runner, req, p.Config, runEmit)
+		userStopped := jobCtx.Err() == context.Canceled && ctx.Err() == nil
 		budgetExpired := jobCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 		jobCancel()
+		unregisterAttempt()
+		if userStopped {
+			run.Status = "cancelled"
+			run.Reason = "scanner stopped by user; partial output and artifacts were retained"
+			run.FinishedAt = time.Now().Format(time.RFC3339Nano)
+		}
 		if budgetExpired {
 			run.Status = "failed"
 			if !stageDeadline.IsZero() && time.Now().Before(webDeadlines[job.TargetID]) {

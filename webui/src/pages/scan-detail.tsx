@@ -368,9 +368,9 @@ export default function ScanDetailPage() {
   );
 }
 
-type RunKey = { scanner: string; scope: string };
-const sameKey = (a: RunKey | null, b: RunKey) => !!a && a.scanner === b.scanner && a.scope === b.scope;
-const keyOf = (r: ScopeRun, fallbackScope: string): RunKey => ({ scanner: r.scanner, scope: r.scope || fallbackScope });
+type RunKey = { scanner: string; scope: string; attemptId?: string };
+const sameKey = (a: RunKey | null, b: RunKey) => !!a && a.scanner === b.scanner && a.scope === b.scope && a.attemptId === b.attemptId;
+const keyOf = (r: ScopeRun, fallbackScope: string): RunKey => ({ scanner: r.scanner, scope: r.scope || fallbackScope, attemptId: r.attempt_id });
 const ATTENTION = new Set(["failed", "running", "cancelled"]);
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "not_applicable", "skipped"]);
 
@@ -546,6 +546,10 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	// Re-parse the scan's sealed scanner output into findings (e.g. after a
 	// parser fix). Artifacts are only read, never rewritten.
 	const queryClient = useQueryClient();
+	const stopScanner = useMutation({
+		mutationFn: (attemptId: string) => api.stopScannerRun(scan.id, attemptId),
+		onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["scan", scan.id] }); },
+	});
 	const reimport = useMutation({
 		mutationFn: () => api.rebuildScanFindings(scan.id),
 		onSuccess: () => { void queryClient.invalidateQueries(); },
@@ -556,7 +560,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	const liveRun = (scanner: string, scope: string) => (scan.scanner_runs ?? []).find((run) => run.scanner === scanner && (run.scope ?? "") === scope);
 	const cards = (runs: ScopeRun[], fallbackScope: string) => <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{runs.map((r) => {
 		const k = keyOf(r, fallbackScope);
-		return <ScannerStatusCard key={`${k.scope}|${k.scanner}`} name={r.scanner} run={r} live={liveRunProgress(liveRun(k.scanner, k.scope))} active={sameKey(selected, k)} onClick={() => setPicked(k)} />;
+		return <ScannerStatusCard key={`${k.scope}|${k.scanner}|${k.attemptId ?? ""}`} name={r.scanner} run={r} live={liveRunProgress(liveRun(k.scanner, k.scope))} active={sameKey(selected, k)} onClick={() => setPicked(k)} onStop={(attemptId) => stopScanner.mutate(attemptId)} stopping={stopScanner.isPending} />;
 	})}</div>;
 	// Render a scope's runs grouped by scanner group (web/network/cloud/k8s/code),
 	// each under a small subheader. A single group falls back to a flat grid.
@@ -584,7 +588,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 			{(coverageQuery.data.gaps ?? []).length > 0 && <div><p className="mb-2 text-xs font-medium">Coverage gaps</p><div className="space-y-2">{coverageQuery.data.gaps?.map((gap, index) => <div key={`${gap.scanner}-${gap.target_id}-${index}`} className="border-l-2 pl-3"><p className="text-xs font-medium">{gap.scanner} · {gap.state} · {gap.reason_code}</p><p className="text-xs text-muted-foreground">{gap.reason}</p></div>)}</div></div>}
 			{coverageQuery.data.api_operation_counts && <p className="text-xs text-muted-foreground">API operations: {coverageQuery.data.api_operation_counts.discovered} discovered · {coverageQuery.data.api_operation_counts.eligible} eligible · {coverageQuery.data.api_operation_counts.attempted} attempted · {coverageQuery.data.api_operation_counts.completed} completed · {coverageQuery.data.api_operation_counts.batch_completed} batch completed · {coverageQuery.data.api_operation_counts.failed} failed · {coverageQuery.data.api_operation_counts.skipped} skipped · {coverageQuery.data.api_operation_counts.not_attempted} not attempted</p>}{(coverageQuery.data.api_operations ?? []).length > 0 && <div><p className="mb-2 text-xs font-medium">API operations</p><div className="space-y-1">{coverageQuery.data.api_operations?.map((op, index) => <p key={`${op.target_id}-${op.method}-${op.path}-${index}`} className="text-xs"><span className="font-mono">{op.method} {op.path}</span> · {op.status}{!op.eligible && <span className="text-muted-foreground"> — {op.reason}</span>}</p>)}</div></div>}
 		</CardContent></Card>}
-		{scan.assessment_plan && <AssessmentWorkflowCard scan={scan} coverage={coverageQuery.data} onOpen={(scanner, scope) => setPicked({ scanner, scope })} />}
+		{scan.assessment_plan && <AssessmentWorkflowCard scan={scan} coverage={coverageQuery.data} onOpen={(scanner, scope) => setPicked({ scanner, scope })} onStop={(attemptId) => stopScanner.mutate(attemptId)} stopping={stopScanner.isPending} />}
 		<AttackSurfaceCard scanId={scan.id} runsSignature={runsSignature} />
 		{scopesQuery.isError && <Card><CardContent className="flex items-center justify-between gap-3 p-4 text-sm"><span className="text-destructive">Could not load scanner runs.</span><Button size="sm" variant="outline" onClick={() => void scopesQuery.refetch()}>Retry</Button></CardContent></Card>}
 		{scopesQuery.isSuccess && !recon.length && !scopes.length && <p className="text-sm text-muted-foreground">No scanner runs yet.</p>}
@@ -601,11 +605,11 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 				{open && grid(sc.runs, sc.id)}
 			</section>;
 		})}
-		{selected && <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle><span className="capitalize">{selected.scanner}</span>{located && <span className="font-normal text-muted-foreground"> @ {located.label}</span>}</CardTitle><CardDescription>Scanner terminal output.</CardDescription></div>{located?.run.has_artifact && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected.scanner, selected.scope || undefined)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></CardHeader><CardContent><ScannerTerminal key={`${selected.scope}|${selected.scanner}`} scanId={scan.id} scanner={selected.scanner} scope={selected.scope || undefined} status={located?.run.status || "pending"} reason={located?.run.reason} truncated={located?.run.truncated} /></CardContent></Card>}
+		{selected && <Card><CardHeader><div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle><span className="capitalize">{selected.scanner}</span>{located && <span className="font-normal text-muted-foreground"> @ {located.label}</span>}</CardTitle><CardDescription>Saved scanner evidence: combined terminal output and native artifact when available.</CardDescription></div><div className="flex gap-2">{located?.run.status === "running" && located.run.attempt_id && <Button size="sm" variant="destructive" disabled={stopScanner.isPending} onClick={() => stopScanner.mutate(located.run.attempt_id!)}>{stopScanner.isPending ? "Stopping…" : "Stop scanner"}</Button>}{located?.run.has_artifact && <Button size="sm" variant="outline" asChild><a href={api.scannerArtifactUrl(scan.id, selected.scanner, selected.scope || undefined, located.run.attempt_id)}><Download className="mr-1 h-4 w-4" /> Artifact</a></Button>}</div></div></CardHeader><CardContent><ScannerTerminal key={`${selected.scope}|${selected.scanner}|${located?.run.attempt_id ?? ""}`} scanId={scan.id} scanner={selected.scanner} scope={selected.scope || undefined} attemptId={located?.run.attempt_id} status={located?.run.status || "pending"} reason={located?.run.reason} truncated={located?.run.truncated} /></CardContent></Card>}
 	</div>;
 }
 
-function AssessmentWorkflowCard({ scan, coverage, onOpen }: { scan: ScanRecord; coverage?: ScanRecord extends never ? never : import("@/types/api").AssessmentCoverage; onOpen: (scanner: string, scope: string) => void }) {
+function AssessmentWorkflowCard({ scan, coverage, onOpen, onStop, stopping }: { scan: ScanRecord; coverage?: ScanRecord extends never ? never : import("@/types/api").AssessmentCoverage; onOpen: (scanner: string, scope: string) => void; onStop: (attemptId: string) => void; stopping: boolean }) {
 	const plan = scan.assessment_plan;
 	if (!plan) return null;
 	const jobs = plan.jobs ?? [];
@@ -620,7 +624,7 @@ function AssessmentWorkflowCard({ scan, coverage, onOpen }: { scan: ScanRecord; 
 		const status = planned?.status || run?.status || job.state;
 		const definition = job.scanner;
 		const live = liveRunProgress(run);
-		return <div key={job.id} className="flex flex-col gap-2 rounded-md border bg-background/40 p-3 sm:flex-row sm:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">{definition}</span><Badge variant="outline" className="text-[10px]">{status.replaceAll("_", " ")}</Badge><Badge variant="outline" className="text-[10px]">{job.target}</Badge>{live && <Badge variant="outline" className="text-[10px] text-amber-300">{live.stage} {live.percent}%</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">{(job.assessment_types ?? [job.assessment_type]).map((type) => type.replaceAll("_", " ")).join(", ")}{run?.started_at ? ` · started ${formatTime(run.started_at)}` : ""}{run?.finished_at ? ` · finished ${formatTime(run.finished_at)}` : ""}</p>{(planned?.reason || run?.reason || job.reason) && <p className="mt-1 text-xs text-muted-foreground">{planned?.reason || run?.reason || job.reason}</p>}</div>{run && <Button size="sm" variant="outline" onClick={() => onOpen(run.scanner, run.scope || job.target)}><Terminal className="mr-1 h-3.5 w-3.5" />View output</Button>}</div>;
+		return <div key={job.id} className="flex flex-col gap-2 rounded-md border bg-background/40 p-3 sm:flex-row sm:items-start"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">{definition}</span><Badge variant="outline" className="text-[10px]">{status.replaceAll("_", " ")}</Badge><Badge variant="outline" className="text-[10px]">{job.target}</Badge>{live && <Badge variant="outline" className="text-[10px] text-amber-300">{live.stage} {live.percent}%</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">{(job.assessment_types ?? [job.assessment_type]).map((type) => type.replaceAll("_", " ")).join(", ")}{run?.started_at ? ` · started ${formatTime(run.started_at)}` : ""}{run?.finished_at ? ` · finished ${formatTime(run.finished_at)}` : ""}</p>{(planned?.reason || run?.reason || job.reason) && <p className="mt-1 text-xs text-muted-foreground">{planned?.reason || run?.reason || job.reason}</p>}</div>{run && <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => onOpen(run.scanner, run.scope || job.target)}><Terminal className="mr-1 h-3.5 w-3.5" />Evidence</Button>{run.status === "running" && run.attempt_id && <Button size="sm" variant="destructive" disabled={stopping} onClick={() => onStop(run.attempt_id!)}>{stopping ? "Stopping…" : "Stop"}</Button>}</div>}</div>;
 	};
 	return <Card><CardHeader><CardTitle className="text-sm">Assessment workflow</CardTitle><CardDescription>Planned tools and their current execution state. Scanner jobs can run concurrently.</CardDescription></CardHeader><CardContent className="space-y-4">
 		{authRequested && <div className="rounded-lg border p-3"><p className="text-xs font-medium">Access verification</p><div className="mt-2 flex flex-wrap gap-2">{authEvidence.length ? authEvidence.map((item, index) => { const state = item.state === "verified" ? "verified" : item.state === "available" || item.state === "declared" ? "configured" : "failed"; return <Badge key={`${item.capability}-${item.target_id}-${index}`} variant="outline" className={state === "verified" ? "text-emerald-300" : state === "failed" ? "text-red-300" : "text-amber-300"}>{item.target_id || "target"} · {state}</Badge>; }) : <Badge variant="outline" className="text-amber-300">configured · verification pending</Badge>}</div>{authEvidence.some((item) => item.state === "unavailable" || item.state === "failed") && <p className="mt-2 text-xs text-red-300">{authEvidence.find((item) => item.state === "unavailable" || item.state === "failed")?.reason}</p>}</div>}
@@ -670,9 +674,9 @@ function AttackSurfaceCard({ scanId, runsSignature }: { scanId: string; runsSign
 	</Card>;
 }
 
-function ScannerStatusCard({ name, run, live, active, onClick }: { name: string; run?: { status: string; reason?: string; truncated?: boolean; authenticated?: boolean }; live?: { percent: number; stage: string } | null; active: boolean; onClick: () => void }) {
+function ScannerStatusCard({ name, run, live, active, onClick, onStop, stopping }: { name: string; run?: { status: string; reason?: string; truncated?: boolean; authenticated?: boolean; attempt_id?: string }; live?: { percent: number; stage: string } | null; active: boolean; onClick: () => void; onStop: (attemptId: string) => void; stopping: boolean }) {
 	const status = run?.status ?? "pending";
-	return <button type="button" onClick={onClick} className={cn("rounded-lg border p-4 text-left transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{live && <RunProgress live={live} />}{run?.authenticated && <Badge variant="outline" className="mt-2">Authenticated session</Badge>}{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>;
+	return <div className={cn("rounded-lg border p-3 transition-colors hover:bg-muted/30", active && "border-primary bg-muted/30")}><button type="button" onClick={onClick} className="w-full text-left"><p className="font-medium capitalize">{name}</p><p className={cn("mt-2 text-xs capitalize", status === "completed" && "text-emerald-400", status === "failed" && "text-red-400", status === "not_applicable" && "text-muted-foreground", status === "skipped" && "text-muted-foreground", status === "cancelled" && "text-amber-400")}>{status.replaceAll("_", " ")}</p>{live && <RunProgress live={live} />}{run?.authenticated && <Badge variant="outline" className="mt-2">Authenticated session</Badge>}{run?.reason && <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground" title={run.reason}>{run.reason}</p>}{run?.truncated && <Badge variant="outline" className="mt-2">truncated</Badge>}</button>{status === "running" && run?.attempt_id && <Button className="mt-3" size="sm" variant="destructive" disabled={stopping} onClick={() => onStop(run.attempt_id!)}>{stopping ? "Stopping…" : "Stop scanner"}</Button>}</div>;
 }
 
 function currentPhaseLabel(p?: number): string {

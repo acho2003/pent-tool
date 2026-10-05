@@ -104,6 +104,19 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 	}
 
 	pipeline := scanner.NewPipeline(s.ScannerConfig(sess.cfg))
+	pipeline.AttemptControl = func(attemptID string, cancel context.CancelFunc) func() {
+		s.scannerControlMu.Lock()
+		if s.scannerCancels == nil {
+			s.scannerCancels = make(map[string]context.CancelFunc)
+		}
+		s.scannerCancels[attemptID] = cancel
+		s.scannerControlMu.Unlock()
+		return func() {
+			s.scannerControlMu.Lock()
+			delete(s.scannerCancels, attemptID)
+			s.scannerControlMu.Unlock()
+		}
+	}
 	emit := func(evt scanner.Event) {
 		ws := WSEvent{Type: evt.Type, Scanner: evt.Scanner, Stream: evt.Stream, Sequence: evt.Sequence, Output: evt.Output, Content: evt.Output, Target: sess.target, AgentID: sess.id, Timestamp: time.Now().Format(time.RFC3339Nano)}
 		if evt.Type == "scanner_progress" {

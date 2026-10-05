@@ -669,15 +669,17 @@ var dashboardRoutes = []string{
 
 // Server is the web UI server.
 type Server struct {
-	cfg             *config.Config
-	port            int
-	clients         map[*wsClient]bool
-	mu              sync.RWMutex
-	cancelScan      context.CancelFunc // cancels the current scan session context
-	running         atomic.Bool
-	stopReq         atomic.Bool
-	restartWhenIdle atomic.Bool  // SIGUSR1 sets this; a watcher restarts once scans drain
-	httpServer      *http.Server // set in Start; used to trigger graceful restart from the API
+	cfg              *config.Config
+	port             int
+	clients          map[*wsClient]bool
+	mu               sync.RWMutex
+	scannerControlMu sync.Mutex
+	scannerCancels   map[string]context.CancelFunc
+	cancelScan       context.CancelFunc // cancels the current scan session context
+	running          atomic.Bool
+	stopReq          atomic.Bool
+	restartWhenIdle  atomic.Bool  // SIGUSR1 sets this; a watcher restarts once scans drain
+	httpServer       *http.Server // set in Start; used to trigger graceful restart from the API
 	// forceRestartFn performs an immediate restart for POST /api/restart?force=true.
 	// nil in production (the handler re-execs via restartNow); tests set it to a
 	// stub so the force path can be exercised without exec'ing the process.
@@ -755,6 +757,7 @@ func NewServer(cfg *config.Config, port int) *Server {
 		cfg:                  cfg,
 		port:                 port,
 		clients:              make(map[*wsClient]bool),
+		scannerCancels:       make(map[string]context.CancelFunc),
 		dataDir:              dataDir,
 		discordWebhook:       cfg.DiscordWebhook,
 		discordMinSeverity:   strings.ToLower(strings.TrimSpace(cfg.DiscordMinSeverity)),
@@ -918,6 +921,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/scans", s.handleListScans)
 	mux.HandleFunc("/api/scans/plan", s.handleAssessmentPlan)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/stop") && strings.Contains(r.URL.Path, "/runs/") {
+			s.handleStopScannerRun(w, r)
+			return
+		}
 		if isFindingsRoutePath(r.URL.Path) {
 			s.handleFindingsAPI(w, r)
 			return

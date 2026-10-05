@@ -16,8 +16,8 @@ function displayText(raw: string): string {
 
 type Stream = "combined" | "stdout" | "stderr";
 
-function TerminalStream({ scanId, scanner, scope, stream, running, onMissing }: {
-  scanId: string; scanner: string; scope?: string; stream: Stream; running: boolean; onMissing?: () => void;
+function TerminalStream({ scanId, scanner, scope, attemptId, stream, running, onMissing }: {
+  scanId: string; scanner: string; scope?: string; attemptId?: string; stream: Stream; running: boolean; onMissing?: () => void;
 }) {
   const [page, setPage] = useState({ text: "", start: 0, next: 0, total: 0 });
   const [loading, setLoading] = useState(true);
@@ -32,9 +32,9 @@ function TerminalStream({ scanId, scanner, scope, stream, running, onMissing }: 
     setFollowing(true);
     void (async () => {
       try {
-        const probe = await api.scannerOutputChunk(scanId, scanner, stream, scope, 0, 1);
+        const probe = await api.scannerOutputChunk(scanId, scanner, stream, scope, 0, 1, attemptId);
         const start = Math.max(0, probe.total - PAGE_BYTES);
-        const chunk = await api.scannerOutputChunk(scanId, scanner, stream, scope, start, PAGE_BYTES);
+        const chunk = await api.scannerOutputChunk(scanId, scanner, stream, scope, start, PAGE_BYTES, attemptId);
         if (active) setPage(chunk);
       } catch (e) {
         if (!active) return;
@@ -45,13 +45,13 @@ function TerminalStream({ scanId, scanner, scope, stream, running, onMissing }: 
       }
     })();
     return () => { active = false; };
-  }, [scanId, scanner, scope, stream, onMissing]);
+  }, [scanId, scanner, scope, attemptId, stream, onMissing]);
 
   useEffect(() => {
     if (!running || !following || loading || error) return;
     let active = true;
     const timer = window.setInterval(() => {
-      void api.scannerOutputChunk(scanId, scanner, stream, scope, page.next, PAGE_BYTES)
+      void api.scannerOutputChunk(scanId, scanner, stream, scope, page.next, PAGE_BYTES, attemptId)
         .then((chunk) => {
           if (!active || chunk.next === page.next) return;
           setPage((prev) => {
@@ -63,7 +63,7 @@ function TerminalStream({ scanId, scanner, scope, stream, running, onMissing }: 
         .catch((e) => { if (active) setError(e instanceof Error ? e.message : "Output unavailable"); });
     }, 1000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [scanId, scanner, scope, stream, running, following, loading, error, page.next]);
+  }, [scanId, scanner, scope, attemptId, stream, running, following, loading, error, page.next]);
 
   async function show(offset: number, follow: boolean) {
     setLoading(true);
@@ -92,19 +92,19 @@ function TerminalStream({ scanId, scanner, scope, stream, running, onMissing }: 
   </div>;
 }
 
-export function ScannerTerminal({ scanId, scanner, scope, status, reason, truncated }: {
-  scanId: string; scanner: string; scope?: string; status: string; reason?: string; truncated?: boolean;
+export function ScannerTerminal({ scanId, scanner, scope, attemptId, status, reason, truncated }: {
+  scanId: string; scanner: string; scope?: string; attemptId?: string; status: string; reason?: string; truncated?: boolean;
 }) {
   const [legacy, setLegacy] = useState(false);
-  useEffect(() => setLegacy(false), [scanId, scanner, scope]);
+  useEffect(() => setLegacy(false), [scanId, scanner, scope, attemptId]);
   const missing = useCallback(() => setLegacy(true), []);
   return <div className="space-y-3">
     <p className="text-xs text-muted-foreground">Status: <span className="text-foreground">{status.replaceAll("_", " ")}</span>{reason ? ` — ${reason}` : ""}</p>
     {truncated && <p className="text-xs text-amber-400">Output reached the configured size limit; this transcript is incomplete.</p>}
     {legacy ? <>
       <p className="text-xs text-muted-foreground">Older scan: stdout and stderr were saved separately, so their original order is unavailable.</p>
-      <TerminalStream scanId={scanId} scanner={scanner} scope={scope} stream="stdout" running={status === "running"} />
-      <TerminalStream scanId={scanId} scanner={scanner} scope={scope} stream="stderr" running={status === "running"} />
-    </> : <TerminalStream scanId={scanId} scanner={scanner} scope={scope} stream="combined" running={status === "running"} onMissing={missing} />}
+      <TerminalStream scanId={scanId} scanner={scanner} scope={scope} attemptId={attemptId} stream="stdout" running={status === "running"} />
+      <TerminalStream scanId={scanId} scanner={scanner} scope={scope} attemptId={attemptId} stream="stderr" running={status === "running"} />
+    </> : <TerminalStream scanId={scanId} scanner={scanner} scope={scope} attemptId={attemptId} stream="combined" running={status === "running"} onMissing={missing} />}
   </div>;
 }

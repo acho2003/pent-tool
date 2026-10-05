@@ -649,6 +649,45 @@ func TestScannerOutputMatchesPerHostReconRunByHostScope(t *testing.T) {
 	}
 }
 
+func TestScannerOutputSelectsExactAttempt(t *testing.T) {
+	s := newTestServer(t, nil)
+	saveScannerScan(t, s, "attempt-output", func(dir string) []scanner.Run {
+		return []scanner.Run{
+			{Scanner: "nuclei", AttemptID: "attempt-old", Scope: "host:a.test", Target: "a.test", Status: "cancelled", StdoutPath: writeFile(t, filepath.Join(dir, "old.out"), "old partial evidence")},
+			{Scanner: "nuclei", AttemptID: "attempt-new", Scope: "host:a.test", Target: "a.test", Status: "completed", StdoutPath: writeFile(t, filepath.Join(dir, "new.out"), "new evidence")},
+		}
+	})
+	rr := httptest.NewRecorder()
+	s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, "/api/scans/attempt-output/output/nuclei/stdout?scope=host%3Aa.test&attempt_id=attempt-old", nil))
+	if rr.Code != http.StatusOK || rr.Body.String() != "old partial evidence" {
+		t.Fatalf("exact attempt output: %d %q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStopScannerRunCancelsOnlyActiveAttempt(t *testing.T) {
+	s := newTestServer(t, nil)
+	saveScannerScan(t, s, "stop-attempt", func(dir string) []scanner.Run {
+		return []scanner.Run{{Scanner: "nuclei", AttemptID: "attempt-live", Scope: "host:a.test", Target: "a.test", Status: "running"}}
+	})
+	cancelled := make(chan struct{}, 1)
+	s.scannerCancels["attempt-live"] = func() { cancelled <- struct{}{} }
+	rr := httptest.NewRecorder()
+	s.handleStopScannerRun(rr, httptest.NewRequest(http.MethodPost, "/api/scans/stop-attempt/runs/attempt-live/stop", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("stop status %d: %s", rr.Code, rr.Body.String())
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("active scanner attempt was not cancelled")
+	}
+	wrong := httptest.NewRecorder()
+	s.handleStopScannerRun(wrong, httptest.NewRequest(http.MethodPost, "/api/scans/stop-attempt/runs/other-attempt/stop", nil))
+	if wrong.Code != http.StatusNotFound {
+		t.Fatalf("nonexistent attempt stop status %d, want 404", wrong.Code)
+	}
+}
+
 // TestScannerArtifactSelectsRunByScope mirrors
 // TestScannerOutputSelectsRunByScope for the artifact endpoint: ?scope=
 // picks one host's artifact file, and without it the first run by name wins.

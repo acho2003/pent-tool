@@ -276,6 +276,8 @@ export const api = {
     http<WSEvent[]>(`/api/instances/${id}/events`),
   stopInstance: (id: string) =>
     http<{ status: string }>(`/api/instances/${id}/stop`, { method: "POST" }),
+  stopScannerRun: (scanId: string, attemptId: string) =>
+    http<{ status: string }>(`/api/scans/${encodeURIComponent(scanId)}/runs/${encodeURIComponent(attemptId)}/stop`, { method: "POST" }),
   restartInstance: (id: string) =>
     http<{ status: string }>(`/api/instances/${id}/restart`, {
       method: "POST",
@@ -350,14 +352,15 @@ export const api = {
   reportUrl: (scanId: string) => `/api/report/${scanId}`,
 	scannerOutput: (scanId: string, scanner: string, stream: "stdout" | "stderr", scope?: string) =>
 		http<string>(`/api/scans/${scanId}/output/${scanner}/${stream}${scopeQuery(scope)}`),
-	scannerOutputChunk: async (scanId: string, scanner: string, stream: "combined" | "stdout" | "stderr", scope: string | undefined, offset: number, limit = 65536) => {
-		const path = `/api/scans/${encodeURIComponent(scanId)}/output/${encodeURIComponent(scanner)}/${stream}${scopeQuery(scope)}`;
-		const response = await fetch(`${path}${path.includes("?") ? "&" : "?"}offset=${offset}&limit=${limit}`, { credentials: "same-origin" });
+	scannerOutputChunk: async (scanId: string, scanner: string, stream: "combined" | "stdout" | "stderr", scope: string | undefined, offset: number, limit = 65536, attemptId?: string) => {
+		const base = `/api/scans/${encodeURIComponent(scanId)}/output/${encodeURIComponent(scanner)}/${stream}${scopeQuery(scope)}`;
+		const path = `${base}${base.includes("?") ? "&" : "?"}${attemptId ? `attempt_id=${encodeURIComponent(attemptId)}&` : ""}`;
+		const response = await fetch(`${path}offset=${offset}&limit=${limit}`, { credentials: "same-origin" });
 		if (response.status === 401) dispatchAuthExpired();
 		if (!response.ok) throw new HttpError({ status: response.status, statusText: response.statusText, body: await response.text(), data: null });
 		return { text: await response.text(), start: Number(response.headers.get("X-Start-Offset") ?? offset), next: Number(response.headers.get("X-Next-Offset") ?? offset), total: Number(response.headers.get("X-Total-Size") ?? 0) };
 	},
-	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}`,
+	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string, attemptId?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}${attemptId ? `${scope ? "&" : "?"}attempt_id=${encodeURIComponent(attemptId)}` : ""}`,
 	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
 	assessmentCoverage: (scanId: string) => http<AssessmentCoverage>(`/api/scans/${scanId}/coverage`),
 	attackSurface: (scanId: string, params?: { page?: number; size?: number; kind?: string; scanner?: string; status?: string; q?: string }) => {
