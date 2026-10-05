@@ -189,6 +189,66 @@ func TestNegativeControlUsesNegativeMarkerWhenSupplied(t *testing.T) {
 	}
 }
 
+func TestHeaderCookieAuthCanAutoVerifyTargetWithLoginRedirect(t *testing.T) {
+	const cookieValue = "session=valid"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/app/login" {
+			_, _ = w.Write([]byte("Sign in"))
+			return
+		}
+		if r.Header.Get("Cookie") == cookieValue {
+			_, _ = w.Write([]byte("Private dashboard"))
+			return
+		}
+		http.Redirect(w, r, "/app/login", http.StatusFound)
+	}))
+	defer server.Close()
+	s := newTestServer(t, nil)
+	vault := authTestVault(t, s)
+	meta, err := vault.Create(credentials.Record{Name: "cookie", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"app"}, Values: map[string]string{"Cookie": cookieValue}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := headerAuthPlan(server.URL+"/app", meta.ID, "", "")
+	plan.Config.Access[0].VerifyURL = ""
+	plan.Config.Access[0].VerifyMarker = ""
+	headers, err := s.prepareAssessmentAuthentication(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(headers["app"]) != 1 || headers["app"][0] != "Cookie: "+cookieValue || plan.Capabilities[0].State != assessment.StateVerified {
+		t.Fatalf("cookie was not auto-verified: headers=%v evidence=%+v", headers, plan.Capabilities[0])
+	}
+	refreshers, err := s.assessmentAuthRefreshers(plan, headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed, err := refreshers["app"](context.Background(), headers["app"]); err != nil || len(refreshed) != 1 || refreshed[0] != headers["app"][0] {
+		t.Fatalf("authentication prerequisite could not re-verify the cookie: headers=%v err=%v", refreshed, err)
+	}
+}
+
+func TestHeaderCredentialAutoVerificationRejectsIdenticalPublicResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Public single-page app"))
+	}))
+	defer server.Close()
+	s := newTestServer(t, nil)
+	vault := authTestVault(t, s)
+	meta, err := vault.Create(credentials.Record{Name: "cookie", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"app"}, Values: map[string]string{"Cookie": "session=invalid"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := headerAuthPlan(server.URL+"/app", meta.ID, "", "")
+	plan.Config.Access[0].VerifyURL = ""
+	plan.Config.Access[0].VerifyMarker = ""
+	if headers, err := s.prepareAssessmentAuthentication(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	} else if len(headers["app"]) != 0 || plan.Capabilities[0].State != assessment.StateFailed || !strings.Contains(plan.Capabilities[0].Reason, "look the same") {
+		t.Fatalf("identical public response incorrectly verified credentials: headers=%v evidence=%+v", headers, plan.Capabilities[0])
+	}
+}
+
 func TestNegativeControlRunsOncePerVerificationNotPerRefresh(t *testing.T) {
 	const secret = "Bearer REFRESH-COUNT-SECRET"
 	var anonymous, authenticated atomic.Int32

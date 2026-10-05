@@ -67,9 +67,13 @@ cleanup method/path and any required cleanup fixture. Review the scan preview
 before starting.
 
 Application credentials are stored in the encrypted credential vault and
-bound to targets. For authenticated work, configure a protected verification
-URL and a response marker; the assessment verifies access before authenticated
-discovery. Credentials are not sent to archive providers or sibling hosts.
+bound to targets. For HTTP header or cookie credentials, save the credential
+and optionally provide a protected verification URL and response marker. With
+neither set, Xalgorix checks the approved target URL and compares authenticated
+and anonymous status/redirect behavior; if they look identical, provide a
+protected URL or marker. Form login still requires a protected URL and marker.
+The assessment verifies access before authenticated discovery. Credentials are
+not sent to archive providers or sibling hosts.
 
 ## Coverage and reports
 

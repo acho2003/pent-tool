@@ -68,6 +68,44 @@ func verifyNegativeControl(ctx context.Context, scope assessment.AppScope, verif
 	return nil
 }
 
+// verifyAnonymousContrast confirms a marker-free credential check behaves
+// differently from an unauthenticated request. It supports common apps that
+// redirect anonymous users to sign-in while returning the protected page for
+// a valid Cookie or Authorization header. If both responses look identical,
+// ask the operator for a marker from a protected page instead of claiming auth.
+func verifyAnonymousContrast(ctx context.Context, scope assessment.AppScope, verifyURL string, authenticated authProbeResult) error {
+	if !scopeAllowsRequest(scope, verifyURL) {
+		return fmt.Errorf("verification URL is outside the application scope")
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return fmt.Errorf("could not create anonymous verification session")
+	}
+	client := &http.Client{Jar: jar, Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 || !scopeAllowsRequest(scope, req.URL.String()) {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, verifyURL, nil)
+	if err != nil {
+		return fmt.Errorf("invalid anonymous verification request")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("anonymous verification request failed")
+	}
+	defer resp.Body.Close()
+	_, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return fmt.Errorf("anonymous verification response could not be read")
+	}
+	if resp.StatusCode != authenticated.StatusCode || resp.Request.URL.String() != authenticated.FinalURL {
+		return nil
+	}
+	return fmt.Errorf("authenticated and anonymous responses look the same; choose a protected verification URL or add a response marker")
+}
+
 // applicationScope is the scope of one application URL, built by the shared
 // assessment matcher so default ports, host case and dot segments compare the
 // same way everywhere.

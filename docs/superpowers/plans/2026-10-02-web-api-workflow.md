@@ -622,7 +622,7 @@ I5.T1 and I5.T2 were merged into I5.T1. I5.T3 was split into I5.T2 and I5.T3.
 13. I1.T9 split and file reference: applied (I1.T9 in group D, I1.T19 in group H after the executor). The file reference is now deterministic_scan.go.
 14. I1.T10 split: applied (I1.T11, I1.T17, I1.T12, I1.T13, I1.T14). The AssessmentRPS division is dropped (fidelity 9).
 15. I3.T5 split and identities: applied (I3.T6 read-only checks, I3.T7 writes/authz, I3.T11 targeted validation; identities in I3.T1/I3.T9).
-16. RegistryVersion per increment: applied (4/5/6); API operation materialization adds version 7, and approved write execution adds version 8, invalidating previews created before request dispatch policy changed.
+16. RegistryVersion per increment: applied (4/5/6); API operation materialization adds version 7, approved write execution adds version 8, and optional marker/status-contrast authentication adds version 9 to invalidate plans created under older auth verification rules.
 17. I2 shippability: applied. The runtime pins move to I2.T10.
 18. Parallel tasks in one package: applied (worktree per task, merge-and-test at group boundaries, prefixed helpers; section 1).
 19. I5.T1 and I5.T2 coupled: applied, merged into I5.T1.

@@ -76,8 +76,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 8: journaled API write execution).
-const PlanRegistryVersion = "8"
+// schedules (version 9: simpler header-auth verification).
+const PlanRegistryVersion = "9"
 
 type AssessmentPlan struct {
 	Config          assessment.AssessmentConfig     `json:"config"`

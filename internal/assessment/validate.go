@@ -288,10 +288,12 @@ func Validate(cfg AssessmentConfig) []Problem {
 		}
 		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin {
 			if strings.TrimSpace(ab.CredentialID) != "" {
-				if strings.TrimSpace(ab.VerifyURL) == "" || strings.TrimSpace(ab.VerifyMarker) == "" {
-					probs = append(probs, blocking("access.verification_required", "application credentials require an in-scope verify_url and expected verify_marker"))
-				} else if err := validateTargetValue(Target{Kind: KindURL, Value: ab.VerifyURL}); err != nil {
-					probs = append(probs, blocking("access.verify_url.invalid", "credential verification URL must be an absolute HTTP(S) URL without embedded credentials or fragments"))
+				if ab.Kind == AccessFormLogin && (strings.TrimSpace(ab.VerifyURL) == "" || strings.TrimSpace(ab.VerifyMarker) == "") {
+					probs = append(probs, blocking("access.verification_required", "form login requires an in-scope verify_url and expected verify_marker"))
+				} else if ab.VerifyURL != "" {
+					if err := validateTargetValue(Target{Kind: KindURL, Value: ab.VerifyURL}); err != nil {
+						probs = append(probs, blocking("access.verify_url.invalid", "credential verification URL must be an absolute HTTP(S) URL without embedded credentials or fragments"))
+					}
 				}
 				if len(ab.VerifyMarker) > 256 || strings.ContainsAny(ab.VerifyMarker, "\r\n\x00") {
 					probs = append(probs, blocking("access.verify_marker.invalid", "credential verification marker must be 1–256 printable characters"))

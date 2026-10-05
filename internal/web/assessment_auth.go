@@ -87,21 +87,21 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 				continue
 			}
 			scope := assessment.AppScopeForTarget(plan.Config, targetID)
-			if !urlWithinApplication(target.Value, binding.VerifyURL) || !scopeAllowsRequest(scope, binding.VerifyURL) {
+			verifyURL := binding.VerifyURL
+			if verifyURL == "" {
+				verifyURL = target.Value
+			}
+			if !urlWithinApplication(target.Value, verifyURL) || !scopeAllowsRequest(scope, verifyURL) {
 				setAuthCapability(plan, targetID, assessment.StateUnavailable, "verification URL is outside the application origin or path boundary")
 				continue
 			}
-			negativeMarker := binding.NegativeMarker
-			if negativeMarker == "" {
-				negativeMarker = binding.VerifyMarker
-			}
-			if binding.VerifyMarker == "" || negativeMarker == "" {
-				setAuthCapability(plan, targetID, assessment.StateUnavailable, "no verification marker is configured")
+			if binding.Kind == assessment.AccessFormLogin && binding.VerifyMarker == "" {
+				setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login requires a verification marker")
 				continue
 			}
 			var lines []string
 			if binding.Kind == assessment.AccessFormLogin {
-				cookieHeader, loginErr := verifyFormSession(ctx, target.Value, binding.VerifyURL, binding.VerifyMarker, record.Values)
+				cookieHeader, loginErr := verifyFormSession(ctx, target.Value, verifyURL, binding.VerifyMarker, record.Values)
 				var configErr formConfigError
 				if errors.As(loginErr, &configErr) {
 					setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login is not usable ("+configErr.Error()+"); authenticated scanning was skipped")
@@ -113,6 +113,14 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 					continue
 				}
 				lines = []string{cookieHeader}
+				negativeMarker := binding.NegativeMarker
+				if negativeMarker == "" {
+					negativeMarker = binding.VerifyMarker
+				}
+				if controlErr := verifyNegativeControl(ctx, scope, verifyURL, negativeMarker); controlErr != nil {
+					setAuthVerification(plan, targetID, assessment.StateFailed, "negative control failed ("+controlErr.Error()+"); authenticated scanning was skipped")
+					continue
+				}
 			} else {
 				var convErr error
 				lines, convErr = credentialHeaderLines(binding.Kind, record.Values)
@@ -120,19 +128,29 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential fields are not valid HTTP headers")
 					continue
 				}
-				if verifyErr := verifyHeaderSession(ctx, binding.VerifyURL, binding.VerifyMarker, lines, target.Value); verifyErr != nil {
+				positive, verifyErr := probeHeaderSession(ctx, verifyURL, binding.VerifyMarker, lines, target.Value)
+				if verifyErr == nil && binding.VerifyMarker != "" {
+					negativeMarker := binding.NegativeMarker
+					if negativeMarker == "" {
+						negativeMarker = binding.VerifyMarker
+					}
+					verifyErr = verifyNegativeControl(ctx, scope, verifyURL, negativeMarker)
+				} else if verifyErr == nil {
+					verifyErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
+				}
+				if verifyErr != nil {
 					setAuthVerification(plan, targetID, assessment.StateFailed, "credential verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
 					continue
 				}
 			}
-			// The negative control runs once per verification, after the positive
-			// check; session refreshes only repeat the positive check.
-			if controlErr := verifyNegativeControl(ctx, scope, binding.VerifyURL, negativeMarker); controlErr != nil {
-				setAuthVerification(plan, targetID, assessment.StateFailed, "negative control failed ("+controlErr.Error()+"); the marker does not prove an authenticated session, so authenticated scanning was skipped")
-				continue
-			}
 			headersByTarget[targetID] = append(headersByTarget[targetID], lines...)
-			setAuthVerification(plan, targetID, assessment.StateVerified, "target-bound credentials passed the configured verification check and an unauthenticated request did not show the marker (negative control passed)")
+			verificationReason := "target-bound credentials passed the configured authentication check"
+			if binding.Kind != assessment.AccessFormLogin && binding.VerifyMarker == "" {
+				verificationReason = "target-bound credentials passed the authenticated-versus-anonymous negative control (status or redirect differed)"
+			} else {
+				verificationReason += " and the unauthenticated negative control passed"
+			}
+			setAuthVerification(plan, targetID, assessment.StateVerified, verificationReason)
 			for i := range plan.Jobs {
 				if plan.Jobs[i].TargetID == targetID && (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") {
 					plan.Jobs[i].ExecutionMode = "authenticated"
@@ -199,6 +217,9 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 			}
 		}
 		appURL := target.Value
+		if verifyURL == "" {
+			verifyURL = appURL
+		}
 		// Concurrent jobs on one target share the renewal budget; the lock also
 		// keeps two of them from logging in at the same time.
 		var mu sync.Mutex
@@ -206,8 +227,14 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 		refreshers[target.ID] = func(ctx context.Context, current []string) ([]string, error) {
 			mu.Lock()
 			defer mu.Unlock()
-			if err := verifyHeaderSession(ctx, verifyURL, marker, current, appURL); err == nil {
-				return current, nil
+			if marker != "" {
+				if err := verifyHeaderSession(ctx, verifyURL, marker, current, appURL); err == nil {
+					return current, nil
+				}
+			} else if positive, err := probeHeaderSession(ctx, verifyURL, "", current, appURL); err == nil {
+				if contrastErr := verifyAnonymousContrast(ctx, applicationScope(appURL), verifyURL, positive); contrastErr == nil {
+					return current, nil
+				}
 			}
 			if formValues == nil {
 				return nil, fmt.Errorf("authenticated session expired or verification failed")
@@ -295,10 +322,21 @@ func validHTTPHeaderName(name string) bool {
 	return name != ""
 }
 
+type authProbeResult struct {
+	StatusCode int
+	FinalURL   string
+}
+
 func verifyHeaderSession(ctx context.Context, verifyURL, marker string, lines []string, appURL string) error {
+	_, err := probeHeaderSession(ctx, verifyURL, marker, lines, appURL)
+	return err
+}
+
+func probeHeaderSession(ctx context.Context, verifyURL, marker string, lines []string, appURL string) (authProbeResult, error) {
+	var result authProbeResult
 	scope := applicationScope(appURL)
 	if !urlWithinScope(scope, verifyURL) {
-		return fmt.Errorf("verification URL outside scope")
+		return result, fmt.Errorf("verification URL outside scope")
 	}
 	u, _ := url.Parse(verifyURL)
 	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -309,28 +347,32 @@ func verifyHeaderSession(ctx context.Context, verifyURL, marker string, lines []
 	}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return fmt.Errorf("invalid verification request")
+		return result, fmt.Errorf("invalid verification request")
 	}
 	for _, line := range lines {
 		name, value, ok := strings.Cut(line, ":")
 		if !ok {
-			return fmt.Errorf("invalid credential header")
+			return result, fmt.Errorf("invalid credential header")
 		}
 		req.Header.Set(strings.TrimSpace(name), strings.TrimSpace(value))
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("verification request failed")
+		return result, fmt.Errorf("verification request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("verification returned non-success status")
+		return result, fmt.Errorf("verification returned non-success status")
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil || !strings.Contains(string(body), marker) {
-		return fmt.Errorf("verification marker not found")
+	if err != nil {
+		return result, fmt.Errorf("verification response could not be read")
 	}
-	return nil
+	if marker != "" && !strings.Contains(string(body), marker) {
+		return result, fmt.Errorf("verification marker not found")
+	}
+	result.StatusCode, result.FinalURL = resp.StatusCode, resp.Request.URL.String()
+	return result, nil
 }
 
 // urlWithinApplication reports whether candidate is inside the origin and path

@@ -243,6 +243,14 @@ func TestValidateVerifyURLMustBeInsideApprovedOrigin(t *testing.T) {
 	}
 }
 
+func TestValidateHeaderCredentialAllowsAutomaticVerification(t *testing.T) {
+	cfg := webConfig()
+	cfg.Access = []AccessBinding{{TargetIDs: []string{"app"}, Kind: AccessApplicationHeaders, CredentialID: "cookie-credential"}}
+	if probs := Validate(Normalize(cfg)); FirstBlocking(probs) != nil {
+		t.Fatalf("header credential without custom verification fields should be accepted: %+v", probs)
+	}
+}
+
 func TestEmptyNewFieldsSerializeUnchanged(t *testing.T) {
 	cfg := Normalize(AssessmentConfig{
 		Mode: ModeGrayBox, Types: []Type{TypeWebApplication, TypeAPI},
