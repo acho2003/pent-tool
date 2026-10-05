@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/credentials"
@@ -19,6 +21,19 @@ type credentialRequest struct {
 	Kind      assessment.AccessKind `json:"kind"`
 	TargetIDs []string              `json:"target_ids"`
 	Values    map[string]string     `json:"values"`
+}
+
+type testCredentialRequest struct {
+	TargetID     string `json:"target_id"`
+	TargetURL    string `json:"target_url"`
+	VerifyURL    string `json:"verify_url"`
+	VerifyMarker string `json:"verify_marker"`
+}
+
+type testCredentialResponse struct {
+	Verified bool   `json:"verified"`
+	State    string `json:"state"`
+	Reason   string `json:"reason"`
 }
 
 func (s *Server) credentialVault() (*credentials.Vault, error) {
@@ -74,6 +89,15 @@ func (s *Server) handleCredentials(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCredentialDetail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/credentials/"), "/")
+	if strings.HasSuffix(id, "/test") {
+		id = strings.TrimSuffix(id, "/test")
+		if id == "" || strings.Contains(id, "/") {
+			http.Error(w, "credential not found", http.StatusNotFound)
+			return
+		}
+		s.handleTestCredential(w, r, id)
+		return
+	}
 	if id == "" || strings.Contains(id, "/") {
 		http.Error(w, "credential not found", http.StatusNotFound)
 		return
@@ -110,6 +134,102 @@ func (s *Server) handleCredentialDetail(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Allow", "GET, PUT, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req testCredentialRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCredentialRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "invalid credential test request", http.StatusBadRequest)
+		return
+	}
+	result := testCredentialResponse{State: "unavailable"}
+	if req.TargetID == "" || req.TargetURL == "" {
+		result.Reason = "choose an HTTP(S) target before testing authentication"
+		writeCredentialTestResult(w, result)
+		return
+	}
+	if !strings.HasPrefix(strings.ToLower(req.TargetURL), "http://") && !strings.HasPrefix(strings.ToLower(req.TargetURL), "https://") {
+		result.Reason = "authentication tests require an explicit HTTP(S) target"
+		writeCredentialTestResult(w, result)
+		return
+	}
+	if s.isBlockedTargetForScan(req.TargetURL, nil) {
+		result.Reason = "target is blocked by the application scope guard"
+		writeCredentialTestResult(w, result)
+		return
+	}
+	verifyURL := req.VerifyURL
+	if verifyURL == "" {
+		verifyURL = req.TargetURL
+	}
+	if !urlWithinApplication(req.TargetURL, verifyURL) || !scopeAllowsRequest(applicationScope(req.TargetURL), verifyURL) {
+		result.Reason = "verification URL is outside the target origin or path boundary"
+		writeCredentialTestResult(w, result)
+		return
+	}
+	vault, err := s.openCredentialVault()
+	if err != nil {
+		result.Reason = "encrypted credential storage is unavailable"
+		writeCredentialTestResult(w, result)
+		return
+	}
+	record, err := vault.Get(id, req.TargetID)
+	if err != nil || !webAuthenticationKind(record.Kind) {
+		result.Reason = "credential is unavailable or is not bound to this target"
+		writeCredentialTestResult(w, result)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	scope := applicationScope(req.TargetURL)
+	if record.Kind == assessment.AccessFormLogin {
+		if req.VerifyMarker == "" {
+			result.Reason = "form login requires a verification marker"
+			writeCredentialTestResult(w, result)
+			return
+		}
+		if _, err := verifyFormSession(ctx, req.TargetURL, verifyURL, req.VerifyMarker, record.Values); err != nil {
+			result.State, result.Reason = "failed", "form login or protected-page verification failed"
+			writeCredentialTestResult(w, result)
+			return
+		}
+		marker := req.VerifyMarker
+		if err := verifyNegativeControl(ctx, scope, verifyURL, marker); err != nil {
+			result.State, result.Reason = "failed", "anonymous negative-control check failed"
+			writeCredentialTestResult(w, result)
+			return
+		}
+	} else {
+		lines, err := credentialHeaderLines(record.Kind, record.Values)
+		if err != nil {
+			result.Reason = "credential fields are not valid HTTP headers"
+			writeCredentialTestResult(w, result)
+			return
+		}
+		positive, err := probeHeaderSession(ctx, verifyURL, req.VerifyMarker, lines, req.TargetURL)
+		if err == nil && req.VerifyMarker != "" {
+			err = verifyNegativeControl(ctx, scope, verifyURL, req.VerifyMarker)
+		} else if err == nil {
+			err = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
+		}
+		if err != nil {
+			result.State, result.Reason = "failed", err.Error()
+			writeCredentialTestResult(w, result)
+			return
+		}
+	}
+	result.Verified, result.State, result.Reason = true, "verified", "credentials passed the protected-page and anonymous-control checks"
+	writeCredentialTestResult(w, result)
+}
+
+func writeCredentialTestResult(w http.ResponseWriter, result testCredentialResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func credentialError(w http.ResponseWriter, err error) bool {

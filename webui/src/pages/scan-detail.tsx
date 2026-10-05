@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -19,6 +19,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { ScanStatusPill } from "@/components/scan-status-pill";
@@ -433,6 +434,59 @@ const runGroupLabel = (g: string) => RUN_GROUP_LABELS[g] ?? (g || "Other");
 function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	const [picked, setPicked] = useState<RunKey | null>(null);
 	const [openState, setOpenState] = useState<Record<string, boolean>>({});
+	const [inactiveRun, setInactiveRun] = useState<{ scanner: string; scope: string } | null>(null);
+	const stopScan = useStopInstance();
+	const runsRef = useRef(scan.scanner_runs ?? []);
+	const activityRef = useRef(new Map<string, { at: number; signature: string; bytes?: number }>());
+	const promptedRef = useRef(new Set<string>());
+	runsRef.current = scan.scanner_runs ?? [];
+	useEffect(() => {
+		const now = Date.now();
+		const running = new Set<string>();
+		for (const run of scan.scanner_runs ?? []) {
+			if (run.status !== "running") continue;
+			const key = `${run.scanner}|${run.scope ?? run.target}`;
+			running.add(key);
+			const signature = `${run.progress ?? ""}|${run.progress_stage ?? ""}`;
+			const current = activityRef.current.get(key);
+			if (!current || current.signature !== signature) activityRef.current.set(key, { at: now, signature, bytes: current?.bytes });
+		}
+		for (const key of activityRef.current.keys()) if (!running.has(key)) {
+			activityRef.current.delete(key);
+			promptedRef.current.delete(key);
+		}
+	}, [scan.scanner_runs]);
+	useEffect(() => {
+		let active = true;
+		const check = async () => {
+			for (const run of runsRef.current) {
+				if (!active || run.status !== "running") continue;
+				const key = `${run.scanner}|${run.scope ?? run.target}`;
+				let activity = activityRef.current.get(key);
+				if (!activity) {
+					activity = { at: Date.now(), signature: `${run.progress ?? ""}|${run.progress_stage ?? ""}` };
+					activityRef.current.set(key, activity);
+				}
+				try {
+					const output = await api.scannerOutputChunk(scan.id, run.scanner, "combined", run.scope || undefined, 0, 1);
+					if (!active) return;
+					if (activity.bytes === undefined) activity.bytes = output.total;
+					else if (activity.bytes !== output.total) {
+						activity.bytes = output.total;
+						activity.at = Date.now();
+						promptedRef.current.delete(key);
+					}
+				} catch { /* Old scans may not retain a combined transcript. */ }
+				if (Date.now() - activity.at >= 10 * 60 * 1000 && !promptedRef.current.has(key)) {
+					promptedRef.current.add(key);
+					setInactiveRun({ scanner: run.scanner, scope: run.scope ?? run.target });
+					return;
+				}
+			}
+		};
+		const timer = window.setInterval(() => void check(), 60_000);
+		return () => { active = false; window.clearInterval(timer); };
+	}, [scan.id]);
 	// Refetch the grouping whenever any run is added or changes status.
 	const runsSignature = useMemo(() => (scan.scanner_runs ?? []).map((r) => `${r.scope ?? ""}|${r.scanner}|${r.status}`).join(","), [scan.scanner_runs]);
 	const scopesQuery = useQuery({ queryKey: ["scan-scopes", scan.id, runsSignature], queryFn: () => api.scanScopes(scan.id), placeholderData: (prev) => prev });
@@ -512,6 +566,12 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		return <div className="space-y-3">{present.map((g) => <div key={g} className="space-y-2"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{runGroupLabel(g)}</p>{cards(runs.filter((r) => groupOf(r.scanner) === g), fallbackScope)}</div>)}</div>;
 	};
 	return <div className="space-y-6">
+		<Dialog open={!!inactiveRun} onOpenChange={(open) => { if (!open && inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(open ? inactiveRun : null); }}>
+			<DialogContent>
+				<DialogHeader><DialogTitle>Scanner has shown no progress</DialogTitle><DialogDescription>{inactiveRun?.scanner} at {inactiveRun?.scope} has produced no new output or progress updates for 10 minutes. Stop the assessment, or keep it running and check again later?</DialogDescription></DialogHeader>
+				<DialogFooter><Button variant="outline" onClick={() => { if (inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(null); }}>Keep running</Button><Button variant="destructive" disabled={stopScan.isPending} onClick={() => { stopScan.mutate(scan.instance_id || scan.id); setInactiveRun(null); }}>{stopScan.isPending ? "Stopping…" : "Stop assessment"}</Button></DialogFooter>
+			</DialogContent>
+		</Dialog>
 		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>
 		<header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h1 className="font-mono text-2xl font-semibold">{scan.target}</h1><div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{scan.id}</span><span>·</span><span>{formatDuration(scan.started_at, scan.finished_at)}</span><Badge variant="outline">schema v{scan.schema_version ?? 2}</Badge>{scan.assessment && <><Badge variant="outline">{scan.assessment.assessment_mode.replaceAll("_", " ")}</Badge><Badge variant="outline">{scan.profile || scan.assessment.profile || "web-gentle"}</Badge></>}</div></div><div className="flex flex-wrap items-center gap-2"><ScanStatusPill status={scan.status} />{scanFinished && <Button variant="outline" size="sm" disabled={reimport.isPending} onClick={() => reimport.mutate()} title="Re-read this scan's saved scanner output into findings"><RefreshCw className={cn("mr-1 h-4 w-4", reimport.isPending && "animate-spin")} /> {reimport.isPending ? "Re-importing…" : "Re-import findings"}</Button>}<Button variant="outline" size="sm" asChild><a href={api.reportUrl(scan.id)} target="_blank" rel="noreferrer"><Download className="mr-1 h-4 w-4" /> Report</a></Button></div></header>
 		{reimport.isSuccess && <p className="text-xs text-emerald-300">Findings re-imported from the saved scanner output.</p>}

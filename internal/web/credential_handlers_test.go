@@ -3,11 +3,15 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -58,5 +62,59 @@ func TestCredentialAPIRequiresMountedKey(t *testing.T) {
 	s.handleCredentials(rr, httptest.NewRequest(http.MethodGet, "/api/credentials", nil))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCredentialTestEndpointVerifiesBoundCredential(t *testing.T) {
+	var authRequests, anonymousRequests atomic.Int32
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer auth-secret" {
+			authRequests.Add(1)
+			_, _ = fmt.Fprint(w, "private dashboard")
+			return
+		}
+		anonymousRequests.Add(1)
+		http.Redirect(w, r, "/login", http.StatusFound)
+	}))
+	defer app.Close()
+
+	s := newTestServer(t, nil)
+	s.cfg.AllowLocalTargets = true
+	keyPath := filepath.Join(t.TempDir(), "credential-key")
+	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{0x42}, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	vault, err := s.credentialVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := vault.Create(credentials.Record{Name: "test", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"target-1"}, Values: map[string]string{"Authorization": "Bearer auth-secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoke := func(targetID string) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"target_id":%q,"target_url":%q}`, targetID, app.URL)
+		rr := httptest.NewRecorder()
+		s.handleCredentialDetail(rr, httptest.NewRequest(http.MethodPost, "/api/credentials/"+meta.ID+"/test", strings.NewReader(body)))
+		return rr
+	}
+	rr := invoke("target-1")
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"verified":true`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "auth-secret") || strings.Contains(rr.Body.String(), "Bearer") {
+		t.Fatalf("response leaked secret: %s", rr.Body.String())
+	}
+	if authRequests.Load() != 1 || anonymousRequests.Load() < 1 {
+		t.Fatalf("auth requests=%d anonymous=%d", authRequests.Load(), anonymousRequests.Load())
+	}
+
+	wrong := invoke("other")
+	if wrong.Code != http.StatusOK || !strings.Contains(wrong.Body.String(), `"state":"unavailable"`) {
+		t.Fatalf("cross-target result: status=%d body=%s", wrong.Code, wrong.Body.String())
+	}
+	if authRequests.Load() != 1 {
+		t.Fatal("cross-target credential was sent to target")
 	}
 }
