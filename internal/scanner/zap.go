@@ -333,6 +333,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			if err := recording.Close(); err != nil {
 				final.Status, final.Reason = "failed", "ZAP coverage recording failed"
 			}
+			recording.ApplyOutcome(&final)
 			final = finalizeRun(final)
 		}()
 	}
@@ -841,7 +842,13 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if err := redactArtifact(run.ArtifactPath, secrets); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
-	if boundWebArtifact(run.ArtifactPath, "zap", cfg.MaxOutputBytes) {
+	bounded, boundErr := boundWebArtifact(run.ArtifactPath, "zap", cfg.MaxOutputBytes)
+	if boundErr != nil {
+		run.ExecutionOutcome, run.Outcome = "SUCCESS", "PARSER_FAILED"
+		run.ParserOutcome, run.Completeness = "FAILED", "partial"
+		return finishServiceFailure(run, fmt.Errorf("retain bounded ZAP artifact: %w", boundErr), secrets, cfg.MaxOutputBytes, emit)
+	}
+	if bounded {
 		run.Truncated = true
 		run.Reason = fmt.Sprintf("artifact truncated at configured %d-byte limit", cfg.MaxOutputBytes)
 	}

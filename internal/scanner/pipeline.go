@@ -880,8 +880,17 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if run.Status == "completed" && spec.partialMarker != "" && strings.Contains(readCapped(run.StdoutPath, 1<<20), spec.partialMarker) {
 		run.Status, run.Reason = "failed", "scanner time budget reached; partial results may be available"
 	}
-	if spec.artifact != "" && boundWebArtifact(run.ArtifactPath, name, cfg.MaxOutputBytes) {
-		run.Truncated = true
+	if spec.artifact != "" {
+		bounded, boundErr := boundWebArtifact(run.ArtifactPath, name, cfg.MaxOutputBytes)
+		run.Truncated = run.Truncated || bounded
+		if boundErr != nil {
+			if run.Status == "completed" {
+				run.ExecutionOutcome = "SUCCESS"
+			}
+			run.Outcome = "PARSER_FAILED"
+			run.Status, run.ParserOutcome, run.Completeness = "failed", "FAILED", "partial"
+			run.Reason = "could not retain usable bounded artifact: " + boundErr.Error()
+		}
 	}
 	_ = redactArtifact(run.ArtifactPath, secrets)
 	if run.Truncated && run.Reason == "" {

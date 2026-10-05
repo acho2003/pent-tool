@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,7 @@ type RecordingGateway struct {
 	encoder            *json.Encoder
 	file               *os.File
 	failed             error
+	limitations        map[string]bool
 	requests           int
 	phase              string
 	URL                string
@@ -169,6 +171,14 @@ func (g *RecordingGateway) record(event CoverageEvent) {
 	event.Scanner, event.AttemptID, event.At = g.scanner, g.req.AttemptID, time.Now().UTC().Format(time.RFC3339Nano)
 	if event.Phase == "" {
 		event.Phase = g.phase
+	}
+	if event.Kind == "blocked" || event.Kind == "failed" {
+		if g.limitations == nil {
+			g.limitations = map[string]bool{}
+		}
+		if len(g.limitations) < 16 {
+			g.limitations[event.Reason] = true
+		}
 	}
 	event.URL = SafeTelemetryURL(event.URL)
 	if g.file != nil {
@@ -418,4 +428,26 @@ func (g *RecordingGateway) certificate(host string) (*tls.Certificate, error) {
 	cert := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: g.key}
 	g.certificates[host] = cert
 	return cert, nil
+}
+
+// ApplyOutcome keeps blocked/failed traffic visible even when the scanner
+// process itself exits successfully. Call after Close seals the event journal.
+func (g *RecordingGateway) ApplyOutcome(run *Run) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.limitations) == 0 {
+		return
+	}
+	reasons := make([]string, 0, len(g.limitations))
+	for reason := range g.limitations {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	for _, reason := range reasons {
+		run.Limitations = append(run.Limitations, RunLimitation{Kind: "gateway_restriction", Reason: reason})
+	}
+	run.Completeness = "partial"
+	if run.Status == "completed" {
+		run.Outcome = "PARTIAL"
+	}
 }

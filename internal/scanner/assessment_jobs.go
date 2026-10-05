@@ -586,6 +586,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			if err := gateway.Close(); err != nil {
 				run.Status, run.Reason = "failed", "coverage recording failed"
 			}
+			gateway.ApplyOutcome(&run)
 		}
 
 		run.InputManifestPath = manifestPath

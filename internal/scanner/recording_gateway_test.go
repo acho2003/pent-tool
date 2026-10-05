@@ -91,7 +91,7 @@ func TestGatewayInspectsTLSRequests(t *testing.T) {
 func TestOutputLimitKeepsCompleteJSONRecords(t *testing.T) {
 	path := t.TempDir() + "/zap.json"
 	os.WriteFile(path, []byte(`{"alerts":[{"url":"https://app.test/a","evidence":"long evidence long evidence"},{"url":"https://app.test/b","evidence":"long evidence long evidence"}]}`), 0600)
-	if !boundWebArtifact(path, "zap", 110) {
+	if bounded, err := boundWebArtifact(path, "zap", 110); !bounded || err != nil {
 		t.Fatal("limit not recorded")
 	}
 	data, _ := os.ReadFile(path)
@@ -164,5 +164,22 @@ func TestGatewayAttributesOnlyTheExactBodyVariant(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing observed request")
+	}
+}
+
+func TestGatewayRestrictionsMakeSuccessfulScannerPartial(t *testing.T) {
+	gateway := &RecordingGateway{}
+	gateway.record(CoverageEvent{Kind: "blocked", Reason: "assessment budget exhausted"})
+	gateway.record(CoverageEvent{Kind: "failed", Reason: "upstream response exceeds recording limit"})
+	gateway.record(CoverageEvent{Kind: "blocked", Reason: "assessment budget exhausted"})
+	run := Run{Status: "completed", Outcome: "SUCCESS_NO_FINDINGS", Completeness: "complete"}
+	gateway.ApplyOutcome(&run)
+	if run.Outcome != "PARTIAL" || run.Completeness != "partial" || len(run.Limitations) != 2 {
+		t.Fatal("restrictions hidden", run)
+	}
+	failed := Run{Status: "failed", Outcome: "AUTH_FAILED"}
+	gateway.ApplyOutcome(&failed)
+	if failed.Outcome != "AUTH_FAILED" {
+		t.Fatal("execution failure replaced", failed)
 	}
 }
