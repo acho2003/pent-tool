@@ -133,6 +133,17 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 				sess.record.Events = append([]WSEvent(nil), sess.record.Events[len(sess.record.Events)-200:]...)
 			}
 		}
+		if evt.Type == "scanner_started" || evt.Type == "scanner_output" || evt.Type == "scanner_progress" {
+			for i := range sess.record.ScannerRuns {
+				run := &sess.record.ScannerRuns[i]
+				if run.Scanner == evt.Scanner && run.Status == "running" && (evt.Run.AttemptID == "" || run.AttemptID == evt.Run.AttemptID) {
+					run.LastActivityAt = ws.Timestamp
+				}
+			}
+			if evt.Run.Scanner != "" {
+				evt.Run.LastActivityAt = ws.Timestamp
+			}
+		}
 		if evt.Run.Scanner != "" {
 			upsertScannerRun(&sess.record.ScannerRuns, evt.Run)
 		}
@@ -190,6 +201,14 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 		}
 	} else {
 		runs = pipeline.Run(ctx, scanner.Request{Target: sess.target, Scanners: sess.scanners, ScanDir: sess.scanDir, Artifact: sess.artifact, VulsSSHHost: sess.vulsSSHHost, TargetAuth: sess.targetAuth, Profile: sess.profile, ApplicationURL: sess.target}, sess.record.ScannerRuns, emit)
+	}
+	for i := range runs {
+		for _, saved := range sess.record.ScannerRuns {
+			if runs[i].Scanner == saved.Scanner && runs[i].Scope == saved.Scope && runs[i].AttemptID == saved.AttemptID {
+				runs[i].LastActivityAt = saved.LastActivityAt
+				break
+			}
+		}
 	}
 	sess.record.ScannerRuns = runs
 	sess.record.ToolCalls = countTerminalRuns(runs)
@@ -252,6 +271,9 @@ func upsertScannerRun(runs *[]scanner.Run, run scanner.Run) {
 		// keying on Scanner alone would let one host's run overwrite another's in
 		// the crash-persisted record used for resume.
 		if (*runs)[i].Scanner == run.Scanner && (*runs)[i].Scope == run.Scope && (*runs)[i].Variant == run.Variant {
+			if run.LastActivityAt == "" {
+				run.LastActivityAt = (*runs)[i].LastActivityAt
+			}
 			(*runs)[i] = run
 			return
 		}

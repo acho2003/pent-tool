@@ -445,11 +445,11 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		const running = new Set<string>();
 		for (const run of scan.scanner_runs ?? []) {
 			if (run.status !== "running") continue;
-			const key = `${run.scanner}|${run.scope ?? run.target}`;
+			const key = `${run.scanner}|${run.attempt_id ?? run.scope ?? run.target}`;
 			running.add(key);
-			const signature = `${run.progress ?? ""}|${run.progress_stage ?? ""}`;
+			const signature = `${run.progress ?? ""}|${run.progress_stage ?? ""}|${run.last_activity_at ?? ""}`;
 			const current = activityRef.current.get(key);
-			if (!current || current.signature !== signature) activityRef.current.set(key, { at: now, signature, bytes: current?.bytes });
+			if (!current || current.signature !== signature) activityRef.current.set(key, { at: run.last_activity_at ? Date.parse(run.last_activity_at) : now, signature, bytes: current?.bytes });
 		}
 		for (const key of activityRef.current.keys()) if (!running.has(key)) {
 			activityRef.current.delete(key);
@@ -461,14 +461,14 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		const check = async () => {
 			for (const run of runsRef.current) {
 				if (!active || run.status !== "running") continue;
-				const key = `${run.scanner}|${run.scope ?? run.target}`;
+				const key = `${run.scanner}|${run.attempt_id ?? run.scope ?? run.target}`;
 				let activity = activityRef.current.get(key);
 				if (!activity) {
-					activity = { at: Date.now(), signature: `${run.progress ?? ""}|${run.progress_stage ?? ""}` };
+					activity = { at: run.last_activity_at ? Date.parse(run.last_activity_at) : Date.now(), signature: `${run.progress ?? ""}|${run.progress_stage ?? ""}` };
 					activityRef.current.set(key, activity);
 				}
 				try {
-					const output = await api.scannerOutputChunk(scan.id, run.scanner, "combined", run.scope || undefined, 0, 1);
+					const output = await api.scannerOutputChunk(scan.id, run.scanner, "combined", run.scope || undefined, 0, 1, run.attempt_id);
 					if (!active) return;
 					if (activity.bytes === undefined) activity.bytes = output.total;
 					else if (activity.bytes !== output.total) {
@@ -571,10 +571,10 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	};
 	return <div className="space-y-6">
 		{stopScanner.isError && <p role="alert" className="text-sm text-destructive">Could not stop scanner: {stopScanner.error.message}</p>}
-		<Dialog open={!!inactiveRun} onOpenChange={(open) => { if (!open && inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(open ? inactiveRun : null); }}>
+		<Dialog open={!!inactiveRun} onOpenChange={(open) => { if (!open && inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.attemptId ?? inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(open ? inactiveRun : null); }}>
 			<DialogContent>
 				<DialogHeader><DialogTitle>Scanner has shown no progress</DialogTitle><DialogDescription>{inactiveRun?.scanner} at {inactiveRun?.scope} has produced no new output or progress updates for 10 minutes. Last activity: {inactiveRun ? formatTime(new Date(inactiveRun.lastActivity).toISOString()) : "unknown"}. Stop this scanner, or keep it running?</DialogDescription></DialogHeader>
-				<DialogFooter><Button variant="outline" onClick={() => { if (inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(null); }}>Keep running</Button>{inactiveRun?.attemptId && <Button variant="destructive" disabled={stopScanner.isPending} onClick={() => { stopScanner.mutate(inactiveRun.attemptId!); setInactiveRun(null); }}>Stop this scanner</Button>}<Button variant="destructive" disabled={stopScan.isPending} onClick={() => { stopScan.mutate(scan.instance_id || scan.id); setInactiveRun(null); }}>{stopScan.isPending ? "Stopping…" : "Stop assessment"}</Button></DialogFooter>
+				<DialogFooter><Button variant="outline" onClick={() => { if (inactiveRun) activityRef.current.set(`${inactiveRun.scanner}|${inactiveRun.attemptId ?? inactiveRun.scope}`, { at: Date.now(), signature: "" }); setInactiveRun(null); }}>Keep running</Button>{inactiveRun?.attemptId && <Button variant="destructive" disabled={stopScanner.isPending} onClick={() => { stopScanner.mutate(inactiveRun.attemptId!); setInactiveRun(null); }}>Stop this scanner</Button>}<Button variant="destructive" disabled={stopScan.isPending} onClick={() => { stopScan.mutate(scan.instance_id || scan.id); setInactiveRun(null); }}>{stopScan.isPending ? "Stopping…" : "Stop assessment"}</Button></DialogFooter>
 			</DialogContent>
 		</Dialog>
 		<Link to="/scans" className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"><ChevronLeft className="mr-1 h-3 w-3" /> All scans</Link>

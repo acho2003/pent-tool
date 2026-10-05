@@ -157,6 +157,7 @@ type Run struct {
 	Scope                string                `json:"scope,omitempty"`
 	Target               string                `json:"target"`
 	Status               string                `json:"status"`
+	LastActivityAt       string                `json:"last_activity_at,omitempty"`
 	StartedAt            string                `json:"started_at,omitempty"`
 	FinishedAt           string                `json:"finished_at,omitempty"`
 	ExitCode             int                   `json:"exit_code,omitempty"`

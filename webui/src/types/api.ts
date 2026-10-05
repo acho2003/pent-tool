@@ -72,6 +72,7 @@ export interface ScannerArtifact { kind: "filesystem" | "repository" | "image" |
 export interface ScannerRun {
   scanner: string;
   attempt_id?: string;
+  last_activity_at?: string;
   authenticated?: boolean;
   scope?: string;
   target: string;
@@ -141,6 +142,7 @@ export interface AssessmentScannerDefinition {
 export interface ScopeRun {
   scanner: string;
   attempt_id?: string;
+  last_activity_at?: string;
   authenticated?: boolean;
   status: string;
   reason?: string;
