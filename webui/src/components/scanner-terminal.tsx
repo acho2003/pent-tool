@@ -69,7 +69,7 @@ function TerminalStream({ scanId, scanner, scope, attemptId, stream, running, on
     setLoading(true);
     setError("");
     try {
-      const chunk = await api.scannerOutputChunk(scanId, scanner, stream, scope, offset, PAGE_BYTES);
+      const chunk = await api.scannerOutputChunk(scanId, scanner, stream, scope, offset, PAGE_BYTES, attemptId);
       setPage(chunk);
       setFollowing(follow);
     } catch (e) {
