@@ -171,6 +171,7 @@ export interface ScanScopes {
 export interface AttackSurfaceParameter { name: string; location: string; }
 export interface AttackSurfaceCoverage { scanner: string; status: string; reason?: string; started_at?: string; finished_at?: string; }
 export interface AttackSurfaceEndpoint {
+ group_id?: string; auth_context_id?: string; coverage_history?: Array<AttackSurfaceCoverage & {attempt_id?: string; evidence_reference?: string}>;
   id: string;
   url: string;
   canonical_url: string;
@@ -272,6 +273,7 @@ export interface ScanRecord {
 }
 
 export interface AssessmentCoverage {
+ proof?: CoverageProof;
   scan_id: string;
   state: string;
   profile?: string;
@@ -587,3 +589,25 @@ export interface WazuhList<T> { data?: { affected_items?: T[]; total_affected_it
 export interface WazuhSearch { hits?: { total?: { value?: number }; hits?: Array<{_id:string; _source:Record<string, unknown>}> } }
 export interface MonitoringAction { time: string; actor: string; agent_id: string; command: string; status: string; result?: string }
 export interface MonitoringEnrollment { name: string; os: "Linux"|"Windows"|"macOS"; created_at: string }
+
+export interface CoverageEvent {
+  attempt_id: string; scanner: string; endpoint_ids?: string[]; url?: string; method?: string;
+  phase: string; kind: string; at: string; response_code?: number; reason?: string;
+}
+export interface CoverageProof {
+  expanded_enabled: boolean; discovered: number; seeds: number; candidates: number; hosts: number;
+  services: number; tls_services: number; forms: number; parameterized: number; observed_with_auth: number;
+  definitions: Array<{id: string; kind: string; url?: string; state: string; reason?: string}>;
+  scanners: Array<{scanner: string; selected: number; submitted: number; acknowledged: number; exercised: number | null; batch_completed: number; failed: number; skipped: number; unknown: number}>;
+  not_tracked: string[]; discovery_gaps: string[];
+}
+export interface DiscoveryPreview {
+  fingerprint: string; parent_fingerprint: string; state: string;
+  candidates: Array<{id: string; kind: string; value: string; source: string; state: string}>;
+}
+export interface DiscoveryRevision {
+  parent_fingerprint: string; preview_fingerprint: string; selected_ids: string[]; plan: AssessmentPlan;
+}
+export interface EndpointTrace {
+  endpoint: AttackSurfaceEndpoint; state: string; items: CoverageEvent[]; total: number; page: number; size: number;
+}

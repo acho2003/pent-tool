@@ -87,6 +87,7 @@ func (s *Server) handleAttackSurface(w http.ResponseWriter, r *http.Request) {
 			if endpoint.HasForm {
 				response.Summary.Forms++
 			}
+			endpoint.URL = scanner.SafeTelemetryURL(endpoint.URL)
 			all = append(all, endpoint)
 		}
 	}

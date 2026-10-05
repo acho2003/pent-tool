@@ -127,6 +127,22 @@ func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
 		"Plan fingerprint: " + coverage.PlanFingerprint,
 		fmt.Sprintf("API operations: discovered %d, eligible %d, attempted %d, completed %d, batch completed %d, failed %d, skipped %d, not attempted %d.", coverage.OperationCounts.Discovered, coverage.OperationCounts.Eligible, coverage.OperationCounts.Attempted, coverage.OperationCounts.Completed, coverage.OperationCounts.BatchCompleted, coverage.OperationCounts.Failed, coverage.OperationCounts.Skipped, coverage.OperationCounts.NotAttempted),
 	}
+	if proof := coverage.Proof; proof != nil {
+		lines = append(lines, fmt.Sprintf("Inventory: %d requests, %d seeds, %d hosts, %d services, %d TLS services, %d forms, %d parameterized requests.", proof.Discovered, proof.Seeds, proof.Hosts, proof.Services, proof.TLS, proof.Forms, proof.Parameterized))
+		for _, row := range proof.Scanners {
+			exercised := "NOT TRACKED"
+			if row.Exercised != nil {
+				exercised = fmt.Sprint(*row.Exercised)
+			}
+			lines = append(lines, fmt.Sprintf("%s: selected %d, submitted %d, acknowledged %d, observed active requests %s, batch completed %d, failed %d, skipped %d, unknown %d.", row.Scanner, row.Selected, row.Submitted, row.Acknowledged, exercised, row.BatchCompleted, row.Failed, row.Skipped, row.Unknown))
+		}
+		for _, metric := range proof.NotTracked {
+			lines = append(lines, metric+": NOT TRACKED")
+		}
+		for _, gap := range proof.DiscoveryGaps {
+			lines = append(lines, "Discovery gap: "+gap)
+		}
+	}
 	for _, typ := range coverage.TypeCoverage {
 		lines = append(lines, fmt.Sprintf("Type %s: %s - %s", typ.Type, typ.State, typ.Reason))
 	}

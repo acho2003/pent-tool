@@ -1,4 +1,5 @@
 import type {
+ DiscoveryPreview, DiscoveryRevision, EndpointTrace,
 	AssessmentCoverage,
 	AttackSurfaceResponse,
 	AssessmentConfig,
@@ -362,6 +363,9 @@ export const api = {
 	},
 	scannerArtifactUrl: (scanId: string, scanner: string, scope?: string, attemptId?: string) => `/api/scans/${scanId}/${scanner}/artifact${scopeQuery(scope)}${attemptId ? `${scope ? "&" : "?"}attempt_id=${encodeURIComponent(attemptId)}` : ""}`,
 	scanScopes: (scanId: string) => http<ScanScopes>(`/api/scans/${scanId}/scopes`),
+	discoveryPreview: (scanId: string) => http<DiscoveryPreview>(`/api/scans/${scanId}/discovery`),
+ approveDiscovery: (scanId: string, fingerprint: string, selected_ids: string[]) => http<DiscoveryRevision>(`/api/scans/${scanId}/discovery`, {method:"POST",json:{fingerprint,selected_ids}}),
+ endpointTrace: (scanId: string, endpointId: string, page = 1) => http<EndpointTrace>(`/api/scans/${scanId}/endpoints/${endpointId}/trace?page=${page}&size=25`),
 	assessmentCoverage: (scanId: string) => http<AssessmentCoverage>(`/api/scans/${scanId}/coverage`),
 	attackSurface: (scanId: string, params?: { page?: number; size?: number; kind?: string; scanner?: string; status?: string; q?: string }) => {
 		const query = new URLSearchParams();

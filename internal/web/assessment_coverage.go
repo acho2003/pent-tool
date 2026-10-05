@@ -55,6 +55,7 @@ type assessmentOperationCounts struct {
 }
 
 type assessmentCoverageResponse struct {
+	Proof           *scanner.CoverageProof         `json:"proof,omitempty"`
 	ScanID          string                         `json:"scan_id"`
 	State           string                         `json:"state"`
 	Profile         string                         `json:"profile,omitempty"`
@@ -96,6 +97,10 @@ func (s *Server) handleAssessmentCoverage(w http.ResponseWriter, r *http.Request
 
 func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) assessmentCoverageResponse {
 	coverage := assessmentCoverageResponse{ScanID: scanID, State: "legacy", Counts: map[string]int{}}
+	if record != nil {
+		proof := scanner.BuildCoverageProof(scanner.LoadAttackSurfaces(scanDir), record.ScannerRuns)
+		coverage.Proof = &proof
+	}
 	if record == nil || record.AssessmentPlan == nil {
 		coverage.Reason = "This scan predates assessment planning and has no recorded coverage snapshot."
 		return coverage
