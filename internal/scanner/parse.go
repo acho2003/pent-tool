@@ -198,7 +198,7 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseTestssl(run.ArtifactPath)
 	case "sslyze":
 		return parseSSLyze(run.ArtifactPath)
-	case "masscan", "subfinder", "amass", "dnsx", "gau", "waybackurls", "httpx", "katana", "auth":
+	case "masscan", "subfinder", "amass", "dnsx", "gau", "waybackurls", "httpx", "katana", "browser", "auth":
 		return nil, nil // recon/discovery evidence tools produce no findings
 	case "nikto":
 		return parseNikto(run.ArtifactPath)

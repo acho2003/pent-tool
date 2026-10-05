@@ -234,6 +234,30 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			surface = NewSeedAttackSurface(inventoryScope, inventoryTarget)
 		}
 		MergeKatanaRedirectTargets(surface, spec.artifact, crawlReq.AppScope, crawlReq.TargetAuth != "")
+		if UnifiedWorkflowEnabled() && p.Config.WebBrowser {
+			browserReq := crawlReq
+			browserReq.Target = inventoryTarget
+			browserReq.ScanDir = filepath.Join(crawlReq.ScanDir, "browser")
+			browserRun := DiscoverBrowser(ctx, browserReq, p.Config)
+			browserRun.Stage = StageCrawl
+			results = append(results, browserRun)
+			if parsed, err := ParseKatanaAttackSurfaceScoped(browserRun.ArtifactPath, inventoryScope, inventoryTarget, browserRun.Authenticated, crawlReq.AppScope); err == nil {
+				byID := map[string]int{}
+				for i := range surface.Endpoints {
+					byID[surface.Endpoints[i].ID] = i
+				}
+				for _, ep := range parsed.Endpoints {
+					ep.Provenance = append(ep.Provenance, EndpointProvenance{Tool: "browser", Artifact: browserRun.ArtifactPath, Authenticated: browserRun.Authenticated})
+					mergeSurfaceEndpoint(surface, byID, ep)
+				}
+				surface.RawCount += parsed.RawCount
+			} else {
+				surface.DiscoveryGaps = append(surface.DiscoveryGaps, "browser discovery produced no usable inventory")
+			}
+			if browserRun.Completeness == "partial" || browserRun.Status != "completed" {
+				surface.DiscoveryGaps = append(surface.DiscoveryGaps, browserRun.Reason)
+			}
+		}
 		EnsureSeedEndpoint(surface, inventoryTarget)
 		var apiEndpoints []APIEndpoint
 		for _, endpoint := range plan.APIEndpoints {
