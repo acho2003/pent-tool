@@ -611,7 +611,7 @@ export interface CoverageProof {
 export interface DiscoveryPreview {
  approved_revision?: DiscoveryRevision;
   fingerprint: string; parent_fingerprint: string; state: string;
-  candidates: Array<{id: string; kind: string; value: string; source: string; state: string}>;
+  candidates: Array<{id: string; kind: string; value: string; source: string; state: string; actions?: Array<{scanner:string; description:string}>}>;
 }
 export interface DiscoveryRevision {
   parent_fingerprint: string; preview_fingerprint: string; selected_ids: string[]; plan: AssessmentPlan;

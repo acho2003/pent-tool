@@ -242,6 +242,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			plan.Jobs = append(plan.Jobs, PlanJob{ID: "katana:" + target.ID + ":katana", State: state, Scanner: "katana", TargetID: target.ID, Target: target.Value, Variant: "katana", Stage: StageCrawl})
 		}
 	}
+	ensureApprovedDiscoveryPreparation(&plan, input)
 	writeTargets := map[string]bool{}
 	for _, approval := range cfg.WriteApprovals {
 		if writeTargets[approval.TargetID] {

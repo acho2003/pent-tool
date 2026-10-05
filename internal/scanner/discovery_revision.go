@@ -16,12 +16,13 @@ import (
 )
 
 type DiscoveryCandidate struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind"`
-	Value       string `json:"value"`
-	Source      string `json:"source"`
-	EvidenceRef string `json:"evidence_reference,omitempty"`
-	State       string `json:"state"`
+	Actions     []DiscoveryAction `json:"actions,omitempty"`
+	ID          string            `json:"id"`
+	Kind        string            `json:"kind"`
+	Value       string            `json:"value"`
+	Source      string            `json:"source"`
+	EvidenceRef string            `json:"evidence_reference,omitempty"`
+	State       string            `json:"state"`
 }
 type DiscoveryPreview struct {
 	ApprovedRevision  *DiscoveryRevision   `json:"approved_revision,omitempty"`
@@ -57,7 +58,9 @@ func BuildDiscoveryPreview(plan AssessmentPlan, runs []Run, surfaces []AttackSur
 		}
 	}
 	for _, o := range plan.Config.ApprovedOrigins {
-		known[o.Origin()] = true
+		if o.PathPrefix == "" || o.PathPrefix == "/" {
+			known[o.Origin()] = true
+		}
 	}
 	seen := map[string]bool{}
 	add := func(kind, value, source, ref string) {
@@ -76,7 +79,8 @@ func BuildDiscoveryPreview(plan AssessmentPlan, runs []Run, surfaces []AttackSur
 			}
 		}
 		seen[kind+value] = true
-		p.Candidates = append(p.Candidates, DiscoveryCandidate{ID: inventoryID(kind, value), Kind: kind, Value: value, Source: source, EvidenceRef: ref, State: "candidate"})
+		actions := proposedDiscoveryActions(plan.Config, kind)
+		p.Candidates = append(p.Candidates, DiscoveryCandidate{Actions: actions, ID: inventoryID(kind, value), Kind: kind, Value: value, Source: source, EvidenceRef: ref, State: "candidate"})
 	}
 	for _, r := range runs {
 		for _, h := range r.CandidateHosts {
