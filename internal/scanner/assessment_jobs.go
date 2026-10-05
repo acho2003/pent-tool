@@ -495,9 +495,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, fmt.Sprintf("create attempt ID: %v", err), emit))
 			continue
 		}
+		req.AttemptID, req.PlanFingerprint = attemptID, plan.Fingerprint
 		req.ScanDir = filepath.Join(req.ScanDir, attemptID)
 		if err := os.MkdirAll(req.ScanDir, 0o700); err != nil {
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, fmt.Sprintf("create job artifact directory: %v", err), emit))
+			continue
+		}
+		req.InputRequests = BuildScannerInputs(surface, req, job.Scanner)
+		manifestPath, manifestErr := SaveScannerInputs(req, job.Scanner)
+		if manifestErr != nil {
+			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "could not persist scanner inputs", emit))
 			continue
 		}
 		jobCtx, jobCancel := context.WithCancel(ctx)
@@ -540,6 +547,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		run := runAttempt(jobCtx, runner, req, p.Config, runEmit)
+		run.InputManifestPath = manifestPath
 		userStopped := jobCtx.Err() == context.Canceled && ctx.Err() == nil
 		budgetExpired := jobCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 		jobCancel()

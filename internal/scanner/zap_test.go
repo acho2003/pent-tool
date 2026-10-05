@@ -994,3 +994,24 @@ func TestZAPSessionLossRecordsAuthExpiredStructurally(t *testing.T) {
 		t.Fatalf("active session not recorded as verified: status=%s auth=%q gap=%q checked=%q", verified.Status, verified.AuthState, verified.GapKind, verified.AuthCheckedAt)
 	}
 }
+
+func TestZAPApprovedContextAndExportCoverMultipleOrigins(t *testing.T) {
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{{Scheme: "https", Host: "app.test", Port: 443, PathPrefix: "/app"}, {Scheme: "https", Host: "api.test", Port: 8443, PathPrefix: "/v1"}})
+	pattern, err := zapApprovedContextRegex(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(pattern)
+	for _, raw := range []string{"https://app.test/app/a", "https://api.test:8443/v1/users"} {
+		if !re.MatchString(raw) {
+			t.Fatal(raw)
+		}
+	}
+	if re.MatchString("https://api.test:8443/admin") {
+		t.Fatal("path scope widened")
+	}
+	out, err := filterZAPScopeAlerts([]byte(`{"alerts":[{"url":"https://app.test/app/a"},{"url":"https://api.test:8443/v1/users"},{"url":"https://outside.test/"}]}`), scope)
+	if err != nil || strings.Contains(string(out), "outside.test") || !strings.Contains(string(out), "api.test") {
+		t.Fatalf("%s %v", out, err)
+	}
+}

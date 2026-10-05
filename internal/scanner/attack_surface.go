@@ -774,6 +774,9 @@ func endpointEligibleInScope(ep AttackSurfaceEndpoint, scannerName string, scope
 		}
 		return false, "endpoint is not classified as an API operation"
 	case "zap":
+		if UnifiedWorkflowEnabled() {
+			return true, ""
+		}
 		if ep.Kind == "api" || ep.HasParameters || ep.HasForm || ep.Sensitive {
 			return true, ""
 		}
@@ -828,6 +831,9 @@ func CompleteEndpointCoverage(surface *AttackSurface, scannerName string, run Ru
 	status := run.Status
 	if status == "not_applicable" || status == "cancelled" {
 		status = "failed"
+	}
+	if run.Completeness == "partial" && status == "completed" {
+		status = "partial"
 	}
 	if status == "completed" && batchEvidenceScanners[scannerName] {
 		status = EndpointCoverageBatchCompleted

@@ -305,9 +305,13 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	exclusionRegexes, widened := zapExclusionRegexes(req.AppScope)
 	contextName, contextID, scopeRegex := "", "", ""
+	authScopeRegex, _ := applicationContextRegex(target)
 	if req.TypedAssessment {
 		var err error
 		scopeRegex, err = applicationContextRegex(target)
+		if UnifiedWorkflowEnabled() && req.AppScope != nil {
+			scopeRegex, err = zapApprovedContextRegex(*req.AppScope)
+		}
 		if err != nil {
 			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 		}
@@ -444,7 +448,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			"matchString": {strings.TrimSpace(name)}, "replacement": {strings.TrimSpace(value)},
 		}
 		if req.TypedAssessment {
-			params.Set("url", scopeRegex)
+			params.Set("url", authScopeRegex)
 		}
 		_, err := zapPostResponse(cctx, cfg, "/JSON/replacer/action/addRule/", params)
 		if err != nil {
@@ -469,7 +473,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				if err := zapRemoveRule(cfg, rules[i]); err != nil {
 					return errors.New("authenticated session header could not be replaced")
 				}
-				params := url.Values{"description": {rules[i]}, "enabled": {"true"}, "matchType": {"REQ_HEADER"}, "matchRegex": {"false"}, "matchString": {strings.TrimSpace(name)}, "replacement": {strings.TrimSpace(value)}, "url": {scopeRegex}}
+				params := url.Values{"description": {rules[i]}, "enabled": {"true"}, "matchType": {"REQ_HEADER"}, "matchRegex": {"false"}, "matchString": {strings.TrimSpace(name)}, "replacement": {strings.TrimSpace(value)}, "url": {authScopeRegex}}
 				if _, err := zapPostResponse(cctx, cfg, "/JSON/replacer/action/addRule/", params); err != nil {
 					return errors.New("authenticated session header could not be installed")
 				}
@@ -636,9 +640,22 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			if err := checkAuth(); err != nil {
 				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 			}
-			if _, seedErr := call("/JSON/core/action/accessUrl/", url.Values{"url": {endpoint}, "followRedirects": {followRedirects}}); seedErr == nil {
-				seeded++
+			submission := EndpointSubmission{Method: method, URL: SafeTelemetryURL(endpoint), At: time.Now().UTC().Format(time.RFC3339Nano)}
+			for _, input := range req.InputRequests {
+				if input.URL == endpoint && input.Method == method {
+					submission.EndpointID = input.EndpointID
+				}
 			}
+			if seedErr := seedRequest(method, endpoint); seedErr == nil {
+				seeded++
+				submission.Status = "acknowledged"
+			} else {
+				submission.Status = "failed"
+				submission.Reason = "ZAP rejected request seeding"
+				run.Completeness = "partial"
+				logLine("ZAP seed failed for " + SafeTelemetryURL(endpoint))
+			}
+			run.Submissions = append(run.Submissions, submission)
 		}
 		if seeded > 0 {
 			logLine(fmt.Sprintf("ZAP seeded %d katana-discovered URLs into the scan tree", seeded))
@@ -721,27 +738,39 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if err := checkAuth(); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
-	active, err := call("/JSON/ascan/action/scan/", activeParams)
-	if err != nil {
-		// The active scan runs over the Sites tree. An empty tree (the spider
-		// found nothing reachable and the pre-seed did not land) surfaces as
-		// this ZAP error; translate it into a plain explanation instead of the
-		// raw API string.
-		if strings.Contains(err.Error(), "url_not_found") || strings.Contains(err.Error(), "URL Not Found in the Scan Tree") {
-			return finishServiceFailure(run, fmt.Errorf("ZAP found no reachable pages to scan on %s — the spider returned nothing (the target may block automated crawling, require JavaScript rendering, or speak only HTTP/2, which ZAP's crawler does not fetch)", target), secrets, cfg.MaxOutputBytes, emit)
+	activeTargets := []string{target}
+	if UnifiedWorkflowEnabled() && req.AppScope != nil {
+		activeTargets = nil
+		for _, o := range req.AppScope.Origins() {
+			activeTargets = append(activeTargets, o.Origin()+o.PathPrefix)
 		}
-		return finishServiceFailure(run, fmt.Errorf("start ZAP active scan: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}
-	activeID := valueString(active, "scan")
-	if activeID == "" || activeID == "<nil>" {
-		return finishServiceFailure(run, fmt.Errorf("ZAP did not return an active scan id"), secrets, cfg.MaxOutputBytes, emit)
+	for _, activeTarget := range activeTargets {
+		activeParams.Set("url", activeTarget)
+		active, err := call("/JSON/ascan/action/scan/", activeParams)
+		if err != nil {
+			// The active scan runs over the Sites tree. An empty tree (the spider
+			// found nothing reachable and the pre-seed did not land) surfaces as
+			// this ZAP error; translate it into a plain explanation instead of the
+			// raw API string.
+			if strings.Contains(err.Error(), "url_not_found") || strings.Contains(err.Error(), "URL Not Found in the Scan Tree") {
+				return finishServiceFailure(run, fmt.Errorf("ZAP found no reachable pages to scan on %s — the spider returned nothing (the target may block automated crawling, require JavaScript rendering, or speak only HTTP/2, which ZAP's crawler does not fetch)", target), secrets, cfg.MaxOutputBytes, emit)
+			}
+			return finishServiceFailure(run, fmt.Errorf("start ZAP active scan: %w", err), secrets, cfg.MaxOutputBytes, emit)
+		}
+		activeID := valueString(active, "scan")
+		run.NativeScanIDs = append(run.NativeScanIDs, activeID)
+		if activeID == "" || activeID == "<nil>" {
+			return finishServiceFailure(run, fmt.Errorf("ZAP did not return an active scan id"), secrets, cfg.MaxOutputBytes, emit)
+		}
+		logLine("ZAP active scan started: " + activeID)
+		if err := zapWaitScanChecked(cctx, call, "/JSON/ascan/view/status/", activeID, "active scan", logLine, checkAuth, reportProgress("active scan")); err != nil {
+			zapStopScan(cfg, "/JSON/ascan/action/stop/", activeID)
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		}
+		logLine("ZAP passive scan: waiting for active-scan traffic to be analyzed")
+
 	}
-	logLine("ZAP active scan started: " + activeID)
-	if err := zapWaitScanChecked(cctx, call, "/JSON/ascan/view/status/", activeID, "active scan", logLine, checkAuth, reportProgress("active scan")); err != nil {
-		zapStopScan(cfg, "/JSON/ascan/action/stop/", activeID)
-		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
-	}
-	logLine("ZAP passive scan: waiting for active-scan traffic to be analyzed")
 	if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
 		return finishServiceFailure(run, fmt.Errorf("ZAP passive scan after active scan: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}
@@ -752,7 +781,14 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if err := checkAuth(); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
-	report, err := fetch("/JSON/core/view/alerts/", url.Values{"baseurl": {target}}, 10*time.Minute)
+	exportParams := url.Values{"baseurl": {target}}
+	if UnifiedWorkflowEnabled() && req.TypedAssessment {
+		exportParams = url.Values{}
+	}
+	report, err := fetch("/JSON/core/view/alerts/", exportParams, 10*time.Minute)
+	if err == nil && UnifiedWorkflowEnabled() && req.AppScope != nil {
+		report, err = filterZAPScopeAlerts(report, *req.AppScope)
+	}
 	if err != nil {
 		return finishServiceFailure(run, fmt.Errorf("export ZAP alerts: %w", err), secrets, cfg.MaxOutputBytes, emit)
 	}
@@ -1087,4 +1123,46 @@ func finishServiceFailure(run Run, err error, secrets []string, limit int64, emi
 		emit(Event{Type: "scanner_failed", Scanner: run.Scanner, Run: run, Output: run.Reason})
 	}
 	return run
+}
+
+func zapApprovedContextRegex(scope assessment.AppScope) (string, error) {
+	var parts []string
+	for _, o := range scope.Origins() {
+		re, err := applicationContextRegex(o.Origin() + o.PathPrefix)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, "(?:"+re+")")
+	}
+	if len(parts) == 0 {
+		return "", errors.New("no approved ZAP origins")
+	}
+	return strings.Join(parts, "|"), nil
+}
+func filterZAPScopeAlerts(data []byte, scope assessment.AppScope) ([]byte, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	var alerts []map[string]any
+	if err := json.Unmarshal(root["alerts"], &alerts); err != nil {
+		return nil, err
+	}
+	kept := []map[string]any{}
+	for _, alert := range alerts {
+		raw := str(alert["url"])
+		method := str(alert["method"])
+		if method == "" {
+			method = "GET"
+		}
+		if allowed, _ := scope.Allows(raw); !allowed {
+			continue
+		}
+		if excluded, _ := scope.Excluded(method, raw); excluded {
+			continue
+		}
+		kept = append(kept, alert)
+	}
+	root["alerts"], _ = json.Marshal(kept)
+	return json.Marshal(root)
 }

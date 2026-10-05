@@ -50,6 +50,8 @@ const (
 )
 
 type RawObservation struct {
+	NativeMessageID      string  `json:"native_message_id,omitempty"`
+	Attack               string  `json:"attack,omitempty"`
 	ID                   string  `json:"id"`
 	EvidenceCompleteness string  `json:"evidence_completeness,omitempty"`
 	SourceRunStatus      string  `json:"source_run_status,omitempty"`
@@ -363,7 +365,7 @@ func observationFromFinding(f Finding, run Run, index int) RawObservation {
 	if seen == "" {
 		seen = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	return RawObservation{ID: id, EvidenceCompleteness: f.EvidenceCompleteness, SourceRunStatus: run.Status, SourceRunReason: run.Reason, Scanner: f.Scanner, RuleID: f.RuleID, SourceID: f.SourceID, EvidenceReference: f.EvidenceRef, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: observed, CanonicalEndpoint: canonical, Method: strings.ToUpper(f.Method), Parameter: f.Parameter, ParameterLocation: f.ParameterLocation, Protocol: f.Protocol, Port: f.Port, Package: f.Package, PackageVersion: f.PackageVersion, SourceLocation: f.SourceLocation, Container: f.Container, Resource: f.Resource, Description: f.Description, Evidence: f.Evidence, Remediation: f.Remediation, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Scope: f.Scope, ObservedAt: seen, ObservationKind: rule.Type}
+	return RawObservation{NativeMessageID: f.NativeMessageID, Attack: f.Attack, ID: id, EvidenceCompleteness: f.EvidenceCompleteness, SourceRunStatus: run.Status, SourceRunReason: run.Reason, Scanner: f.Scanner, RuleID: f.RuleID, SourceID: f.SourceID, EvidenceReference: f.EvidenceRef, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: observed, CanonicalEndpoint: canonical, Method: strings.ToUpper(f.Method), Parameter: f.Parameter, ParameterLocation: f.ParameterLocation, Protocol: f.Protocol, Port: f.Port, Package: f.Package, PackageVersion: f.PackageVersion, SourceLocation: f.SourceLocation, Container: f.Container, Resource: f.Resource, Description: f.Description, Evidence: f.Evidence, Remediation: f.Remediation, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Scope: f.Scope, ObservedAt: seen, ObservationKind: rule.Type}
 }
 
 func findingFingerprint(f RawObservation, rule findingRule) string {

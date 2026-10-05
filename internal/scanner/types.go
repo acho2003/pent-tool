@@ -50,7 +50,10 @@ type Artifact struct {
 }
 
 type Request struct {
-	Target string `json:"target"`
+	AttemptID       string                `json:"-"`
+	PlanFingerprint string                `json:"-"`
+	InputRequests   []ScannerRequestInput `json:"-"`
+	Target          string                `json:"target"`
 	// Scanners restricts this request to the named scanners. Empty runs the
 	// whole pipeline; every name must be one of OrderedNames.
 	Scanners []string `json:"-"`
@@ -149,6 +152,9 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	InputManifestPath    string                `json:"input_manifest_path,omitempty"`
+	NativeScanIDs        []string              `json:"native_scan_ids,omitempty"`
+	Submissions          []EndpointSubmission  `json:"submissions,omitempty"`
 	Outcome              string                `json:"outcome,omitempty"`
 	ExecutionOutcome     string                `json:"execution_outcome,omitempty"`
 	ParserOutcome        string                `json:"parser_outcome,omitempty"`

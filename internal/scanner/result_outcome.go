@@ -61,12 +61,13 @@ func validateWebResult(run *Run) {
 		run.Status, run.Reason = "failed", "scanner results unavailable or invalid: "+err.Error()
 		return
 	}
+	wasPartial := run.Completeness == "partial"
 	run.ParserOutcome, run.Completeness = "SUCCESS", "complete"
 	run.Outcome = "SUCCESS_NO_FINDINGS"
 	if len(findings) > 0 {
 		run.Outcome = "SUCCESS_WITH_FINDINGS"
 	}
-	if run.Truncated || len(run.Limitations) > 0 {
+	if wasPartial || run.Truncated || len(run.Limitations) > 0 {
 		run.Outcome, run.Completeness = "PARTIAL", "partial"
 	}
 }
