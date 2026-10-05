@@ -34,7 +34,16 @@ func TestAssessmentWapitiRoutes684RequestsWithoutFiftyInputCeiling(t *testing.T)
 	defer server.Close()
 	root := t.TempDir()
 	bin := filepath.Join(t.TempDir(), "wapiti")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then shift; printf '{\"vulnerabilities\":{}}' > \"$1\"; fi; shift; done\n"), 0700); err != nil {
+	if err := os.WriteFile(bin, []byte(`#!/bin/sh
+receipt="${0%/*}/received-inputs.txt"
+while [ $# -gt 0 ]; do
+ case "$1" in
+  -u|--start) shift; printf '%s\n' "$1" >> "$receipt" ;;
+  -o) shift; printf '{"vulnerabilities":{}}' > "$1" ;;
+ esac
+ shift
+done
+`), 0700); err != nil {
 		t.Fatal(err)
 	}
 	target := assessment.Target{ID: "app", Kind: assessment.KindURL, Value: server.URL + "/?q=0"}
@@ -62,6 +71,26 @@ func TestAssessmentWapitiRoutes684RequestsWithoutFiftyInputCeiling(t *testing.T)
 	}
 	if run.Status != "completed" || len(run.BatchRuns) != 14 || len(run.Submissions) != 684 {
 		t.Fatalf("status=%s reason=%s batches=%d submissions=%d", run.Status, run.Reason, len(run.BatchRuns), len(run.Submissions))
+	}
+	received, err := os.ReadFile(filepath.Join(filepath.Dir(bin), "received-inputs.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	processInputs := strings.Split(strings.TrimSpace(string(received)), "\n")
+	if len(processInputs) != 684 {
+		t.Fatalf("scanner process received %d inputs, expected 684", len(processInputs))
+	}
+	delivered := map[string]bool{}
+	for _, raw := range processInputs {
+		if delivered[raw] {
+			t.Fatal("scanner process received a duplicate input", raw)
+		}
+		delivered[raw] = true
+	}
+	for i := 0; i < 684; i++ {
+		if !delivered[fmt.Sprintf("%s/?q=%d", server.URL, i)] {
+			t.Fatalf("scanner process did not receive input %d", i)
+		}
 	}
 	ids := map[string]bool{}
 	for _, submission := range run.Submissions {

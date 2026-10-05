@@ -40,6 +40,14 @@ establish that the complete expanded workflow is ready for default rollout.
 - Complete staged workflow restart/resume acceptance, including approval pauses.
 - The complete 684-request execution fixture across retained active adapters;
   manifest coverage alone is insufficient.
+- Method/body-aware active routing with encrypted replay inputs; captured browser
+  body variants currently retain digests and parameter structure, not replay bytes.
+- Supplemental ZAP spider results merged into the inventory before active checks;
+  structured runs currently disable that spider to preserve the request boundary.
+- Multi-role discovery/authentication contexts and the complete native HTTPS ZAP
+  gateway fixture; HTTP routing and Go TLS gateway fixtures are already covered.
+- Evidence sanitization before persistence across all native artifact formats and
+  enforcement of the recording boundary for adapters that can bypass proxies.
 - End-to-end browser UI approval/authentication/report acceptance and amd64 CI.
 
 Production containers, data volumes, credentials, Greenbone feeds, and unrelated
@@ -48,3 +56,29 @@ performed. The disposable validation network and daemon may be removed after
 validation; the validation tag remains available for review.
 
 Follow-up validation: the assessment executor fixture routes 684 selected Wapiti query inputs through 14 batches with unique submission IDs. Native arm64 Chromium fixtures capture authenticated XHR and read-only GraphQL POST body metadata, block mutations/forms/logout, and verify an explicit one-request budget. The disposable native ZAP request/import fixture passes again. These are submission/discovery checks, not proof that every native active check completed.
+
+## October 6 continuation
+
+Six implementation commits retain accepted executor versions, remove the expanded
+Wapiti selection ceiling, bound evidence by complete records, expose gateway
+limits, preserve explicit OpenVAS ports, capture read-only GraphQL POST requests,
+preview active discovery actions, and add encrypted browser storage/access tests.
+
+The 684-input assessment fixture now inspects the fake scanner process's received
+`-u`/`--start` arguments as well as unique submission records. All 684 distinct
+inputs reach 14 bounded batches; this is not native vulnerability-check proof.
+The full Go suite, scanner/credential race tests and Web UI build pass. Native
+Chromium verifies protected markers, anonymous controls and storage-origin
+isolation; the disposable native ZAP request/import fixture also passes.
+
+A fresh application-only Linux arm64 image is available as
+`xalgorix:workflow-validation-a250ade`, with application revision
+`a250ade7789f051eac9858966f9fe926a73f805b`. Its offline scanner/runtime smoke test
+passed. This reuses the existing slim runtime and is not a full scanner rebuild
+from scratch. Production application/service containers were not replaced.
+The expanded feature flag remains disabled by default while the remaining
+acceptance and implementation work above is outstanding.
+
+After validation, the disposable `xalgorix-workflow-zap` container and
+`xalgorix-workflow-validation` network were removed. Both validation image tags
+remain available. Production services, other images and all volumes were preserved.
