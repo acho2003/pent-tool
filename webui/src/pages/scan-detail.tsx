@@ -1078,6 +1078,7 @@ function FindingsTab({
         ))}
       </div>
       <FindingDetailsDialog
+        scanId={scanId}
         finding={selected}
         onOpenChange={(open) => !open && setSelected(null)}
       />
@@ -1177,12 +1178,20 @@ function FindingRowMenu({
 }
 
 function FindingDetailsDialog({
+  scanId,
   finding,
   onOpenChange,
 }: {
+  scanId: string;
   finding: VulnSummary | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const observationsQuery = useQuery({
+    queryKey: ["finding-observations", scanId, finding?.id],
+    queryFn: () => api.allFindingObservations(scanId, finding!.id),
+    enabled: !!finding,
+  });
+  const observations = observationsQuery.data ?? [];
   return (
     <Dialog open={!!finding} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
@@ -1247,6 +1256,34 @@ function FindingDetailsDialog({
             </div>
 
             <Separator />
+
+            <section className="space-y-3" aria-label="Affected locations and scanner evidence">
+              <div><h3 className="text-sm font-semibold">Affected locations and scanner evidence</h3><p className="text-xs text-muted-foreground">Evidence is taken from saved scanner output. Sensitive values are redacted and excerpts are limited.</p></div>
+              {observationsQuery.isLoading && <p className="text-sm text-muted-foreground">Loading scanner observations…</p>}
+              {observationsQuery.isError && <p role="alert" className="text-sm text-destructive">Could not load scanner observations.</p>}
+              {!observationsQuery.isLoading && !observationsQuery.isError && observations.length === 0 && <p className="rounded border p-3 text-sm text-muted-foreground">Evidence: Not provided by scanner.</p>}
+              {observations.map((observation) => {
+                const locations = [
+                  observation.endpoint && `URL/endpoint: ${observation.endpoint}`,
+                  observation.method && `Method: ${observation.method}`,
+                  observation.parameter && `${observation.parameter_location || ""} parameter: ${observation.parameter}`,
+                  observation.source_location && `Source: ${observation.source_location}`,
+                  observation.package && `Package: ${observation.package}${observation.package_version ? `@${observation.package_version}` : ""}`,
+                  (observation.protocol || observation.port) && `Service: ${[observation.protocol, observation.port].filter(Boolean).join("/")}`,
+                  observation.target && `Target: ${observation.target}`,
+                  observation.container && `Container: ${observation.container}`,
+                  observation.resource && `Resource: ${observation.resource}`,
+                ].filter(Boolean) as string[];
+                return <article key={observation.id} className="space-y-2 rounded-md border p-3">
+                  <div className="flex flex-wrap items-center gap-2 text-xs"><Badge variant="outline">{observation.scanner}</Badge>{observation.source_id && <span className="break-all font-mono text-muted-foreground">{observation.source_id}</span>}</div>
+                  <p className="text-sm font-medium">{observation.title}</p>
+                  <div className="space-y-1 text-xs">{locations.length ? locations.map((location) => <p key={location} className="break-all font-mono">{location}</p>) : <p className="text-muted-foreground">Location: Not provided by scanner.</p>}</div>
+                  {observation.description && <p className="text-sm text-muted-foreground">{observation.description}</p>}
+                  <div className="rounded bg-muted/30 p-2"><p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Evidence excerpt</p><pre className="whitespace-pre-wrap break-words font-mono text-xs">{observation.evidence || "Not provided by scanner."}</pre></div>
+                  {observation.evidence_reference && <p className="break-all text-[11px] text-muted-foreground">Evidence reference: <span className="font-mono">{observation.evidence_reference}</span></p>}
+                </article>;
+              })}
+            </section>
 
             <div className="space-y-4">
               <DetailSection title="Description" value={finding.description} />

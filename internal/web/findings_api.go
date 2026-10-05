@@ -68,6 +68,9 @@ func (s *Server) handleFindingsAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items := filterSecurityFindings(snapshot.UniqueFindings, r)
+		for i := range items {
+			items[i] = sanitizeSecurityFinding(items[i])
+		}
 		page, size := parsePageParams(r.URL.Query().Get("page"), firstNonBlank(r.URL.Query().Get("limit"), r.URL.Query().Get("size")))
 		writeFindingJSON(w, http.StatusOK, pagedFindingResponse(items, page, size))
 		return
@@ -88,7 +91,7 @@ func (s *Server) handleFindingsAPI(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 3 {
 		switch r.Method {
 		case http.MethodGet:
-			writeFindingJSON(w, http.StatusOK, finding)
+			writeFindingJSON(w, http.StatusOK, sanitizeSecurityFinding(*finding))
 		case http.MethodPatch:
 			var req struct {
 				Status scanner.FindingStatus `json:"status"`
@@ -121,7 +124,7 @@ func (s *Server) handleFindingsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		if parts[3] == "endpoints" {
 			page, size := parsePageParams(r.URL.Query().Get("page"), firstNonBlank(r.URL.Query().Get("limit"), r.URL.Query().Get("size")))
-			writeFindingJSON(w, http.StatusOK, pageFindingItems(finding.Endpoints, page, size))
+			writeFindingJSON(w, http.StatusOK, pageFindingItems(sanitizeSecurityFinding(*finding).Endpoints, page, size))
 			return
 		}
 		observations := make([]scanner.RawObservation, 0, len(finding.ObservationIDs))
@@ -131,7 +134,7 @@ func (s *Server) handleFindingsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, id := range finding.ObservationIDs {
 			if o, exists := byID[id]; exists {
-				observations = append(observations, o)
+				observations = append(observations, sanitizeFindingObservation(o))
 			}
 		}
 		page, size := parsePageParams(r.URL.Query().Get("page"), firstNonBlank(r.URL.Query().Get("limit"), r.URL.Query().Get("size")))

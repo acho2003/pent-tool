@@ -332,8 +332,22 @@ export interface FindingObservation {
   id: string;
   scanner: string;
   title: string;
+  source_id?: string;
   evidence_reference?: string;
+  target?: string;
   endpoint?: string;
+  canonical_endpoint?: string;
+  method?: string;
+  parameter?: string;
+  parameter_location?: string;
+  source_location?: string;
+  package?: string;
+  package_version?: string;
+  protocol?: string;
+  port?: string;
+  container?: string;
+  resource?: string;
+  description?: string;
   evidence?: string;
   observed_at?: string;
 }

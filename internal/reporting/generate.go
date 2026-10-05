@@ -980,7 +980,7 @@ func Generate(scan *Scan, opts Options) (string, error) {
 				sections = append(sections, section{"IMPACT", v.Impact})
 			}
 			if v.TechnicalAnalysis != "" {
-				sections = append(sections, section{"TECHNICAL ANALYSIS", v.TechnicalAnalysis})
+				sections = append(sections, section{"AFFECTED LOCATIONS & SCANNER EVIDENCE", v.TechnicalAnalysis})
 			}
 			if v.PoCDescription != "" {
 				sections = append(sections, section{"PROOF OF CONCEPT", v.PoCDescription})

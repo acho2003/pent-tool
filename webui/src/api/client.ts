@@ -247,6 +247,17 @@ export const api = {
     http<Paginated<NonNullable<ScanFinding["endpoints"]>[number]>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/endpoints${listQuery(params)}`),
   findingObservations: (scanId: string, findingId: string, params: ListParams = { page: 1, size: 50 }) =>
     http<Paginated<FindingObservation>>(`/api/scans/${scanId}/findings/${encodeURIComponent(findingId)}/observations${listQuery(params)}`),
+  allFindingObservations: async (scanId: string, findingId: string) => {
+    const pageSize = 100;
+    const first = await api.findingObservations(scanId, findingId, { page: 1, size: pageSize });
+    const items = [...first.items];
+    for (let page = 2; items.length < first.total; page++) {
+      const next = await api.findingObservations(scanId, findingId, { page, size: pageSize });
+      if (!next.items.length) break;
+      items.push(...next.items);
+    }
+    return items;
+  },
   deleteScan: (id: string) =>
     http<{ status: string }>(`/api/scans/${id}`, { method: "DELETE" }),
   deleteVuln: (scanId: string, vulnId: string) =>

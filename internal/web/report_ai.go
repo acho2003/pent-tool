@@ -65,6 +65,27 @@ type reportFinding struct {
 	Confidence            string                    `json:"confidence,omitempty"`
 	NativeConfidence      string                    `json:"native_confidence,omitempty"`
 	EvidenceCompleteness  string                    `json:"evidence_completeness,omitempty"`
+	EvidenceItems         []reportEvidenceItem      `json:"evidence_items,omitempty"`
+}
+
+type reportEvidenceItem struct {
+	Scanner           string `json:"scanner,omitempty"`
+	SourceID          string `json:"source_id,omitempty"`
+	EvidenceReference string `json:"evidence_reference,omitempty"`
+	Target            string `json:"target,omitempty"`
+	Endpoint          string `json:"endpoint,omitempty"`
+	Method            string `json:"method,omitempty"`
+	Parameter         string `json:"parameter,omitempty"`
+	ParameterLocation string `json:"parameter_location,omitempty"`
+	SourceLocation    string `json:"source_location,omitempty"`
+	Package           string `json:"package,omitempty"`
+	PackageVersion    string `json:"package_version,omitempty"`
+	Protocol          string `json:"protocol,omitempty"`
+	Port              string `json:"port,omitempty"`
+	Container         string `json:"container,omitempty"`
+	Resource          string `json:"resource,omitempty"`
+	Description       string `json:"description,omitempty"`
+	Evidence          string `json:"evidence,omitempty"`
 }
 
 // GenerateCLIReport runs the same report-only AI and deterministic fallback
@@ -162,10 +183,18 @@ func fallbackSnapshotFindings(snapshot *scanner.FindingsSnapshot) []reportFindin
 	out := make([]reportFinding, 0, len(snapshot.UniqueFindings))
 	for _, f := range snapshot.UniqueFindings {
 		primary := scanner.RawObservation{}
+		evidenceItems := make([]reportEvidenceItem, 0, len(f.ObservationIDs))
 		if len(f.ObservationIDs) > 0 {
 			primary = observations[f.ObservationIDs[0]]
 		}
-		out = append(out, reportFinding{SourceID: f.ID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: string(f.DedupeScope), Scanner: firstFindingScanner(securityFindingToSummary(f)), Scanners: append([]string(nil), f.Scanners...), Title: f.Title, Severity: f.Severity, SeverityUnrated: primary.SeverityUnrated, Status: string(f.Status), StatusReason: f.StatusReason, Target: f.Target, Endpoint: firstFindingEndpoint(f), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, ObservationIDs: append([]string(nil), f.ObservationIDs...), AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.Endpoints...), Explanation: "The originating scanners reported this normalized issue; review the linked raw observations for evidence.", Evidence: primary.Evidence, EvidenceRef: primary.EvidenceReference, CVE: strings.Join(f.CVE, ", "), CWE: strings.Join(f.CWE, ", "), CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Scope: f.Scope})
+		for _, observationID := range f.ObservationIDs {
+			observation, ok := observations[observationID]
+			if !ok {
+				continue
+			}
+			evidenceItems = append(evidenceItems, evidenceItemFromObservation(observation))
+		}
+		out = append(out, reportFinding{SourceID: f.ID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: string(f.DedupeScope), Scanner: firstFindingScanner(securityFindingToSummary(f)), Scanners: append([]string(nil), f.Scanners...), Title: f.Title, Severity: f.Severity, SeverityUnrated: primary.SeverityUnrated, Status: string(f.Status), StatusReason: f.StatusReason, Target: sanitizeEvidenceText(sanitizeEvidenceURL(f.Target)), Endpoint: sanitizeEvidenceURL(firstFindingEndpoint(f)), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, ObservationIDs: append([]string(nil), f.ObservationIDs...), AffectedEndpoints: sanitizeFindingEndpoints(f.Endpoints), EvidenceItems: evidenceItems, Explanation: "The originating scanners reported this normalized issue; review the linked raw observations for evidence.", Evidence: sanitizeEvidenceText(primary.Evidence), EvidenceRef: sanitizeEvidenceText(primary.EvidenceReference), CVE: strings.Join(f.CVE, ", "), CWE: strings.Join(f.CWE, ", "), CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Scope: f.Scope})
 	}
 	return out
 }
@@ -175,7 +204,7 @@ func fallbackSnapshotFindings(snapshot *scanner.FindingsSnapshot) []reportFindin
 func fallbackReportFindings(in []scanner.Finding) []reportFinding {
 	out := make([]reportFinding, 0, len(in))
 	for _, f := range in {
-		out = append(out, reportFinding{SourceID: f.SourceID, Fingerprint: f.Fingerprint, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: f.Target, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, Explanation: firstNonBlank(f.Description, "The originating scanner reported this issue in its native output."), Evidence: f.Evidence, EvidenceRef: f.EvidenceRef, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Scope: f.Scope})
+		out = append(out, reportFinding{SourceID: f.SourceID, Fingerprint: f.Fingerprint, Scanner: f.Scanner, Title: f.Title, Severity: f.Severity, SeverityUnrated: f.SeverityUnrated, Target: sanitizeEvidenceText(sanitizeEvidenceURL(f.Target)), Endpoint: sanitizeEvidenceURL(f.Endpoint), Method: f.Method, Parameter: f.Parameter, Explanation: sanitizeEvidenceText(firstNonBlank(f.Description, "The originating scanner reported this issue in its native output.")), Evidence: sanitizeEvidenceText(f.Evidence), EvidenceRef: sanitizeEvidenceText(f.EvidenceRef), EvidenceItems: []reportEvidenceItem{{Scanner: f.Scanner, SourceID: f.SourceID, EvidenceReference: sanitizeEvidenceText(f.EvidenceRef), Target: sanitizeEvidenceText(sanitizeEvidenceURL(f.Target)), Endpoint: sanitizeEvidenceURL(f.Endpoint), Method: f.Method, Parameter: f.Parameter, ParameterLocation: f.ParameterLocation, SourceLocation: sanitizeEvidenceText(f.SourceLocation), Package: sanitizeEvidenceText(f.Package), PackageVersion: sanitizeEvidenceText(f.PackageVersion), Protocol: f.Protocol, Port: f.Port, Container: sanitizeEvidenceText(f.Container), Resource: sanitizeEvidenceText(f.Resource), Description: sanitizeEvidenceText(f.Description), Evidence: sanitizeEvidenceText(f.Evidence)}}, CVE: f.CVE, CWE: f.CWE, CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Scope: f.Scope})
 	}
 	return out
 }
@@ -185,9 +214,100 @@ func reportFindingsToVulns(in []reportFinding) []VulnSummary {
 	for _, f := range in {
 		scanners := reportScanners(f)
 		tags := append([]string{"scanner-reported"}, scanners...)
-		out = append(out, VulnSummary{ID: f.SourceID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: f.DedupeScope, Title: f.Title, Severity: f.Severity, Status: f.Status, StatusReason: f.StatusReason, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, ObservationIDs: append([]string(nil), f.ObservationIDs...), Scanners: append([]string(nil), scanners...), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.AffectedEndpoints...), Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: f.Evidence + "\n" + reportEvidenceRefs(f), Remediation: f.Remediation, VerificationMethod: strings.Join(scanners, ", "), Verified: f.Status == string(scanner.StatusConfirmed), Tags: tags})
+		out = append(out, VulnSummary{ID: f.SourceID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: f.DedupeScope, Title: f.Title, Severity: f.Severity, Status: f.Status, StatusReason: f.StatusReason, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, ObservationIDs: append([]string(nil), f.ObservationIDs...), Scanners: append([]string(nil), scanners...), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.AffectedEndpoints...), Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: renderFindingEvidence(f), Remediation: f.Remediation, VerificationMethod: strings.Join(scanners, ", "), Verified: f.Status == string(scanner.StatusConfirmed), Tags: tags})
 	}
 	return out
+}
+
+func evidenceItemFromObservation(o scanner.RawObservation) reportEvidenceItem {
+	o = sanitizeFindingObservation(o)
+	return reportEvidenceItem{Scanner: o.Scanner, SourceID: o.SourceID, EvidenceReference: o.EvidenceReference, Target: o.Target, Endpoint: o.Endpoint, Method: o.Method, Parameter: o.Parameter, ParameterLocation: o.ParameterLocation, SourceLocation: o.SourceLocation, Package: o.Package, PackageVersion: o.PackageVersion, Protocol: o.Protocol, Port: o.Port, Container: o.Container, Resource: o.Resource, Description: o.Description, Evidence: o.Evidence}
+}
+
+func sanitizeFindingEndpoints(in []scanner.FindingEndpoint) []scanner.FindingEndpoint {
+	out := append([]scanner.FindingEndpoint(nil), in...)
+	for i := range out {
+		out[i].Endpoint = sanitizeEvidenceURL(out[i].Endpoint)
+		out[i].CanonicalEndpoint = sanitizeEvidenceURL(out[i].CanonicalEndpoint)
+		out[i].Parameter = sanitizeEvidenceText(out[i].Parameter)
+	}
+	return out
+}
+
+func renderFindingEvidence(f reportFinding) string {
+	var b strings.Builder
+	if len(f.EvidenceItems) == 0 {
+		b.WriteString("Affected location: Not provided by scanner.\nEvidence excerpt: ")
+		b.WriteString(firstNonBlank(sanitizeEvidenceText(f.Evidence), "Not provided by scanner"))
+		if ref := reportEvidenceRefs(f); strings.TrimSpace(strings.TrimSuffix(ref, ":")) != "Evidence reference" {
+			b.WriteString("\n")
+			b.WriteString(sanitizeEvidenceText(ref))
+		}
+		return b.String()
+	}
+	b.WriteString("Scanner evidence and affected locations:\n")
+	for i, item := range f.EvidenceItems {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("Observation %d — scanner: %s", i+1, firstNonBlank(item.Scanner, "Not provided by scanner")))
+		if item.SourceID != "" {
+			b.WriteString("; source: " + sanitizeEvidenceText(item.SourceID))
+		}
+		b.WriteString("\nLocation: " + evidenceLocation(item))
+		if item.EvidenceReference != "" {
+			b.WriteString("\nEvidence reference: " + sanitizeEvidenceText(item.EvidenceReference))
+		}
+		if item.Description != "" {
+			b.WriteString("\nFinding detail: " + item.Description)
+		}
+		evidence := firstNonBlank(item.Evidence, "Not provided by scanner")
+		b.WriteString("\nEvidence excerpt: " + sanitizeEvidenceText(evidence))
+	}
+	return b.String()
+}
+
+func evidenceLocation(item reportEvidenceItem) string {
+	parts := []string{}
+	if item.Endpoint != "" {
+		parts = append(parts, "URL/endpoint="+sanitizeEvidenceURL(item.Endpoint))
+	}
+	if item.Method != "" {
+		parts = append(parts, "method="+item.Method)
+	}
+	if item.Parameter != "" {
+		label := "parameter"
+		if item.ParameterLocation != "" {
+			label = item.ParameterLocation + " parameter"
+		}
+		parts = append(parts, label+"="+sanitizeEvidenceText(item.Parameter))
+	}
+	if item.SourceLocation != "" {
+		parts = append(parts, "source="+item.SourceLocation)
+	}
+	if item.Package != "" {
+		value := item.Package
+		if item.PackageVersion != "" {
+			value += "@" + item.PackageVersion
+		}
+		parts = append(parts, "package="+value)
+	}
+	if item.Protocol != "" || item.Port != "" {
+		parts = append(parts, "service="+strings.Trim(strings.Join([]string{item.Protocol, item.Port}, "/"), "/"))
+	}
+	if item.Target != "" {
+		parts = append(parts, "target="+sanitizeEvidenceText(sanitizeEvidenceURL(item.Target)))
+	}
+	if item.Container != "" {
+		parts = append(parts, "container="+item.Container)
+	}
+	if item.Resource != "" {
+		parts = append(parts, "resource="+item.Resource)
+	}
+	if len(parts) == 0 {
+		return "Not provided by scanner"
+	}
+	return strings.Join(parts, "; ")
 }
 
 // reportScanners lists the distinct scanners that reported f, primary first.

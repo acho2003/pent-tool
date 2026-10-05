@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
@@ -138,12 +139,11 @@ func TestReportFindingsToVulnsCarriesScopeAndSources(t *testing.T) {
 	if v.Scope != "host:a" || v.Fingerprint != "v2:stable" || v.Confidence != "HIGH" || v.NativeConfidence != "confirmed" || v.EvidenceCompleteness != "request_response" || v.Method != "POST" || v.Parameter != "profile.name" || v.Remediation != "Validate input" || v.VerificationMethod != "nuclei, openvas" || !slices.Contains(v.Tags, "openvas") {
 		t.Fatalf("vuln = %#v", v)
 	}
-	want := "ev\nEvidence reference (nuclei): n.jsonl#nuclei:x\nEvidence reference (openvas): ov.xml#openvas:r1"
-	if v.TechnicalAnalysis != want {
+	if !strings.Contains(v.TechnicalAnalysis, "Affected location: Not provided by scanner") || !strings.Contains(v.TechnicalAnalysis, "Evidence excerpt: ev") || !strings.Contains(v.TechnicalAnalysis, "Evidence reference (nuclei): n.jsonl#nuclei:x") || !strings.Contains(v.TechnicalAnalysis, "Evidence reference (openvas): ov.xml#openvas:r1") {
 		t.Fatalf("technical analysis = %q", v.TechnicalAnalysis)
 	}
 	single := reportFindingsToVulns([]reportFinding{{SourceID: "zap:1", Scanner: "zap", Evidence: "e", EvidenceRef: "z.json#zap:1"}})[0]
-	if single.TechnicalAnalysis != "e\nEvidence reference: z.json#zap:1" || single.VerificationMethod != "zap" {
+	if !strings.Contains(single.TechnicalAnalysis, "Evidence excerpt: e") || !strings.Contains(single.TechnicalAnalysis, "Evidence reference: z.json#zap:1") || single.VerificationMethod != "zap" {
 		t.Fatalf("unmerged vuln must keep the existing shape, got %#v", single)
 	}
 }

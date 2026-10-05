@@ -156,6 +156,54 @@ func TestFallbackFindingTraceIsPreserved(t *testing.T) {
 	}
 }
 
+func TestScannerReportIncludesRedactedScannerLocationsAndEvidence(t *testing.T) {
+	s := newTestServer(t, nil)
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "nuclei.jsonl")
+	body := `{"template-id":"reflected-value","matched-at":"https://example.test/search?access_token=must-not-leak&q=test","host":"example.test","matcher-name":"Authorization: Bearer scanner-secret","info":{"name":"Reflected value","severity":"medium"}}` + "\n"
+	if err := os.WriteFile(artifact, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := scanner.Run{Scanner: "nuclei", Target: "https://example.test", Scope: "host:example.test", Status: "completed", ArtifactPath: artifact}
+	run.Checksum = scanner.CalculateChecksum(run)
+	rec := &ScanRecord{SchemaVersion: scanner.SchemaVersion, ID: "evidence-report", Target: "https://example.test", Status: "finished", ScannerRuns: []scanner.Run{run}, Events: []WSEvent{}}
+	reportPath := s.generateScannerReport(rec, dir, "")
+	if reportPath == "" {
+		t.Fatal("report generation failed")
+	}
+	pdf, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pdf) == 0 || !strings.Contains(strings.ToLower(rec.Vulns[0].TechnicalAnalysis), "affected locations") || !strings.Contains(rec.Vulns[0].TechnicalAnalysis, "[REDACTED]") {
+		t.Fatal("PDF input did not include the affected-location evidence section or redaction")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, secret := range []string{"must-not-leak", "scanner-secret"} {
+		if strings.Contains(text, secret) {
+			t.Errorf("report manifest leaked %q", secret)
+		}
+	}
+	var manifest reportManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Findings) != 1 || len(manifest.Findings[0].EvidenceItems) != 1 {
+		t.Fatalf("evidence items missing: %+v", manifest.Findings)
+	}
+	item := manifest.Findings[0].EvidenceItems[0]
+	if item.Scanner != "nuclei" || item.Endpoint == "" || !strings.Contains(item.Endpoint, "[REDACTED]") || !strings.Contains(item.Evidence, "[REDACTED]") {
+		t.Fatalf("report observation was not enriched/redacted: %+v", item)
+	}
+	if !strings.Contains(string(rec.Vulns[0].TechnicalAnalysis), "Affected locations") && !strings.Contains(string(rec.Vulns[0].TechnicalAnalysis), "affected locations") {
+		t.Fatalf("PDF finding data lacks location/evidence section: %q", rec.Vulns[0].TechnicalAnalysis)
+	}
+}
+
 func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	s := newTestServer(t, nil)
 	dir := t.TempDir()
