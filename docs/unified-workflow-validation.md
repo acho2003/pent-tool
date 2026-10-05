@@ -44,3 +44,5 @@ Production containers, data volumes, credentials, Greenbone feeds, and unrelated
 projects were preserved. No global Docker pruning or public-target scanning was
 performed. The disposable validation network and daemon may be removed after
 validation; the validation tag remains available for review.
+
+Follow-up validation: the assessment executor fixture routes 684 selected Wapiti query inputs through 14 batches with unique submission IDs. Native arm64 Chromium fixtures capture authenticated XHR and read-only GraphQL POST body metadata, block mutations/forms/logout, and verify an explicit one-request budget. The disposable native ZAP request/import fixture passes again. These are submission/discovery checks, not proof that every native active check completed.

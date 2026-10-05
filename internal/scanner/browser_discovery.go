@@ -2,12 +2,15 @@ package scanner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +38,7 @@ func browserRequestAllowed(req Request, cfg Config, method, rawURL string) error
 	}
 	if parsed, err := url.Parse(rawURL); err == nil {
 		query := strings.TrimSpace(parsed.Query().Get("query"))
-		if strings.HasPrefix(query, "{") || strings.HasPrefix(query, "query ") || strings.HasPrefix(query, "query(") || strings.HasPrefix(query, "mutation") || strings.HasPrefix(query, "subscription") {
+		if strings.Contains(query, "{") || strings.HasPrefix(query, "query ") || strings.HasPrefix(query, "query(") || strings.HasPrefix(query, "mutation") || strings.HasPrefix(query, "subscription") {
 			document, err := parser.ParseQuery(&ast.Source{Input: query})
 			if err != nil {
 				return fmt.Errorf("GraphQL query is invalid")
@@ -143,6 +146,8 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	observed := map[string]bool{}
 	count := 0
 	partial := false
+	limitReasons := map[string]bool{}
+	markLimit := func(reason string) { mu.Lock(); partial = true; limitReasons[reason] = true; mu.Unlock() }
 	max := cfg.WebMaxEndpoints
 	if max <= 0 {
 		max = 500
@@ -152,6 +157,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		defer mu.Unlock()
 		if err := encoder.Encode(row); err != nil {
 			partial = true
+			limitReasons["browser observation could not be persisted"] = true
 		}
 	}
 	router := browser.HijackRequests()
@@ -173,13 +179,16 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 			return
 		}
-		if err := browserRequestAllowed(req, cfg, method, rawURL); err != nil {
+		requestBody := []byte(h.Request.Body())
+		if err := browserDiscoveryRequestAllowed(req, cfg, method, rawURL, h.Request.Req().Header.Get("Content-Type"), requestBody); err != nil {
+			markLimit("browser request excluded by approved policy: " + err.Error())
 			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 			return
 		}
 		mu.Lock()
 		if count >= max {
 			partial = true
+			limitReasons[fmt.Sprintf("browser HTTP request limit reached (%d)", max)] = true
 			mu.Unlock()
 			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 			return
@@ -187,9 +196,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		count++
 		mu.Unlock()
 		if err := cfg.Budget.Wait(ctx); err != nil {
-			mu.Lock()
-			partial = true
-			mu.Unlock()
+			markLimit("assessment rate or time budget ended during browser discovery")
 			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 			return
 		}
@@ -218,17 +225,13 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		response, err := client.Do(h.Request.Req().WithContext(ctx))
 		if err != nil {
 			h.Response.Fail(proto.NetworkErrorReasonFailed)
-			mu.Lock()
-			partial = true
-			mu.Unlock()
+			markLimit("browser upstream request failed")
 			return
 		}
 		defer response.Body.Close()
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
 		if readErr != nil || len(body) > 2<<20 {
-			mu.Lock()
-			partial = true
-			mu.Unlock()
+			markLimit("browser response exceeded 2097152 bytes or could not be read")
 			h.Response.Fail(proto.NetworkErrorReasonFailed)
 			return
 		}
@@ -240,7 +243,13 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		h.Response.SetBody(body)
 		// Bodies/credentials are not copied into public discovery artifacts.
-		row := map[string]any{"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "request": map[string]any{"endpoint": rawURL, "method": method, "source": "browser", "headers": map[string]string{"content-type": h.Request.Req().Header.Get("Content-Type")}}, "response": map[string]any{"status_code": response.StatusCode, "headers": map[string]string{"content-type": response.Header.Get("Content-Type")}}}
+		requestRecord := map[string]any{"endpoint": rawURL, "method": method, "source": "browser", "headers": map[string]string{"content-type": h.Request.Req().Header.Get("Content-Type")}}
+		if len(requestBody) > 0 {
+			sum := sha256.Sum256(requestBody)
+			requestRecord["body_digest"] = hex.EncodeToString(sum[:])
+			requestRecord["parameters"] = bodyParameters(string(requestBody), h.Request.Req().Header.Get("Content-Type"))
+		}
+		row := map[string]any{"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "request": requestRecord, "response": map[string]any{"status_code": response.StatusCode, "headers": map[string]string{"content-type": response.Header.Get("Content-Type")}}}
 		record(row)
 		mu.Lock()
 		observed[rawURL] = true
@@ -300,23 +309,22 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 				}
 				if json.Unmarshal([]byte(result.Value.Str()), &extracted) == nil {
 					record(map[string]any{"request": map[string]any{"endpoint": next.url, "method": "GET", "source": "browser-dom"}, "forms": extracted.Forms})
+					if next.depth >= katanaDefaultDepth && len(extracted.Links) > 0 {
+						markLimit(fmt.Sprintf("browser crawl depth limit reached (%d)", katanaDefaultDepth))
+					}
 					if next.depth < katanaDefaultDepth {
 						for _, link := range extracted.Links {
 							if len(queue)+len(visited) < max {
 								queue = append(queue, entry{link, next.depth + 1})
 							} else {
-								mu.Lock()
-								partial = true
-								mu.Unlock()
+								markLimit(fmt.Sprintf("browser navigation queue limit reached (%d)", max))
 							}
 						}
 					}
 				}
 			}
 		} else {
-			mu.Lock()
-			partial = true
-			mu.Unlock()
+			markLimit("browser navigation or page loading failed (20-second navigation deadline)")
 		}
 		if page != nil {
 			_ = page.Close()
@@ -338,8 +346,19 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	authMu.Unlock()
 	run.Completeness = "complete"
+	if timedOut {
+		limitReasons["browser discovery cancelled or time budget exhausted"] = true
+	}
 	if timedOut || partial {
-		run.Outcome, run.Completeness, run.Reason = "PARTIAL", "partial", "browser discovery reached a request, response-size, navigation, depth or time limit"
+		reasons := make([]string, 0, len(limitReasons))
+		for reason := range limitReasons {
+			reasons = append(reasons, reason)
+		}
+		sort.Strings(reasons)
+		for _, reason := range reasons {
+			run.Limitations = append(run.Limitations, RunLimitation{Kind: "browser_discovery_limit", Reason: reason})
+		}
+		run.Outcome, run.Completeness, run.Reason = "PARTIAL", "partial", strings.Join(reasons, "; ")
 	}
 	if count == 0 {
 		run.Status, run.Reason = "failed", "browser produced no approved HTTP observations"

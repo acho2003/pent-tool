@@ -195,7 +195,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 	// them with an out_of_scope State instead.
 	targetHost := hostFromTarget(target)
 	artifactName := filepath.Base(artifact)
-	var requestBody, requestType string
+	var requestBody, requestType, recordedBodyDigest string
 	add := func(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm bool) {
 		allowed, reason := inSurfaceScope(rawURL, targetHost, appScope)
 		if !allowed && appScope == nil {
@@ -205,7 +205,10 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		if !ok {
 			return
 		}
-		if requestBody != "" {
+		if recordedBodyDigest != "" {
+			ep.BodyDigest = recordedBodyDigest
+			ep.ID = inventoryID(ep.ID, recordedBodyDigest)
+		} else if requestBody != "" {
 			sum := sha256.Sum256([]byte(requestBody))
 			ep.BodyDigest = hex.EncodeToString(sum[:])
 			ep.ID = inventoryID(ep.ID, ep.BodyDigest)
@@ -244,6 +247,10 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 			endpoint = firstStringValue(raw, "endpoint", "url")
 		}
 		requestBody = firstStringValue(request, "body")
+		recordedBodyDigest = firstStringValue(request, "body_digest")
+		if decoded, err := hex.DecodeString(recordedBodyDigest); err != nil || len(decoded) != sha256.Size {
+			recordedBodyDigest = ""
+		}
 		requestType = headerValue(request["headers"], "content-type")
 		method := firstStringValue(request, "method")
 		tag := firstStringValue(request, "tag")
@@ -254,6 +261,16 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		status := intValue(response["status_code"])
 		contentType := headerValue(response["headers"], "content-type")
 		params := endpointParameters(endpoint)
+		if supplied, ok := request["parameters"].([]any); ok {
+			for _, item := range supplied {
+				if parameter, ok := item.(map[string]any); ok {
+					name, location := firstStringValue(parameter, "name"), firstStringValue(parameter, "location")
+					if name != "" && (location == "body" || location == "query" || location == "path") {
+						params = append(params, EndpointParameter{Name: name, Location: location})
+					}
+				}
+			}
+		}
 		params = append(params, bodyParameters(firstStringValue(request, "body"), headerValue(request["headers"], "content-type"))...)
 		hasForm := strings.EqualFold(tag, "form")
 		if hasForm {
