@@ -24,7 +24,7 @@ not-json
 	if err != nil {
 		t.Fatal(err)
 	}
-	if surface.RawCount != 7 || len(surface.Endpoints) != 5 {
+	if surface.RawCount != 7 || len(surface.Endpoints) != 6 {
 		t.Fatalf("raw=%d endpoints=%d: %+v", surface.RawCount, len(surface.Endpoints), surface.Endpoints)
 	}
 	var product, spa, js, api, form *AttackSurfaceEndpoint
@@ -43,7 +43,7 @@ not-json
 			form = ep
 		}
 	}
-	if product == nil || product.CanonicalURL != "http://example.com/product?id={value}" || len(product.Parameters) != 1 || len(product.Sources) != 2 {
+	if product == nil || product.CanonicalURL != "http://example.com/product?id={value}" || len(product.Parameters) != 1 || len(product.Sources) != 1 {
 		t.Fatalf("product normalization failed: %+v", product)
 	}
 	if spa == nil || len(spa.SPARoutes) != 1 || spa.SPARoutes[0] != "/login" || spa.CanonicalURL != "http://example.com/" {
@@ -158,8 +158,8 @@ func TestCompleteEndpointCoverageRecordsBatchCompletedForBatchAdapters(t *testin
 }
 
 func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
-	if AttackSurfaceClassifierVersion != 3 {
-		t.Fatalf("classifier version = %d, want 3", AttackSurfaceClassifierVersion)
+	if AttackSurfaceClassifierVersion != 4 {
+		t.Fatalf("classifier version = %d, want 4", AttackSurfaceClassifierVersion)
 	}
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "results.jsonl")

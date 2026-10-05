@@ -20,13 +20,13 @@ import (
 )
 
 const (
-	AttackSurfaceSchemaVersion = 1
+	AttackSurfaceSchemaVersion = 2
 	// AttackSurfaceClassifierVersion is bumped whenever eligibility semantics
 	// change, so cached snapshots are re-parsed from their raw JSONL (without
 	// contacting the target) instead of being reused. v2: endpoint State,
 	// exclusions and placeholder refusal. v3: retain scoped OpenAPI operations
 	// that still need explicit inputs.
-	AttackSurfaceClassifierVersion = 3
+	AttackSurfaceClassifierVersion = 4
 )
 
 // Endpoint states. An empty State (seeds, OpenAPI merges, the legacy parse and
@@ -73,11 +73,14 @@ type EndpointParameter struct {
 }
 
 type EndpointScannerCoverage struct {
-	Scanner    string `json:"scanner"`
-	Status     string `json:"status"`
-	Reason     string `json:"reason,omitempty"`
-	StartedAt  string `json:"started_at,omitempty"`
-	FinishedAt string `json:"finished_at,omitempty"`
+	AttemptID       string `json:"attempt_id,omitempty"`
+	PlanFingerprint string `json:"plan_fingerprint,omitempty"`
+	EvidenceRef     string `json:"evidence_reference,omitempty"`
+	Scanner         string `json:"scanner"`
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+	StartedAt       string `json:"started_at,omitempty"`
+	FinishedAt      string `json:"finished_at,omitempty"`
 }
 
 // AttackSurfaceEndpoint is one normalized request surface. URL is a concrete,
@@ -85,30 +88,40 @@ type EndpointScannerCoverage struct {
 // query values replaced by placeholders. A fragment is metadata only and never
 // participates in the HTTP request identity.
 type AttackSurfaceEndpoint struct {
-	ID               string                    `json:"id"`
-	URL              string                    `json:"url"`
-	CanonicalURL     string                    `json:"canonical_url"`
-	Method           string                    `json:"method"`
-	Path             string                    `json:"path"`
-	SPARoutes        []string                  `json:"spa_routes,omitempty"`
-	Kind             string                    `json:"kind"`
-	Sources          []string                  `json:"sources,omitempty"`
-	Parameters       []EndpointParameter       `json:"parameters,omitempty"`
-	StatusCode       int                       `json:"status_code,omitempty"`
-	ContentType      string                    `json:"content_type,omitempty"`
-	Sensitive        bool                      `json:"sensitive,omitempty"`
-	HasParameters    bool                      `json:"has_parameters,omitempty"`
-	HasForm          bool                      `json:"has_form,omitempty"`
-	ObservedWithAuth bool                      `json:"observed_with_auth,omitempty"`
-	RequiresAuth     *bool                     `json:"requires_auth,omitempty"`
-	DiscoveredAt     string                    `json:"discovered_at,omitempty"`
-	State            string                    `json:"state,omitempty"`
-	StateReason      string                    `json:"state_reason,omitempty"`
-	Provenance       []EndpointProvenance      `json:"provenance,omitempty"`
-	ScannerCoverage  []EndpointScannerCoverage `json:"scanner_coverage,omitempty"`
+	GroupID            string                    `json:"group_id,omitempty"`
+	AuthContextID      string                    `json:"auth_context_id,omitempty"`
+	RequestContentType string                    `json:"request_content_type,omitempty"`
+	BodyDigest         string                    `json:"body_digest,omitempty"`
+	ObservationKind    string                    `json:"observation_kind,omitempty"`
+	CoverageHistory    []EndpointScannerCoverage `json:"coverage_history,omitempty"`
+	ID                 string                    `json:"id"`
+	URL                string                    `json:"url"`
+	CanonicalURL       string                    `json:"canonical_url"`
+	Method             string                    `json:"method"`
+	Path               string                    `json:"path"`
+	SPARoutes          []string                  `json:"spa_routes,omitempty"`
+	Kind               string                    `json:"kind"`
+	Sources            []string                  `json:"sources,omitempty"`
+	Parameters         []EndpointParameter       `json:"parameters,omitempty"`
+	StatusCode         int                       `json:"status_code,omitempty"`
+	ContentType        string                    `json:"content_type,omitempty"`
+	Sensitive          bool                      `json:"sensitive,omitempty"`
+	HasParameters      bool                      `json:"has_parameters,omitempty"`
+	HasForm            bool                      `json:"has_form,omitempty"`
+	ObservedWithAuth   bool                      `json:"observed_with_auth,omitempty"`
+	RequiresAuth       *bool                     `json:"requires_auth,omitempty"`
+	DiscoveredAt       string                    `json:"discovered_at,omitempty"`
+	State              string                    `json:"state,omitempty"`
+	StateReason        string                    `json:"state_reason,omitempty"`
+	Provenance         []EndpointProvenance      `json:"provenance,omitempty"`
+	ScannerCoverage    []EndpointScannerCoverage `json:"scanner_coverage,omitempty"`
 }
 
 type AttackSurface struct {
+	Hosts             []InventoryHost         `json:"hosts,omitempty"`
+	Services          []InventoryService      `json:"services,omitempty"`
+	Definitions       []InventoryDefinition   `json:"definitions,omitempty"`
+	DiscoveryGaps     []string                `json:"discovery_gaps,omitempty"`
 	SchemaVersion     int                     `json:"schema_version"`
 	ClassifierVersion int                     `json:"classifier_version"`
 	Scope             string                  `json:"scope"`
@@ -124,7 +137,8 @@ func NewSeedAttackSurface(scope, target string) *AttackSurface {
 		SchemaVersion: AttackSurfaceSchemaVersion, ClassifierVersion: AttackSurfaceClassifierVersion,
 		Scope: scope, Target: target, GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Endpoints: []AttackSurfaceEndpoint{},
 	}
-	if ep, ok := normalizeAttackSurfaceEndpoint(target, "GET", "seed", surface.GeneratedAt, 0, "", nil, false, false); ok {
+	if ep, ok := normalizeAttackSurfaceEndpoint(target, "GET", "seed", surface.GeneratedAt, 0, "", endpointParameters(target), false, false); ok {
+		ep.ObservationKind = "seed"
 		surface.RawCount = 1
 		surface.Endpoints = append(surface.Endpoints, ep)
 	}
@@ -139,7 +153,8 @@ func EnsureSeedEndpoint(surface *AttackSurface, target string) {
 	for i := range surface.Endpoints {
 		byID[surface.Endpoints[i].ID] = i
 	}
-	if ep, ok := normalizeAttackSurfaceEndpoint(target, "GET", "seed", surface.GeneratedAt, 0, "", nil, false, false); ok {
+	if ep, ok := normalizeAttackSurfaceEndpoint(target, "GET", "seed", surface.GeneratedAt, 0, "", endpointParameters(target), false, false); ok {
+		ep.ObservationKind = "seed"
 		mergeSurfaceEndpoint(surface, byID, ep)
 	}
 }
@@ -178,6 +193,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 	// them with an out_of_scope State instead.
 	targetHost := hostFromTarget(target)
 	artifactName := filepath.Base(artifact)
+	var requestBody, requestType string
 	add := func(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm bool) {
 		allowed, reason := inSurfaceScope(rawURL, targetHost, appScope)
 		if !allowed && appScope == nil {
@@ -186,6 +202,18 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		ep, ok := normalizeAttackSurfaceEndpoint(rawURL, method, source, timestamp, status, contentType, params, hasForm, observedWithAuth)
 		if !ok {
 			return
+		}
+		if requestBody != "" {
+			sum := sha256.Sum256([]byte(requestBody))
+			ep.BodyDigest = hex.EncodeToString(sum[:])
+			ep.ID = inventoryID(ep.ID, ep.BodyDigest)
+		}
+		ep.RequestContentType = requestType
+		if requestType != "" {
+			ep.ID = inventoryID(ep.ID, requestType)
+		}
+		if observedWithAuth {
+			ep.AuthContextID = inventoryID(scope, "target-bound")
 		}
 		ep.Provenance = []EndpointProvenance{{Tool: "katana", Source: strings.TrimSpace(source), Artifact: artifactName, ObservedAt: timestamp, Authenticated: observedWithAuth}}
 		if appScope != nil {
@@ -203,6 +231,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		surface.RawCount++
 		var raw map[string]any
 		if json.Unmarshal([]byte(line), &raw) != nil {
+			surface.DiscoveryGaps = append(surface.DiscoveryGaps, fmt.Sprintf("malformed crawler record %d", surface.RawCount))
 			continue
 		}
 		request, _ := raw["request"].(map[string]any)
@@ -211,6 +240,8 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		if endpoint == "" {
 			endpoint = firstStringValue(raw, "endpoint", "url")
 		}
+		requestBody = firstStringValue(request, "body")
+		requestType = headerValue(request["headers"], "content-type")
 		method := firstStringValue(request, "method")
 		tag := firstStringValue(request, "tag")
 		source := firstStringValue(request, "source")
@@ -234,6 +265,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		}
 		// Katana versions have emitted form extraction at both the top level and
 		// under response. Decode generically so upgrades do not make forms vanish.
+		requestBody, requestType = "", ""
 		for _, form := range collectForms(raw) {
 			action := firstStringValue(form, "action", "url", "endpoint")
 			if action == "" {
@@ -311,14 +343,15 @@ func normalizeAttackSurfaceEndpoint(rawURL, method, source, timestamp string, st
 		method = "GET"
 	}
 	params = mergeParameters(params)
-	hash := sha256.Sum256([]byte(method + "\x00" + canonical))
+	hash := sha256.Sum256([]byte(method + "\x00" + observed + fmt.Sprint(params) + fmt.Sprint(observedWithAuth)))
+	group := sha256.Sum256([]byte(method + "\x00" + canonical))
 	requiresAuth := (*bool)(nil)
 	if status == 401 || status == 403 {
 		v := true
 		requiresAuth = &v
 	}
 	ep := AttackSurfaceEndpoint{
-		ID: hex.EncodeToString(hash[:12]), URL: observed, CanonicalURL: canonical, Method: method,
+		GroupID: hex.EncodeToString(group[:12]), ObservationKind: "observed", ID: hex.EncodeToString(hash[:12]), URL: observed, CanonicalURL: canonical, Method: method,
 		Path: endpointPath, Sources: []string{strings.TrimSpace(source)}, Parameters: params,
 		StatusCode: status, ContentType: contentType, HasParameters: len(params) > 0, HasForm: hasForm,
 		ObservedWithAuth: observedWithAuth, RequiresAuth: requiresAuth, DiscoveredAt: timestamp,
@@ -348,15 +381,10 @@ func canonicalizeAttackSurfaceURL(raw string) (observed, canonical, route, endpo
 	route = u.Fragment
 	u.Fragment = ""
 	u.RawFragment = ""
-	cleaned := path.Clean("/" + strings.TrimLeft(u.Path, "/"))
-	if cleaned == "." || cleaned == "" {
-		cleaned = "/"
+	if u.Path == "" {
+		u.Path = "/"
 	}
-	if cleaned != "/" {
-		cleaned = strings.TrimSuffix(cleaned, "/")
-	}
-	u.Path, u.RawPath = cleaned, ""
-	endpointPath = cleaned
+	endpointPath = u.Path
 	values, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return "", "", "", "", false
@@ -810,11 +838,13 @@ func CompleteEndpointCoverage(surface *AttackSurface, scannerName string, run Ru
 			if coverage.Scanner != scannerName || coverage.Status != "dispatched" {
 				continue
 			}
+			coverage.AttemptID, coverage.PlanFingerprint, coverage.EvidenceRef = run.AttemptID, run.PlanFingerprint, run.ArtifactPath
 			coverage.Status = status
 			coverage.FinishedAt = run.FinishedAt
 			if run.Reason != "" {
 				coverage.Reason = run.Reason
 			}
+			surface.Endpoints[i].CoverageHistory = append(surface.Endpoints[i].CoverageHistory, *coverage)
 		}
 	}
 }
@@ -859,7 +889,7 @@ func LoadAttackSurface(scanDir, scope, rawArtifact string) (*AttackSurface, bool
 		return nil, false
 	}
 	var surface AttackSurface
-	if json.Unmarshal(data, &surface) != nil || surface.SchemaVersion != AttackSurfaceSchemaVersion || surface.ClassifierVersion != AttackSurfaceClassifierVersion {
+	if json.Unmarshal(data, &surface) != nil || (surface.SchemaVersion != AttackSurfaceSchemaVersion && surface.SchemaVersion != 1) || surface.ClassifierVersion != AttackSurfaceClassifierVersion {
 		return nil, false
 	}
 	if rawArtifact != "" {

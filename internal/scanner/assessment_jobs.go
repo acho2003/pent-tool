@@ -121,10 +121,15 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 	}
 
+	surfaces := map[string]*AttackSurface{}
 	results := make([]Run, 0, len(plan.Jobs))
 	jobOutcomes := make(map[string]Run, len(plan.Jobs))
 	appendOutcome := func(job PlanJob, run Run) {
 		run.Stage = job.Stage
+		if surface := surfaces[job.TargetID]; surface != nil {
+			MergeRunAssets(surface, run)
+			_ = SaveAttackSurface(scanDir, surface)
+		}
 		results = append(results, run)
 		jobOutcomes[job.ID] = run
 	}
@@ -142,7 +147,6 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	// is reused on resume; if only the raw JSONL remains, it is reparsed without
 	// touching the target. The runtime inventory refines scanner inputs but never
 	// changes the accepted assessment plan or its fingerprint.
-	surfaces := map[string]*AttackSurface{}
 	pendingHistory := map[string][]HistoricalCandidate{}
 	preCrawlRuns := map[string]Run{}
 	explicitCrawl := map[string]bool{}
@@ -236,6 +240,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		MergeOpenAPIEndpointsScoped(surface, inventoryTarget, apiEndpoints, appScopes[target.ID])
 		MergeHistoricalCandidates(surface, pendingHistory[target.ID])
+		for _, previous := range results {
+			if previous.Scope == inventoryScope || previous.Target == target.Value {
+				MergeRunAssets(surface, previous)
+			}
+		}
 		surfaces[target.ID] = surface
 		_ = SaveAttackSurface(scanDir, surface)
 	}
