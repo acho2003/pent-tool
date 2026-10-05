@@ -1436,7 +1436,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 				sections = append(sections, section{"IMPACT", v.Impact})
 			}
 			if v.TechnicalAnalysis != "" {
-				sections = append(sections, section{"TECHNICAL ANALYSIS", v.TechnicalAnalysis})
+				sections = append(sections, section{technicalAnalysisSectionLabel(v.TechnicalAnalysis), v.TechnicalAnalysis})
 			}
 			if v.PoCDescription != "" {
 				sections = append(sections, section{"PROOF OF CONCEPT", v.PoCDescription})
@@ -1875,6 +1875,13 @@ https://github.com/xalgord/xalgorix`
 	}
 
 	return outPath, nil
+}
+
+func technicalAnalysisSectionLabel(content string) string {
+	if strings.HasPrefix(content, "Scanner evidence and affected locations:") || strings.HasPrefix(content, "Affected location:") {
+		return "SCANNER EVIDENCE & AFFECTED LOCATIONS"
+	}
+	return "TECHNICAL ANALYSIS"
 }
 
 // extractURL extracts a clean URL from a string

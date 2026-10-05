@@ -2681,7 +2681,8 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if rec.SchemaVersion >= scanner.SchemaVersion {
 		reportPath = filepath.Join(scanDir, fmt.Sprintf("xalgorix_report_%s.pdf", rec.ID))
-		if info, statErr := os.Stat(reportPath); statErr != nil || !info.Mode().IsRegular() {
+		info, statErr := os.Stat(reportPath)
+		if statErr != nil || !info.Mode().IsRegular() || reportManifestNeedsRefresh(scanDir) {
 			reportPath = s.generateScannerReport(rec, scanDir, rec.InstanceID)
 			if reportPath == "" {
 				err = fmt.Errorf("scanner report generation failed")

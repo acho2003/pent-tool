@@ -2,6 +2,8 @@ package web
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -178,6 +180,9 @@ func TestScannerReportIncludesRedactedScannerLocationsAndEvidence(t *testing.T) 
 	if len(pdf) == 0 || !strings.Contains(strings.ToLower(rec.Vulns[0].TechnicalAnalysis), "affected locations") || !strings.Contains(rec.Vulns[0].TechnicalAnalysis, "[REDACTED]") {
 		t.Fatal("PDF input did not include the affected-location evidence section or redaction")
 	}
+	if got := technicalAnalysisSectionLabel(rec.Vulns[0].TechnicalAnalysis); got != "SCANNER EVIDENCE & AFFECTED LOCATIONS" {
+		t.Fatalf("evidence section label=%q", got)
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "report.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +206,64 @@ func TestScannerReportIncludesRedactedScannerLocationsAndEvidence(t *testing.T) 
 	}
 	if !strings.Contains(string(rec.Vulns[0].TechnicalAnalysis), "Affected locations") && !strings.Contains(string(rec.Vulns[0].TechnicalAnalysis), "affected locations") {
 		t.Fatalf("PDF finding data lacks location/evidence section: %q", rec.Vulns[0].TechnicalAnalysis)
+	}
+}
+
+func TestReportManifestRefreshesOldEvidenceVersions(t *testing.T) {
+	dir := t.TempDir()
+	if !reportManifestNeedsRefresh(dir) {
+		t.Fatal("missing manifest should require regeneration")
+	}
+	write := func(version string) {
+		t.Helper()
+		data, err := json.Marshal(map[string]string{"prompt_version": version})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "report.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("scanner-report-v2")
+	if !reportManifestNeedsRefresh(dir) {
+		t.Fatal("old report manifest did not request evidence refresh")
+	}
+	write(reportPromptVersion)
+	if reportManifestNeedsRefresh(dir) {
+		t.Fatal("current report manifest should not request refresh")
+	}
+}
+
+func TestDownloadRebuildsCachedReportWithScannerEvidence(t *testing.T) {
+	s := newTestServer(t, nil)
+	var artifact string
+	dir := saveScannerScan(t, s, "refresh-evidence-report", func(dir string) []scanner.Run {
+		artifact = writeFile(t, filepath.Join(dir, "nuclei.jsonl"), `{"template-id":"x","matched-at":"https://example.test/?token=hidden","host":"example.test","info":{"name":"Finding","severity":"high"}}`+"\n")
+		run := scanner.Run{Scanner: "nuclei", Target: "https://example.test", Scope: "host:example.test", Status: "completed", ArtifactPath: artifact}
+		run.Checksum = scanner.CalculateChecksum(run)
+		return []scanner.Run{run}
+	})
+	if err := os.WriteFile(filepath.Join(dir, "report.json"), []byte(`{"prompt_version":"scanner-report-v2"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "xalgorix_report_refresh-evidence-report.pdf"), []byte("old report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	s.handleDownloadReport(rr, httptest.NewRequest(http.MethodGet, "/api/report/refresh-evidence-report", nil))
+	if rr.Code != http.StatusOK || !strings.HasPrefix(rr.Header().Get("Content-Type"), "application/pdf") {
+		t.Fatalf("download response=%d content-type=%q body=%q", rr.Code, rr.Header().Get("Content-Type"), rr.Body.String())
+	}
+	var manifest reportManifest
+	data, err := os.ReadFile(filepath.Join(dir, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.PromptVersion != reportPromptVersion || len(manifest.Findings) == 0 || len(manifest.Findings[0].EvidenceItems) == 0 {
+		t.Fatalf("cached report was not rebuilt from scanner evidence: %+v", manifest)
 	}
 }
 
@@ -247,8 +310,8 @@ func TestScannerReportGroupsByScopeAndMergesCVE(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != 2 || manifest.PromptVersion != "scanner-report-v2" {
-		t.Fatalf("manifest version = %d / %q, want 2 / scanner-report-v2", manifest.SchemaVersion, manifest.PromptVersion)
+	if manifest.SchemaVersion != 2 || manifest.PromptVersion != reportPromptVersion {
+		t.Fatalf("manifest version = %d / %q, want 2 / %s", manifest.SchemaVersion, manifest.PromptVersion, reportPromptVersion)
 	}
 	var scopeIDs []string
 	for _, sc := range manifest.Scopes {

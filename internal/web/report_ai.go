@@ -14,7 +14,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-const reportPromptVersion = "scanner-report-v2"
+const reportPromptVersion = "scanner-report-v3"
 
 type reportManifest struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -29,6 +29,19 @@ type reportManifest struct {
 	Recon         *reportReconSummary         `json:"recon,omitempty"`
 	Assessment    *assessmentCoverageResponse `json:"assessment_coverage,omitempty"`
 	Findings      []reportFinding             `json:"findings"`
+}
+
+// reportManifestNeedsRefresh ensures cached PDFs/manifests created before the
+// evidence section was added are rebuilt from their saved scanner artifacts.
+func reportManifestNeedsRefresh(scanDir string) bool {
+	data, err := os.ReadFile(filepath.Join(scanDir, "report.json"))
+	if err != nil {
+		return true
+	}
+	var header struct {
+		PromptVersion string `json:"prompt_version"`
+	}
+	return json.Unmarshal(data, &header) != nil || header.PromptVersion != reportPromptVersion
 }
 
 type reportFinding struct {
