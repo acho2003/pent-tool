@@ -126,6 +126,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	jobOutcomes := make(map[string]Run, len(plan.Jobs))
 	appendOutcome := func(job PlanJob, run Run) {
 		run.Stage = job.Stage
+		if surfaces[job.TargetID] == nil && UnifiedWorkflowEnabled() {
+			surfaces[job.TargetID] = &AttackSurface{SchemaVersion: AttackSurfaceSchemaVersion, ClassifierVersion: AttackSurfaceClassifierVersion, Scope: scopeForInventoryJob(job), Target: job.Target, Endpoints: []AttackSurfaceEndpoint{}}
+		}
 		if surface := surfaces[job.TargetID]; surface != nil {
 			MergeRunAssets(surface, run)
 			_ = SaveAttackSurface(scanDir, surface)

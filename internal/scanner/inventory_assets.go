@@ -3,8 +3,11 @@ package scanner
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 )
 
@@ -65,6 +68,52 @@ func MergeRunAssets(surface *AttackSurface, run Run) {
 	}
 	if run.DNSResolution != nil {
 		addHost(run.DNSResolution.Host, "resolved", append(append([]string{}, run.DNSResolution.A...), run.DNSResolution.AAAA...))
+	}
+	if run.Scanner == "nmap" && run.Status == "completed" {
+		data, err := os.ReadFile(run.ArtifactPath)
+		var result nmapRun
+		if err == nil && xml.Unmarshal(data, &result) == nil {
+			for _, host := range result.Hosts {
+				var addresses []string
+				for _, a := range host.Addresses {
+					addresses = append(addresses, a.Addr)
+				}
+				name := hostFromTarget(run.Target)
+				hostID := addHost(name, "observed", addresses)
+				for _, p := range host.Ports {
+					if p.State.State != "open" {
+						continue
+					}
+					port, err := strconv.Atoi(p.PortID)
+					if err != nil {
+						continue
+					}
+					scheme := ""
+					tls := p.Service.Tunnel == "ssl" || strings.Contains(p.Service.Name, "https")
+					if strings.Contains(p.Service.Name, "http") {
+						scheme = "http"
+						if tls {
+							scheme = "https"
+						}
+					}
+					origin := ""
+					if scheme != "" {
+						o := assessment.ApprovedOrigin{Scheme: scheme, Host: name, Port: port, PathPrefix: "/"}
+						origin = o.Origin()
+					}
+					id := inventoryID("service", hostID, p.Protocol, p.PortID)
+					exists := false
+					for _, s := range surface.Services {
+						if s.ID == id {
+							exists = true
+						}
+					}
+					if !exists {
+						surface.Services = append(surface.Services, InventoryService{ID: id, HostID: hostID, Host: name, Port: port, Protocol: p.Protocol, Origin: origin, TLS: tls, State: "open", EvidenceRef: run.ArtifactPath})
+					}
+				}
+			}
+		}
 	}
 	for _, o := range run.HTTPObservations {
 		u, err := url.Parse(o.URL)

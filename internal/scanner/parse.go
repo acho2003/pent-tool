@@ -689,6 +689,7 @@ type nmapState struct {
 	State string `xml:"state,attr"`
 }
 type nmapSvc struct {
+	Tunnel  string `xml:"tunnel,attr"`
 	Name    string `xml:"name,attr"`
 	Product string `xml:"product,attr"`
 	Version string `xml:"version,attr"`

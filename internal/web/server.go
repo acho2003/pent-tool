@@ -921,6 +921,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/scans", s.handleListScans)
 	mux.HandleFunc("/api/scans/plan", s.handleAssessmentPlan)
 	mux.HandleFunc("/api/scans/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/discovery") {
+			s.handleDiscoveryRevision(w, r)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/stop") && strings.Contains(r.URL.Path, "/runs/") {
 			s.handleStopScannerRun(w, r)
 			return
