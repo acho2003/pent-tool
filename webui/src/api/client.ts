@@ -367,6 +367,7 @@ export const api = {
  approveDiscovery: (scanId: string, fingerprint: string, selected_ids: string[]) => http<DiscoveryRevision>(`/api/scans/${scanId}/discovery`, {method:"POST",json:{fingerprint,selected_ids}}),
  endpointTrace: (scanId: string, endpointId: string, page = 1) => http<EndpointTrace>(`/api/scans/${scanId}/endpoints/${endpointId}/trace?page=${page}&size=25`),
 	assessmentCoverage: (scanId: string) => http<AssessmentCoverage>(`/api/scans/${scanId}/coverage`),
+  coverageItems: (scanId: string, metric: string, scanner?: string, page = 1) => http<{items: Array<{id: string; endpoint_id?: string; url?: string; method?: string; state?: string; reason?: string; attempt_id?: string; evidence_reference?: string}>;total: number;page: number;size: number}>(`/api/scans/${scanId}/coverage/items?${new URLSearchParams({metric,page:String(page),size:"25",...(scanner?{scanner}:{})})}`),
 	attackSurface: (scanId: string, params?: { page?: number; size?: number; kind?: string; scanner?: string; status?: string; q?: string }) => {
 		const query = new URLSearchParams();
 		for (const [key, value] of Object.entries(params ?? {})) if (value !== undefined && value !== "") query.set(key, String(value));

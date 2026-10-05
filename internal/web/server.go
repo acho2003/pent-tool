@@ -945,6 +945,10 @@ func (s *Server) Start() error {
 			s.handleScanScopes(w, r)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/coverage/items") {
+			s.handleCoverageItems(w, r)
+			return
+		}
 		if isScanCoveragePath(r.URL.Path) {
 			s.handleAssessmentCoverage(w, r)
 			return

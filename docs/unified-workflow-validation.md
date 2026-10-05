@@ -1,0 +1,46 @@
+# Unified workflow validation
+
+These results cover the implemented adapters and evidence pipeline. They do not
+establish that the complete expanded workflow is ready for default rollout.
+`XALGORIX_UNIFIED_WORKFLOW` remains disabled by default.
+
+## Passed checks
+
+- `CGO_ENABLED=0 go test ./...` passed on the development machine.
+- `go test -race ./internal/scanner -run 'TestGateway|TestGraphQL|TestProof|TestAcceptedRevision'` passed.
+- `npm --prefix webui run build` passed, including TypeScript checking. The build
+  still reports the existing bundle-size warning.
+- Native Linux arm64 application-only Docker build succeeded under the temporary
+  `xalgorix:workflow-validation` tag using the retained Debian slim runtime.
+- Offline retained-runtime smoke test passed: executable versions, Chromium,
+  libraries, JavaScript/HTTP discovery, source fixture, and removed-tool checks.
+- Native Chromium fixture captured authenticated XHR and repeated query values,
+  followed an allowed link, recorded forms, and blocked excluded/write routes.
+- A disposable dedicated ZAP on an internal Docker network passed native request
+  recording, GET/HEAD variants, two approved origins, filtered OpenAPI/GraphQL
+  imports, and proxy restoration. Vulnerability rules were disabled in this
+  routing fixture; it makes no executed-check or vulnerability-detection claim.
+- Native Nuclei listed 9,966 HTTP templates under the configured policy. This is
+  an enabled-template inventory, not proof that those checks executed.
+- Existing Greenbone returned GMP version 22.7 to a read-only `<get_version/>`
+  request. No credentials, scan task, feed update, or volume modification was
+  involved in that check.
+- Unit fixtures cover 684 request manifest dispositions, Wapiti batching beyond
+  50 inputs, immutable approvals, scope isolation, HTTP/TLS recording, exact
+  body variants, encoded query identity, GraphQL input materialization,
+  malformed artifacts, redaction, and coverage-count drill-down consistency.
+
+## Remaining acceptance
+
+- Browser storage configuration and access testing through the browser worker.
+- Approved URL-encoded POST fuzzing with explicit bounded operation approval and
+  cleanup; existing single-write approvals must keep their original semantics.
+- Complete staged workflow restart/resume acceptance, including approval pauses.
+- The complete 684-request execution fixture across retained active adapters;
+  manifest coverage alone is insufficient.
+- End-to-end browser UI approval/authentication/report acceptance and amd64 CI.
+
+Production containers, data volumes, credentials, Greenbone feeds, and unrelated
+projects were preserved. No global Docker pruning or public-target scanning was
+performed. The disposable validation network and daemon may be removed after
+validation; the validation tag remains available for review.

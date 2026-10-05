@@ -70,6 +70,10 @@ export interface WSEvent {
 
 export interface ScannerArtifact { kind: "filesystem" | "repository" | "image" | "sbom" | string; ref: string; }
 export interface ScannerRun {
+  outcome?: string;
+  execution_outcome?: string;
+  parser_outcome?: string;
+  completeness?: string;
   scanner: string;
   attempt_id?: string;
   last_activity_at?: string;
@@ -596,10 +600,11 @@ export interface CoverageEvent {
   phase: string; kind: string; at: string; response_code?: number; reason?: string;
 }
 export interface CoverageProof {
+ approved: number; eligible: number; observed: number;
   expanded_enabled: boolean; discovered: number; seeds: number; candidates: number; hosts: number;
   services: number; tls_services: number; forms: number; parameterized: number; observed_with_auth: number;
   definitions: Array<{id: string; kind: string; url?: string; state: string; reason?: string}>;
-  scanners: Array<{scanner: string; selected: number; submitted: number; acknowledged: number; exercised: number | null; batch_completed: number; failed: number; skipped: number; unknown: number}>;
+  scanners: Array<{completed: number | null; enabled_templates: number | null; scanner: string; selected: number; submitted: number; acknowledged: number; exercised: number | null; batch_completed: number; failed: number; skipped: number; unknown: number}>;
   not_tracked: string[]; discovery_gaps: string[];
 }
 export interface DiscoveryPreview {

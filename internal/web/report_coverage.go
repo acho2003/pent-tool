@@ -129,7 +129,18 @@ func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
 	}
 	if proof := coverage.Proof; proof != nil {
 		lines = append(lines, fmt.Sprintf("Inventory: %d requests, %d seeds, %d hosts, %d services, %d TLS services, %d forms, %d parameterized requests.", proof.Discovered, proof.Seeds, proof.Hosts, proof.Services, proof.TLS, proof.Forms, proof.Parameterized))
+		lines = append(lines, fmt.Sprintf("Requests: observed %d, approved %d, eligible %d.", proof.Observed, proof.Approved, proof.Eligible))
 		for _, row := range proof.Scanners {
+			templates := "NOT TRACKED"
+			if row.EnabledTemplates != nil {
+				templates = fmt.Sprint(*row.EnabledTemplates)
+			}
+			lines = append(lines, fmt.Sprintf("%s enabled templates: %s; executed checks: NOT TRACKED.", row.Scanner, templates))
+			completed := "NOT TRACKED"
+			if row.Completed != nil {
+				completed = fmt.Sprint(*row.Completed)
+			}
+			lines = append(lines, fmt.Sprintf("%s individually completed requests: %s.", row.Scanner, completed))
 			exercised := "NOT TRACKED"
 			if row.Exercised != nil {
 				exercised = fmt.Sprint(*row.Exercised)

@@ -11,6 +11,7 @@ import (
 )
 
 type ScannerProof struct {
+	Completed        *int   `json:"completed"`
 	EnabledTemplates *int   `json:"enabled_templates"`
 	Scanner          string `json:"scanner"`
 	Selected         int    `json:"selected"`

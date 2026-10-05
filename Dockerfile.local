@@ -9,5 +9,6 @@ ARG VCS_REF=unknown
 LABEL org.opencontainers.image.revision=${VCS_REF}
 # Fail rather than accidentally inherit the historical Kali toolbox image.
 RUN python3 -c 'import json; assert json.load(open("/usr/local/share/xalgorix/content-lock.json"))["runtime_family"] == "debian-slim", "Build the slim runtime first"'
+COPY runtime/content-lock.json /usr/local/share/xalgorix/content-lock.json
 COPY build/xalgorix /usr/local/bin/xalgorix
 RUN chmod +x /usr/local/bin/xalgorix && xalgorix --version

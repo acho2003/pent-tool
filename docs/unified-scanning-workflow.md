@@ -35,6 +35,9 @@ Each attempt writes `input-manifest.json`. Scoped recording writes append-only
 history. `GET /api/scans/{id}/endpoints/{endpoint_id}/trace` supports `page`, `size`,
 `scanner`, and `attempt_id` filters. The endpoint trace in Scan Details exposes
 that evidence without guessing that a completed batch exercised each URL.
+`GET /api/scans/{id}/coverage/items` supports paginated `metric` and `scanner`
+filters. Every displayed count links to its inventory/evidence members.
+Inventory scope is persisted separately from scanner execution scope.
 
 Coverage and reports use the same proof calculation. Distinguish selected,
 submitted, acknowledged, observed active endpoints, batch completed, failed,
@@ -52,7 +55,13 @@ findings, labelled partial, after timeout or cancellation.
 Keep the managed ZAP daemon dedicated. Its pinned Compose image contains network
 0.28.0, OpenAPI 56.0.0, and GraphQL 0.33.0 in the inspected runtime. Expanded ZAP
 execution refuses unavailable network proxy configuration or an already enabled
-upstream proxy. Proxy restoration failure quarantines the daemon.
+upstream proxy. All three tested add-on versions are checked before expanded
+execution. Proxy restoration failure quarantines the daemon. Compose enables
+key-protected API file transfer for filtered schema imports. OpenAPI imports
+contain approved, resolved operations without invented parameter values.
+GraphQL imports contain materialized read queries; mutation/subscription roots
+and unresolved queries are removed, and native query generation is disabled
+while importing. Exact methods and query-value variants are seeded separately.
 
 `XALGORIX_SCANNER_GATEWAY_HOST=xalgorix` advertises the application container to
 ZAP. The gateway binds ephemeral internal ports and authenticates each attempt;
@@ -69,7 +78,11 @@ reported as discovery gaps.
 
 Wapiti GET-input routing uses batches of 50 under one overall time budget rather
 than silently dropping the remaining endpoints. State-changing API operations
-continue through the existing explicitly approved fixture/cleanup adapter.
+continue through the existing explicitly approved fixture/cleanup adapter. URL-only
+adapters refuse HEAD variants rather than converting them to GET; ZAP preserves
+HEAD and the encoded absolute request URI. Nuclei uses its native offline listing
+to save `template-inventory.json`; enabled templates are separate from proven
+executed checks.
 Unsupported request bodies/methods must remain visible coverage gaps; never
 reinterpret the single-write approvals as permission for repeated fuzzing.
 
@@ -83,9 +96,22 @@ schema validation, redaction, partial evidence, and legacy compatibility.
 Build a native arm64 validation image using a temporary tag, and run the offline
 runtime smoke test. Existing Docker CI validates amd64 before publication. Both
 Docker build paths accept `VCS_REF` for the OCI revision label; new scanner runs
-also record their Go VCS build revision where available.
+also record their Go VCS build revision. The full Docker build injects VCS_REF
+into the binary when its build context has no Git metadata.
 
 Do not replace the application image or enable the expanded flag until runtime
 acceptance passes. Recreate only the application container when deploying. Keep
 existing data volumes, credentials, Greenbone feeds, service images, and lab
 images. No global pruning is part of this workflow.
+
+Native fixture checks are opt-in Go tests. Build the scanner test binary for
+Linux arm64 and run it in the retained runtime with `XALGORIX_TEST_CHROMIUM`,
+`XALGORIX_TEST_NUCLEI_NATIVE`, and `XALGORIX_TEST_ZAP`. ZAP must be a disposable,
+dedicated daemon on an isolated internal Docker network. Optional
+`XALGORIX_TEST_GMP_SOCKET` sends only `<get_version/>` to an existing Greenbone
+socket. These checks do not scan public targets.
+
+Expanded acceptance is not complete merely because these adapter fixtures pass.
+Wapiti POST fuzzing, browser storage access, the complete staged/restart workflow,
+and the full 684-request execution fixture still need acceptance before enabling
+the expanded workflow by default.
