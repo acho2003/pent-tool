@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
@@ -117,6 +118,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 			s.scannerControlMu.Unlock()
 		}
 	}
+	var lastActivitySave atomic.Int64
 	emit := func(evt scanner.Event) {
 		ws := WSEvent{Type: evt.Type, Scanner: evt.Scanner, Stream: evt.Stream, Sequence: evt.Sequence, Output: evt.Output, Content: evt.Output, Target: sess.target, AgentID: sess.id, Timestamp: time.Now().Format(time.RFC3339Nano)}
 		if evt.Type == "scanner_progress" {
@@ -148,7 +150,10 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 			upsertScannerRun(&sess.record.ScannerRuns, evt.Run)
 		}
 		sess.record.ToolCalls = countTerminalRuns(sess.record.ScannerRuns)
-		if evt.Type != "scanner_output" || evt.Sequence%25 == 0 {
+		nowUnix := time.Now().Unix()
+		previousSave := lastActivitySave.Load()
+		persistActivity := evt.Type == "scanner_output" && nowUnix-previousSave >= 5 && lastActivitySave.CompareAndSwap(previousSave, nowUnix)
+		if evt.Type != "scanner_output" || evt.Sequence%25 == 0 || persistActivity {
 			s.saveScanRecordTo(sess.record, sess.scanDir)
 		}
 		if sess.instanceID != "" {
