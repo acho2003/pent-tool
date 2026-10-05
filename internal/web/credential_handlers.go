@@ -17,13 +17,15 @@ import (
 const maxCredentialRequestBytes = 64 << 10
 
 type credentialRequest struct {
-	Name      string                `json:"name"`
-	Kind      assessment.AccessKind `json:"kind"`
-	TargetIDs []string              `json:"target_ids"`
-	Values    map[string]string     `json:"values"`
+	BrowserStorage *credentials.BrowserStorage `json:"browser_storage,omitempty"`
+	Name           string                      `json:"name"`
+	Kind           assessment.AccessKind       `json:"kind"`
+	TargetIDs      []string                    `json:"target_ids"`
+	Values         map[string]string           `json:"values"`
 }
 
 type testCredentialRequest struct {
+	Browser      bool   `json:"browser,omitempty"`
 	TargetID     string `json:"target_id"`
 	TargetURL    string `json:"target_url"`
 	VerifyURL    string `json:"verify_url"`
@@ -73,7 +75,7 @@ func (s *Server) handleCredentials(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid credential request", http.StatusBadRequest)
 			return
 		}
-		meta, err := vault.Create(credentials.Record{Name: req.Name, Kind: req.Kind, TargetIDs: req.TargetIDs, Values: req.Values})
+		meta, err := vault.Create(credentials.Record{Name: req.Name, Kind: req.Kind, TargetIDs: req.TargetIDs, Values: req.Values, BrowserStorage: req.BrowserStorage})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -120,7 +122,7 @@ func (s *Server) handleCredentialDetail(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "invalid credential request", http.StatusBadRequest)
 			return
 		}
-		meta, err := vault.Replace(id, credentials.Record{Name: req.Name, Kind: req.Kind, TargetIDs: req.TargetIDs, Values: req.Values})
+		meta, err := vault.Replace(id, credentials.Record{Name: req.Name, Kind: req.Kind, TargetIDs: req.TargetIDs, Values: req.Values, BrowserStorage: req.BrowserStorage})
 		if credentialError(w, err) {
 			return
 		}
@@ -184,7 +186,7 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 		writeCredentialTestResult(w, result)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 	scope := applicationScope(req.TargetURL)
 	if record.Kind == assessment.AccessFormLogin {
@@ -193,8 +195,19 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 			writeCredentialTestResult(w, result)
 			return
 		}
-		if _, err := verifyFormSession(ctx, req.TargetURL, verifyURL, req.VerifyMarker, record.Values); err != nil {
+		cookieHeader, loginErr := verifyFormSession(ctx, req.TargetURL, verifyURL, req.VerifyMarker, record.Values)
+		if loginErr != nil {
 			result.State, result.Reason = "failed", "form login or protected-page verification failed"
+			writeCredentialTestResult(w, result)
+			return
+		}
+		if req.Browser || record.BrowserStorage != nil {
+			if err := s.verifyBrowserCredential(ctx, req.TargetURL, verifyURL, req.VerifyMarker, []string{cookieHeader}, record.BrowserStorage, true); err != nil {
+				result.State, result.Reason = "failed", err.Error()
+				writeCredentialTestResult(w, result)
+				return
+			}
+			result.State, result.Verified, result.Reason = "verified", true, "Browser protected-route marker and anonymous negative control passed"
 			writeCredentialTestResult(w, result)
 			return
 		}
@@ -208,6 +221,16 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 		lines, err := credentialHeaderLines(record.Kind, record.Values)
 		if err != nil {
 			result.Reason = "credential fields are not valid HTTP headers"
+			writeCredentialTestResult(w, result)
+			return
+		}
+		if req.Browser || record.BrowserStorage != nil {
+			if err := s.verifyBrowserCredential(ctx, req.TargetURL, verifyURL, req.VerifyMarker, lines, record.BrowserStorage, true); err != nil {
+				result.State, result.Reason = "failed", err.Error()
+				writeCredentialTestResult(w, result)
+				return
+			}
+			result.State, result.Verified, result.Reason = "verified", true, "Browser protected-route marker and anonymous negative control passed"
 			writeCredentialTestResult(w, result)
 			return
 		}

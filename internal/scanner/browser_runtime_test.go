@@ -2,12 +2,15 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -80,5 +83,47 @@ func TestBrowserRuntimeRequestBudgetIsExplicit(t *testing.T) {
 	run := DiscoverBrowser(t.Context(), Request{Target: fixture.URL + "/", ScanDir: t.TempDir(), AppScope: &scope}, Config{KatanaChromePath: chrome, KatanaTimeout: 20 * time.Second, WebMaxEndpoints: 1})
 	if run.Completeness != "partial" || !strings.Contains(run.Reason, "HTTP request limit reached (1)") {
 		t.Fatalf("request cap hidden: %+v", run)
+	}
+}
+
+func TestBrowserRuntimeStorageAndProtectedCheckpoint(t *testing.T) {
+	chrome := os.Getenv("XALGORIX_TEST_CHROMIUM")
+	if chrome == "" {
+		t.Skip("native Chromium fixture opt-in")
+	}
+	var aliasRequests atomic.Int32
+	alias := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { aliasRequests.Add(1); w.Write([]byte("alias")) }))
+	defer alias.Close()
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(fmt.Sprintf(`<html><body>Public<script>if(localStorage.getItem('token')==='browser-storage-secret'&&sessionStorage.getItem('role')==='reviewer')document.body.append(' Protected checkpoint');fetch('%s/alias?token='+localStorage.getItem('token'));</script><a href='/not-visited'>next</a></body></html>`, alias.URL)))
+		if r.URL.Path == "/not-visited" {
+			t.Error("access test crawled links")
+		}
+	}))
+	defer fixture.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", fixture.URL)
+	origin.PathPrefix = "/"
+	aliasOrigin, _ := assessment.ParseApprovedOrigin("app", alias.URL)
+	aliasOrigin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin, aliasOrigin})
+	request := Request{Target: fixture.URL + "/", ScanDir: t.TempDir(), AppScope: &scope, BrowserStorage: &credentials.BrowserStorage{Local: map[string]string{"token": "browser-storage-secret"}, Session: map[string]string{"role": "reviewer"}}, BrowserAccessTest: true, BrowserCheckpointMarker: "Protected checkpoint"}
+	cfg := Config{KatanaChromePath: chrome, KatanaTimeout: 20 * time.Second, WebMaxEndpoints: 20}
+	positive := DiscoverBrowser(t.Context(), request, cfg)
+	if positive.Status != "completed" || positive.AuthState != "verified" {
+		t.Fatalf("browser storage/checkpoint failed: %+v", positive)
+	}
+	if aliasRequests.Load() != 0 {
+		t.Fatal("storage-bound browser sent credential-derived request to alias")
+	}
+	data, _ := os.ReadFile(positive.ArtifactPath)
+	if strings.Contains(string(data), "browser-storage-secret") {
+		t.Fatal("browser storage persisted in artifact")
+	}
+	request.BrowserStorage = nil
+	request.ScanDir = t.TempDir()
+	negative := DiscoverBrowser(t.Context(), request, cfg)
+	if negative.AuthState == "verified" || negative.Reason != "browser protected-route marker was not confirmed" {
+		t.Fatalf("storage leaked across browser contexts: %+v", negative)
 	}
 }

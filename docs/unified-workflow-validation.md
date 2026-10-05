@@ -32,7 +32,9 @@ establish that the complete expanded workflow is ready for default rollout.
 
 ## Remaining acceptance
 
-- Browser storage configuration and access testing through the browser worker.
+- End-to-end UI acceptance for the newly added browser storage/access-test controls.
+  Native worker tests pass for local/session storage, protected-route markers,
+  anonymous controls, origin isolation and encrypted credential storage.
 - Approved URL-encoded POST fuzzing with explicit bounded operation approval and
   cleanup; existing single-write approvals must keep their original semantics.
 - Complete staged workflow restart/resume acceptance, including approval pauses.

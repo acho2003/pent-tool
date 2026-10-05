@@ -252,3 +252,32 @@ func TestVaultReadsLegacyRecordWithoutRevisionAsZero(t *testing.T) {
 		t.Fatalf("legacy replace metadata = %+v", replaced)
 	}
 }
+
+func TestBrowserStorageIsEncryptedAndTargetBound(t *testing.T) {
+	root := t.TempDir()
+	vault, err := New(root, bytes.Repeat([]byte{0x51}, KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := Record{Name: "browser", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"app"}, Values: map[string]string{"Cookie": "session=fixture"}, BrowserStorage: &BrowserStorage{Local: map[string]string{"authToken": "browser-storage-secret"}, Session: map[string]string{"role": "reviewer"}}}
+	meta, err := vault.Create(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := os.ReadFile(filepath.Join(root, meta.ID+".json"))
+	public, _ := json.Marshal(meta)
+	if bytes.Contains(encoded, []byte("browser-storage-secret")) || bytes.Contains(public, []byte("authToken")) {
+		t.Fatal("storage secret exposed")
+	}
+	got, err := vault.Get(meta.ID, "app")
+	if err != nil || got.BrowserStorage.Local["authToken"] != "browser-storage-secret" {
+		t.Fatal(got, err)
+	}
+	if _, err := vault.Get(meta.ID, "alias"); err != ErrTargetNotBound {
+		t.Fatal("storage crossed target binding", err)
+	}
+	record.BrowserStorage = &BrowserStorage{Local: map[string]string{"": "secret"}}
+	if _, err := vault.Replace(meta.ID, record); err == nil {
+		t.Fatal("invalid storage accepted")
+	}
+}

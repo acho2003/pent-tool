@@ -277,6 +277,9 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if !ab.Kind.Valid() {
 			probs = append(probs, blocking("access.kind.invalid", fmt.Sprintf("unknown access kind %q", ab.Kind)))
 		}
+		if ab.VerifyBrowser && strings.TrimSpace(ab.VerifyMarker) == "" {
+			probs = append(probs, blocking("access.browser_marker.required", "browser verification requires a protected-route marker"))
+		}
 		if ab.Kind == AccessFormLogin && len(ab.TargetIDs) != 1 {
 			probs = append(probs, blocking("access.form_login.single_target", "form login must be bound to exactly one application target"))
 		}

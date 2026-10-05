@@ -66,6 +66,10 @@ func browserRequestAllowed(req Request, cfg Config, method, rawURL string) error
 func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	run = Run{Scanner: "browser", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	defer func() { run = finalizeRun(run) }()
+	if err := req.BrowserStorage.Validate(); err != nil {
+		run.Status, run.Reason = "failed", "invalid browser storage configuration"
+		return
+	}
 	if cfg.KatanaChromePath == "" {
 		run.Status, run.Reason = "not_applicable", "Chromium is unavailable"
 		return
@@ -174,6 +178,12 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		mu.Unlock()
 		defer workers.Done()
 		rawURL, method := h.Request.URL().String(), h.Request.Method()
+		requestOrigin, _ := assessment.ParseApprovedOrigin("", rawURL)
+		if req.BrowserStorage != nil && requestOrigin.Origin() != bound.Origin() {
+			markLimit("browser storage authentication remains bound to its original origin")
+			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+			return
+		}
 		if err := verifyAuth(); err != nil {
 			cancel()
 			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
@@ -279,6 +289,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	queue := []entry{{req.Target, 0}}
 	visited := map[string]bool{}
+	checkpointConfirmed := false
 	for len(queue) > 0 && ctx.Err() == nil {
 		next := queue[0]
 		queue = queue[1:]
@@ -291,6 +302,15 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		pageCtx, pageCancel := context.WithTimeout(ctx, 20*time.Second)
 		page, err := browser.Context(pageCtx).Page(proto.TargetCreateTarget{URL: "about:blank"})
+		if err == nil && req.BrowserStorage != nil {
+			storage, encodeErr := json.Marshal(req.BrowserStorage)
+			boundURL, _ := json.Marshal(bound.Origin())
+			if encodeErr != nil {
+				err = encodeErr
+			} else {
+				_, err = page.EvalOnNewDocument("(()=>{if(location.origin!==" + string(boundURL) + ")return;const s=" + string(storage) + ";for(const [k,v] of Object.entries(s.local||{}))localStorage.setItem(k,v);for(const [k,v] of Object.entries(s.session||{}))sessionStorage.setItem(k,v)})()")
+			}
+		}
 		if err == nil {
 			err = page.Navigate(next.url)
 		}
@@ -300,7 +320,11 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 				page.WaitRequestIdle(300*time.Millisecond, nil, nil, nil)()
 			}
 		}
-		if err == nil {
+		if err == nil && req.BrowserAccessTest {
+			result, checkpointErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
+			checkpointConfirmed = checkpointErr == nil && req.BrowserCheckpointMarker != "" && strings.Contains(result.Value.Str(), req.BrowserCheckpointMarker)
+		}
+		if err == nil && !req.BrowserAccessTest {
 			result, e := page.Eval(`() => JSON.stringify({links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),forms:Array.from(document.forms).map(f=>({action:f.action,method:f.method,fields:Array.from(f.elements).filter(e=>e.name).map(e=>({name:e.name}))}))})`)
 			if e == nil {
 				var extracted struct {
@@ -323,7 +347,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 					}
 				}
 			}
-		} else {
+		} else if err != nil {
 			markLimit("browser navigation or page loading failed (20-second navigation deadline)")
 		}
 		if page != nil {
@@ -346,6 +370,13 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	authMu.Unlock()
 	run.Completeness = "complete"
+	if req.BrowserAccessTest {
+		if !checkpointConfirmed {
+			run.Status, run.AuthState, run.Authenticated, run.Reason = "failed", "failed", false, "browser protected-route marker was not confirmed"
+		} else {
+			run.AuthState = "verified"
+		}
+	}
 	if timedOut {
 		limitReasons["browser discovery cancelled or time budget exhausted"] = true
 	}

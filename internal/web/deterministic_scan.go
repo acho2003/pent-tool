@@ -181,6 +181,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 				runs = nil
 			} else {
 				pipeline.Config.AssessmentAuthHeaders = authHeaders
+				pipeline.Config.AssessmentBrowserStorage = s.assessmentBrowserStorage(sess.assessmentPlan)
 				sshAliases, sshErr := s.assessmentHostAliases(sess.assessmentPlan)
 				gvmCredentials, sshRequested := s.assessmentGVMSSHCredentials(sess.assessmentPlan)
 				refreshers, refreshErr := s.assessmentAuthRefreshers(sess.assessmentPlan, authHeaders)

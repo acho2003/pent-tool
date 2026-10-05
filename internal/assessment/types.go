@@ -181,13 +181,14 @@ type Target struct {
 // credential by opaque ID. It never carries resolved secret values in response
 // DTOs.
 type AccessBinding struct {
-	TargetIDs    []string   `json:"target_ids"`
-	Kind         AccessKind `json:"kind"`
-	CredentialID string     `json:"credential_id,omitempty"`
-	Identity     string     `json:"identity,omitempty"`
-	Role         string     `json:"role,omitempty"`
-	VerifyURL    string     `json:"verify_url,omitempty"`
-	VerifyMarker string     `json:"verify_marker,omitempty"`
+	VerifyBrowser bool       `json:"verify_browser,omitempty"`
+	TargetIDs     []string   `json:"target_ids"`
+	Kind          AccessKind `json:"kind"`
+	CredentialID  string     `json:"credential_id,omitempty"`
+	Identity      string     `json:"identity,omitempty"`
+	Role          string     `json:"role,omitempty"`
+	VerifyURL     string     `json:"verify_url,omitempty"`
+	VerifyMarker  string     `json:"verify_marker,omitempty"`
 	// NegativeMarker is the text whose presence on an anonymous request proves
 	// the verify page is public (negative control). Empty falls back to
 	// VerifyMarker.

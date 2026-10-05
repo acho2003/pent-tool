@@ -27,12 +27,13 @@ var ErrTargetNotBound = errors.New("credential is not bound to this target")
 
 // Record contains secret values and is never returned directly by API handlers.
 type Record struct {
-	ID        string                `json:"id"`
-	Name      string                `json:"name"`
-	Kind      assessment.AccessKind `json:"kind"`
-	TargetIDs []string              `json:"target_ids"`
-	Values    map[string]string     `json:"values"`
-	CreatedAt time.Time             `json:"created_at"`
+	BrowserStorage *BrowserStorage       `json:"browser_storage,omitempty"`
+	ID             string                `json:"id"`
+	Name           string                `json:"name"`
+	Kind           assessment.AccessKind `json:"kind"`
+	TargetIDs      []string              `json:"target_ids"`
+	Values         map[string]string     `json:"values"`
+	CreatedAt      time.Time             `json:"created_at"`
 	// UpdatedAt and Revision are vault-managed: Create starts at revision 1
 	// and every Replace increments it. Records written before revisions
 	// existed decode as revision 0 with a zero UpdatedAt.
@@ -134,6 +135,12 @@ func (v *Vault) Create(record Record) (Metadata, error) {
 			return Metadata{}, errors.New("credential keys and values must be non-empty")
 		}
 	}
+	if err := validateBrowserRecord(record); err != nil {
+		return Metadata{}, err
+	}
+	if err := record.BrowserStorage.Validate(); err != nil {
+		return Metadata{}, err
+	}
 	if err := validateFormValues(record); err != nil {
 		return Metadata{}, err
 	}
@@ -219,6 +226,12 @@ func (v *Vault) Replace(id string, replacement Record) (Metadata, error) {
 		if strings.TrimSpace(key) == "" || value == "" {
 			return Metadata{}, errors.New("credential keys and values must be non-empty")
 		}
+	}
+	if err := validateBrowserRecord(replacement); err != nil {
+		return Metadata{}, err
+	}
+	if err := replacement.BrowserStorage.Validate(); err != nil {
+		return Metadata{}, err
 	}
 	if err := validateFormValues(replacement); err != nil {
 		return Metadata{}, err

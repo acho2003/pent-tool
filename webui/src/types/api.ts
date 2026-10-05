@@ -114,7 +114,7 @@ export interface AssessmentConfig {
   exclusions?: Array<{ target_id?: string; origin?: string; method?: string; path_pattern: string; reason?: string }>;
   api_definitions?: Array<{ target_id: string; definition_id: string }>;
   api_operation_inputs?: Array<{ definition_id: string; operation_id: string; path_params?: Record<string, string>; query?: Record<string, string>; request_body_ref?: string }>;
-  access?: Array<{ target_ids: string[]; kind: string; credential_id: string; verify_url?: string; verify_marker?: string }>;
+  access?: Array<{ target_ids: string[]; kind: string; credential_id: string; verify_url?: string; verify_marker?: string; verify_browser?: boolean }>;
   scanner_selection?: { mode?: "auto" | "custom"; variants?: string[] };
 }
 export interface CredentialMetadata { id: string; name: string; kind: string; target_ids: string[]; created_at: string; }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
@@ -113,6 +114,12 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 					continue
 				}
 				lines = []string{cookieHeader}
+				if record.BrowserStorage != nil || binding.VerifyBrowser {
+					if err := s.verifyBrowserCredential(ctx, target.Value, verifyURL, binding.VerifyMarker, lines, record.BrowserStorage, true); err != nil {
+						setAuthVerification(plan, targetID, assessment.StateFailed, "browser protected-route verification failed")
+						continue
+					}
+				}
 				negativeMarker := binding.NegativeMarker
 				if negativeMarker == "" {
 					negativeMarker = binding.VerifyMarker
@@ -128,14 +135,20 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential fields are not valid HTTP headers")
 					continue
 				}
-				positive, verifyErr := probeHeaderSession(ctx, verifyURL, binding.VerifyMarker, lines, target.Value)
-				if verifyErr == nil && binding.VerifyMarker != "" {
+				positive, verifyErr := authProbeResult{}, error(nil)
+				if record.BrowserStorage != nil || binding.VerifyBrowser {
+					verifyErr = s.verifyBrowserCredential(ctx, target.Value, verifyURL, binding.VerifyMarker, lines, record.BrowserStorage, true)
+				} else {
+					positive, verifyErr = probeHeaderSession(ctx, verifyURL, binding.VerifyMarker, lines, target.Value)
+				}
+
+				if record.BrowserStorage == nil && !binding.VerifyBrowser && verifyErr == nil && binding.VerifyMarker != "" {
 					negativeMarker := binding.NegativeMarker
 					if negativeMarker == "" {
 						negativeMarker = binding.VerifyMarker
 					}
 					verifyErr = verifyNegativeControl(ctx, scope, verifyURL, negativeMarker)
-				} else if verifyErr == nil {
+				} else if record.BrowserStorage == nil && !binding.VerifyBrowser && verifyErr == nil {
 					verifyErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
 				}
 				if verifyErr != nil {
@@ -192,6 +205,8 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 		}
 		var verifyURL, marker string
 		var formValues map[string]string
+		var browserStorage *credentials.BrowserStorage
+		var verifyBrowser bool
 		for _, binding := range plan.Config.Access {
 			if !webAuthenticationKind(binding.Kind) {
 				continue
@@ -200,6 +215,10 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 				if id != target.ID {
 					continue
 				}
+				if record, err := vault.Get(binding.CredentialID, target.ID); err == nil && record.BrowserStorage != nil {
+					browserStorage = record.BrowserStorage
+				}
+				verifyBrowser = verifyBrowser || binding.VerifyBrowser
 				if verifyURL == "" {
 					verifyURL, marker = binding.VerifyURL, binding.VerifyMarker
 				}
@@ -227,6 +246,12 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 		refreshers[target.ID] = func(ctx context.Context, current []string) ([]string, error) {
 			mu.Lock()
 			defer mu.Unlock()
+			if browserStorage != nil || verifyBrowser {
+				if err := s.verifyBrowserCredential(ctx, appURL, verifyURL, marker, current, browserStorage, false); err != nil {
+					return nil, fmt.Errorf("browser authentication checkpoint failed")
+				}
+				return current, nil
+			}
 			if marker != "" {
 				if err := verifyHeaderSession(ctx, verifyURL, marker, current, appURL); err == nil {
 					return current, nil

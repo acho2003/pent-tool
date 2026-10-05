@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 )
 
 const SchemaVersion = 2
@@ -50,15 +51,18 @@ type Artifact struct {
 }
 
 type Request struct {
-	WorkflowVersion string                `json:"-"`
-	Gateway         *RecordingGateway     `json:"-"`
-	GatewayURL      string                `json:"-"`
-	GatewayCAPath   string                `json:"-"`
-	NetworkPorts    []int                 `json:"-"`
-	AttemptID       string                `json:"-"`
-	PlanFingerprint string                `json:"-"`
-	InputRequests   []ScannerRequestInput `json:"-"`
-	Target          string                `json:"target"`
+	BrowserStorage          *credentials.BrowserStorage `json:"-"`
+	BrowserAccessTest       bool                        `json:"-"`
+	BrowserCheckpointMarker string                      `json:"-"`
+	WorkflowVersion         string                      `json:"-"`
+	Gateway                 *RecordingGateway           `json:"-"`
+	GatewayURL              string                      `json:"-"`
+	GatewayCAPath           string                      `json:"-"`
+	NetworkPorts            []int                       `json:"-"`
+	AttemptID               string                      `json:"-"`
+	PlanFingerprint         string                      `json:"-"`
+	InputRequests           []ScannerRequestInput       `json:"-"`
+	Target                  string                      `json:"target"`
 	// Scanners restricts this request to the named scanners. Empty runs the
 	// whole pipeline; every name must be one of OrderedNames.
 	Scanners []string `json:"-"`
@@ -280,7 +284,8 @@ type Config struct {
 	ScanHeaders     []string
 	// AssessmentAuthHeaders contains runtime-only, target-bound credentials for
 	// typed jobs. It must never be serialized or logged.
-	AssessmentAuthHeaders map[string][]string
+	AssessmentBrowserStorage map[string]*credentials.BrowserStorage `json:"-"`
+	AssessmentAuthHeaders    map[string][]string
 	// AssessmentAuthRefresh checks an authenticated session during a typed job.
 	// It returns replacement header lines after at most one form re-login.
 	// Callbacks and returned secrets remain runtime-only.

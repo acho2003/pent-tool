@@ -244,11 +244,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			surface = NewSeedAttackSurface(inventoryScope, inventoryTarget)
 		}
 		MergeKatanaRedirectTargets(surface, spec.artifact, crawlReq.AppScope, crawlReq.TargetAuth != "")
-		if expanded && p.Config.WebBrowser {
+		if expanded && (p.Config.WebBrowser || authBound || p.Config.AssessmentBrowserStorage[target.ID] != nil) {
 			if authBound && !authVerified[target.ID] {
 				return
 			}
 			browserReq := crawlReq
+			browserReq.BrowserStorage = p.Config.AssessmentBrowserStorage[target.ID]
 			browserReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
 			browserReq.Target = inventoryTarget
 			browserReq.ScanDir = filepath.Join(crawlReq.ScanDir, "browser")
