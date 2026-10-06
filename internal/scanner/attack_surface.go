@@ -731,7 +731,7 @@ func DispatchTargets(surface *AttackSurface, scannerName string, max int) []stri
 func DispatchTargetsScoped(surface *AttackSurface, scannerName string, max int, scope *assessment.AppScope, budget *AssessmentBudget) []string {
 	return dispatchTargetsWithPolicy(surface, scannerName, max, scope, budget, UnifiedWorkflowEnabled())
 }
-func dispatchTargetsWithPolicy(surface *AttackSurface, scannerName string, max int, scope *assessment.AppScope, budget *AssessmentBudget, expanded bool) []string {
+func dispatchTargetsWithPolicy(surface *AttackSurface, scannerName string, max int, scope *assessment.AppScope, budget *AssessmentBudget, expanded bool, contextIDs ...string) []string {
 	if surface == nil {
 		return nil
 	}
@@ -741,8 +741,15 @@ func dispatchTargetsWithPolicy(surface *AttackSurface, scannerName string, max i
 	selectedVariants := 0
 	for i := range surface.Endpoints {
 		ep := &surface.Endpoints[i]
+		contextID := ""
+		if len(contextIDs) > 0 {
+			contextID = contextIDs[0]
+		}
+		if contextID != "" && ep.AuthContextID != contextID {
+			continue
+		}
 		eligible, reason := endpointEligibleWithPolicy(*ep, scannerName, scope, expanded)
-		if expanded && scannerName != "apichecks" && ep.AuthContextID != "" && ep.AuthContextID != inventoryID(surface.Scope, "target-bound") {
+		if expanded && scannerName != "apichecks" && ep.AuthContextID != "" && ep.AuthContextID != inventoryID(surface.Scope, "target-bound") && ep.AuthContextID != contextID {
 			eligible, reason = false, "request requires a separate named authentication context"
 		}
 		status := "skipped"

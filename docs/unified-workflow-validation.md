@@ -37,17 +37,22 @@ establish that the complete expanded workflow is ready for default rollout.
   anonymous controls, origin isolation and encrypted credential storage.
 - Approved URL-encoded POST fuzzing with explicit bounded operation approval and
   cleanup; existing single-write approvals must keep their original semantics.
-- Complete staged workflow restart/resume acceptance, including approval pauses.
+- End-to-end process restart during discovery/approval and native scanner execution.
+  Per-job disk checkpoint/reload, interrupted-attempt retry, sealed completion reuse,
+  and checkpoint failure refusal now pass deterministic executor acceptance.
 - The complete 684-request execution fixture across retained active adapters;
   manifest coverage alone is insufficient.
 - Bounded, explicitly approved state-changing scanner routing; encrypted exact
   replay and captured read-only GraphQL POST routing are implemented.
 - Supplemental ZAP spider results merged into the inventory before active checks;
   structured runs currently disable that spider to preserve the request boundary.
-- Multi-role discovery/authentication contexts; the native HTTPS ZAP gateway
-  fixture now covers 684 method/body-aware request submissions.
-- Evidence sanitization before persistence across all native artifact formats and
-  enforcement of the recording boundary for adapters that can bypass proxies.
+- End-to-end native multi-role workflow acceptance across all retained active
+  scanners. Named-role browser discovery, previewed scanner jobs, independently
+  renewed credentials, and exact role receipt attribution are implemented.
+- Enforcement of the recording boundary for adapters that can bypass proxies,
+  and secret sanitization at native capture time. Saved JSON, JSONL, XML and text
+  artifacts now mask common unknown credentials before public availability;
+  native subprocesses still create their private raw output before sanitization.
 - End-to-end browser UI approval/authentication/report acceptance and amd64 CI.
 
 Production containers, data volumes, credentials, Greenbone feeds, and unrelated
@@ -219,3 +224,27 @@ unchanged. Expanded workflow rollout is still blocked by the outstanding items
 in Remaining acceptance, especially approved POST fuzzing, supplemental ZAP
 inventory discovery, general per-role adapter routing, complete execution restart
 acceptance and amd64 CI. No completeness percentage is inferred from these tests.
+
+## Per-job recovery and role routing follow-up
+
+Commits `f04f6df` and `3748689` add format-aware common credential redaction and
+per-job workflow checkpoints. JSON and XML stay parseable, large integer/native
+IDs survive, malformed structured output fails closed, and empty JSONL remains
+valid for a no-finding scan. A disk-reload fixture starts a fresh executor after
+cancellation: the sealed completed attempt is reused, the interrupted attempt
+gets a fresh ID, and pending work executes. Checkpoint failure stops subsequent
+execution. Partial native evidence cannot produce a clean completed stage.
+
+Registry version 10 previews separate authentication, Nuclei, ZAP, Wapiti and
+Dalfox jobs for additional named identities. Their prerequisites, input selection,
+verification/renewal and saved receipts stay isolated. Resolved approved GET/HEAD
+schema operations receive role-specific seeds; those seeds are not observations
+or proof of a live host. External origins, unresolved inputs and write operations
+are not promoted. The primary identity preserves legacy inventory IDs.
+
+The full Go suite, scanner/credential race tests, Web UI typecheck/build and Linux
+arm64 race fixtures pass. A disposable local HTTP gateway verifies that a reader
+credential reaches its own request and its response cannot credit admin or
+anonymous variants. No public targets or production containers were used. The
+expanded flag remains disabled pending the Remaining acceptance items; these
+checks do not establish complete native active-check or staged UI acceptance.

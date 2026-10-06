@@ -149,6 +149,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	var checkpointErr error
 	appendOutcome := func(job PlanJob, run Run) {
 		run.Stage = job.Stage
+		run.AuthContextID, run.AuthIdentity, run.AuthRole = job.AuthContextID, job.AuthIdentity, job.AuthRole
 		run.WorkflowVersion = plan.Config.WorkflowVersion
 		if surfaces[job.TargetID] == nil && expanded {
 			surfaces[job.TargetID] = &AttackSurface{SchemaVersion: AttackSurfaceSchemaVersion, ClassifierVersion: AttackSurfaceClassifierVersion, Scope: scopeForInventoryJob(job), Target: job.Target, Endpoints: []AttackSurfaceEndpoint{}}
@@ -191,7 +192,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			explicitCrawl[job.TargetID] = true
 		}
 	}
+	preparedSurfaces := map[string]bool{}
 	prepareSurface := func(target assessment.Target) {
+		preparedSurfaces[target.ID] = true
 		switch target.Kind {
 		case assessment.KindURL, assessment.KindDomain, assessment.KindHost:
 		default:
@@ -203,9 +206,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			if err := p.refreshAssessmentWebAuth(ctx, target.ID); err != nil {
 				// A requested authenticated crawl must not quietly become a
 				// public crawl when a cookie has expired or login failed.
-				return
+				authVerified[target.ID] = false
+			} else {
+				authVerified[target.ID] = true
 			}
-			authVerified[target.ID] = true
 		}
 		inventoryScope := assessmentTargetScope(target)
 		inventoryTarget := target.Value
@@ -232,7 +236,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				surface = parsed
 			}
 		}
-		if surface == nil && katanaAvailable(p.Config) && spec.notApp == "" {
+		if surface == nil && katanaAvailable(p.Config) && spec.notApp == "" && (!authBound || authVerified[target.ID]) {
 			crawlRun := executeSpec(ctx, "katana", crawlReq, p.Config, spec, emit)
 			crawlRun.Scope = crawlScope
 			crawlRun.Authenticated = authBound && crawlReq.TargetAuth != "" && crawlRun.Status == "completed"
@@ -270,10 +274,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			surface = NewSeedAttackSurface(inventoryScope, inventoryTarget)
 		}
 		MergeKatanaRedirectTargets(surface, spec.artifact, crawlReq.AppScope, crawlReq.TargetAuth != "")
-		if expanded && (p.Config.WebBrowser || authBound || p.Config.AssessmentBrowserStorage[target.ID] != nil) {
-			if authBound && !authVerified[target.ID] {
-				return
-			}
+		if expanded && (!authBound || authVerified[target.ID]) && (p.Config.WebBrowser || authBound || p.Config.AssessmentBrowserStorage[target.ID] != nil) {
 			browserReq := crawlReq
 			browserReq.BrowserStorage = p.Config.AssessmentBrowserStorage[target.ID]
 			browserReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
@@ -313,13 +314,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		MergeOpenAPIEndpointsScoped(surface, inventoryTarget, apiEndpoints, appScopes[target.ID])
-		if expanded {
+		if expanded && (!authBound || authVerified[target.ID]) {
 			crawlReq.Target = inventoryTarget
 			discoveredAPIs[target.ID] = DiscoverAPIs(ctx, crawlReq, p.Config, surface)
 			for i := range discoveredAPIs[target.ID] {
 				discoveredAPIs[target.ID][i].TargetID = target.ID
 			}
 			MergeOpenAPIEndpointsScoped(surface, inventoryTarget, discoveredAPIs[target.ID], appScopes[target.ID])
+		}
+		if expanded {
+			addIdentitySchemaSeeds(surface, target.ID, p.Config.AssessmentAuthContexts)
 		}
 		MergeHistoricalCandidates(surface, pendingHistory[target.ID])
 		for _, previous := range results {
@@ -375,6 +379,24 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, run)
 			continue
 		}
+		if job.AuthContextID != "" {
+			auth, err := p.refreshIdentity(ctx, job.TargetID, job.AuthContextID)
+			if err != nil {
+				run := plannedJobNotRun(job, req, plan.Fingerprint, "named identity authentication failed; credentials were not substituted", emit)
+				run.AuthState, run.GapKind = auth.State, GapAuthFailed
+				if run.AuthState == "" {
+					run.AuthState = assessment.StateFailed
+				}
+				appendOutcome(job, run)
+				continue
+			}
+			applyIdentityRequest(&req, auth)
+			if job.Scanner == "auth" {
+				now := time.Now().UTC().Format(time.RFC3339Nano)
+				appendOutcome(job, finalizeRun(Run{Scanner: "auth", Target: job.Target, Scope: scope, Variant: job.Variant, PlanFingerprint: plan.Fingerprint, Status: "completed", StartedAt: now, FinishedAt: now, AuthState: assessment.StateVerified, AuthCheckedAt: now}))
+				continue
+			}
+		}
 		if job.Scanner == "auth" {
 			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err == nil {
 				authVerified[job.TargetID] = true
@@ -419,7 +441,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
 			continue
 		}
-		if assessmentWebAuthBound(plan.Config.Access, job.TargetID) && scannerUsesWebAuth(job.Scanner) {
+		if job.AuthContextID == "" && assessmentWebAuthBound(plan.Config.Access, job.TargetID) && scannerUsesWebAuth(job.Scanner) {
 			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err != nil {
 				run := plannedJobNotRun(job, req, plan.Fingerprint, "authenticated scan skipped: session verification failed", emit)
 				run.AuthState, run.GapKind = assessment.StateFailed, GapAuthFailed
@@ -431,6 +453,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				continue
 			}
 			authVerified[job.TargetID] = true
+		}
+		if job.AuthContextID != "" && !preparedSurfaces[job.TargetID] {
+			if target, ok := targetByID[job.TargetID]; ok {
+				prepareSurface(target)
+			}
 		}
 		surface := surfaces[job.TargetID]
 		if surface != nil {
@@ -457,13 +484,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		if old, ok := completed[key]; ok && old.Status == "completed" && (!assessmentWebAuthBound(plan.Config.Access, job.TargetID) || old.Authenticated || !scannerUsesWebAuth(job.Scanner)) && VerifyChecksum(old) == nil {
 
-			req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded)
+			req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
 			CompleteEndpointCoverage(surface, job.Scanner, old)
 			_ = SaveAttackSurface(scanDir, surface)
 			appendOutcome(job, old)
 			continue
 		}
-		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; len(headers) > 0 && scannerUsesWebAuth(job.Scanner) {
+		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; job.AuthContextID == "" && len(headers) > 0 && scannerUsesWebAuth(job.Scanner) {
 			req.TargetAuth = strings.Join(headers, "\n")
 			req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
 			req.AuthKind = "HTTP headers"
@@ -556,7 +583,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "planned scanner has no execution adapter", emit))
 			continue
 		}
-		req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded)
+		req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
 		if surface != nil {
 			req.EndpointMethods = map[string]string{}
 			for _, ep := range surface.Endpoints {
@@ -628,6 +655,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 					event.Run.AssessmentTypes = jobAssessmentTypes(job)
 					event.Run.PlanFingerprint = plan.Fingerprint
 					event.Run.AttemptID = attemptID
+					event.Run.AuthContextID, event.Run.AuthIdentity, event.Run.AuthRole = job.AuthContextID, job.AuthIdentity, job.AuthRole
 				}
 				emit(event)
 			}
@@ -679,7 +707,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			run.AuthState, run.AuthCheckedAt = assessment.StateVerified, time.Now().UTC().Format(time.RFC3339)
 		}
 		if run.Authenticated && job.Scanner == "nuclei" {
-			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err != nil {
+			if err := refreshRunIdentity(ctx, p, job); err != nil {
 				run.Status, run.Authenticated = "failed", false
 				run.AuthState, run.GapKind = assessment.StateExpired, GapAuthExpired
 				run.Reason = "authenticated session expired during Nuclei scan; coverage is partial"

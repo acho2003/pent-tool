@@ -84,7 +84,7 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 				chosen[targetID] = true
 				primaryHeaders[targetID] = slices.Clone(headers[targetID])
 				for i := range plan.Jobs {
-					if plan.Jobs[i].TargetID == targetID {
+					if plan.Jobs[i].TargetID == targetID && plan.Jobs[i].AuthContextID == "" {
 						plan.Jobs[i] = isolated.Jobs[i]
 					}
 				}
@@ -92,6 +92,11 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 					if plan.Decisions[i].TargetID == targetID {
 						plan.Decisions[i] = isolated.Decisions[i]
 					}
+				}
+			}
+			for i := range plan.Jobs {
+				if plan.Jobs[i].TargetID == targetID && plan.Jobs[i].AuthContextID == auth.ID {
+					plan.Jobs[i] = isolated.Jobs[i]
 				}
 			}
 			for i := range plan.Capabilities {

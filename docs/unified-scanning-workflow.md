@@ -133,3 +133,25 @@ Structured ZAP assessments seed exclusively from their saved input manifest. The
 Expanded request budgets count selected method/body variants individually, even when they share a URL. Browser form definitions require operation approval and supplied inputs before submission; they do not authorize a GET request by themselves. DOM alias observations do not inherit authentication. Redacted discovery URLs without their bound replay reference remain unmaterialized. Classifier version 6 invalidates cached eligibility from previous rules without contacting targets.
 
 Expanded approved API writes use an assessment-wide journal, shared across attempts and protected by an OS process lock. Every transition reloads disk state and syncs the file and containing directories before network execution. Saved per-attempt intents are imported without inventing outcomes; corrupt or unresolved journals prevent automatic resume. Discovery approval clears prior write approvals, so accepting new destinations cannot renew mutation consent. Unsupported locking platforms refuse writes.
+
+
+Registry version 10 includes separate scanner jobs for additional named target
+identities in the accepted preview. Nuclei, ZAP, Wapiti and Dalfox select only
+that identity's browser observations and resolved same-origin read-operation
+schema seeds. Each job renews its own target-bound credential; an unavailable
+role never substitutes the primary credential. Execution receipts attach only
+to the matching identity's exact request variants. Role jobs are labelled in
+setup and revision review. This does not authorize repeated state-changing
+fuzzing or extend credential bindings to aliases.
+
+The derived workflow manifest is checkpointed after every job. A stage with
+pending jobs remains running, and partial evidence remains partial. Persistence
+failure stops later execution. Restart reuses only completed attempts with the
+accepted plan fingerprint and valid saved checksums; interrupted attempts receive
+new IDs. Authentication is reverified during resumed work.
+
+Saved native JSON, JSONL, XML and text artifacts are sanitized for configured and
+common unknown credentials before public download. Structured decoding preserves
+record boundaries and native IDs; malformed structured artifacts cannot count as
+usable success. Native scanners initially write private raw artifacts, so this
+is not a claim of sanitization before every filesystem write.

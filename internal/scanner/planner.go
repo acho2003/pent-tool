@@ -34,6 +34,9 @@ type PlanDecision struct {
 }
 
 type PlanJob struct {
+	AuthContextID   string            `json:"auth_context_id,omitempty"`
+	AuthIdentity    string            `json:"auth_identity,omitempty"`
+	AuthRole        string            `json:"auth_role,omitempty"`
 	ID              string            `json:"id"`
 	State           PlanState         `json:"state"`
 	Scanner         string            `json:"scanner"`
@@ -77,7 +80,7 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 9: simpler header-auth verification).
-const PlanRegistryVersion = "9"
+const PlanRegistryVersion = "10"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -300,6 +303,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		plan.Coverage = append(plan.Coverage, coverage)
 	}
 	plan.Jobs = expandTLSServiceJobs(cfg, plan.Jobs)
+	plan.Jobs = expandIdentityJobs(cfg, plan.Jobs)
 	assignStages(plan.Jobs)
 	// Every dependency points at a strictly earlier stage, so ordering by stage
 	// rank (ties by job ID) is a deterministic topological order.
@@ -326,17 +330,17 @@ func assignStages(jobs []PlanJob) {
 		if !webWorkflowScanner(jobs[i].Scanner) {
 			continue
 		}
-		if byStage[jobs[i].TargetID] == nil {
-			byStage[jobs[i].TargetID] = map[string][]string{}
+		if byStage[jobs[i].TargetID+"\x00"+jobs[i].AuthContextID] == nil {
+			byStage[jobs[i].TargetID+"\x00"+jobs[i].AuthContextID] = map[string][]string{}
 		}
-		byStage[jobs[i].TargetID][jobs[i].Stage] = append(byStage[jobs[i].TargetID][jobs[i].Stage], jobs[i].ID)
+		byStage[jobs[i].TargetID+"\x00"+jobs[i].AuthContextID][jobs[i].Stage] = append(byStage[jobs[i].TargetID+"\x00"+jobs[i].AuthContextID][jobs[i].Stage], jobs[i].ID)
 	}
 	for i := range jobs {
 		jobs[i].Dependencies = nil
 		if !webWorkflowScanner(jobs[i].Scanner) {
 			continue
 		}
-		stages := byStage[jobs[i].TargetID]
+		stages := byStage[jobs[i].TargetID+"\x00"+jobs[i].AuthContextID]
 		visited := map[string]bool{}
 		var deps []string
 		var visit func(stage string)

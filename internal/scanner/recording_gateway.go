@@ -382,7 +382,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	}
 	requestOrigin, _ := assessment.ParseApprovedOrigin("", raw)
 	for _, input := range g.req.InputRequests {
-		if !input.Selected || input.Method != r.Method || !gatewayInputAuthenticationMatches(input, request, g.req.TargetAuth, sameOrigin) {
+		if !input.Selected || input.Method != r.Method || !gatewayInputAuthenticationMatches(input, request, g.req.TargetAuth, sameOrigin, g.req.AuthContextID) {
 			continue
 		}
 		candidate, e := url.Parse(input.URL)
@@ -477,7 +477,7 @@ func (g *RecordingGateway) ApplyOutcome(run *Run) {
 // A response received with credentials cannot prove exercise of the anonymous
 // request variant at the same URL. Only the context represented by the actual
 // outgoing headers can receive the receipt.
-func gatewayInputAuthenticationMatches(input ScannerRequestInput, request *http.Request, boundHeaders string, sameOrigin bool) bool {
+func gatewayInputAuthenticationMatches(input ScannerRequestInput, request *http.Request, boundHeaders string, sameOrigin bool, contextIDs ...string) bool {
 	bound := sameOrigin && strings.TrimSpace(boundHeaders) != ""
 	if input.AuthContextID == "" {
 		if bound || request.Header.Get("Authorization") != "" || request.Header.Get("Cookie") != "" {
@@ -486,6 +486,9 @@ func gatewayInputAuthenticationMatches(input ScannerRequestInput, request *http.
 		return true
 	}
 	if bound {
+		if len(contextIDs) > 0 && contextIDs[0] != "" {
+			return input.AuthContextID == contextIDs[0]
+		}
 		return input.AuthContextID == inventoryID(input.InventoryScope, "target-bound")
 	}
 	matched := false
