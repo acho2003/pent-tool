@@ -359,6 +359,11 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 					Forms []map[string]any `json:"forms"`
 				}
 				if json.Unmarshal([]byte(result.Value.Str()), &extracted) == nil {
+					for _, form := range extracted.Forms {
+						if action, ok := form["action"].(string); ok {
+							form["action"] = SafeTelemetryURL(action)
+						}
+					}
 					record(map[string]any{"request": map[string]any{"endpoint": SafeTelemetryURL(next.url), "method": "GET", "source": "browser-dom", "authenticated": req.TargetAuth != "" && func() bool { o, _ := assessment.ParseApprovedOrigin("", next.url); return o.Origin() == bound.Origin() }()}, "forms": extracted.Forms})
 					if next.depth >= katanaDefaultDepth && len(extracted.Links) > 0 {
 						markLimit(fmt.Sprintf("browser crawl depth limit reached (%d)", katanaDefaultDepth))

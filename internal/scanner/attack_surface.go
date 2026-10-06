@@ -27,7 +27,7 @@ const (
 	// contacting the target) instead of being reused. v2: endpoint State,
 	// exclusions and placeholder refusal. v3: retain scoped OpenAPI operations
 	// that still need explicit inputs.
-	AttackSurfaceClassifierVersion = 5
+	AttackSurfaceClassifierVersion = 6
 )
 
 // Endpoint states. An empty State (seeds, OpenAPI merges, the legacy parse and
@@ -200,7 +200,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 	targetHost := hostFromTarget(target)
 	artifactName := filepath.Base(artifact)
 	var requestBody, requestType, recordedBodyDigest, replayRef, requestID string
-	var readOnly bool
+	var readOnly, trustedBrowser bool
 	observationAuth := observedWithAuth
 	add := func(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm bool) {
 		allowed, reason := inSurfaceScope(rawURL, targetHost, appScope)
@@ -235,6 +235,9 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		if appScope != nil {
 			stampEndpointState(&ep, *appScope, allowed, reason)
 		}
+		if trustedBrowser && ep.ReplayRef == "" && replayURLRedacted(ep.URL) && endpointStateDispatchable(ep.State) {
+			ep.State, ep.StateReason = EndpointStateUnmaterialized, "redacted discovery URL requires its original encrypted replay"
+		}
 		mergeSurfaceEndpoint(surface, byID, ep)
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
@@ -258,8 +261,8 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		}
 		requestBody = firstStringValue(request, "body")
 		replayRef, requestID, readOnly = "", "", false
-		trustedBrowser := firstStringValue(request, "source") == "browser" && filepath.Base(artifact) == "browser.jsonl"
-		if trustedBrowser {
+		trustedBrowser = (firstStringValue(request, "source") == "browser" || firstStringValue(request, "source") == "browser-dom") && filepath.Base(artifact) == "browser.jsonl"
+		if trustedBrowser && firstStringValue(request, "source") == "browser" {
 			replayRef, requestID = firstStringValue(request, "replay_reference"), firstStringValue(request, "request_id")
 			readOnly, _ = request["read_only"].(bool)
 		}
@@ -318,6 +321,14 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 				}
 			}
 			add(action, firstStringValue(form, "method"), source, firstStringValue(raw, "timestamp"), 0, "", formParameters(form), true)
+			if trustedBrowser {
+				for i := range surface.Endpoints {
+					ep := &surface.Endpoints[i]
+					if ep.URL == action && ep.HasForm && ep.ReplayRef == "" && endpointStateDispatchable(ep.State) {
+						ep.State, ep.StateReason = EndpointStateUnmaterialized, "form submission requires an approved operation and supplied inputs"
+					}
+				}
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -720,18 +731,20 @@ func dispatchTargetsWithPolicy(surface *AttackSurface, scannerName string, max i
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	seen := map[string]bool{}
 	var targets []string
+	selectedVariants := 0
 	for i := range surface.Endpoints {
 		ep := &surface.Endpoints[i]
 		eligible, reason := endpointEligibleWithPolicy(*ep, scannerName, scope, expanded)
 		status := "skipped"
 		switch {
 		case !eligible:
-		case max > 0 && len(targets) >= max:
+		case max > 0 && ((expanded && selectedVariants >= max) || (!expanded && len(targets) >= max)):
 			reason = "endpoint budget exhausted"
 		case budget != nil && len(budget.ReserveEndpoints([]string{ep.ID})) == 0:
 			reason = assessmentEndpointCapReason
 		default:
 			status = "dispatched"
+			selectedVariants++
 			if !seen[ep.URL] {
 				seen[ep.URL] = true
 				targets = append(targets, ep.URL)

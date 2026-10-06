@@ -117,3 +117,65 @@ func TestUntrustedCrawlerCannotGrantReplayAuthority(t *testing.T) {
 		t.Fatal("crawler granted capture authority")
 	}
 }
+
+func TestRequestBudgetCountsMethodAndBodyVariants(t *testing.T) {
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	raw := "https://app.test/graphql"
+	surface := &AttackSurface{}
+	for _, method := range []string{"GET", "HEAD", "OPTIONS"} {
+		ep, _ := requestVariantEndpoint("app:a", raw, method, "", "", false)
+		surface.Endpoints = append(surface.Endpoints, ep)
+	}
+	for _, body := range []string{`{"query":"{one}"}`, `{"query":"{two}"}`} {
+		ep, _ := requestVariantEndpoint("app:a", raw, "POST", "application/json", body, false)
+		ep.ReplayRef = "bound-reference"
+		ep.ReadOnly = true
+		ep.ReplayBody = body
+		surface.Endpoints = append(surface.Endpoints, ep)
+	}
+	selected := DispatchTargets(surface, "zap", 2)
+	inputs := BuildScannerInputs(surface, Request{EndpointTargets: selected}, "zap")
+	count := 0
+	for _, input := range inputs {
+		if input.Selected {
+			count++
+		} else if input.Reason != "endpoint budget exhausted" {
+			t.Fatalf("unexplained skip %+v", input)
+		}
+	}
+	if count != 2 {
+		t.Fatalf("method/body variants bypassed request budget: %d", count)
+	}
+}
+func TestBrowserDOMAliasesDoNotInheritAuthAndFormsNeedApproval(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "browser.jsonl")
+	os.WriteFile(path, []byte(`{"request":{"endpoint":"https://app.test/","method":"GET","source":"browser-dom","authenticated":false},"forms":[{"action":"https://app.test/submit?token=%5BREDACTED%5D","method":"GET","fields":[{"name":"token"}]}]}`), 0600)
+	surface, err := ParseKatanaAttackSurface(path, "app:a", "https://app.test/", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(surface.Endpoints) != 2 {
+		t.Fatal(surface.Endpoints)
+	}
+	for _, ep := range surface.Endpoints {
+		if ep.AuthContextID != "" {
+			t.Fatal("DOM metadata inferred credential authorization")
+		}
+		if ep.HasForm && ep.State != EndpointStateUnmaterialized {
+			t.Fatal("browser form became a submission without approval")
+		}
+	}
+}
+
+func TestRedactedDOMRequestCannotBecomeNewSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "browser.jsonl")
+	os.WriteFile(path, []byte(`{"request":{"endpoint":"https://app.test/?token=%5BREDACTED%5D","method":"GET","source":"browser-dom","authenticated":true}}`), 0600)
+	surface, err := ParseKatanaAttackSurface(path, "app:a", "https://app.test/", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(surface.Endpoints) != 1 || surface.Endpoints[0].State != EndpointStateUnmaterialized || len(DispatchTargets(surface, "zap", 100)) != 0 {
+		t.Fatalf("redacted DOM request submitted: %+v", surface)
+	}
+}

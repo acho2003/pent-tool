@@ -157,3 +157,21 @@ func replaySecrets(inputs []ScannerRequestInput) []string {
 	}
 	return secrets
 }
+
+func replayURLRedacted(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return true
+	}
+	if u.Fragment == "[REDACTED]" {
+		return true
+	}
+	for _, values := range u.Query() {
+		for _, value := range values {
+			if value == "[REDACTED]" {
+				return true
+			}
+		}
+	}
+	return false
+}

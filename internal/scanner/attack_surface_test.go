@@ -158,8 +158,8 @@ func TestCompleteEndpointCoverageRecordsBatchCompletedForBatchAdapters(t *testin
 }
 
 func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
-	if AttackSurfaceClassifierVersion != 5 {
-		t.Fatalf("classifier version = %d, want 5", AttackSurfaceClassifierVersion)
+	if AttackSurfaceClassifierVersion != 6 {
+		t.Fatalf("classifier version = %d, want 6", AttackSurfaceClassifierVersion)
 	}
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "results.jsonl")
@@ -173,7 +173,7 @@ func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
 	// Simulate a snapshot cached by the previous classifier with the same
 	// source checksum: it must not be reused, so the caller re-parses the raw
 	// JSONL (no network) under the new eligibility semantics.
-	surface.ClassifierVersion = 4
+	surface.ClassifierVersion = 5
 	if err := SaveAttackSurface(dir, surface); err != nil {
 		t.Fatal(err)
 	}

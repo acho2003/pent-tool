@@ -29,7 +29,7 @@ func TestBrowserRuntimeAuthenticatedXHRAndExclusions(t *testing.T) {
 		}
 		if r.URL.Path == "/" {
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(`<html><body><a href="/next/">next</a><a href="/logout">logout</a><script>fetch('/xhr?x=1&x=2').then(r=>r.text());fetch('/write',{method:'POST',body:'x=1'});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'query Read($secret: String){viewer}',variables:{secret:'fixture-browser-secret'}})});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'mutation {deleteUser}'})});</script><form method="post" action="/write"><input name="x"></form></body></html>`))
+			w.Write([]byte(`<html><body><a href="/next/">next</a><a href="/logout">logout</a><script>fetch('/xhr?x=1&x=2').then(r=>r.text());fetch('/write',{method:'POST',body:'x=1'});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'query Read($secret: String){viewer}',variables:{secret:'fixture-browser-secret'}})});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'mutation {deleteUser}'})});</script><form method="post" action="/write"><input name="x"></form><form method="get" action="/form-read?token=fixture-form-secret"><input name="token"></form></body></html>`))
 			return
 		}
 		if r.URL.Path == "/graphql" {
@@ -75,6 +75,9 @@ func TestBrowserRuntimeAuthenticatedXHRAndExclusions(t *testing.T) {
 	hydrateRequestReplay(surface, store, "app:fixture")
 	found := false
 	for _, ep := range surface.Endpoints {
+		if ep.HasForm && ep.ReplayRef == "" && endpointStateDispatchable(ep.State) {
+			t.Fatal("browser form was authorized for submission")
+		}
 		if ep.Method == "POST" && strings.Contains(ep.URL, "/graphql") {
 			found = ep.ReadOnly && ep.ReplayRef != "" && strings.Contains(ep.ReplayBody, "fixture-browser-secret") && ep.ReplayHeaders["Cookie"] == "session=fixture"
 		}
@@ -82,7 +85,7 @@ func TestBrowserRuntimeAuthenticatedXHRAndExclusions(t *testing.T) {
 	if !found {
 		t.Fatalf("encrypted browser body/header replay missing: %+v", surface.Endpoints)
 	}
-	if strings.Contains(string(data), "session=fixture") || strings.Contains(string(data), "fixture-browser-secret") {
+	if strings.Contains(string(data), "session=fixture") || strings.Contains(string(data), "fixture-browser-secret") || strings.Contains(string(data), "fixture-form-secret") {
 		t.Fatal("secret persisted")
 	}
 }
