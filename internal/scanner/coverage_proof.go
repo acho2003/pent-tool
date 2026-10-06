@@ -74,7 +74,7 @@ func ReadCoverageEvents(path string) ([]CoverageEvent, error) {
 	return events, s.Err()
 }
 func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
-	proof := CoverageProof{Items: map[string][]ProofItem{}, Definitions: []InventoryDefinition{}, Scanners: []ScannerProof{}, NotTracked: []string{"parameters_tested", "templates_executed", "protected_route_coverage_percent"}}
+	proof := CoverageProof{Items: map[string][]ProofItem{}, Definitions: []InventoryDefinition{}, Scanners: []ScannerProof{}, DiscoveryGaps: []string{}, NotTracked: []string{"parameters_tested", "templates_executed", "protected_route_coverage_percent"}}
 	type sets struct {
 		selected, submitted, ack, exercised, batch, failed, skipped map[string]bool
 		recorded                                                    bool

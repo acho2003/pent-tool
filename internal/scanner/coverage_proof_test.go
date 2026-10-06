@@ -81,3 +81,21 @@ func TestProofDrilldownMatchesCountsAndUsesInventoryScope(t *testing.T) {
 		t.Fatal("lost inventory relationship")
 	}
 }
+
+func TestEmptyCoverageProofCollectionsRemainJSONArrays(t *testing.T) {
+	proof := BuildCoverageProof(nil, nil)
+	data, err := json.Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"scanners", "definitions", "not_tracked", "discovery_gaps"} {
+		var items []any
+		if string(decoded[field]) == "null" || json.Unmarshal(decoded[field], &items) != nil {
+			t.Fatalf("%s is not an array: %s", field, decoded[field])
+		}
+	}
+}
