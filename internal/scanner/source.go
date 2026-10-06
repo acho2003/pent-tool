@@ -38,6 +38,7 @@ func gitClone(ctx context.Context, url, dir string) error {
 		return err
 	}
 	cmd := exec.CommandContext(cctx, "git", "clone", "--depth", "1", url, dir)
+	configureCommandCancellation(cmd)
 	return cmd.Run()
 }
 

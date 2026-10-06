@@ -45,6 +45,7 @@ func (vulsRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFun
 	sequence := int64(0)
 	stage := func(name string, args ...string) error {
 		cmd := exec.CommandContext(cctx, cfg.VulsPath, args...)
+		configureCommandCancellation(cmd)
 		cmd.Dir = req.ScanDir
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr

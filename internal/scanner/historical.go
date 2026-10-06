@@ -76,6 +76,7 @@ func (r historicalRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		args = []string{"--threads", "1", "--timeout", "10", "--retries", "0", domain}
 	}
 	cmd := exec.CommandContext(providerCtx, path, args...)
+	configureCommandCancellation(cmd)
 	if r.provider == "waybackurls" {
 		cmd.Stdin = strings.NewReader(domain + "\n")
 	}

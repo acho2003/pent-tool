@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -876,5 +877,34 @@ func TestEmitCallbackNeverInvokedConcurrently(t *testing.T) {
 	p.Run(context.Background(), Request{Target: "t", ScanDir: t.TempDir()}, nil, emit)
 	if atomic.LoadInt32(&raced) != 0 {
 		t.Fatalf("emit callback was invoked concurrently across scan-phase workers")
+	}
+}
+
+func TestAdapterTimeoutKeepsExecutionSeparateFromArtifactFailure(t *testing.T) {
+	for _, withArtifact := range []bool{false, true} {
+		t.Run(fmt.Sprintf("artifact-%t", withArtifact), func(t *testing.T) {
+			dir := t.TempDir()
+			artifact := filepath.Join(dir, "results.json")
+			bin := filepath.Join(dir, "scanner")
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if withArtifact {
+				if err := os.WriteFile(artifact, []byte("[]"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			started := time.Now()
+			run := executeSpec(t.Context(), "dalfox", Request{Target: "http://fixture.test/", ScanDir: dir}, Config{MaxOutputBytes: 4096}, commandSpec{path: bin, artifact: artifact, timeout: 50 * time.Millisecond}, nil)
+			if time.Since(started) > 2*time.Second {
+				t.Fatal("scanner helper survived cancellation")
+			}
+			if run.ExecutionOutcome != "TIMEOUT" || run.Outcome != "TIMEOUT" || run.Completeness != "partial" || run.Status != "failed" || run.Reason != "scanner timeout exceeded" {
+				t.Fatalf("interruption was overwritten: %+v", run)
+			}
+			if !withArtifact && run.ParserOutcome != "FAILED" {
+				t.Fatalf("missing artifact parser state: %+v", run)
+			}
+		})
 	}
 }

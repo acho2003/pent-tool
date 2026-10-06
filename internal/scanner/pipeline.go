@@ -812,6 +812,7 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		spec.env = append(spec.env, "SSL_CERT_FILE="+req.GatewayCAPath, "REQUESTS_CA_BUNDLE="+req.GatewayCAPath)
 	}
 	cmd := exec.CommandContext(cmdCtx, spec.path, spec.args...)
+	configureCommandCancellation(cmd)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = req.ScanDir, outW, errW
 	// Extra environment (e.g. resolved cloud credentials for prowler/scoutsuite)
 	// is passed via env, never argv, so secrets don't land in the process table
@@ -849,10 +850,15 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 			run.ExitCode = ee.ExitCode()
 		}
 		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			run.Status, run.Reason = "failed", "assessment time budget exceeded"
+			run.ExecutionOutcome, run.Outcome, run.Completeness = "TIMEOUT", "TIMEOUT", "partial"
 		case ctx.Err() != nil:
 			run.Status, run.Reason = "cancelled", ctx.Err().Error()
+			run.ExecutionOutcome, run.Outcome, run.Completeness = "CANCELLED", "PARTIAL", "partial"
 		case errors.Is(cmdCtx.Err(), context.DeadlineExceeded):
 			run.Status, run.Reason = "failed", "scanner timeout exceeded"
+			run.ExecutionOutcome, run.Outcome, run.Completeness = "TIMEOUT", "TIMEOUT", "partial"
 		default:
 			if spec.okExit != nil && spec.okExit[run.ExitCode] {
 				run.Status = "completed"
@@ -887,9 +893,11 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 			if run.Status == "completed" {
 				run.ExecutionOutcome = "SUCCESS"
 			}
-			run.Outcome = "PARSER_FAILED"
-			run.Status, run.ParserOutcome, run.Completeness = "failed", "FAILED", "partial"
-			run.Reason = "could not retain usable bounded artifact: " + boundErr.Error()
+			run.ParserOutcome, run.Completeness = "FAILED", "partial"
+			if run.ExecutionOutcome != "TIMEOUT" && run.ExecutionOutcome != "CANCELLED" {
+				run.Outcome, run.Status = "PARSER_FAILED", "failed"
+				run.Reason = "could not retain usable bounded artifact: " + boundErr.Error()
+			}
 		}
 	}
 	_ = redactArtifact(run.ArtifactPath, secrets)

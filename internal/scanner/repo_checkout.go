@@ -57,6 +57,7 @@ func cloneRepositoryTarget(ctx context.Context, dir, repoURL string, cred RepoCr
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "git", "clone", "--depth", "1", "--single-branch", "--no-tags", "--", u.String(), dir)
+	configureCommandCancellation(cmd)
 	// Never block on an interactive username/password prompt.
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
 	token := strings.TrimSpace(cred.Token)

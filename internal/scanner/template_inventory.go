@@ -28,6 +28,7 @@ func saveNucleiTemplateInventory(ctx context.Context, req Request, cfg Config) (
 	args := []string{"-tl", "-silent", "-nc", "-duc", "-dut", "-t", cfg.NucleiTemplatesDir}
 	args = append(args, nucleiPolicyArgs(cfg)...)
 	command := exec.CommandContext(ctx, cfg.NucleiPath, args...)
+	configureCommandCancellation(command)
 	var output limitedTemplateOutput
 	command.Stdout = &output
 	if err := command.Run(); err != nil {
