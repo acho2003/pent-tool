@@ -57,6 +57,14 @@ func (s *Server) assessmentBrowserStorage(plan *scanner.AssessmentPlan) map[stri
 	if plan == nil || plan.Config.WorkflowVersion != "unified-v1" {
 		return result
 	}
+	if len(plan.AuthContexts) > 0 {
+		for _, auth := range plan.AuthContexts {
+			if auth.Primary && auth.State == "verified" && auth.BrowserStorage != nil {
+				result[auth.TargetID] = auth.BrowserStorage
+			}
+		}
+		return result
+	}
 	vault, err := s.openCredentialVault()
 	if err != nil {
 		return result

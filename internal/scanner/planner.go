@@ -80,6 +80,7 @@ type PlanInput struct {
 const PlanRegistryVersion = "9"
 
 type AssessmentPlan struct {
+	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
 	Config          assessment.AssessmentConfig     `json:"config"`
 	Capabilities    []assessment.CapabilityEvidence `json:"capabilities"`
 	Decisions       []PlanDecision                  `json:"decisions"`

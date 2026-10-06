@@ -183,6 +183,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 			} else {
 				pipeline.Config.ReplayKey, _ = credentials.LoadKeyFile(os.Getenv("XALGORIX_CREDENTIAL_KEY_FILE"))
 				pipeline.Config.AssessmentAuthHeaders = authHeaders
+				pipeline.Config.AssessmentAuthContexts = sess.assessmentPlan.AuthContexts
 				pipeline.Config.AssessmentBrowserStorage = s.assessmentBrowserStorage(sess.assessmentPlan)
 				sshAliases, sshErr := s.assessmentHostAliases(sess.assessmentPlan)
 				gvmCredentials, sshRequested := s.assessmentGVMSSHCredentials(sess.assessmentPlan)

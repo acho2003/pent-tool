@@ -30,7 +30,7 @@ const maxSessionRenewals = 3
 // Configuration and vault problems are unavailable (nothing ran); a
 // verification that ran and was rejected is failed. Secret values remain in
 // runtime memory only.
-func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scanner.AssessmentPlan) (map[string][]string, error) {
+func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *scanner.AssessmentPlan) (map[string][]string, error) {
 	headersByTarget := map[string][]string{}
 	if plan == nil || len(plan.Config.Access) == 0 {
 		return headersByTarget, nil
@@ -192,6 +192,15 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 // the positive check, never the negative control.
 func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers map[string][]string) (map[string]func(context.Context, []string) ([]string, error), error) {
 	refreshers := map[string]func(context.Context, []string) ([]string, error){}
+	if plan != nil && len(plan.AuthContexts) > 0 {
+		for _, auth := range plan.AuthContexts {
+			if auth.Primary && auth.State == assessment.StateVerified && auth.Refresh != nil {
+				refreshers[auth.TargetID] = auth.Refresh
+			}
+		}
+		return refreshers, nil
+	}
+
 	if len(headers) == 0 {
 		return refreshers, nil
 	}

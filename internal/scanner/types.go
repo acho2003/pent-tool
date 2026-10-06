@@ -289,6 +289,7 @@ type Config struct {
 	// AssessmentAuthHeaders contains runtime-only, target-bound credentials for
 	// typed jobs. It must never be serialized or logged.
 	AssessmentBrowserStorage map[string]*credentials.BrowserStorage `json:"-"`
+	AssessmentAuthContexts   []AuthContext                          `json:"-"`
 	AssessmentAuthHeaders    map[string][]string
 	// AssessmentAuthRefresh checks an authenticated session during a typed job.
 	// It returns replacement header lines after at most one form re-login.
