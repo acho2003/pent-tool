@@ -124,3 +124,16 @@ claim all 684 were exercised. Linux process-group cancellation reduces the
 helper-stop regression from ten seconds to about 50 ms, while preserving
 `TIMEOUT`/`CANCELLED` execution independently from artifact parser failures.
 The full Go suite and scanner/credential race checks pass for these changes.
+
+Approval endpoint regression acceptance now covers a fresh server reading the
+same data directory before and after approval: pending previews retain their
+fingerprint, stale approval returns HTTP 409, accepted revisions survive restart,
+and the original parent plan remains unchanged. Execution restart/resume and
+complete staged UI approval acceptance remain separate outstanding checks.
+
+The application-only arm64 validation image `xalgorix:workflow-validation-6d8fe6b`
+contains application revision `6d8fe6b9306561f76faab695246bba7b98817a4f` and measures
+1,139,410,181 bytes. Its offline runtime smoke test passes all 24 retained scanner
+commands, Chromium/discovery, libraries, and source fixtures. This reuses the
+existing slim runtime; no reclaimed-space claim or production replacement was
+made.
