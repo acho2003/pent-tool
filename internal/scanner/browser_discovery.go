@@ -21,6 +21,7 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"net/url"
 )
 
@@ -253,11 +254,37 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		h.Response.SetBody(body)
 		// Bodies/credentials are not copied into public discovery artifacts.
-		requestRecord := map[string]any{"endpoint": rawURL, "method": method, "source": "browser", "headers": map[string]string{"content-type": h.Request.Req().Header.Get("Content-Type")}}
+		requestRecord := map[string]any{"endpoint": SafeTelemetryURL(rawURL), "method": method, "source": "browser", "authenticated": sameOrigin && req.TargetAuth != "", "read_only": true, "headers": map[string]string{"content-type": h.Request.Req().Header.Get("Content-Type")}}
 		if len(requestBody) > 0 {
 			sum := sha256.Sum256(requestBody)
 			requestRecord["body_digest"] = hex.EncodeToString(sum[:])
 			requestRecord["parameters"] = bodyParameters(string(requestBody), h.Request.Req().Header.Get("Content-Type"))
+		}
+		endpoint, identityOK := requestVariantEndpoint(req.ReplayScope, rawURL, method, h.Request.Req().Header.Get("Content-Type"), string(requestBody), sameOrigin && req.TargetAuth != "")
+		if identityOK {
+			requestRecord["request_id"] = endpoint.ID
+			if req.ReplayStore != nil && !req.BrowserAccessTest {
+				headers := map[string]string{}
+				for name, values := range h.Request.Req().Header {
+					if len(values) > 0 {
+						separator := ", "
+						if strings.EqualFold(name, "Cookie") {
+							separator = "; "
+						}
+						headers[name] = strings.Join(values, separator)
+					}
+				}
+				reference, err := req.ReplayStore.Put(req.ReplayScope, endpoint.AuthContextID, credentials.ReplayRequest{EndpointID: endpoint.ID, URL: rawURL, Method: method, ContentType: endpoint.RequestContentType, Body: string(requestBody), Headers: headers})
+				if err != nil {
+					markLimit("browser request replay could not be encrypted")
+				} else {
+					requestRecord["replay_reference"] = reference
+				}
+			} else if len(requestBody) > 0 || SafeTelemetryURL(rawURL) != rawURL {
+				if !req.BrowserAccessTest {
+					markLimit("browser request replay key unavailable; exact request retained as metadata only")
+				}
+			}
 		}
 		row := map[string]any{"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "request": requestRecord, "response": map[string]any{"status_code": response.StatusCode, "headers": map[string]string{"content-type": response.Header.Get("Content-Type")}}}
 		record(row)
@@ -332,7 +359,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 					Forms []map[string]any `json:"forms"`
 				}
 				if json.Unmarshal([]byte(result.Value.Str()), &extracted) == nil {
-					record(map[string]any{"request": map[string]any{"endpoint": next.url, "method": "GET", "source": "browser-dom"}, "forms": extracted.Forms})
+					record(map[string]any{"request": map[string]any{"endpoint": SafeTelemetryURL(next.url), "method": "GET", "source": "browser-dom", "authenticated": req.TargetAuth != "" && func() bool { o, _ := assessment.ParseApprovedOrigin("", next.url); return o.Origin() == bound.Origin() }()}, "forms": extracted.Forms})
 					if next.depth >= katanaDefaultDepth && len(extracted.Links) > 0 {
 						markLimit(fmt.Sprintf("browser crawl depth limit reached (%d)", katanaDefaultDepth))
 					}

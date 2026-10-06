@@ -669,7 +669,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				refusal = "request was not selected"
 			}
 		}
-		if input.Method != http.MethodGet && input.Method != http.MethodHead && input.Method != http.MethodOptions {
+		if input.Method != http.MethodGet && input.Method != http.MethodHead && input.Method != http.MethodOptions && !(input.ReadOnly && input.Method == http.MethodPost && input.Body != "" && browserDiscoveryRequestAllowed(req, cfg, input.Method, input.URL, input.ContentType, []byte(input.Body)) == nil) {
 			refusal = "state-changing request requires an approved operation and fixture"
 		}
 		if input.BodyDigest != "" && input.Body == "" {

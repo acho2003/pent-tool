@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 	"github.com/xalgord/xalgorix/v4/internal/storage"
 )
@@ -180,6 +181,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 				sess.record.StopReason = "assessment authentication preparation failed"
 				runs = nil
 			} else {
+				pipeline.Config.ReplayKey, _ = credentials.LoadKeyFile(os.Getenv("XALGORIX_CREDENTIAL_KEY_FILE"))
 				pipeline.Config.AssessmentAuthHeaders = authHeaders
 				pipeline.Config.AssessmentBrowserStorage = s.assessmentBrowserStorage(sess.assessmentPlan)
 				sshAliases, sshErr := s.assessmentHostAliases(sess.assessmentPlan)

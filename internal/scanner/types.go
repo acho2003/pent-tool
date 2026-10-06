@@ -51,6 +51,8 @@ type Artifact struct {
 }
 
 type Request struct {
+	ReplayStore             *credentials.ReplayStore    `json:"-"`
+	ReplayScope             string                      `json:"-"`
 	BrowserStorage          *credentials.BrowserStorage `json:"-"`
 	BrowserAccessTest       bool                        `json:"-"`
 	BrowserCheckpointMarker string                      `json:"-"`
@@ -238,6 +240,7 @@ type Event struct {
 }
 
 type Config struct {
+	ReplayKey          []byte `json:"-"`
 	NucleiPath         string
 	NucleiTemplatesDir string
 	TrivyPath          string

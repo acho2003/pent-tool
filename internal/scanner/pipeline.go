@@ -1113,6 +1113,7 @@ func redact(s string, secrets []string) string {
 func secretValues(req Request, cfg Config) []string {
 	vals := []string{cfg.ZAPAPIKey, cfg.GVMPass}
 	vals = append(vals, req.Secrets...)
+	vals = append(vals, replaySecrets(req.InputRequests)...)
 	headers := append([]string(nil), cfg.ScanHeaders...)
 	headers = append(headers, strings.Split(req.TargetAuth, "\n")...)
 	for _, part := range headers {

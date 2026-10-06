@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,7 +50,11 @@ func TestBrowserRuntimeAuthenticatedXHRAndExclusions(t *testing.T) {
 	origin, _ := assessment.ParseApprovedOrigin("app", fixture.URL)
 	origin.PathPrefix = "/"
 	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin}, assessment.Exclusion{Method: "*", PathPattern: "/logout"})
-	req := Request{Target: fixture.URL + "/", ScanDir: t.TempDir(), AppScope: &scope, TargetAuth: "Cookie: session=fixture", AuthRefresh: func(_ context.Context, h []string) ([]string, error) { return h, nil }}
+	store, err := credentials.NewReplayStore(filepath.Join(t.TempDir(), "replay"), bytes.Repeat([]byte{6}, credentials.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{ReplayStore: store, ReplayScope: "app:fixture", Target: fixture.URL + "/", ScanDir: t.TempDir(), AppScope: &scope, TargetAuth: "Cookie: session=fixture", AuthRefresh: func(_ context.Context, h []string) ([]string, error) { return h, nil }}
 	run := DiscoverBrowser(t.Context(), req, Config{KatanaChromePath: chrome, KatanaTimeout: 20 * time.Second, WebMaxEndpoints: 20})
 	if run.Status != "completed" {
 		t.Fatalf("browser: %+v", run)
@@ -61,6 +67,20 @@ func TestBrowserRuntimeAuthenticatedXHRAndExclusions(t *testing.T) {
 		if !strings.Contains(strings.ReplaceAll(string(data), `\u0026`, "&"), want) {
 			t.Fatalf("missing %s: %s", want, data)
 		}
+	}
+	surface, parseErr := ParseKatanaAttackSurfaceScoped(run.ArtifactPath, "app:fixture", fixture.URL, true, &scope)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	hydrateRequestReplay(surface, store, "app:fixture")
+	found := false
+	for _, ep := range surface.Endpoints {
+		if ep.Method == "POST" && strings.Contains(ep.URL, "/graphql") {
+			found = ep.ReadOnly && ep.ReplayRef != "" && strings.Contains(ep.ReplayBody, "fixture-browser-secret") && ep.ReplayHeaders["Cookie"] == "session=fixture"
+		}
+	}
+	if !found {
+		t.Fatalf("encrypted browser body/header replay missing: %+v", surface.Endpoints)
 	}
 	if strings.Contains(string(data), "session=fixture") || strings.Contains(string(data), "fixture-browser-secret") {
 		t.Fatal("secret persisted")

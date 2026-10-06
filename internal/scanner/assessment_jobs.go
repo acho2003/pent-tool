@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 )
 
 // HasAssessmentRunner reports whether a scanner ID has a direct job adapter.
@@ -75,6 +76,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		p.Config.WebMaxEndpoints = profile.MaxEndpoints
 		p.Config.WebBudget = profile.Budget
 		p.Config.WebBrowser = profile.Browser
+	}
+	var replayStore *credentials.ReplayStore
+	if expanded && len(p.Config.ReplayKey) > 0 {
+		var err error
+		replayStore, err = credentials.NewReplayStore(filepath.Join(scanDir, "request-replay"), p.Config.ReplayKey)
+		if err != nil {
+			return failedAssessmentJobs(plan.Jobs, scanDir, plan.Fingerprint, "encrypted replay storage unavailable", emit)
+		}
 	}
 	// One budget is shared by discovery and every job in this assessment.
 	// Scanner-specific limits still apply inside each adapter.
@@ -187,7 +196,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			inventoryTarget = "http://" + inventoryTarget
 		}
 		crawlReq := Request{
-			Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion,
+			ReplayStore: replayStore, ReplayScope: inventoryScope, Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion,
 			ScanDir: filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),
@@ -296,6 +305,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				MergeRunAssets(surface, previous)
 			}
 		}
+		if expanded {
+			sealInventoryRequests(surface, replayStore, inventoryScope)
+			hydrateRequestReplay(surface, replayStore, inventoryScope)
+		}
 		surfaces[target.ID] = surface
 		_ = SaveAttackSurface(scanDir, surface)
 	}
@@ -305,6 +318,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		key := assessmentJobRunKey(scope, job.Scanner, job.Variant, plan.Fingerprint)
 		req := Request{
 			Target: job.Target, WorkflowVersion: plan.Config.WorkflowVersion,
+			ReplayStore: replayStore, ReplayScope: scope,
 			Scope: scope,
 			ScanDir: filepath.Join(scanDir, "jobs", stableJobPath(job.TargetID), stableJobPath(plan.Fingerprint),
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),

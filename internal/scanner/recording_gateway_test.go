@@ -183,3 +183,39 @@ func TestGatewayRestrictionsMakeSuccessfulScannerPartial(t *testing.T) {
 		t.Fatal("execution failure replaced", failed)
 	}
 }
+
+func TestGatewayAllowsOnlyCapturedReadOnlyGraphQLBody(t *testing.T) {
+	hits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.Write([]byte(`{"data":{"viewer":"ok"}}`)) }))
+	defer target.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", target.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	body := `{"query":"query {viewer}"}`
+	input := ScannerRequestInput{EndpointID: "read", URL: target.URL + "/graphql", Method: "POST", ContentType: "application/json", BodyDigest: bodyDigest(body), Body: body, Selected: true, ReadOnly: true}
+	gateway, err := NewRecordingGateway(t.Context(), Request{Target: target.URL, AppScope: &scope, ScanDir: t.TempDir(), InputRequests: []ScannerRequestInput{input}}, Config{}, "zap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	proxy, _ := url.Parse(gateway.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{{body, 200}, {`{"query":"mutation {deleteUser}"}`, 403}, {`{"query":"query {other}"}`, 403}, {"", 403}} {
+		request, _ := http.NewRequest("POST", input.URL, strings.NewReader(tc.body))
+		request.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != tc.status {
+			t.Fatalf("%s status %d", tc.body, response.StatusCode)
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("unapproved POST reached target: %d", hits)
+	}
+}

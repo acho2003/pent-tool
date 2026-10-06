@@ -40,8 +40,8 @@ establish that the complete expanded workflow is ready for default rollout.
 - Complete staged workflow restart/resume acceptance, including approval pauses.
 - The complete 684-request execution fixture across retained active adapters;
   manifest coverage alone is insufficient.
-- Method/body-aware active routing with encrypted replay inputs; captured browser
-  body variants currently retain digests and parameter structure, not replay bytes.
+- Bounded, explicitly approved state-changing scanner routing; encrypted exact
+  replay and captured read-only GraphQL POST routing are implemented.
 - Supplemental ZAP spider results merged into the inventory before active checks;
   structured runs currently disable that spider to preserve the request boundary.
 - Multi-role discovery/authentication contexts and the complete native HTTPS ZAP
@@ -82,3 +82,5 @@ acceptance and implementation work above is outstanding.
 After validation, the disposable `xalgorix-workflow-zap` container and
 `xalgorix-workflow-validation` network were removed. Both validation image tags
 remain available. Production services, other images and all volumes were preserved.
+
+Encrypted replay follow-up: credential isolation/integrity, exact URL/body variants, missing-key fail-closed routing, public-manifest redaction and captured read-only GraphQL gateway tests pass. The full Go suite, scanner/credential race tests and Web UI build pass. Native arm64 Chromium restores captured GraphQL bodies and verified headers from encrypted replay while public discovery artifacts omit secrets. Native ZAP body/HTTPS acceptance is still pending.

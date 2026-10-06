@@ -89,6 +89,10 @@ type EndpointScannerCoverage struct {
 // query values replaced by placeholders. A fragment is metadata only and never
 // participates in the HTTP request identity.
 type AttackSurfaceEndpoint struct {
+	ReplayRef          string                    `json:"replay_reference,omitempty"`
+	ReadOnly           bool                      `json:"read_only,omitempty"`
+	ReplayBody         string                    `json:"-"`
+	ReplayHeaders      map[string]string         `json:"-"`
 	GroupID            string                    `json:"group_id,omitempty"`
 	AuthContextID      string                    `json:"auth_context_id,omitempty"`
 	RequestContentType string                    `json:"request_content_type,omitempty"`
@@ -195,13 +199,15 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 	// them with an out_of_scope State instead.
 	targetHost := hostFromTarget(target)
 	artifactName := filepath.Base(artifact)
-	var requestBody, requestType, recordedBodyDigest string
+	var requestBody, requestType, recordedBodyDigest, replayRef, requestID string
+	var readOnly bool
+	observationAuth := observedWithAuth
 	add := func(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm bool) {
 		allowed, reason := inSurfaceScope(rawURL, targetHost, appScope)
 		if !allowed && appScope == nil {
 			return
 		}
-		ep, ok := normalizeAttackSurfaceEndpoint(rawURL, method, source, timestamp, status, contentType, params, hasForm, observedWithAuth)
+		ep, ok := normalizeAttackSurfaceEndpoint(rawURL, method, source, timestamp, status, contentType, params, hasForm, observationAuth)
 		if !ok {
 			return
 		}
@@ -217,11 +223,15 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		if requestType != "" {
 			ep.ID = inventoryID(ep.ID, requestType)
 		}
-		if observedWithAuth {
+		if observationAuth {
 			ep.AuthContextID = inventoryID(scope, "target-bound")
 			ep.ID = inventoryID(ep.ID, ep.AuthContextID)
 		}
-		ep.Provenance = []EndpointProvenance{{Tool: "katana", Source: strings.TrimSpace(source), Artifact: artifactName, ObservedAt: timestamp, Authenticated: observedWithAuth}}
+		ep.ReplayRef, ep.ReadOnly = replayRef, readOnly
+		if decoded, err := hex.DecodeString(requestID); err == nil && len(decoded) == 12 {
+			ep.ID = requestID
+		}
+		ep.Provenance = []EndpointProvenance{{Tool: "katana", Source: strings.TrimSpace(source), Artifact: artifactName, ObservedAt: timestamp, Authenticated: observationAuth}}
 		if appScope != nil {
 			stampEndpointState(&ep, *appScope, allowed, reason)
 		}
@@ -247,6 +257,16 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 			endpoint = firstStringValue(raw, "endpoint", "url")
 		}
 		requestBody = firstStringValue(request, "body")
+		replayRef, requestID, readOnly = "", "", false
+		trustedBrowser := firstStringValue(request, "source") == "browser" && filepath.Base(artifact) == "browser.jsonl"
+		if trustedBrowser {
+			replayRef, requestID = firstStringValue(request, "replay_reference"), firstStringValue(request, "request_id")
+			readOnly, _ = request["read_only"].(bool)
+		}
+		observationAuth = observedWithAuth
+		if flag, ok := request["authenticated"].(bool); ok && trustedBrowser {
+			observationAuth = flag
+		}
 		recordedBodyDigest = firstStringValue(request, "body_digest")
 		if decoded, err := hex.DecodeString(recordedBodyDigest); err != nil || len(decoded) != sha256.Size {
 			recordedBodyDigest = ""
@@ -285,7 +305,8 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		}
 		// Katana versions have emitted form extraction at both the top level and
 		// under response. Decode generically so upgrades do not make forms vanish.
-		requestBody, requestType = "", ""
+		requestBody, requestType, recordedBodyDigest, replayRef, requestID = "", "", "", "", ""
+		readOnly = false
 		for _, form := range collectForms(raw) {
 			action := firstStringValue(form, "action", "url", "endpoint")
 			if action == "" {
@@ -492,6 +513,10 @@ func mergeSurfaceEndpoint(surface *AttackSurface, byID map[string]int, incoming 
 		ep := &surface.Endpoints[index]
 		if incoming.ObservationKind == "observed" {
 			ep.ObservationKind = "observed"
+		}
+		if incoming.ReplayRef != "" {
+			ep.ReplayRef = incoming.ReplayRef
+			ep.ReadOnly = incoming.ReadOnly
 		}
 		ep.Sources = mergeStrings(ep.Sources, incoming.Sources)
 		ep.Parameters = mergeParameters(append(ep.Parameters, incoming.Parameters...))
@@ -788,7 +813,7 @@ func endpointEligibleWithPolicy(ep AttackSurfaceEndpoint, scannerName string, sc
 	if endpointHasPlaceholderPath(ep.URL) {
 		return false, "endpoint path contains an unresolved {placeholder}"
 	}
-	safeMethod := ep.Method == "GET" || ep.Method == "HEAD"
+	safeMethod := ep.Method == "GET" || ep.Method == "HEAD" || ep.Method == "OPTIONS" || (expanded && scannerName == "zap" && ep.Method == "POST" && ep.ReadOnly && ep.ReplayRef != "")
 	if !safeMethod {
 		return false, "unsafe or state-changing method is inventory-only"
 	}
@@ -915,7 +940,20 @@ func SaveAttackSurface(scanDir string, surface *AttackSurface) error {
 	if err := storage.EnsureSecureDir(filepath.Dir(dst)); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(surface, "", "  ")
+	snapshot := *surface
+	snapshot.Endpoints = append([]AttackSurfaceEndpoint(nil), surface.Endpoints...)
+	if surface.WorkflowVersion == "unified-v1" {
+		snapshot.Target = SafeTelemetryURL(surface.Target)
+		for i := range snapshot.Endpoints {
+			endpoint := &snapshot.Endpoints[i]
+			clean := SafeTelemetryURL(endpoint.URL)
+			if clean != endpoint.URL && endpoint.ReplayRef == "" {
+				endpoint.State, endpoint.StateReason = EndpointStateUnmaterialized, "sensitive request URL requires encrypted replay"
+			}
+			endpoint.URL = clean
+		}
+	}
+	data, err := json.MarshalIndent(&snapshot, "", "  ")
 	if err != nil {
 		return err
 	}

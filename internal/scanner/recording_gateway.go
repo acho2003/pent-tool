@@ -295,7 +295,29 @@ func (w *gatewayResponse) Write(data []byte) (int, error) {
 func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	raw := r.URL.String()
 	event := CoverageEvent{URL: raw, Method: r.Method}
-	if err := browserRequestAllowed(g.req, g.cfg, r.Method, raw); err != nil {
+	if r.Method == http.MethodPost {
+		if r.Body == nil {
+			r.Body = http.NoBody
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, (2<<20)+1))
+		if r.Body != nil {
+			_ = r.Body.Close()
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		selected := false
+		for _, input := range g.req.InputRequests {
+			if input.Selected && input.ReadOnly && input.Method == r.Method && input.URL == raw && input.BodyDigest != "" && input.BodyDigest == bodyDigest(string(body)) {
+				selected = true
+				break
+			}
+		}
+		if err != nil || len(body) > 2<<20 || !selected || browserDiscoveryRequestAllowed(g.req, g.cfg, r.Method, raw, r.Header.Get("Content-Type"), body) != nil {
+			g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: "POST does not match an approved read-only request"})
+			http.Error(w, "POST outside approved policy", 403)
+			return
+		}
+	}
+	if err := browserRequestAllowed(g.req, g.cfg, r.Method, raw); err != nil && r.Method != http.MethodPost {
 		event.Kind, event.Reason = "blocked", err.Error()
 		g.record(event)
 		http.Error(w, "request outside approved policy", 403)
