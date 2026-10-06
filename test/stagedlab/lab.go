@@ -49,7 +49,9 @@ type Hit struct {
 	Path     string `json:"path"`
 	RawQuery string `json:"raw_query"`
 	Identity string `json:"identity"` // anonymous, admin or viewer
-	Body     string `json:"body"`
+	// UserAgent identifies which tool produced the request.
+	UserAgent string `json:"user_agent"`
+	Body      string `json:"body"`
 }
 
 // URL returns the path and query exactly as received.
@@ -70,6 +72,10 @@ type Lab struct {
 	// AliasURL is the public base URL of the unapproved alias origin. Pages link
 	// and redirect to it so crawlers can be shown leaving the approved scope.
 	AliasURL string
+	// SecondaryURL is the public base URL of the second origin. It is linked
+	// from the home page so it surfaces as a discovery candidate that must be
+	// approved before any tool may contact it.
+	SecondaryURL string
 
 	mu        sync.Mutex
 	hits      []Hit
@@ -85,6 +91,7 @@ func Start(t testing.TB) *Lab {
 	l.Secondary = httptest.NewTLSServer(l.SecondaryHandler())
 	l.Alias = httptest.NewServer(l.AliasHandler())
 	l.AliasURL = l.Alias.URL
+	l.SecondaryURL = l.Secondary.URL
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -135,6 +142,7 @@ func (l *Lab) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /resources", guard(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]int{"resources": l.Resources()})
 	}))
+	mux.HandleFunc("GET /variants", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, Variants()) }))
 	mux.HandleFunc("POST /reset", guard(func(w http.ResponseWriter, r *http.Request) { l.Reset(); w.WriteHeader(http.StatusNoContent) }))
 	return mux
 }
@@ -172,13 +180,19 @@ func (l *Lab) Forbidden() []Hit {
 		switch {
 		case hit.Origin == "alias":
 			out = append(out, hit)
-		case hit.Origin == "primary" && !strings.HasPrefix(hit.Path, PathPrefix):
+		case hit.Origin == "primary" && !insideBoundary(hit.Path):
 			out = append(out, hit)
 		case hit.Origin == "primary" && excluded(hit.Path):
 			out = append(out, hit)
 		}
 	}
 	return out
+}
+
+// insideBoundary reports whether path is the approved prefix itself (with or
+// without its trailing slash) or below it.
+func insideBoundary(path string) bool {
+	return path == strings.TrimSuffix(PathPrefix, "/") || strings.HasPrefix(path, PathPrefix)
 }
 
 func excluded(path string) bool {
@@ -216,7 +230,7 @@ func Variants() []string {
 
 func (l *Lab) record(origin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit := Hit{Origin: origin, Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Identity: identityOf(r)}
+		hit := Hit{Origin: origin, Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Identity: identityOf(r), UserAgent: r.UserAgent()}
 		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 			hit.Body = string(body)
@@ -249,9 +263,9 @@ func (l *Lab) primaryRoutes() http.Handler {
 		page(w, fmt.Sprintf(`<h1>Lab home</h1>
 <a href="%[1]sabout">about</a> <a href="%[1]scatalog">catalog</a> <a href="%[1]sjs">js</a>
 <a href="%[1]slogin">login</a> <a href="%[1]slogout">logout</a> <a href="%[1]sredirect">redirect</a>
-<a href="%[2]s">outside path</a> <a href="%[3]s">alias</a> <a href="%[1]sprivate">private</a>
+<a href="%[2]s">outside path</a> <a href="%[3]s">alias</a> <a href="%[4]s">secondary</a> <a href="%[1]sprivate">private</a>
 <form method="get" action="%[1]ssearch"><input name="q"></form>
-<form method="post" action="%[1]swrite"><input name="note"><button>save</button></form>`, PathPrefix, OutsidePath, l.AliasURL+"/anything"))
+<form method="post" action="%[1]swrite"><input name="note"><button>save</button></form>`, PathPrefix, OutsidePath, l.AliasURL+"/anything", l.SecondaryURL+"/"))
 	})
 	mux.HandleFunc("GET "+PathPrefix+"about", func(w http.ResponseWriter, r *http.Request) { page(w, "<h1>About</h1>") })
 	mux.HandleFunc("GET "+PathPrefix+"catalog", func(w http.ResponseWriter, r *http.Request) {

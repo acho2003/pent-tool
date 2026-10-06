@@ -19,10 +19,12 @@ func main() {
 	alias := flag.String("alias", ":8081", "unapproved alias origin listen address")
 	control := flag.String("control", ":9000", "recorder control listen address")
 	aliasURL := flag.String("alias-url", "http://lab-alias:8081", "public URL pages use to reach the alias origin")
+	secondaryURL := flag.String("secondary-url", "https://lab-secondary:8443", "public URL pages use to reach the secondary origin")
 	flag.Parse()
 
 	lab := stagedlab.New()
 	lab.AliasURL = *aliasURL
+	lab.SecondaryURL = *secondaryURL
 	serve := func(name, addr string, start func(*httptest.Server), handler http.Handler) {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {

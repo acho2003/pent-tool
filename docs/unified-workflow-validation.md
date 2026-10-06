@@ -321,3 +321,38 @@ cancellation fixtures passed, the full Web race suite passed, and the isolated
 ZAP discovery and 684-request seeding fixtures passed. Its temporary service
 containers and internal network were removed by the script. No full staged
 assessment or undiscovered-asset completeness claim follows from these results.
+
+## Staged lab acceptance (API level)
+
+`runtime/staged-acceptance.sh IMAGE [APPLICATION_BINARY]` runs a complete
+assessment through the public API against the checked-in staged lab
+(`test/stagedlab`) on a private, internal Docker network and removes only the
+containers and network it created. The lab has an approved path boundary
+(`/app`), an HTTPS secondary origin that is only a discovery candidate, an
+unapproved alias origin, 684 distinct exact request variants, excluded logout and
+write routes, and a recorder that reports any request outside the boundary.
+
+Recorded outcome on native Linux arm64 (runtime `xalgorix:workflow-validation-e69bc21`
+with the application binary built from the working tree; httpx and katana
+selected, `web-gentle` profile): 82 checks passed, 0 failed, 2 known limitations.
+Checked: plan preview and stale-fingerprint HTTP 409; job outcomes and verified
+artifacts; every coverage drill-down total equals its summary count; all 684
+variants present in the inventory with a disposition; the excluded write route
+dispositioned and never requested; alias origin never contacted and never counted
+as a live service; stale discovery approval HTTP 409; approval of the secondary
+origin creates a child revision that leaves the parent unchanged and clears
+write/fuzz consent; the revision runs and contacts the secondary origin; the PDF
+report's inventory totals equal the API totals for both assessments.
+
+Known limitations recorded by the run (not passes):
+
+- katana's headless Chromium requests `/favicon.ico` on the approved origin root,
+  outside the `/app` path prefix. katana is not routed through the recording
+  gateway, so its `-cs`/`-cos` fences cannot constrain the browser's own fetch.
+- The browser navigation queue limit (500) is reached; only 501 of the 684
+  variants were fetched by the browser. The shortfall is reported by the
+  application as a discovery gap.
+
+Not covered by this run: the UI, authenticated identities, API/GraphQL
+definitions, the approved POST campaign, restart recovery, Nuclei/Wapiti/Dalfox/
+ZAP execution, and amd64. Those remain open.

@@ -110,6 +110,7 @@ func TestRecordsResourceCreateAndCleanup(t *testing.T) {
 func TestForbiddenTrafficIsRecorded(t *testing.T) {
 	lab := Start(t)
 	get(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"about")
+	get(t, http.DefaultClient, lab.Primary.URL+strings.TrimSuffix(PathPrefix, "/"))
 	if len(lab.Forbidden()) != 0 {
 		t.Fatalf("approved traffic flagged: %+v", lab.Forbidden())
 	}
