@@ -126,7 +126,19 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 		for _, input := range normalized.APIOperationInputs {
 			checkFixture(input.RequestBodyRef, "API request body")
 		}
-		for _, approval := range normalized.WriteApprovals {
+		allWriteApprovals := append([]assessment.WriteApproval(nil), normalized.WriteApprovals...)
+		for _, fuzz := range normalized.FuzzApprovals {
+			allWriteApprovals = append(allWriteApprovals, fuzz.WriteApproval)
+			file, err := fixtureStore.Open(fuzz.FixtureRef)
+			if err == nil {
+				body, readErr := io.ReadAll(io.LimitReader(file, (64<<10)+1))
+				file.Close()
+				if readErr != nil || scanner.ValidateWapitiFormFixture(body) != nil {
+					plan.Errors = append(plan.Errors, assessment.Problem{Code: "fuzz.fixture.unsupported", Message: "Wapiti requires bounded unique plain URL-encoded fields; repeated or encoded inputs need a capable API adapter", Blocking: true})
+				}
+			}
+		}
+		for _, approval := range allWriteApprovals {
 			checkFixture(approval.FixtureRef, "API write")
 			checkFixture(approval.CleanupRef, "API write cleanup")
 		}
@@ -159,7 +171,7 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 							plan.Errors = append(plan.Errors, assessment.Problem{Code: "api_input.operation_unknown", Message: fmt.Sprintf("API input refers to unknown operation %q in definition %s", input.OperationID, binding.DefinitionID), Blocking: true})
 						}
 					}
-					for _, approval := range normalized.WriteApprovals {
+					for _, approval := range allWriteApprovals {
 						if approval.TargetID != binding.TargetID {
 							continue
 						}

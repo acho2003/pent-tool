@@ -28,6 +28,9 @@ func (wapitiRunner) Descriptor() Descriptor {
 	return Descriptor{Name: "wapiti", Summary: "Bounded web fuzzing of a web host and its discovered endpoints", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightHeavy, Applies: appliesToHost}
 }
 func (r wapitiRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	if req.WapitiPostApproval != nil {
+		return runWapitiPost(ctx, req, cfg, emit)
+	}
 	if expandedWorkflowRequest(req) && len(req.EndpointTargets) > 50 && req.TestEnvironment {
 		return runWapitiBatches(ctx, req, cfg, emit)
 	}

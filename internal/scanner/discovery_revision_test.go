@@ -53,13 +53,13 @@ func TestAcceptedRevisionCannotBeOverwritten(t *testing.T) {
 
 func TestDiscoveryApprovalDoesNotRenewWriteConsent(t *testing.T) {
 	original := assessment.WriteApproval{TargetID: "app", Method: "POST", Path: "/items", OperationID: "create"}
-	plan := AssessmentPlan{Fingerprint: "parent", Config: assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.test/"}}, WriteApprovals: []assessment.WriteApproval{original}}}
+	plan := AssessmentPlan{Fingerprint: "parent", Config: assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.test/"}}, WriteApprovals: []assessment.WriteApproval{original}, FuzzApprovals: []assessment.FuzzApproval{{WriteApproval: original, Scanner: "wapiti", RequestLimit: 3, RepeatTestingApproved: true}}}}
 	preview := BuildDiscoveryPreview(plan, []Run{{Scanner: "subfinder", CandidateHosts: []string{"api.app.test"}}}, nil)
 	cfg, err := ApproveDiscoveryConfig(plan, preview, preview.Fingerprint, []string{preview.Candidates[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.WriteApprovals) != 0 || len(plan.Config.WriteApprovals) != 1 {
+	if len(cfg.WriteApprovals) != 0 || len(cfg.FuzzApprovals) != 0 || len(plan.Config.FuzzApprovals) != 1 || len(plan.Config.WriteApprovals) != 1 {
 		t.Fatal("discovery approval renewed state-changing consent or changed parent")
 	}
 }

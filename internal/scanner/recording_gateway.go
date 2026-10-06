@@ -65,6 +65,11 @@ type RecordingGateway struct {
 	file               *os.File
 	failed             error
 	limitations        map[string]bool
+	formFuzzInFlight   sync.WaitGroup
+	formFuzzObserved   int
+	formFuzzUncertain  bool
+	formFuzzArmed      bool
+	formFuzzRequests   int
 	requests           int
 	phase              string
 	URL                string
@@ -164,6 +169,7 @@ func (g *RecordingGateway) Close() error {
 	}
 	return g.failed
 }
+func (g *RecordingGateway) ArmFormFuzz() { g.mu.Lock(); g.formFuzzArmed = true; g.mu.Unlock() }
 func (g *RecordingGateway) UpdateTargetAuth(headers []string) {
 	g.mu.Lock()
 	g.req.TargetAuth = strings.Join(headers, "\n")
@@ -173,6 +179,14 @@ func (g *RecordingGateway) SetPhase(phase string) { g.mu.Lock(); g.phase = phase
 func (g *RecordingGateway) record(event CoverageEvent) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.req.WapitiPostApproval != nil && event.Method == "POST" {
+		if event.Kind == "observed" {
+			g.formFuzzObserved++
+		}
+		if event.Kind == "failed" {
+			g.formFuzzUncertain = true
+		}
+	}
 	event.Scanner, event.AttemptID, event.At = g.scanner, g.req.AttemptID, time.Now().UTC().Format(time.RFC3339Nano)
 	if event.Phase == "" {
 		event.Phase = g.phase
@@ -300,6 +314,12 @@ func (w *gatewayResponse) Write(data []byte) (int, error) {
 func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	raw := r.URL.String()
 	event := CoverageEvent{URL: raw, Method: r.Method}
+	if g.req.WapitiPostApproval != nil && r.Method != "POST" && (raw != g.req.WapitiPostURL || (r.Method != "GET" && r.Method != "HEAD")) {
+		g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: "form fuzzing is restricted to its approved entry point"})
+		http.Error(w, "request outside form operation", 403)
+		return
+	}
+
 	if r.Method == http.MethodPost {
 		if r.Body == nil {
 			r.Body = http.NoBody
@@ -316,8 +336,20 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		if err != nil || len(body) > 2<<20 || !selected || browserDiscoveryRequestAllowed(g.req, g.cfg, r.Method, raw, r.Header.Get("Content-Type"), body) != nil {
-			g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: "POST does not match an approved read-only request"})
+		approvedFuzz, fuzzReason := false, ""
+		if err == nil {
+			approvedFuzz, fuzzReason = g.admitFormFuzzDecision(raw, r.Header.Get("Content-Type"), body)
+		}
+		if approvedFuzz {
+			defer g.formFuzzInFlight.Done()
+			event.NativeRef = "approved-form-fuzz:" + fuzzApprovalID(*g.req.WapitiPostApproval)
+		}
+		if err != nil || len(body) > 2<<20 || (!approvedFuzz && (!selected || browserDiscoveryRequestAllowed(g.req, g.cfg, r.Method, raw, r.Header.Get("Content-Type"), body) != nil)) {
+			reason := "POST does not match an approved read-only request"
+			if fuzzReason != "" {
+				reason = fuzzReason
+			}
+			g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: reason})
 			http.Error(w, "POST outside approved policy", 403)
 			return
 		}

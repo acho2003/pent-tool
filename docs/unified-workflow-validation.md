@@ -35,8 +35,9 @@ establish that the complete expanded workflow is ready for default rollout.
 - End-to-end UI acceptance for the newly added browser storage/access-test controls.
   Native worker tests pass for local/session storage, protected-route markers,
   anonymous controls, origin isolation and encrypted credential storage.
-- Approved URL-encoded POST fuzzing with explicit bounded operation approval and
-  cleanup; existing single-write approvals must keep their original semantics.
+- Complete staged UI/native acceptance of approved form campaigns inside a full
+  assessment; the isolated native Wapiti campaign now passes exact-body, budget,
+  cleanup and replay refusal checks.
 - End-to-end process restart during discovery/approval and native scanner execution.
   Per-job disk checkpoint/reload, interrupted-attempt retry, sealed completion reuse,
   and checkpoint failure refusal now pass deterministic executor acceptance.
@@ -262,3 +263,19 @@ and restores the original spider form policy. Unit fixtures preserve blocked
 candidate dispositions and verify renewed gateway credentials. The full Go suite
 and scanner/credential race tests pass. This is discovery/routing acceptance,
 not a claim that native vulnerability checks completed for every endpoint.
+
+## Approved form campaign acceptance (2026-10-06)
+
+- Installed Wapiti 3.3.2 on native Linux arm64 passed the offline local fixture:
+  original POST body receipt, cap of three POSTs, blocked excess payloads,
+  declared DELETE cleanup, persistent campaign journal, and refused replay.
+- Unit tests cover separate consent, production refusal, unsupported input
+  semantics, atomic concurrent budgets, method/path/content-type isolation,
+  body-free public manifests, and a process that produces no POST evidence.
+- Playwright with synthetic API responses verified separate consent, unchanged
+  fixture upload, body clearing, consent reset and removal of saved approval
+  when leaving the test environment. This is UI acceptance, not a full server
+  and native-scanner end-to-end run.
+- Full Go suite, scanner/credential/assessment race checks and UI typecheck/build
+  passed. Preview and execution reject forms whose semantics this installed
+  Wapiti cannot preserve. Existing single-write consent remains separate.

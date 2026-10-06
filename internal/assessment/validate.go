@@ -99,20 +99,20 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 	out.WriteApprovals = append([]WriteApproval(nil), cfg.WriteApprovals...)
 	for i := range out.WriteApprovals {
 		a := &out.WriteApprovals[i]
-		a.TargetID = strings.TrimSpace(a.TargetID)
-		a.Method = strings.ToUpper(strings.TrimSpace(a.Method))
-		a.Path = strings.TrimSpace(a.Path)
-		a.OperationID = strings.TrimSpace(a.OperationID)
-		a.FixtureRef = strings.ToLower(strings.TrimSpace(a.FixtureRef))
-		a.ContentType = strings.TrimSpace(a.ContentType)
-		a.CleanupMethod = strings.ToUpper(strings.TrimSpace(a.CleanupMethod))
-		a.CleanupPath = strings.TrimSpace(a.CleanupPath)
-		a.CleanupRef = strings.ToLower(strings.TrimSpace(a.CleanupRef))
-		a.CleanupContentType = strings.TrimSpace(a.CleanupContentType)
+		normalizeWriteApproval(a)
 	}
 	sort.Slice(out.WriteApprovals, func(i, j int) bool {
 		a, b := out.WriteApprovals[i], out.WriteApprovals[j]
 		return a.TargetID+"\x00"+a.Method+"\x00"+a.Path < b.TargetID+"\x00"+b.Method+"\x00"+b.Path
+	})
+	out.FuzzApprovals = append([]FuzzApproval(nil), cfg.FuzzApprovals...)
+	for i := range out.FuzzApprovals {
+		f := &out.FuzzApprovals[i]
+		f.Scanner = strings.ToLower(strings.TrimSpace(f.Scanner))
+		normalizeWriteApproval(&f.WriteApproval)
+	}
+	sort.Slice(out.FuzzApprovals, func(i, j int) bool {
+		return out.FuzzApprovals[i].TargetID+"\x00"+out.FuzzApprovals[i].OperationID < out.FuzzApprovals[j].TargetID+"\x00"+out.FuzzApprovals[j].OperationID
 	})
 	out.AuthorizationExpectations = append([]AuthorizationExpectation(nil), cfg.AuthorizationExpectations...)
 	for i := range out.AuthorizationExpectations {
@@ -363,8 +363,18 @@ func Validate(cfg AssessmentConfig) []Problem {
 			probs = append(probs, blocking("api_input.fixture.invalid", "request_body_ref must be a SHA-256 API fixture reference"))
 		}
 	}
+	allWriteApprovals := append([]WriteApproval(nil), cfg.WriteApprovals...)
+	for _, fuzz := range cfg.FuzzApprovals {
+		if cfg.WorkflowVersion != "unified-v1" || !fuzz.RepeatTestingApproved || fuzz.Scanner != "wapiti" || fuzz.RequestLimit < 1 || fuzz.RequestLimit > 1000 {
+			probs = append(probs, blocking("fuzz.approval.invalid", "form fuzzing requires the unified workflow, explicit repeated-test consent, Wapiti, and a request limit of 1–1000"))
+		}
+		if fuzz.Method != "POST" || fuzz.ContentType != "application/x-www-form-urlencoded" {
+			probs = append(probs, blocking("fuzz.input.unsupported", "Wapiti fuzz approval supports only URL-encoded POST inputs"))
+		}
+		allWriteApprovals = append(allWriteApprovals, fuzz.WriteApproval)
+	}
 	seenWriteApproval := map[string]bool{}
-	for _, approval := range cfg.WriteApprovals {
+	for _, approval := range allWriteApprovals {
 		key := approval.TargetID + "\x00" + approval.Method + "\x00" + approval.Path
 		if !cfg.TestEnvironment || cfg.Mode == ModeBlackBox {
 			probs = append(probs, blocking("api_write.test_environment_required", "API write approvals require a non-Black-Box test environment"))
@@ -779,4 +789,17 @@ func FirstBlocking(probs []Problem) *Problem {
 		}
 	}
 	return nil
+}
+
+func normalizeWriteApproval(a *WriteApproval) {
+	a.TargetID = strings.TrimSpace(a.TargetID)
+	a.Method = strings.ToUpper(strings.TrimSpace(a.Method))
+	a.Path = strings.TrimSpace(a.Path)
+	a.OperationID = strings.TrimSpace(a.OperationID)
+	a.FixtureRef = strings.ToLower(strings.TrimSpace(a.FixtureRef))
+	a.ContentType = strings.TrimSpace(a.ContentType)
+	a.CleanupMethod = strings.ToUpper(strings.TrimSpace(a.CleanupMethod))
+	a.CleanupPath = strings.TrimSpace(a.CleanupPath)
+	a.CleanupRef = strings.ToLower(strings.TrimSpace(a.CleanupRef))
+	a.CleanupContentType = strings.TrimSpace(a.CleanupContentType)
 }

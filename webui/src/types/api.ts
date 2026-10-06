@@ -104,6 +104,8 @@ export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
 export interface AssessmentTarget { id: string; type: string; value: string; }
 export interface AssessmentConfig {
+  test_environment?: boolean;
+  fuzz_approvals?: Array<{target_id: string; method: "POST"; path: string; operation_id: string; fixture_ref: string; content_type: "application/x-www-form-urlencoded"; cleanup_method: "DELETE"; cleanup_path: string; scanner: "wapiti"; request_limit: number; repeat_testing_approved: boolean}>;
  workflow_version?: string;
  parent_assessment_id?: string; parent_plan_fingerprint?: string; approval_preview_fingerprint?: string;
   assessment_mode: AssessmentMode;
@@ -125,7 +127,7 @@ export interface AssessmentPlan {
   config: AssessmentConfig;
   capabilities: Array<{ capability: string; target_id: string; reference_id?: string; access_kind?: string; state: string; provenance: string; reason: string }>;
   decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
-  jobs: Array<{ auth_context_id?: string; auth_identity?: string; auth_role?: string; id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; assessment_types?: AssessmentType[]; variant: string; execution_mode?: string; reason?: string }>;
+  jobs: Array<{ fuzz_approval_id?: string; auth_context_id?: string; auth_identity?: string; auth_role?: string; id: string; state: string; scanner: string; target_id: string; target: string; assessment_type: AssessmentType; assessment_types?: AssessmentType[]; variant: string; execution_mode?: string; reason?: string }>;
   coverage: Array<{ type: AssessmentType; state: string; reason: string }>;
   api_endpoints?: Array<{ method: string; path: string; origin?: string; target_id?: string; definition_id?: string; operation_id?: string; missing_inputs?: string[]; source: string; resolved: boolean; eligible: boolean; reason?: string; parameters?: Array<{ name: string; location: string; required?: boolean; schema_type?: string }>; request_body_required?: boolean; request_body_content_types?: string[]; security_schemes?: string[]; spec_servers?: string[] }>;
   warnings?: Array<{ code: string; message: string; blocking: boolean }>;

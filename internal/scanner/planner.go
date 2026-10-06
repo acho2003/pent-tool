@@ -34,6 +34,7 @@ type PlanDecision struct {
 }
 
 type PlanJob struct {
+	FuzzApprovalID  string            `json:"fuzz_approval_id,omitempty"`
 	AuthContextID   string            `json:"auth_context_id,omitempty"`
 	AuthIdentity    string            `json:"auth_identity,omitempty"`
 	AuthRole        string            `json:"auth_role,omitempty"`
@@ -80,7 +81,7 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 9: simpler header-auth verification).
-const PlanRegistryVersion = "11"
+const PlanRegistryVersion = "12"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -247,6 +248,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 	}
 	ensureApprovedDiscoveryPreparation(&plan, input)
+	plan.Jobs = appendFuzzJobs(cfg, plan.Jobs, input.Availability)
 	writeTargets := map[string]bool{}
 	for _, approval := range cfg.WriteApprovals {
 		if writeTargets[approval.TargetID] {
@@ -327,6 +329,9 @@ func assignStages(jobs []PlanJob) {
 	byStage := map[string]map[string][]string{} // targetID -> stage -> job IDs
 	for i := range jobs {
 		jobs[i].Stage = stageForScanner(jobs[i].Scanner)
+		if jobs[i].FuzzApprovalID != "" {
+			jobs[i].Stage = StageWrite
+		}
 		if !webWorkflowScanner(jobs[i].Scanner) {
 			continue
 		}

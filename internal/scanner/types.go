@@ -51,6 +51,9 @@ type Artifact struct {
 }
 
 type Request struct {
+	WapitiPostApproval        *assessment.FuzzApproval                `json:"-"`
+	WapitiPostURL             string                                  `json:"-"`
+	WapitiPostBody            string                                  `json:"-"`
 	Variant                   string                                  `json:"-"`
 	ZAPDiscoveryOnly          bool                                    `json:"-"`
 	BrowserEmit               EmitFunc                                `json:"-"`

@@ -132,6 +132,7 @@ func ApproveDiscoveryConfig(plan AssessmentPlan, preview DiscoveryPreview, finge
 	}
 	// Destination review never renews consent for previously approved writes.
 	cfg.WriteApprovals = nil
+	cfg.FuzzApprovals = nil
 	candidates := map[string]DiscoveryCandidate{}
 	for _, c := range preview.Candidates {
 		candidates[c.ID] = c

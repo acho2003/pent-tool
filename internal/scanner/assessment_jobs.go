@@ -367,6 +367,20 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, run)
 			continue
 		}
+		if job.FuzzApprovalID != "" {
+			req.WriteJournalDir, req.APIFixtureDir = scanDir, p.Config.APIFixtureDir
+			for _, approval := range plan.Config.FuzzApprovals {
+				if approval.TargetID == job.TargetID && fuzzApprovalID(approval) == job.FuzzApprovalID {
+					copy := approval
+					req.WapitiPostApproval = &copy
+				}
+			}
+			for _, endpoint := range plan.APIEndpoints {
+				if endpoint.TargetID == job.TargetID {
+					req.APIOperationEndpoints = append(req.APIOperationEndpoints, endpoint)
+				}
+			}
+		}
 		if job.Scanner == "apiwrites" {
 			if expanded {
 				req.WriteJournalDir = scanDir
@@ -593,7 +607,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "planned scanner has no execution adapter", emit))
 			continue
 		}
-		req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
+		if job.FuzzApprovalID != "" {
+			if err := prepareWapitiPostRequest(&req, surface); err != nil {
+				appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, err.Error(), emit))
+				continue
+			}
+		} else {
+			req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
+		}
 		if surface != nil {
 			req.EndpointMethods = map[string]string{}
 			for _, ep := range surface.Endpoints {
@@ -619,7 +640,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, fmt.Sprintf("create job artifact directory: %v", err), emit))
 			continue
 		}
-		req.InputRequests = BuildScannerInputs(surface, req, job.Scanner)
+		if req.WapitiPostApproval == nil {
+			req.InputRequests = BuildScannerInputs(surface, req, job.Scanner)
+		}
 		manifestPath, manifestErr := SaveScannerInputs(req, job.Scanner)
 		if manifestErr != nil {
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "could not persist scanner inputs", emit))
@@ -681,6 +704,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				continue
 			}
 			req.GatewayURL, req.GatewayCAPath, req.Gateway = gateway.URL, gateway.CAPath, gateway
+			if verify := req.AuthRefresh; verify != nil {
+				req.AuthRefresh = func(ctx context.Context, headers []string) ([]string, error) {
+					next, err := verify(ctx, headers)
+					if err == nil {
+						gateway.UpdateTargetAuth(next)
+					}
+					return next, err
+				}
+			}
+
 			req.Secrets = append(req.Secrets, gateway.password)
 		}
 		run := runAttempt(jobCtx, runner, req, p.Config, runEmit)

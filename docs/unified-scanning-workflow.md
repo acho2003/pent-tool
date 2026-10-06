@@ -172,3 +172,34 @@ Supplemental discovery does not run active vulnerability checks. ZAP's later
 active scan continues to seed only selected inventory requests without another
 independent spider. Credential renewal now updates the gateway injection value
 alongside the scoped ZAP rule.
+
+## Bounded approved form campaigns
+
+Expanded assessments can separately configure `fuzz_approvals` for Wapiti POST
+campaigns. This consent does not change exactly-once `write_approvals`. Each
+approval names the target, matching supplied OpenAPI operation, URL-encoded
+fixture reference, exact DELETE cleanup path, scanner `wapiti`, request limit
+(1–1000), and `repeat_testing_approved: true`. A non-Black-Box declared test
+environment is required. The dashboard exposes these controls under Access &
+inputs. Credentials remain bound to the default target identity; approval does
+not authorize campaigns under additional identities.
+
+Installed Wapiti 3.3.2 loses repeated form keys and double-encodes pre-encoded
+values. Its supported fixtures therefore contain at most 64 unique fields,
+64 KiB total, with plain ASCII letters, digits, dots, underscores, tildes and
+hyphens. Incompatible fixtures are rejected during preview and execution;
+JSON, multipart, repeated and encoded inputs remain explicit adapter gaps.
+They are not silently converted or automatically approved for another scanner.
+
+The recording gateway admits only the exact operation, approved field names
+and multiplicities, URL-encoded content type, and bounded POST count. GET/HEAD
+support traffic is restricted to the same entry URL. The campaign intent is
+journaled before opening the gateway, and restart cannot replay the consent or
+reset its budget. On completion or cancellation, admitted POST traffic drains
+before separately scoped, bounded cleanup. Failed cleanup or uncertain request
+evidence leaves the journal unresolved. A successful scanner process without
+an observed POST is reported as partial rather than a clean campaign. Native
+request observations prove traffic, not that every vulnerability check ran.
+
+Registry version 12 records this planning and execution policy. The expanded
+workflow remains disabled by default pending complete rollout acceptance.

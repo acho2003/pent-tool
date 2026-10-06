@@ -50,7 +50,7 @@ func expandIdentityJobs(cfg assessment.AssessmentConfig, jobs []PlanJob) []PlanJ
 		for _, identity := range names[1:] {
 			id := AuthenticationContextID(target, identity)
 			for _, job := range original {
-				if job.TargetID != target || !identityRoutedScanner(job.Scanner) {
+				if job.TargetID != target || job.FuzzApprovalID != "" || !identityRoutedScanner(job.Scanner) {
 					continue
 				}
 				job.ID += ":identity:" + id

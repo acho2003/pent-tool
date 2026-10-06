@@ -240,6 +240,15 @@ type WriteApproval struct {
 	CleanupContentType string `json:"cleanup_content_type,omitempty"`
 }
 
+// FuzzApproval authorizes one non-replayable bounded form-testing campaign.
+// It is separate from exactly-once API write approval.
+type FuzzApproval struct {
+	WriteApproval
+	Scanner               string `json:"scanner"`
+	RequestLimit          int    `json:"request_limit"`
+	RepeatTestingApproved bool   `json:"repeat_testing_approved"`
+}
+
 // AuthorizationExpectation declares expected access for a supplied test
 // identity against a controlled resource fixture.
 type AuthorizationExpectation struct {
@@ -265,6 +274,7 @@ type AssessmentConfig struct {
 	APIDefinitionIDs           []string                   `json:"api_definition_ids,omitempty"`
 	APIDefinitions             []APIDefinitionBinding     `json:"api_definitions,omitempty"`
 	APIOperationInputs         []APIOperationInput        `json:"api_operation_inputs,omitempty"`
+	FuzzApprovals              []FuzzApproval             `json:"fuzz_approvals,omitempty"`
 	WriteApprovals             []WriteApproval            `json:"write_approvals,omitempty"`
 	AuthorizationExpectations  []AuthorizationExpectation `json:"authorization_expectations,omitempty"`
 	SubdomainDiscovery         bool                       `json:"subdomain_discovery,omitempty"`
