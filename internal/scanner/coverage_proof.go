@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sort"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 type ScannerProof struct {
@@ -34,7 +36,21 @@ type ProofItem struct {
 	EvidenceRef string `json:"evidence_reference,omitempty"`
 	AttemptID   string `json:"attempt_id,omitempty"`
 }
+type IdentityDiscovery struct {
+	AuthContextID    string                   `json:"auth_context_id"`
+	Identity         string                   `json:"identity"`
+	Role             string                   `json:"role,omitempty"`
+	AuthState        assessment.EvidenceState `json:"auth_state"`
+	Status           string                   `json:"status"`
+	Reason           string                   `json:"reason,omitempty"`
+	AttemptID        string                   `json:"attempt_id,omitempty"`
+	PlanFingerprint  string                   `json:"plan_fingerprint,omitempty"`
+	EvidenceRef      string                   `json:"evidence_reference,omitempty"`
+	ObservedRequests int                      `json:"observed_requests"`
+}
+
 type CoverageProof struct {
+	IdentityDiscovery    []IdentityDiscovery    `json:"identity_discovery,omitempty"`
 	AuthorizationResults []AuthorizationResult  `json:"authorization_results,omitempty"`
 	Items                map[string][]ProofItem `json:"-"`
 	ExpandedEnabled      bool                   `json:"expanded_enabled"`
@@ -77,6 +93,9 @@ func ReadCoverageEvents(path string) ([]CoverageEvent, error) {
 func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
 	proof := CoverageProof{Items: map[string][]ProofItem{}, Definitions: []InventoryDefinition{}, Scanners: []ScannerProof{}, DiscoveryGaps: []string{}, NotTracked: []string{"parameters_tested", "templates_executed", "protected_route_coverage_percent"}}
 	for _, run := range runs {
+		if run.Scanner == "browser" && run.AuthIdentity != "" {
+			proof.IdentityDiscovery = append(proof.IdentityDiscovery, IdentityDiscovery{AuthContextID: run.AuthContextID, Identity: run.AuthIdentity, Role: run.AuthRole, AuthState: run.AuthState, Status: run.Status, Reason: run.Reason, AttemptID: run.AttemptID, PlanFingerprint: run.PlanFingerprint, EvidenceRef: run.ArtifactPath})
+		}
 		for _, result := range run.AuthorizationResults {
 			result.URL = SafeTelemetryURL(result.URL)
 			proof.AuthorizationResults = append(proof.AuthorizationResults, result)
@@ -341,6 +360,19 @@ func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
 	}
 	for _, items := range proof.Items {
 		sort.SliceStable(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	}
+	for i := range proof.IdentityDiscovery {
+		seen := map[string]bool{}
+		for _, surface := range surfaces {
+			for _, endpoint := range surface.Endpoints {
+				if endpoint.ObservationKind == "observed" && endpoint.AuthContextID == proof.IdentityDiscovery[i].AuthContextID && slices.ContainsFunc(endpoint.Provenance, func(provenance EndpointProvenance) bool {
+					return provenance.Tool == "browser" && provenance.Artifact == proof.IdentityDiscovery[i].EvidenceRef
+				}) {
+					seen[surface.Scope+":"+endpoint.ID] = true
+				}
+			}
+		}
+		proof.IdentityDiscovery[i].ObservedRequests = len(seen)
 	}
 	return proof
 }

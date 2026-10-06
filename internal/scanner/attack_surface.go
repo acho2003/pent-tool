@@ -199,7 +199,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 	// them with an out_of_scope State instead.
 	targetHost := hostFromTarget(target)
 	artifactName := filepath.Base(artifact)
-	var requestBody, requestType, recordedBodyDigest, replayRef, requestID string
+	var requestBody, requestType, recordedBodyDigest, replayRef, requestID, recordedAuthContext string
 	var readOnly, trustedBrowser bool
 	observationAuth := observedWithAuth
 	add := func(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm bool) {
@@ -225,6 +225,9 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		}
 		if observationAuth {
 			ep.AuthContextID = inventoryID(scope, "target-bound")
+			if validAuthenticationContextID(recordedAuthContext) {
+				ep.AuthContextID = recordedAuthContext
+			}
 			ep.ID = inventoryID(ep.ID, ep.AuthContextID)
 		}
 		ep.ReplayRef, ep.ReadOnly = replayRef, readOnly
@@ -261,7 +264,11 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		}
 		requestBody = firstStringValue(request, "body")
 		replayRef, requestID, readOnly = "", "", false
+		recordedAuthContext = ""
 		trustedBrowser = (firstStringValue(request, "source") == "browser" || firstStringValue(request, "source") == "browser-dom") && filepath.Base(artifact) == "browser.jsonl"
+		if trustedBrowser {
+			recordedAuthContext = firstStringValue(request, "auth_context_id")
+		}
 		if trustedBrowser && firstStringValue(request, "source") == "browser" {
 			replayRef, requestID = firstStringValue(request, "replay_reference"), firstStringValue(request, "request_id")
 			readOnly, _ = request["read_only"].(bool)
@@ -735,6 +742,9 @@ func dispatchTargetsWithPolicy(surface *AttackSurface, scannerName string, max i
 	for i := range surface.Endpoints {
 		ep := &surface.Endpoints[i]
 		eligible, reason := endpointEligibleWithPolicy(*ep, scannerName, scope, expanded)
+		if expanded && scannerName != "apichecks" && ep.AuthContextID != "" && ep.AuthContextID != inventoryID(surface.Scope, "target-bound") {
+			eligible, reason = false, "request requires a separate named authentication context"
+		}
 		status := "skipped"
 		switch {
 		case !eligible:

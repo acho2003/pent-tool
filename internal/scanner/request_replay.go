@@ -18,7 +18,7 @@ func bodyDigest(body string) string {
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
 }
-func requestVariantEndpoint(scope, raw, method, contentType, body string, authenticated bool) (AttackSurfaceEndpoint, bool) {
+func requestVariantEndpoint(scope, raw, method, contentType, body string, authenticated bool, contextID ...string) (AttackSurfaceEndpoint, bool) {
 	params := append(endpointParameters(raw), bodyParameters(body, contentType)...)
 	endpoint, ok := normalizeAttackSurfaceEndpoint(raw, method, "browser", "", 0, "", params, false, authenticated)
 	if !ok {
@@ -34,6 +34,9 @@ func requestVariantEndpoint(scope, raw, method, contentType, body string, authen
 	}
 	if authenticated {
 		endpoint.AuthContextID = inventoryID(scope, "target-bound")
+		if len(contextID) > 0 && validAuthenticationContextID(contextID[0]) {
+			endpoint.AuthContextID = contextID[0]
+		}
 		endpoint.ID = inventoryID(endpoint.ID, endpoint.AuthContextID)
 	}
 	return endpoint, true
@@ -174,4 +177,9 @@ func replayURLRedacted(raw string) bool {
 		}
 	}
 	return false
+}
+
+func validAuthenticationContextID(id string) bool {
+	value, err := hex.DecodeString(id)
+	return err == nil && len(value) == 12
 }

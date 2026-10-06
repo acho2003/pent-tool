@@ -231,12 +231,12 @@ func TestAssessmentExecutorRoutesAuthorizationContextsOnFirstAttempt(t *testing.
 	cfg.APIFixtureDir = req.APIFixtureDir
 	cfg.WebMaxEndpoints = 100
 	target := assessment.Target{ID: "app", Kind: assessment.KindURL, Value: req.Target}
-	plan := AssessmentPlan{Fingerprint: "role-first-attempt", Config: assessment.AssessmentConfig{WorkflowVersion: "unified-v1", Targets: []assessment.Target{target}, Types: []assessment.Type{assessment.TypeAPI}, AuthorizationExpectations: req.AuthorizationExpectations}, APIEndpoints: req.APIEndpoints, Jobs: []PlanJob{{ID: "apichecks-app", Scanner: "apichecks", Variant: "apichecks", TargetID: "app", Target: req.Target, State: PlanSelected, AssessmentType: assessment.TypeAPI}}}
+	plan := AssessmentPlan{Fingerprint: "role-first-attempt", Config: assessment.AssessmentConfig{WorkflowVersion: "unified-v1", Targets: []assessment.Target{target}, Types: []assessment.Type{assessment.TypeAPI}, AuthorizationExpectations: req.AuthorizationExpectations}, APIEndpoints: req.APIEndpoints, Jobs: []PlanJob{{ID: "katana-app", Scanner: "katana", Variant: "katana", TargetID: "app", Target: req.Target, State: PlanSelected, AssessmentType: assessment.TypeAPI}, {ID: "apichecks-app", Scanner: "apichecks", Variant: "apichecks", TargetID: "app", Target: req.Target, State: PlanSelected, AssessmentType: assessment.TypeAPI}}}
 	pipeline := Pipeline{Config: cfg}
 	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
 	for _, run := range runs {
 		if run.Scanner == "apichecks" {
-			if len(run.AuthorizationResults) != 2 {
+			if len(run.AuthorizationResults) != 2 || run.AuthorizationResults[0].Status != "matched" || run.AuthorizationResults[1].Status != "matched" {
 				t.Fatalf("first attempt lost authorization configuration: %+v", run)
 			}
 			return

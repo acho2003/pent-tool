@@ -183,3 +183,15 @@ result elements, native IDs and metadata. Both report partial evidence explicitl
 instead of byte-truncating JSON or XML. Local parser fixtures, the full Go suite,
 and targeted scanner race checks pass. This does not establish sanitization of
 all unknown credentials in every native artifact format.
+
+Additional identity browser discovery is now isolated by Chromium profile,
+verification callback, storage and encrypted replay context. Native Linux arm64
+fixtures confirm two roles produce distinct variants of the same authenticated
+XHR endpoint and cannot read each other's replay record. Saved discovery runs
+include context, identity, role, attempt and plan metadata. UI/report counts use
+only observations linked to that attempt's artifact. Failed identities never
+inherit the primary session. General adapters retain explicit skipped dispositions
+for named-role requests until per-role routing is implemented; primary scanner
+completion cannot credit those requests. Full Go, Web UI build, and native arm64
+Chromium/scanner race checks pass. The original first-attempt executor fixture
+now asserts matched role outcomes, rather than only counting returned results.

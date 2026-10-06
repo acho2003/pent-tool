@@ -205,7 +205,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			inventoryTarget = "http://" + inventoryTarget
 		}
 		crawlReq := Request{
-			ReplayStore: replayStore, ReplayScope: inventoryScope, Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion,
+			ReplayStore: replayStore, ReplayScope: inventoryScope, Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion, PlanFingerprint: plan.Fingerprint,
 			ScanDir: filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),
@@ -290,6 +290,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			if browserRun.Completeness == "partial" || browserRun.Status != "completed" {
 				surface.DiscoveryGaps = append(surface.DiscoveryGaps, browserRun.Reason)
 			}
+		}
+		if expanded && len(p.Config.AssessmentAuthContexts) > 0 {
+			identityReq := crawlReq
+			identityReq.Target = inventoryTarget
+			results = append(results, discoverAdditionalIdentities(ctx, target.ID, identityReq, p.Config, surface)...)
 		}
 		surface.WorkflowVersion = plan.Config.WorkflowVersion
 		EnsureSeedEndpoint(surface, inventoryTarget)

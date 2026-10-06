@@ -65,8 +65,18 @@ func browserRequestAllowed(req Request, cfg Config, method, rawURL string) error
 // DiscoverBrowser records browser requests through an intercepted, bounded Go
 // client. Chrome cannot follow a redirect outside the approved request gate.
 func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
-	run = Run{Scanner: "browser", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	run = Run{AuthContextID: req.AuthContextID, Scanner: "browser", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	defer func() { run = finalizeRun(run) }()
+	run.AttemptID, run.PlanFingerprint, run.WorkflowVersion = req.AttemptID, req.PlanFingerprint, req.WorkflowVersion
+	if run.AttemptID == "" {
+		attempt, err := newAssessmentAttemptID()
+		if err != nil {
+			run.Status, run.Reason = "failed", "browser attempt identity unavailable"
+			return
+		}
+		run.AttemptID = attempt
+	}
+
 	if err := req.BrowserStorage.Validate(); err != nil {
 		run.Status, run.Reason = "failed", "invalid browser storage configuration"
 		return
@@ -254,15 +264,16 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		h.Response.SetBody(body)
 		// Bodies/credentials are not copied into public discovery artifacts.
-		requestRecord := map[string]any{"endpoint": SafeTelemetryURL(rawURL), "method": method, "source": "browser", "authenticated": sameOrigin && req.TargetAuth != "", "read_only": true, "headers": map[string]string{"content-type": h.Request.Req().Header.Get("Content-Type")}}
+		requestRecord := map[string]any{"endpoint": SafeTelemetryURL(rawURL), "method": method, "source": "browser", "authenticated": sameOrigin && boundHeaders != "", "read_only": true, "headers": map[string]string{"content-type": h.Request.Req().Header.Get("Content-Type")}}
 		if len(requestBody) > 0 {
 			sum := sha256.Sum256(requestBody)
 			requestRecord["body_digest"] = hex.EncodeToString(sum[:])
 			requestRecord["parameters"] = bodyParameters(string(requestBody), h.Request.Req().Header.Get("Content-Type"))
 		}
-		endpoint, identityOK := requestVariantEndpoint(req.ReplayScope, rawURL, method, h.Request.Req().Header.Get("Content-Type"), string(requestBody), sameOrigin && req.TargetAuth != "")
+		endpoint, identityOK := requestVariantEndpoint(req.ReplayScope, rawURL, method, h.Request.Req().Header.Get("Content-Type"), string(requestBody), sameOrigin && boundHeaders != "", req.AuthContextID)
 		if identityOK {
 			requestRecord["request_id"] = endpoint.ID
+			requestRecord["auth_context_id"] = endpoint.AuthContextID
 			if req.ReplayStore != nil && !req.BrowserAccessTest {
 				headers := map[string]string{}
 				for name, values := range h.Request.Req().Header {
@@ -364,7 +375,10 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 							form["action"] = SafeTelemetryURL(action)
 						}
 					}
-					record(map[string]any{"request": map[string]any{"endpoint": SafeTelemetryURL(next.url), "method": "GET", "source": "browser-dom", "authenticated": req.TargetAuth != "" && func() bool { o, _ := assessment.ParseApprovedOrigin("", next.url); return o.Origin() == bound.Origin() }()}, "forms": extracted.Forms})
+					authMu.Lock()
+					navigationAuth := req.TargetAuth != ""
+					authMu.Unlock()
+					record(map[string]any{"request": map[string]any{"endpoint": SafeTelemetryURL(next.url), "method": "GET", "source": "browser-dom", "auth_context_id": req.AuthContextID, "authenticated": navigationAuth && func() bool { o, _ := assessment.ParseApprovedOrigin("", next.url); return o.Origin() == bound.Origin() }()}, "forms": extracted.Forms})
 					if next.depth >= katanaDefaultDepth && len(extracted.Links) > 0 {
 						markLimit(fmt.Sprintf("browser crawl depth limit reached (%d)", katanaDefaultDepth))
 					}
@@ -394,6 +408,10 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	run.Status = "completed"
 	authMu.Lock()
 	run.Authenticated = req.TargetAuth != "" && authFailure == nil
+	if run.Authenticated {
+		run.AuthState = assessment.StateVerified
+		run.AuthCheckedAt = lastAuthCheck.UTC().Format(time.RFC3339Nano)
+	}
 	if authFailure != nil {
 		markAuthExpired(&run)
 		run.Reason = authFailure.Error()

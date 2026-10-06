@@ -147,6 +147,10 @@ func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
 			}
 			lines = append(lines, fmt.Sprintf("%s: selected %d, submitted %d, acknowledged %d, observed active requests %s, batch completed %d, failed %d, skipped %d, unknown %d.", row.Scanner, row.Selected, row.Submitted, row.Acknowledged, exercised, row.BatchCompleted, row.Failed, row.Skipped, row.Unknown))
 		}
+		for _, identity := range proof.IdentityDiscovery {
+			lines = append(lines, fmt.Sprintf("Browser identity %s (%s): %s; authentication %s; %d observed requests. %s", identity.Identity, identity.Role, identity.Status, identity.AuthState, identity.ObservedRequests, identity.Reason))
+			lines = append(lines, fmt.Sprintf("Context: %s; attempt: %s; evidence: %s", identity.AuthContextID, identity.AttemptID, identity.EvidenceRef))
+		}
 		for _, result := range proof.AuthorizationResults {
 			lines = append(lines, fmt.Sprintf("Authorization %s (%s), %s %s: expected %s, observed %s, %s; HTTP %d. %s", result.Identity, result.Role, result.Method, result.URL, result.Expected, result.Observed, result.Status, result.ResponseCode, result.Reason))
 			lines = append(lines, fmt.Sprintf("Context: %s; request: %s; operation: %s; resource fixture: %s; evidence: %s", result.AuthContextID, result.EndpointID, result.OperationID, result.FixtureRef, result.EvidenceRef))

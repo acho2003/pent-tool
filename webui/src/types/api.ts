@@ -606,6 +606,7 @@ export interface AuthorizationResult {
  endpoint_id?: string; auth_context_id?: string; identity: string; role?: string; operation_id: string; fixture_ref: string; url?: string; method?: string; expected: string; observed?: string; status: string; response_code?: number; marker_confirmed: boolean; reason?: string; evidence_reference?: string;
 }
 export interface CoverageProof {
+ identity_discovery?: Array<{auth_context_id: string; identity: string; role?: string; auth_state: string; status: string; reason?: string; attempt_id?: string; plan_fingerprint?: string; evidence_reference?: string; observed_requests: number}>;
  authorization_results?: AuthorizationResult[];
  approved: number; eligible: number; observed: number;
   expanded_enabled: boolean; discovered: number; seeds: number; candidates: number; hosts: number;

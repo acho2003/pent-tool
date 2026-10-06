@@ -179,3 +179,48 @@ func TestRedactedDOMRequestCannotBecomeNewSeed(t *testing.T) {
 		t.Fatalf("redacted DOM request submitted: %+v", surface)
 	}
 }
+
+func TestNamedBrowserRequestsKeepContextWhenParsed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "browser.jsonl")
+	var rows strings.Builder
+	expected := map[string]string{}
+	for _, identity := range []string{"owner", "reader"} {
+		contextID := AuthenticationContextID("app", identity)
+		endpoint, ok := requestVariantEndpoint("app:app", "https://app.test/api/read", "GET", "", "", true, contextID)
+		if !ok {
+			t.Fatal("invalid fixture endpoint")
+		}
+		expected[contextID] = endpoint.ID
+		row, _ := json.Marshal(map[string]any{"request": map[string]any{"endpoint": endpoint.URL, "method": "GET", "source": "browser", "authenticated": true, "auth_context_id": contextID, "request_id": endpoint.ID, "read_only": true}, "response": map[string]any{"status_code": 200}})
+		rows.Write(row)
+		rows.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, []byte(rows.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	surface, err := ParseKatanaAttackSurface(path, "app:app", "https://app.test/", true)
+	if err != nil || len(surface.Endpoints) != 2 {
+		t.Fatalf("context variants lost: %+v %v", surface, err)
+	}
+	for _, endpoint := range surface.Endpoints {
+		if expected[endpoint.AuthContextID] != endpoint.ID {
+			t.Fatalf("wrong context identity: %+v", endpoint)
+		}
+	}
+}
+
+func TestNamedContextNeverReceivesPrimaryScannerCompletion(t *testing.T) {
+	endpoint, _ := requestVariantEndpoint("app:app", "https://app.test/api/read?value=1", "GET", "", "", true, AuthenticationContextID("app", "reader"))
+	endpoint.State = EndpointStateInScope
+	surface := &AttackSurface{Scope: "app:app", WorkflowVersion: "unified-v1", Endpoints: []AttackSurfaceEndpoint{endpoint}}
+	targets := dispatchTargetsWithPolicy(surface, "nuclei", 100, nil, nil, true)
+	if len(targets) != 0 {
+		t.Fatalf("another role was routed with primary credentials: %v", targets)
+	}
+	CompleteEndpointCoverage(surface, "nuclei", Run{Scanner: "nuclei", Status: "completed", AttemptID: "primary"})
+	for _, coverage := range surface.Endpoints[0].ScannerCoverage {
+		if coverage.Scanner == "nuclei" && (coverage.Status != "skipped" || !strings.Contains(coverage.Reason, "authentication context")) {
+			t.Fatalf("invented role completion: %+v", coverage)
+		}
+	}
+}

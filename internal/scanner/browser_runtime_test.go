@@ -150,3 +150,83 @@ func TestBrowserRuntimeStorageAndProtectedCheckpoint(t *testing.T) {
 		t.Fatalf("storage leaked across browser contexts: %+v", negative)
 	}
 }
+
+func TestBrowserRuntimeNamedIdentitiesKeepIndependentReplay(t *testing.T) {
+	chrome := os.Getenv("XALGORIX_TEST_CHROMIUM")
+	if chrome == "" {
+		t.Skip("native Chromium fixture opt-in")
+	}
+	lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer owner-fixture-secret" && r.Header.Get("Authorization") != "Bearer reader-fixture-secret" {
+			t.Error("wrong identity credential")
+			http.Error(w, "denied", 401)
+			return
+		}
+		if r.URL.Path == "/api/read" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"value":"controlled"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><body><script>fetch('/api/read').then(r=>r.json()).then(v=>document.body.append(v.value))</script></body></html>`))
+	}))
+	defer lab.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", lab.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	store, err := credentials.NewReplayStore(filepath.Join(t.TempDir(), "private"), bytes.Repeat([]byte{7}, credentials.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{KatanaChromePath: chrome, KatanaTimeout: 20 * time.Second, WebMaxEndpoints: 50, Budget: NewAssessmentBudget(1000, 100, time.Minute)}
+	for _, identity := range []string{"owner", "reader"} {
+		cfg.AssessmentAuthContexts = append(cfg.AssessmentAuthContexts, AuthContext{ID: AuthenticationContextID("app", identity), TargetID: "app", Identity: identity, Role: identity, State: assessment.StateVerified, Headers: []string{"Authorization: Bearer " + identity + "-fixture-secret"}, Refresh: func(_ context.Context, headers []string) ([]string, error) { return headers, nil }})
+	}
+	request := Request{Target: lab.URL + "/", ScanDir: t.TempDir(), Scope: "discovery:app", AppScope: &scope, ReplayStore: store, ReplayScope: "app:app"}
+	surface := NewSeedAttackSurface("app:app", request.Target)
+	runs := discoverAdditionalIdentities(t.Context(), "app", request, cfg, surface)
+	if len(runs) != 2 {
+		t.Fatalf("identity runs: %+v", runs)
+	}
+	for _, run := range runs {
+		if run.Status != "completed" || !run.Authenticated || run.AuthContextID != AuthenticationContextID("app", run.AuthIdentity) {
+			t.Fatalf("identity discovery failed: %+v", run)
+		}
+		raw, _ := os.ReadFile(run.ArtifactPath)
+		if strings.Contains(string(raw), "fixture-secret") {
+			t.Fatal("credential leaked in identity discovery artifact")
+		}
+	}
+	proof := BuildCoverageProof([]AttackSurface{*surface}, runs)
+	if len(proof.IdentityDiscovery) != 2 {
+		t.Fatalf("missing role discovery evidence: %+v", proof.IdentityDiscovery)
+	}
+	for _, identity := range proof.IdentityDiscovery {
+		if identity.ObservedRequests < 2 || identity.AttemptID == "" || identity.AuthState != assessment.StateVerified {
+			t.Fatalf("incomplete discovery context record: %+v", identity)
+		}
+	}
+	variants := map[string]AttackSurfaceEndpoint{}
+	for _, endpoint := range surface.Endpoints {
+		if endpoint.URL == lab.URL+"/api/read" && endpoint.ObservedWithAuth {
+			variants[endpoint.AuthContextID] = endpoint
+		}
+	}
+	if len(variants) != 2 {
+		t.Fatalf("role requests collapsed: %+v", variants)
+	}
+	for _, auth := range cfg.AssessmentAuthContexts {
+		endpoint := variants[auth.ID]
+		replay, err := store.Get(request.ReplayScope, auth.ID, endpoint.ReplayRef)
+		if err != nil || replay.Headers["Authorization"] != auth.Headers[0][len("Authorization: "):] {
+			t.Fatalf("identity replay: %+v %v", replay, err)
+		}
+		for _, other := range cfg.AssessmentAuthContexts {
+			if other.ID != auth.ID {
+				if _, err := store.Get(request.ReplayScope, other.ID, endpoint.ReplayRef); err == nil {
+					t.Fatal("another role accessed replay record")
+				}
+			}
+		}
+	}
+}

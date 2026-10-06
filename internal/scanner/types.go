@@ -51,6 +51,7 @@ type Artifact struct {
 }
 
 type Request struct {
+	AuthContextID             string                                `json:"-"`
 	AuthContexts              []AuthContext                         `json:"-"`
 	AuthorizationExpectations []assessment.AuthorizationExpectation `json:"-"`
 	Inventory                 *AttackSurface                        `json:"-"`
@@ -167,6 +168,9 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	AuthContextID         string                `json:"auth_context_id,omitempty"`
+	AuthIdentity          string                `json:"auth_identity,omitempty"`
+	AuthRole              string                `json:"auth_role,omitempty"`
 	AuthorizationResults  []AuthorizationResult `json:"authorization_results,omitempty"`
 	WorkflowVersion       string                `json:"workflow_version,omitempty"`
 	TemplateInventoryPath string                `json:"template_inventory_path,omitempty"`
