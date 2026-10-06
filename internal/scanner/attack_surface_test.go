@@ -3,6 +3,7 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -192,5 +193,24 @@ func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
 	}
 	if got := DispatchTargets(reparsed, "nuclei", 100); len(got) != 0 {
 		t.Fatalf("re-parsed placeholder endpoint dispatched: %v", got)
+	}
+}
+
+func TestUnifiedSnapshotRedactsSPARoutesWithoutMutatingInventory(t *testing.T) {
+	dir := t.TempDir()
+	route := "/account?csrf=private-value&tab=profile"
+	surface := &AttackSurface{WorkflowVersion: "unified-v1", Scope: "app:test", Endpoints: []AttackSurfaceEndpoint{{URL: "https://app.test/", SPARoutes: []string{route}}}}
+	if err := SaveAttackSurface(dir, surface); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(attackSurfacePath(dir, surface.Scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "private-value") || !strings.Contains(string(data), "tab=profile") {
+		t.Fatalf("unsafe snapshot: %s", data)
+	}
+	if surface.Endpoints[0].SPARoutes[0] != route {
+		t.Fatal("snapshot mutated runtime inventory")
 	}
 }

@@ -964,6 +964,10 @@ func SaveAttackSurface(scanDir string, surface *AttackSurface) error {
 				endpoint.State, endpoint.StateReason = EndpointStateUnmaterialized, "sensitive request URL requires encrypted replay"
 			}
 			endpoint.URL = clean
+			endpoint.SPARoutes = append([]string(nil), endpoint.SPARoutes...)
+			for j, route := range endpoint.SPARoutes {
+				endpoint.SPARoutes[j] = SafeTelemetryURL(route)
+			}
 		}
 	}
 	data, err := json.MarshalIndent(&snapshot, "", "  ")

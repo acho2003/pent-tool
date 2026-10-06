@@ -55,3 +55,16 @@ func TestTelemetryRetainsNonsecretEncodingAndRepeatedParameterPositions(t *testi
 		t.Fatal(got)
 	}
 }
+
+func TestTelemetryRedactsCredentialAliasesAndFragments(t *testing.T) {
+	for _, key := range []string{"auth", "csrf", "Cookie", "passwd", "pwd", "access_token", "code"} {
+		for _, raw := range []string{"https://app.test/a%2Fb/?q=one&q=two&" + key + "=private-value", "https://app.test/#/route?" + key + "=private-value", "https://app.test/#" + key + "=private-value"} {
+			if got := SafeTelemetryURL(raw); strings.Contains(got, "private-value") {
+				t.Fatalf("credential leaked: %s", got)
+			}
+		}
+	}
+	if got := SafeTelemetryURL("https://app.test/#/account/settings"); got != "https://app.test/#/account/settings" {
+		t.Fatal(got)
+	}
+}

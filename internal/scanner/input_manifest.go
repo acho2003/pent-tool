@@ -55,8 +55,7 @@ func SafeTelemetryURL(raw string) string {
 			parts[i] = "[invalid parameter omitted]"
 			continue
 		}
-		lower := strings.ToLower(name)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") || strings.Contains(lower, "session") || strings.Contains(lower, "key") || strings.Contains(lower, "signature") || strings.Contains(lower, "credential") || lower == "sig" || lower == "jwt" || lower == "code" || lower == "authorization" {
+		if sensitiveTelemetryKey(name) {
 			parts[i] = key + "=" + url.QueryEscape("[REDACTED]")
 		} else if hasValue {
 			if _, err := url.QueryUnescape(part); err != nil {
@@ -65,14 +64,31 @@ func SafeTelemetryURL(raw string) string {
 		}
 	}
 	u.RawQuery = strings.Join(parts, "&")
-	fragment := strings.ToLower(u.Fragment)
-	if strings.Contains(fragment, "token=") || strings.Contains(fragment, "secret=") || strings.Contains(fragment, "password=") || strings.Contains(fragment, "session=") {
-		u.Fragment = "[REDACTED]"
-		u.RawFragment = ""
+	fragment := u.Fragment
+	if queryAt := strings.IndexByte(fragment, '?'); queryAt >= 0 {
+		fragment = fragment[queryAt+1:]
+	}
+	for _, part := range strings.Split(fragment, "&") {
+		key, _, _ := strings.Cut(part, "=")
+		name, err := url.QueryUnescape(key)
+		if err != nil || sensitiveTelemetryKey(name) {
+			u.Fragment, u.RawFragment = "[REDACTED]", ""
+			break
+		}
 	}
 
 	return u.String()
 }
+func sensitiveTelemetryKey(name string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range []string{"token", "secret", "password", "passwd", "session", "key", "signature", "credential", "authorization", "csrf", "cookie"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return lower == "sig" || lower == "jwt" || lower == "code" || lower == "auth" || lower == "pwd"
+}
+
 func BuildScannerInputs(surface *AttackSurface, req Request, scanner string) []ScannerRequestInput {
 	selected := map[string]bool{}
 	for _, u := range req.EndpointTargets {
