@@ -354,23 +354,6 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	bodySum := sha256.Sum256(body)
-	requestOrigin, _ := assessment.ParseApprovedOrigin("", raw)
-	for _, input := range g.req.InputRequests {
-		if !input.Selected || input.Method != r.Method {
-			continue
-		}
-		candidate, e := url.Parse(input.URL)
-		candidateOrigin, e2 := assessment.ParseApprovedOrigin("", input.URL)
-		if (len(body) > 0 && input.BodyDigest == "") || (input.BodyDigest != "" && input.BodyDigest != hex.EncodeToString(bodySum[:])) {
-			continue
-		}
-		if input.ContentType != "" && !strings.EqualFold(strings.TrimSpace(input.ContentType), strings.TrimSpace(r.Header.Get("Content-Type"))) {
-			continue
-		}
-		if e == nil && e2 == nil && candidateOrigin.Scheme == requestOrigin.Scheme && candidateOrigin.Host == requestOrigin.Host && candidateOrigin.Port == requestOrigin.Port && candidate.EscapedPath() == r.URL.EscapedPath() && candidate.RawQuery == r.URL.RawQuery && candidate.ForceQuery == r.URL.ForceQuery {
-			event.EndpointIDs = append(event.EndpointIDs, input.EndpointID)
-		}
-	}
 	request := r.Clone(r.Context())
 	request.RequestURI = ""
 	request.Host = request.URL.Host
@@ -395,6 +378,23 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 			if ok {
 				request.Header.Set(strings.TrimSpace(name), strings.TrimSpace(value))
 			}
+		}
+	}
+	requestOrigin, _ := assessment.ParseApprovedOrigin("", raw)
+	for _, input := range g.req.InputRequests {
+		if !input.Selected || input.Method != r.Method || !gatewayInputAuthenticationMatches(input, request, g.req.TargetAuth, sameOrigin) {
+			continue
+		}
+		candidate, e := url.Parse(input.URL)
+		candidateOrigin, e2 := assessment.ParseApprovedOrigin("", input.URL)
+		if (len(body) > 0 && input.BodyDigest == "") || (input.BodyDigest != "" && input.BodyDigest != hex.EncodeToString(bodySum[:])) {
+			continue
+		}
+		if input.ContentType != "" && !strings.EqualFold(strings.TrimSpace(input.ContentType), strings.TrimSpace(r.Header.Get("Content-Type"))) {
+			continue
+		}
+		if e == nil && e2 == nil && candidateOrigin.Scheme == requestOrigin.Scheme && candidateOrigin.Host == requestOrigin.Host && candidateOrigin.Port == requestOrigin.Port && candidate.EscapedPath() == r.URL.EscapedPath() && candidate.RawQuery == r.URL.RawQuery && candidate.ForceQuery == r.URL.ForceQuery {
+			event.EndpointIDs = append(event.EndpointIDs, input.EndpointID)
 		}
 	}
 	event.Kind = "requested"
@@ -472,4 +472,30 @@ func (g *RecordingGateway) ApplyOutcome(run *Run) {
 	if run.Status == "completed" {
 		run.Outcome = "PARTIAL"
 	}
+}
+
+// A response received with credentials cannot prove exercise of the anonymous
+// request variant at the same URL. Only the context represented by the actual
+// outgoing headers can receive the receipt.
+func gatewayInputAuthenticationMatches(input ScannerRequestInput, request *http.Request, boundHeaders string, sameOrigin bool) bool {
+	bound := sameOrigin && strings.TrimSpace(boundHeaders) != ""
+	if input.AuthContextID == "" {
+		if bound || request.Header.Get("Authorization") != "" || request.Header.Get("Cookie") != "" {
+			return false
+		}
+		return true
+	}
+	if bound {
+		return input.AuthContextID == inventoryID(input.InventoryScope, "target-bound")
+	}
+	matched := false
+	for name, expected := range input.Headers {
+		if sensitiveTelemetryKey(name) {
+			if expected == "" || request.Header.Get(name) != expected {
+				return false
+			}
+			matched = true
+		}
+	}
+	return matched
 }

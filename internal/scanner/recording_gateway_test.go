@@ -219,3 +219,67 @@ func TestGatewayAllowsOnlyCapturedReadOnlyGraphQLBody(t *testing.T) {
 		t.Fatalf("unapproved POST reached target: %d", hits)
 	}
 }
+
+func TestGatewayDoesNotAttributeAuthenticatedResponseToAnonymousVariant(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != "session=verified" {
+			t.Error("missing bound credential")
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", target.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	contextID := inventoryID("app:app", "target-bound")
+	req := Request{Target: target.URL, AppScope: &scope, ScanDir: t.TempDir(), TargetAuth: "Cookie: session=verified", InputRequests: []ScannerRequestInput{
+		{EndpointID: "anonymous", InventoryScope: "app:app", URL: target.URL + "/", Method: "GET", Selected: true},
+		{EndpointID: "authenticated", AuthContextID: contextID, InventoryScope: "app:app", URL: target.URL + "/", Method: "GET", Selected: true},
+		{EndpointID: "different-role", AuthContextID: "another-role", InventoryScope: "app:app", URL: target.URL + "/", Method: "GET", Selected: true},
+	}}
+	g, err := NewRecordingGateway(t.Context(), req, Config{}, "nuclei")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, _ := url.Parse(g.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+	response, err := client.Get(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if err := g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ReadCoverageEvents(g.EventPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := false
+	for _, event := range events {
+		if event.Kind == "observed" {
+			observed = true
+			if len(event.EndpointIDs) != 1 || event.EndpointIDs[0] != "authenticated" {
+				t.Fatalf("wrong authentication attribution: %+v", event)
+			}
+		}
+	}
+	if !observed {
+		t.Fatal("missing observed response")
+	}
+}
+
+func TestInputManifestPreservesNonsecretAuthenticationContext(t *testing.T) {
+	req := Request{ScanDir: t.TempDir(), InputRequests: []ScannerRequestInput{{EndpointID: "request", AuthContextID: "role-context-id", URL: "https://app.test/private", Method: "GET", Headers: map[string]string{"Cookie": "private-cookie-value"}, Selected: true}}}
+	path, err := SaveScannerInputs(req, "zap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"auth_context_id": "role-context-id"`) || strings.Contains(string(data), "private-cookie-value") {
+		t.Fatalf("unsafe context manifest: %s", data)
+	}
+}

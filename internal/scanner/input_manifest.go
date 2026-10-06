@@ -10,6 +10,7 @@ import (
 )
 
 type ScannerRequestInput struct {
+	AuthContextID  string            `json:"auth_context_id,omitempty"`
 	ReplayRef      string            `json:"replay_reference,omitempty"`
 	ReadOnly       bool              `json:"read_only,omitempty"`
 	Headers        map[string]string `json:"-"`
@@ -99,7 +100,7 @@ func BuildScannerInputs(surface *AttackSurface, req Request, scanner string) []S
 		return inputs
 	}
 	for _, ep := range surface.Endpoints {
-		input := ScannerRequestInput{ReplayRef: ep.ReplayRef, ReadOnly: ep.ReadOnly, Body: ep.ReplayBody, Headers: ep.ReplayHeaders, InventoryScope: surface.Scope, EndpointID: ep.ID, URL: ep.URL, Method: ep.Method, ContentType: ep.RequestContentType, BodyDigest: ep.BodyDigest, Selected: selected[ep.URL]}
+		input := ScannerRequestInput{AuthContextID: ep.AuthContextID, ReplayRef: ep.ReplayRef, ReadOnly: ep.ReadOnly, Body: ep.ReplayBody, Headers: ep.ReplayHeaders, InventoryScope: surface.Scope, EndpointID: ep.ID, URL: ep.URL, Method: ep.Method, ContentType: ep.RequestContentType, BodyDigest: ep.BodyDigest, Selected: selected[ep.URL]}
 		for _, c := range ep.ScannerCoverage {
 			if c.Scanner == scanner {
 				input.Reason = c.Reason
