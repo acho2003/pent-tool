@@ -3,9 +3,13 @@ package scanner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
@@ -114,5 +118,157 @@ func TestWorkflowCheckpointFailureStopsRemainingExecution(t *testing.T) {
 		if run.GapKind != GapInterruptedWrite || run.Status == "completed" {
 			t.Fatalf("unpersisted completion: %+v", run)
 		}
+	}
+}
+
+// This helper executes in a separate OS process so no executor memory survives.
+func TestWorkflowProcessRecoveryHelper(t *testing.T) {
+	root := os.Getenv("XALGORIX_RECOVERY_FIXTURE_ROOT")
+	if root == "" {
+		t.Skip("subprocess fixture")
+	}
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	plan := AssessmentPlan{Fingerprint: "sha256:process-recovery", RegistryVersion: PlanRegistryVersion, Config: assessment.AssessmentConfig{WorkflowVersion: "unified-v1"}}
+	runners := []Runner{}
+	for _, name := range []string{"process-first", "process-second", "process-third"} {
+		plan.Jobs = append(plan.Jobs, PlanJob{ID: name, Scanner: name, TargetID: "app", Target: "https://local-fixture.invalid/", Variant: name, Stage: StageTemplates, State: PlanSelected})
+		runners = append(runners, &processRecoveryRunner{name: name, root: root, t: t})
+	}
+	var saved []Run
+	path := filepath.Join(root, "persisted-runs.json")
+	if data, err := os.ReadFile(path); err == nil {
+		if err = json.Unmarshal(data, &saved); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pipeline := &Pipeline{Config: Config{KatanaPath: "/nonexistent/katana"}, Runners: runners}
+	emit := func(event Event) {
+		if event.Type != "scanner_completed" {
+			return
+		}
+		found := false
+		for i := range saved {
+			if saved[i].Scanner == event.Scanner {
+				saved[i] = event.Run
+				found = true
+			}
+		}
+		if !found {
+			saved = append(saved, event.Run)
+		}
+		data, _ := json.Marshal(saved)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := pipeline.RunAssessmentJobs(t.Context(), plan, root, saved, emit)
+	data, _ := json.Marshal(result)
+	if err := os.WriteFile(filepath.Join(root, "resumed-runs.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type processRecoveryRunner struct {
+	name, root string
+	t          *testing.T
+}
+
+func (r *processRecoveryRunner) Name() string { return r.name }
+func (r *processRecoveryRunner) Descriptor() Descriptor {
+	return Descriptor{Name: r.name, Phase: PhaseWeb}
+}
+func (r *processRecoveryRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
+	file, err := os.OpenFile(filepath.Join(r.root, r.name+".calls"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	fmt.Fprintln(file, req.AttemptID)
+	file.Close()
+	if r.name == "process-second" && os.Getenv("XALGORIX_RECOVERY_FIXTURE_PAUSE") == "1" {
+		if err := os.WriteFile(filepath.Join(r.root, "worker-paused"), []byte(req.AttemptID), 0600); err != nil {
+			r.t.Fatal(err)
+		}
+		<-ctx.Done()
+		return Run{Scanner: r.name, Status: "cancelled"}
+	}
+	path := filepath.Join(req.ScanDir, "result.json")
+	if err := os.WriteFile(path, []byte(`{"fixture":"complete"}`), 0600); err != nil {
+		r.t.Fatal(err)
+	}
+	return finalizeRun(Run{Scanner: r.name, Status: "completed", ArtifactPath: path, Target: req.Target, Scope: req.Scope})
+}
+
+func TestExpandedWorkflowRecoversAfterWorkerProcessIsKilled(t *testing.T) {
+	root := t.TempDir()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := func(pause bool) *exec.Cmd {
+		cmd := exec.CommandContext(t.Context(), binary, "-test.run=^TestWorkflowProcessRecoveryHelper$", "-test.timeout=30s")
+		cmd.Env = append(os.Environ(), "XALGORIX_RECOVERY_FIXTURE_ROOT="+root)
+		if pause {
+			cmd.Env = append(cmd.Env, "XALGORIX_RECOVERY_FIXTURE_PAUSE=1")
+		}
+		return cmd
+	}
+	child := command(true)
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = child.Process.Kill() }()
+	deadline := time.After(15 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	ready := false
+	for !ready {
+		select {
+		case <-deadline:
+			t.Fatal("worker did not reach interrupted job")
+		case <-tick.C:
+			_, err := os.Stat(filepath.Join(root, "worker-paused"))
+			ready = err == nil
+		}
+	}
+	manifest, ok := LoadWorkflowManifest(root)
+	stage, _ := manifest.Stage(StageTemplates)
+	if !ok || stage.Status != StageStatusRunning || len(stage.OutputChecksums) != 1 {
+		t.Fatalf("checkpoint before kill: %+v", stage)
+	}
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Wait(); err == nil {
+		t.Fatal("worker was not killed")
+	}
+	if output, err := command(false).CombinedOutput(); err != nil {
+		t.Fatalf("fresh process recovery: %v %s", err, output)
+	}
+	for name, count := range map[string]int{"process-first": 1, "process-second": 2, "process-third": 1} {
+		data, err := os.ReadFile(filepath.Join(root, name+".calls"))
+		if err != nil || len(strings.Fields(string(data))) != count {
+			t.Fatalf("unexpected execution after process kill: %s %s %v", name, data, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(root, "resumed-runs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []Run
+	if err := json.Unmarshal(data, &runs); err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 3 {
+		t.Fatal("missing recovered jobs")
+	}
+	for _, run := range runs {
+		if run.Status != "completed" || VerifyChecksum(run) != nil {
+			t.Fatalf("unsealed recovered result: %+v", run)
+		}
+	}
+	manifest, ok = LoadWorkflowManifest(root)
+	stage, _ = manifest.Stage(StageTemplates)
+	if !ok || stage.Status != StageStatusCompleted || len(stage.OutputChecksums) != 3 {
+		t.Fatalf("recovered stage: %+v", stage)
 	}
 }

@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -102,5 +104,75 @@ func TestWapitiRuntimeApprovedFormPostBudgetCleanupAndReplay(t *testing.T) {
 	repeated := runWapitiPost(t.Context(), req, cfg, nil)
 	if repeated.Status != "failed" || !strings.Contains(repeated.Reason, "replay") {
 		t.Fatalf("native consent replayed: %+v", repeated)
+	}
+}
+
+func TestWapitiRuntimeCancellationDrainsThenCleansUp(t *testing.T) {
+	if os.Getenv("XALGORIX_TEST_WAPITI_POST") == "" {
+		t.Skip("native installed Wapiti cancellation opt-in")
+	}
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	var posts, cleanups, afterCleanup atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			if cleanups.Load() > 0 {
+				afterCleanup.Add(1)
+			}
+			posts.Add(1)
+		}
+		if r.Method == "DELETE" {
+			cleanups.Add(1)
+			w.WriteHeader(204)
+			return
+		}
+		fmt.Fprint(w, "<html><body>controlled cancellation fixture</body></html>")
+	}))
+	defer target.Close()
+	req, cfg := formFuzzFixture(t, target.URL+"/")
+	req.WapitiPostApproval.RequestLimit = 100
+	cfg.WapitiTimeout = 45 * time.Second
+	if err := prepareWapitiPostRequest(&req, nil); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	gateway, err := NewRecordingGateway(ctx, req, cfg, "wapiti")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	req.Gateway, req.GatewayURL, req.GatewayCAPath = gateway, gateway.URL, gateway.CAPath
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		tick := time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				gateway.mu.Lock()
+				observed := gateway.formFuzzObserved
+				gateway.mu.Unlock()
+				if observed > 0 {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	run := runWapitiPost(ctx, req, cfg, nil)
+	cancel()
+	<-stopped
+	if posts.Load() == 0 || cleanups.Load() != 1 || afterCleanup.Load() != 0 {
+		t.Fatalf("unsafe cancellation: posts=%d cleanup=%d late=%d", posts.Load(), cleanups.Load(), afterCleanup.Load())
+	}
+	if run.Status != "cancelled" {
+		t.Fatalf("native campaign did not stop: %+v", run)
+	}
+	replay := runWapitiPost(t.Context(), req, cfg, nil)
+	if replay.Status != "failed" || !strings.Contains(replay.Reason, "replay") {
+		t.Fatal("cancelled campaign replayed")
 	}
 }

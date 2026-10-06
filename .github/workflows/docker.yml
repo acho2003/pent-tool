@@ -97,6 +97,15 @@ jobs:
       - name: Verify scanner runtime
         run: docker run --rm --network none --entrypoint python3 xalgorix:ci /usr/local/share/xalgorix/smoke-test.py
 
+      - name: Verify native workflow fixtures before publication
+        run: |
+          fixture_bin=$(mktemp -d)
+          trap 'rm -rf "$fixture_bin"' EXIT
+          docker run --rm -v "$PWD:/src:ro" -v "$fixture_bin:/out" -w /src \
+            golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d \
+            bash -ec 'go test -race -c -o /out/scanner.test ./internal/scanner; go test -race -c -o /out/web.test ./internal/web'
+          runtime/workflow-acceptance.sh xalgorix:ci "$fixture_bin/scanner.test" "$fixture_bin/web.test"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

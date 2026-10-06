@@ -56,3 +56,20 @@ references. Shared or unattributable builder cache should remain untouched.
 slim image via `RUNTIME_IMAGE` (default `xalgorix:local`). It rejects historical
 Kali images. Supply a Linux `build/xalgorix` matching the runtime architecture;
 the normal macOS `make build` binary cannot run in Linux containers.
+
+### Native workflow acceptance
+
+After building an image, compile native Linux race-test binaries for
+`./internal/scanner` and `./internal/web`, then run:
+
+```sh
+runtime/workflow-acceptance.sh xalgorix:ci /absolute/scanner.test /absolute/web.test
+```
+
+The binaries must match the runtime architecture and Debian-compatible native
+libraries. The Docker publication workflow compiles them in the pinned Go
+Bookworm builder. The script uses only disposable local fixtures and an isolated
+pinned ZAP service. It preserves production services and volumes, and never runs
+Docker pruning. Dalfox timeout dispositions and native request receipts do not
+prove that every vulnerability check completed. Full staged UI acceptance and
+rollout approval remain separate from these adapter checks.

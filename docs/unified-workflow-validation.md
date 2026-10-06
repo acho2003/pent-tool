@@ -279,3 +279,45 @@ not a claim that native vulnerability checks completed for every endpoint.
 - Full Go suite, scanner/credential/assessment race checks and UI typecheck/build
   passed. Preview and execution reject forms whose semantics this installed
   Wapiti cannot preserve. Existing single-write consent remains separate.
+
+## Process recovery and repeatable native acceptance
+
+The executor now has a real OS-process termination fixture: one worker is killed
+while its second job is running, then a fresh worker recovers from persisted
+records. It reuses the first sealed result, executes the interrupted job again,
+and completes the third job. Native Linux arm64 race checks pass this fixture.
+This verifies executor process recovery; it does not substitute for restarting
+a complete dashboard deployment during every approval and service stage.
+
+Native Wapiti cancellation confirms that cleanup occurs after admitted POST
+traffic drains and that cancelled campaign consent cannot be replayed. Native
+Chromium identity/storage/cancellation tests and the complete Linux Web backend
+race suite also pass. The backend suite mounts its checked-in legacy fixtures.
+
+`runtime/workflow-acceptance.sh IMAGE SCANNER_TEST_BINARY WEB_TEST_BINARY` runs
+these native fixtures against a built slim runtime. Compile the test binaries
+with `go test -race -c` for the runtime architecture. It isolates HTTP fixtures
+with Docker `--network none`, creates its own internal network for a pinned ZAP,
+and removes only its own containers and network afterward. It runs the 684-input
+Wapiti and deterministic signed Nuclei receipt fixtures, Dalfox's explicit
+timeout-disposition fixture, Chromium, ZAP request/import/discovery, approved
+form campaigns, process recovery and the Web backend race suite.
+
+The existing amd64 Docker publication workflow now runs this acceptance script
+after runtime smoke tests and before publication. It has not been dispatched
+or verified on amd64 from this local session. Publication and default rollout
+remain separate actions; this script does not enable the expanded feature flag.
+
+A temporary application-only arm64 image, `xalgorix:workflow-validation-e69bc21`,
+passed the offline runtime smoke test and has revision `e69bc21`. It measures
+1,156,069,966 bytes and reuses the retained slim scanner runtime. This is not a
+fresh rebuild of all scanners, a production replacement, or reclaimed disk space.
+
+The reusable acceptance script passed end to end on native Linux arm64 with
+revision `e69bc21`: signed Nuclei and Wapiti each recorded 684 exact-input HTTP
+receipts, Dalfox recorded 12 receipts with explicit timeout dispositions for
+remaining inputs, all five Chromium fixtures passed, approved POST and
+cancellation fixtures passed, the full Web race suite passed, and the isolated
+ZAP discovery and 684-request seeding fixtures passed. Its temporary service
+containers and internal network were removed by the script. No full staged
+assessment or undiscovered-asset completeness claim follows from these results.
