@@ -90,3 +90,37 @@ ZAP inventory acceptance: structured assessments no longer issue separate root o
 Variant-policy acceptance: method/body variants at one URL consume separate request budget slots; exhausted variants have explicit skip reasons. Tests prevent unapproved browser form submission, inferred authentication on DOM aliases and replay of redacted URLs. Native arm64 Chromium confirms form-action secret redaction and encrypted GraphQL replay. Full Go and scanner/credential race checks pass.
 
 Write restart acceptance: changing attempt directories cannot replay an approved write. Thirty-two independently opened journals retain all intents; four concurrent processes admit exactly one intent for the same operation. Prior attempt journals migrate with their recorded states, and corrupt or unresolved records refuse automatic resume. Discovery approval leaves the parent unchanged and clears mutation consent in the child. Full Go and race checks pass; native Linux arm64 repeats the journal, retry, migration and replay fixtures successfully.
+
+
+## Live UI and native request routing regressions
+
+A disposable internal-network lab and application instance exercised dashboard
+login, encrypted target credentials, the immediate Chromium protected-route test
+with an anonymous negative control, assessment preview/start, authenticated
+browser discovery, endpoint evidence traces, per-tool stop, and PDF download.
+The fixture used only synthetic credentials and local destinations. Its ZAP
+active rules were disabled; this UI check does not establish active-check coverage.
+
+The live fixture exposed an empty-collection Scan Details crash and a premature
+terminal failure event after per-tool stop. Commits `f8a9c5d` and `31aeb92` fix
+those regressions. Commit `ddad363` redacts credential aliases and SPA route
+metadata without modifying the runtime inventory. Commit `6ebef13` preserves
+nonsecret authentication contexts in scanner inputs and prevents an authenticated
+HTTP receipt from proving exercise of an anonymous or different-role variant.
+
+Native arm64 Wapiti now produces HTTP receipts for all **684 selected variants in
+14 batches**. Native Nuclei produces HTTP receipts for all **684 variants** with
+one locally generated, signed deterministic fixture template. The normal
+unsigned-template restriction remains enabled, and fixture signing trust is
+never added to the runtime image or the user's key store. Neither result proves
+that the full retained vulnerability template/module inventory executed.
+
+The expanded workflow still requires the remaining implementation and acceptance
+items listed above; the production feature flag remains disabled by default.
+
+The bounded native Dalfox failure fixture retains 12 HTTP receipts and explicit
+per-request timeout dispositions for the remaining selected inputs. It does not
+claim all 684 were exercised. Linux process-group cancellation reduces the
+helper-stop regression from ten seconds to about 50 ms, while preserving
+`TIMEOUT`/`CANCELLED` execution independently from artifact parser failures.
+The full Go suite and scanner/credential race checks pass for these changes.
