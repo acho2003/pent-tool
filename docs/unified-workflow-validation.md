@@ -163,3 +163,13 @@ vulnerable role access, credential isolation, excluded/wrong-target/write inputs
 unknown responses, persistence and report URL redaction. Full Go tests, targeted
 scanner race tests and the Web UI typecheck/build pass. Expanded role execution
 remains behind the unified-workflow flag, which remains disabled by default.
+
+The setup UI now saves multiple named identities on one target without replacing
+other identities. Verification results and checkpoint edits are keyed by the
+credential reference. Operators can save a controlled GET resource and paired
+allow/deny expectations through the existing fixture upload route. Removing an
+identity clears expectations that would otherwise become stale. A local
+Playwright fixture verifies two saved credentials, an independent immediate test,
+the paired expectations in the preview payload, and removal isolation. This UI
+fixture uses mocked API responses and is separate from native execution tests.
+The full Go suite and Web UI typecheck/build pass.

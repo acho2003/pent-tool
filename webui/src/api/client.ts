@@ -381,6 +381,7 @@ export const api = {
 		http<CredentialMetadata>("/api/credentials", { method: "POST", json: credential }),
 	testCredential: (id: string, input: { target_id: string; target_url: string; verify_url?: string; verify_marker?: string; browser?: boolean }) =>
 		http<{ verified: boolean; state: "verified" | "failed" | "unavailable"; reason: string }>(`/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST", json: input }),
+	uploadAPIFixture: (body: string) => http<{ref: string; size_bytes: number}>("/api/api-fixtures", {method:"POST",body,headers:{"Content-Type":"application/json"}}),
 	uploadAPIDefinition: async (file: File) =>
 		http<{ id: string; format: string; operation_count: number; size_bytes: number }>("/api/api-definitions", {
 			method: "POST",
