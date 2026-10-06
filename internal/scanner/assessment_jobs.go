@@ -325,6 +325,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if expanded {
 			addIdentitySchemaSeeds(surface, target.ID, p.Config.AssessmentAuthContexts)
 		}
+		if expanded && (!authBound || authVerified[target.ID]) && slices.ContainsFunc(plan.Jobs, func(job PlanJob) bool {
+			return job.TargetID == target.ID && job.Scanner == "zap" && job.State == PlanSelected
+		}) {
+			sealInventoryRequests(surface, replayStore, inventoryScope)
+			hydrateRequestReplay(surface, replayStore, inventoryScope)
+			zapReq := crawlReq
+			zapReq.Target = inventoryTarget
+			zapReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
+			results = append(results, runSupplementalZAPDiscovery(ctx, target.ID, zapReq, p.Config, surface, existing, emit, p.AttemptControl)...)
+		}
 		MergeHistoricalCandidates(surface, pendingHistory[target.ID])
 		for _, previous := range results {
 			if previous.Scope == inventoryScope || previous.Target == target.Value {

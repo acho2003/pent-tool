@@ -188,6 +188,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.StructuredDispatch && len(req.EndpointTargets) == 0 && len(req.InputRequests) == 0 {
 		return notApplicableRun("zap", req, cfg, "ZAP has no dispatcher-approved API, parameter, form, or sensitive endpoint to test", emit)
 	}
+	if req.ZAPDiscoveryOnly && (!expandedWorkflowRequest(req) || !req.TypedAssessment || req.AppScope == nil) {
+		return failedServiceRun("zap", req, "supplemental discovery requires the approved unified workflow scope", emit)
+	}
 	target, ok := normalizedWebTarget(req.Target)
 	if !ok {
 		return notApplicableRun("zap", req, cfg, "ZAP requires an HTTP or HTTPS target", emit)
@@ -320,6 +323,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		run.CoverageEventsPath = recording.EventPath
 		secrets = append(secrets, recording.password)
 		recording.SetPhase("seeding")
+		if req.ZAPDiscoveryOnly {
+			recording.SetPhase("discovery")
+		}
 		restore, installErr := configureZAPGateway(cfg, call, recording)
 		if installErr != nil {
 			recording.Close()
@@ -514,6 +520,9 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				secrets = append(secrets, strings.TrimSpace(value))
 			}
 			headers = append([]string(nil), next...)
+			if recording != nil {
+				recording.UpdateTargetAuth(next)
+			}
 			if req.AuthKind == "form login" {
 				logLine("Authentication: form session renewed after re-login")
 			} else {
@@ -734,7 +743,21 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// not spider again: doing so would rediscover and submit POST forms that the
 	// safe dispatcher marked inventory-only. Its active scan therefore operates
 	// on explicitly selected request seeds, without a separate root request.
-	if !req.StructuredDispatch {
+	if !req.StructuredDispatch || req.ZAPDiscoveryOnly {
+		if req.ZAPDiscoveryOnly {
+			restoreSpider, err := configureSafeZAPSpider(cfg, call)
+			defer func() {
+				if restoreSpider != nil {
+					if err := restoreSpider(); err != nil {
+						quarantineZAPService(cfg.ZAPURL, "restore supplemental spider policy failed")
+						final.Status, final.Reason = "failed", "ZAP spider policy cleanup failed"
+					}
+				}
+			}()
+			if err != nil {
+				return finishServiceFailure(run, fmt.Errorf("configure bounded read-only spider: %w", err), secrets, cfg.MaxOutputBytes, emit)
+			}
+		}
 		spiderParams := url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}}
 		if req.TypedAssessment {
 			spiderParams.Set("contextName", contextName)
@@ -765,6 +788,18 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		if err := zapWaitPassiveChecked(cctx, call, logLine, checkAuth); err != nil {
 			return finishServiceFailure(run, fmt.Errorf("ZAP passive scan after endpoint seeding: %w", err), secrets, cfg.MaxOutputBytes, emit)
 		}
+	}
+	if req.ZAPDiscoveryOnly {
+		if recording == nil {
+			return finishServiceFailure(run, errors.New("discovery recording unavailable"), secrets, cfg.MaxOutputBytes, emit)
+		}
+		if err := recording.Close(); err != nil {
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		}
+		if err := saveZAPDiscoveryArtifact(req, &run, cfg); err != nil {
+			return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		}
+		return finalizeRun(run)
 	}
 	// Typed jobs restore daemon-global scan rule state after execution. Legacy
 	// jobs retain the historical DOM XSS mitigation behavior.

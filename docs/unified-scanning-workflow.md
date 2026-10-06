@@ -155,3 +155,20 @@ common unknown credentials before public download. Structured decoding preserves
 record boundaries and native IDs; malformed structured artifacts cannot count as
 usable success. Native scanners initially write private raw artifacts, so this
 is not a claim of sanitization before every filesystem write.
+
+
+Registry version 11 runs bounded supplemental ZAP discovery during inventory
+preparation when ZAP is selected. Forms and POST-form processing are disabled,
+spider depth matches Katana's depth of five, one spider thread is used, and the
+pass is capped at five minutes and the existing endpoint/request budgets. The
+scope gateway also enforces exclusions and approved path/origin boundaries.
+Daemon settings, credentials and proxy configuration are restored under its
+exclusive lease; failed restoration quarantines the service.
+
+Only saved gateway response observations become live endpoint evidence. Blocked
+or failed requests remain candidate dispositions. The resulting shared inventory
+is sealed before the selected vulnerability scanners receive their manifests.
+Supplemental discovery does not run active vulnerability checks. ZAP's later
+active scan continues to seed only selected inventory requests without another
+independent spider. Credential renewal now updates the gateway injection value
+alongside the scoped ZAP rule.

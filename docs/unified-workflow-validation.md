@@ -44,8 +44,9 @@ establish that the complete expanded workflow is ready for default rollout.
   manifest coverage alone is insufficient.
 - Bounded, explicitly approved state-changing scanner routing; encrypted exact
   replay and captured read-only GraphQL POST routing are implemented.
-- Supplemental ZAP spider results merged into the inventory before active checks;
-  structured runs currently disable that spider to preserve the request boundary.
+- Complete staged UI/native acceptance for supplemental discovery; its bounded
+  read-only ZAP worker and inventory response/candidate extraction now pass the
+  disposable arm64 daemon fixture.
 - End-to-end native multi-role workflow acceptance across all retained active
   scanners. Named-role browser discovery, previewed scanner jobs, independently
   renewed credentials, and exact role receipt attribution are implemented.
@@ -248,3 +249,16 @@ credential reaches its own request and its response cannot credit admin or
 anonymous variants. No public targets or production containers were used. The
 expanded flag remains disabled pending the Remaining acceptance items; these
 checks do not establish complete native active-check or staged UI acceptance.
+
+
+## Supplemental ZAP discovery acceptance
+
+A pinned disposable ZAP 2.17.0 daemon on an internal Docker network passed the
+Linux arm64 race fixture `TestZAPRuntimeSupplementalDiscoveryIsReadOnlyAndFeedsInventory`
+in 7.08 seconds. It discovers an unseeded HTML route with repeated query values,
+records its HTTP 200 response in the shared inventory format, submits no POST
+forms, blocks excluded and out-of-path requests, emits no active-test traffic,
+and restores the original spider form policy. Unit fixtures preserve blocked
+candidate dispositions and verify renewed gateway credentials. The full Go suite
+and scanner/credential race tests pass. This is discovery/routing acceptance,
+not a claim that native vulnerability checks completed for every endpoint.

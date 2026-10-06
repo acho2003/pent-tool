@@ -51,6 +51,8 @@ type Artifact struct {
 }
 
 type Request struct {
+	Variant                   string                                  `json:"-"`
+	ZAPDiscoveryOnly          bool                                    `json:"-"`
 	BrowserEmit               EmitFunc                                `json:"-"`
 	BrowserAttemptControl     func(string, context.CancelFunc) func() `json:"-"`
 	AuthIdentity              string                                  `json:"-"`

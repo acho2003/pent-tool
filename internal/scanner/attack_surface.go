@@ -201,6 +201,7 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 	artifactName := filepath.Base(artifact)
 	var requestBody, requestType, recordedBodyDigest, replayRef, requestID, recordedAuthContext string
 	var readOnly, trustedBrowser bool
+	var nativeObservationKind, nativeDispositionReason string
 	observationAuth := observedWithAuth
 	add := func(rawURL, method, source, timestamp string, status int, contentType string, params []EndpointParameter, hasForm bool) {
 		allowed, reason := inSurfaceScope(rawURL, targetHost, appScope)
@@ -241,6 +242,12 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		if trustedBrowser && ep.ReplayRef == "" && replayURLRedacted(ep.URL) && endpointStateDispatchable(ep.State) {
 			ep.State, ep.StateReason = EndpointStateUnmaterialized, "redacted discovery URL requires its original encrypted replay"
 		}
+		if trustedBrowser && nativeObservationKind == "candidate" {
+			ep.ObservationKind = "candidate"
+			if endpointStateDispatchable(ep.State) {
+				ep.State, ep.StateReason = EndpointStateUnmaterialized, nativeDispositionReason
+			}
+		}
 		mergeSurfaceEndpoint(surface, byID, ep)
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
@@ -266,6 +273,12 @@ func ParseKatanaAttackSurfaceScoped(artifact, scope, target string, observedWith
 		replayRef, requestID, readOnly = "", "", false
 		recordedAuthContext = ""
 		trustedBrowser = (firstStringValue(request, "source") == "browser" || firstStringValue(request, "source") == "browser-dom") && filepath.Base(artifact) == "browser.jsonl"
+		trustedBrowser = trustedBrowser || (firstStringValue(request, "source") == "zap-discovery" && filepath.Base(artifact) == "zap-discovery.jsonl")
+		nativeObservationKind, nativeDispositionReason = "", ""
+		if filepath.Base(artifact) == "zap-discovery.jsonl" && firstStringValue(request, "source") == "zap-discovery" {
+			nativeObservationKind = firstStringValue(request, "observation_kind")
+			nativeDispositionReason = firstStringValue(request, "disposition_reason")
+		}
 		if trustedBrowser {
 			recordedAuthContext = firstStringValue(request, "auth_context_id")
 		}

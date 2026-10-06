@@ -164,6 +164,11 @@ func (g *RecordingGateway) Close() error {
 	}
 	return g.failed
 }
+func (g *RecordingGateway) UpdateTargetAuth(headers []string) {
+	g.mu.Lock()
+	g.req.TargetAuth = strings.Join(headers, "\n")
+	g.mu.Unlock()
+}
 func (g *RecordingGateway) SetPhase(phase string) { g.mu.Lock(); g.phase = phase; g.mu.Unlock() }
 func (g *RecordingGateway) record(event CoverageEvent) {
 	g.mu.Lock()
@@ -326,7 +331,11 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	g.requests++
 	failed := g.failed
-	over := g.cfg.WebMaxEndpoints > 0 && g.requests > g.cfg.WebMaxEndpoints*100
+	requestLimit := g.cfg.WebMaxEndpoints * 100
+	if g.req.ZAPDiscoveryOnly {
+		requestLimit = g.cfg.WebMaxEndpoints
+	}
+	over := requestLimit > 0 && g.requests > requestLimit
 	g.mu.Unlock()
 	if failed != nil || over {
 		event.Kind, event.Reason = "blocked", "recording or request budget unavailable"
@@ -359,10 +368,13 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	request.Host = request.URL.Host
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Proxy-Connection")
+	g.mu.Lock()
+	boundHeaders := g.req.TargetAuth
+	g.mu.Unlock()
 	bound, _ := assessment.ParseApprovedOrigin("", g.req.Target)
 	o, _ := assessment.ParseApprovedOrigin("", raw)
 	sameOrigin := bound.Scheme == o.Scheme && bound.Host == o.Host && bound.Port == o.Port
-	for _, h := range strings.Split(g.req.TargetAuth, "\n") {
+	for _, h := range strings.Split(boundHeaders, "\n") {
 		name, _, ok := strings.Cut(h, ":")
 		if ok {
 			request.Header.Del(strings.TrimSpace(name))
@@ -373,7 +385,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		request.Header.Del("Cookie")
 	}
 	if sameOrigin {
-		for _, h := range strings.Split(g.req.TargetAuth, "\n") {
+		for _, h := range strings.Split(boundHeaders, "\n") {
 			name, value, ok := strings.Cut(h, ":")
 			if ok {
 				request.Header.Set(strings.TrimSpace(name), strings.TrimSpace(value))
@@ -382,7 +394,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	}
 	requestOrigin, _ := assessment.ParseApprovedOrigin("", raw)
 	for _, input := range g.req.InputRequests {
-		if !input.Selected || input.Method != r.Method || !gatewayInputAuthenticationMatches(input, request, g.req.TargetAuth, sameOrigin, g.req.AuthContextID) {
+		if !input.Selected || input.Method != r.Method || !gatewayInputAuthenticationMatches(input, request, boundHeaders, sameOrigin, g.req.AuthContextID) {
 			continue
 		}
 		candidate, e := url.Parse(input.URL)
