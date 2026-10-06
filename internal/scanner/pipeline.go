@@ -1056,7 +1056,7 @@ func truncateArtifact(path string, limit int64) bool {
 }
 
 func redactArtifact(path string, secrets []string) error {
-	if path == "" || len(secrets) == 0 {
+	if path == "" {
 		return nil
 	}
 	info, err := os.Stat(path)
@@ -1070,7 +1070,10 @@ func redactArtifact(path string, secrets []string) error {
 	if err != nil {
 		return err
 	}
-	clean := []byte(redact(string(data), secrets))
+	clean, err := sanitizeArtifactData(path, data, secrets)
+	if err != nil {
+		return err
+	}
 	if bytes.Equal(data, clean) {
 		return nil
 	}
