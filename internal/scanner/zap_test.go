@@ -1015,3 +1015,21 @@ func TestZAPApprovedContextAndExportCoverMultipleOrigins(t *testing.T) {
 		t.Fatalf("%s %v", out, err)
 	}
 }
+
+func TestZAPStructuredSeedsOnlyInventoryRequestsOnce(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	raw := "https://example.test/api/ping"
+	req := Request{Target: "https://example.test/", Scope: "app:test", ScanDir: t.TempDir(), TypedAssessment: true, StructuredDispatch: true, InputRequests: []ScannerRequestInput{{EndpointID: "one", URL: raw, Method: "GET", Selected: true}}, APIEndpoints: []APIEndpoint{{Method: "GET", Path: "/api/ping", RequestURL: raw, Resolved: true, Eligible: true}, {Method: "GET", Path: "/not-selected", RequestURL: "https://example.test/not-selected", Resolved: true, Eligible: true}}}
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 10, MaxOutputBytes: 1 << 20}
+	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	if run.Status != "completed" || len(run.Submissions) != 1 || len(run.APIEndpointResults) != 2 || run.APIEndpointResults[0].Status != "seeded" || run.APIEndpointResults[1].Status != "skipped" {
+		t.Fatalf("run %+v", run)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.accessedURLs) != 1 || fake.accessedURLs[0] != raw {
+		t.Fatalf("noninventory or duplicate seeds: %v", fake.accessedURLs)
+	}
+}

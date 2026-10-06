@@ -57,6 +57,18 @@ func zapImportDefinitions(ctx context.Context, cfg Config, req Request, contextI
 		if raw == "" {
 			raw, _ = apiEndpointURL(req.Target, endpoint)
 		}
+		if req.StructuredDispatch {
+			selected := false
+			for _, input := range req.InputRequests {
+				if input.Selected && input.Method == endpoint.Method && input.URL == raw {
+					selected = true
+					break
+				}
+			}
+			if !selected {
+				continue
+			}
+		}
 		if endpoint.Source == "graphql" && endpoint.DefinitionSDL != "" {
 			graphs[endpoint.DefinitionID] = append(graphs[endpoint.DefinitionID], endpoint)
 			continue

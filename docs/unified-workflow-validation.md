@@ -44,8 +44,8 @@ establish that the complete expanded workflow is ready for default rollout.
   replay and captured read-only GraphQL POST routing are implemented.
 - Supplemental ZAP spider results merged into the inventory before active checks;
   structured runs currently disable that spider to preserve the request boundary.
-- Multi-role discovery/authentication contexts and the complete native HTTPS ZAP
-  gateway fixture; HTTP routing and Go TLS gateway fixtures are already covered.
+- Multi-role discovery/authentication contexts; the native HTTPS ZAP gateway
+  fixture now covers 684 method/body-aware request submissions.
 - Evidence sanitization before persistence across all native artifact formats and
   enforcement of the recording boundary for adapters that can bypass proxies.
 - End-to-end browser UI approval/authentication/report acceptance and amd64 CI.
@@ -83,4 +83,6 @@ After validation, the disposable `xalgorix-workflow-zap` container and
 `xalgorix-workflow-validation` network were removed. Both validation image tags
 remain available. Production services, other images and all volumes were preserved.
 
-Encrypted replay follow-up: credential isolation/integrity, exact URL/body variants, missing-key fail-closed routing, public-manifest redaction and captured read-only GraphQL gateway tests pass. The full Go suite, scanner/credential race tests and Web UI build pass. Native arm64 Chromium restores captured GraphQL bodies and verified headers from encrypted replay while public discovery artifacts omit secrets. Native ZAP body/HTTPS acceptance is still pending.
+Encrypted replay follow-up: credential isolation/integrity, exact URL/body variants, missing-key fail-closed routing, public-manifest redaction and captured read-only GraphQL gateway tests pass. The full Go suite, scanner/credential race tests and Web UI build pass. Native arm64 Chromium restores captured GraphQL bodies and verified headers from encrypted replay while public discovery artifacts omit secrets. Native ZAP body/HTTPS acceptance now passes (see below).
+
+ZAP inventory acceptance: structured assessments no longer issue separate root or API seeds, and schema imports are filtered to selected inventory requests. A disposable native arm64 ZAP fixture acknowledges all 684 request variants and verifies saved HTTP seeding receipts for every inventory ID, including repeated query parameters, HEAD, multiple approved origins and a read-only GraphQL JSON POST over HTTPS. Native vulnerability rules are disabled in this routing fixture; it does not prove active-check completion. The full Go suite passes.

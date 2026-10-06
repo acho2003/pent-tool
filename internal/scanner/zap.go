@@ -599,21 +599,23 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		input := ScannerRequestInput{Method: method, URL: rawURL, Selected: true}
 		return zapSeedRequest(cctx, cfg, call, input)
 	}
-	if refusal := seedRefusal(http.MethodGet, target); refusal != "" {
+	if req.StructuredDispatch {
+		logLine("ZAP target anchor is inventory-only; selected request seeds are authoritative")
+	} else if refusal := seedRefusal(http.MethodGet, target); refusal != "" {
 		logLine("ZAP did not pre-seed the target: " + refusal)
 	} else if _, err := call("/JSON/core/action/accessUrl/", url.Values{"url": {target}, "followRedirects": {followRedirects}}); err != nil {
 		logLine("ZAP could not pre-seed the target (continuing to spider): " + err.Error())
 	} else {
 		logLine("ZAP seeded target into scan tree: " + target)
 	}
-	if req.TypedAssessment && len(req.APIEndpoints) > 0 {
+	if req.TypedAssessment && !req.StructuredDispatch && len(req.APIEndpoints) > 0 {
 		seeded := 0
 		for _, endpoint := range req.APIEndpoints {
 			if err := checkAuth(); err != nil {
 				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 			}
 			result := APIEndpointResult{Method: endpoint.Method, Path: endpoint.Path, Origin: endpoint.Origin}
-			if !endpoint.Eligible || !endpoint.Resolved {
+			if !endpoint.Eligible || !endpoint.Resolved || (endpoint.Method != http.MethodGet && endpoint.Method != http.MethodHead && endpoint.Method != http.MethodOptions) {
 				result.Status, result.Reason = "skipped", endpoint.Reason
 				if result.Reason == "" {
 					result.Reason = "operation needs values or explicit approval"
@@ -698,6 +700,32 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 		run.Submissions = append(run.Submissions, submission)
 	}
+	if req.StructuredDispatch {
+		for _, endpoint := range req.APIEndpoints {
+			result := APIEndpointResult{Method: endpoint.Method, Path: endpoint.Path, Origin: endpoint.Origin, Status: "skipped", Reason: "operation was not selected as an exact inventory request"}
+			raw := endpoint.RequestURL
+			if raw == "" {
+				raw, _ = apiEndpointURL(target, endpoint)
+			}
+			if !endpoint.Resolved || !endpoint.Eligible {
+				if endpoint.Reason != "" {
+					result.Reason = endpoint.Reason
+				}
+			} else {
+				for i, input := range inputs {
+					if input.URL == raw && input.Method == endpoint.Method && i < len(run.Submissions) {
+						submission := run.Submissions[i]
+						result.Status, result.Reason = submission.Status, submission.Reason
+						if submission.Status == "acknowledged" {
+							result.Status = "seeded"
+						}
+						break
+					}
+				}
+			}
+			run.APIEndpointResults = append(run.APIEndpointResults, result)
+		}
+	}
 	if seeded > 0 {
 		logLine(fmt.Sprintf("ZAP acknowledged %d inventory request submissions", seeded))
 	}
@@ -705,7 +733,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// Legacy scans retain ZAP's crawler. Structured dispatch deliberately does
 	// not spider again: doing so would rediscover and submit POST forms that the
 	// safe dispatcher marked inventory-only. Its active scan therefore operates
-	// on the root anchor plus the explicit GET/HEAD URLs seeded above.
+	// on explicitly selected request seeds, without a separate root request.
 	if !req.StructuredDispatch {
 		spiderParams := url.Values{"url": {target}, "recurse": {"true"}, "maxChildren": {strconv.Itoa(maxChildren)}}
 		if req.TypedAssessment {
