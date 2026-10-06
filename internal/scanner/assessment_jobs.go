@@ -205,7 +205,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			inventoryTarget = "http://" + inventoryTarget
 		}
 		crawlReq := Request{
-			ReplayStore: replayStore, ReplayScope: inventoryScope, Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion, PlanFingerprint: plan.Fingerprint,
+			BrowserEmit: emit, BrowserAttemptControl: p.AttemptControl, ReplayStore: replayStore, ReplayScope: inventoryScope, Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion, PlanFingerprint: plan.Fingerprint,
 			ScanDir: filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),

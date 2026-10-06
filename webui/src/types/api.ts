@@ -70,6 +70,7 @@ export interface WSEvent {
 
 export interface ScannerArtifact { kind: "filesystem" | "repository" | "image" | "sbom" | string; ref: string; }
 export interface ScannerRun {
+  auth_context_id?: string; auth_identity?: string; auth_role?: string;
   outcome?: string;
   execution_outcome?: string;
   parser_outcome?: string;

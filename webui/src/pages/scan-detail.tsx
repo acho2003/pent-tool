@@ -561,7 +561,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 	const liveRun = (scanner: string, scope: string) => (scan.scanner_runs ?? []).find((run) => run.scanner === scanner && (run.scope ?? "") === scope);
 	const cards = (runs: ScopeRun[], fallbackScope: string) => <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{runs.map((r) => {
 		const k = keyOf(r, fallbackScope);
-		return <ScannerStatusCard key={`${k.scope}|${k.scanner}|${k.attemptId ?? ""}`} name={r.scanner} run={r} live={liveRunProgress(liveRun(k.scanner, k.scope))} active={sameKey(selected, k)} onClick={() => setPicked(k)} onStop={(attemptId) => stopScanner.mutate(attemptId)} stopping={stopScanner.isPending ? stopScanner.variables : undefined} />;
+		return <ScannerStatusCard key={`${k.scope}|${k.scanner}|${k.attemptId ?? ""}`} name={liveRun(k.scanner, k.scope)?.auth_identity ? `${r.scanner} · ${liveRun(k.scanner, k.scope)!.auth_identity}` : r.scanner} run={r} live={liveRunProgress(liveRun(k.scanner, k.scope))} active={sameKey(selected, k)} onClick={() => setPicked(k)} onStop={(attemptId) => stopScanner.mutate(attemptId)} stopping={stopScanner.isPending ? stopScanner.variables : undefined} />;
 	})}</div>;
 	// Render a scope's runs grouped by scanner group (web/network/cloud/k8s/code),
 	// each under a small subheader. A single group falls back to a flat grid.

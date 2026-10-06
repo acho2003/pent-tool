@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -228,5 +229,39 @@ func TestBrowserRuntimeNamedIdentitiesKeepIndependentReplay(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestBrowserRuntimeAttemptStopPublishesCancellation(t *testing.T) {
+	chrome := os.Getenv("XALGORIX_TEST_CHROMIUM")
+	if chrome == "" {
+		t.Skip("native Chromium fixture opt-in")
+	}
+	stops := make(chan context.CancelFunc, 1)
+	var stopOnce sync.Once
+	lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		stopOnce.Do(func() { stop := <-stops; stop() })
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><body>controlled</body></html>`))
+	}))
+	defer lab.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", lab.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	var unregistered atomic.Bool
+	var events []Event
+	req := Request{Target: lab.URL + "/", ScanDir: t.TempDir(), Scope: "discovery:app", AppScope: &scope, PlanFingerprint: "accepted", BrowserEmit: func(event Event) { events = append(events, event) }, BrowserAttemptControl: func(id string, cancel context.CancelFunc) func() {
+		if id == "" {
+			t.Fatal("unidentified browser attempt")
+		}
+		stops <- cancel
+		return func() { unregistered.Store(true) }
+	}}
+	run := DiscoverBrowser(t.Context(), req, Config{KatanaChromePath: chrome, KatanaTimeout: 20 * time.Second, WebMaxEndpoints: 20})
+	if run.Status != "cancelled" || run.ExecutionOutcome != "CANCELLED" || run.Completeness != "partial" || !unregistered.Load() {
+		t.Fatalf("browser stop did not finalize: %+v cleanup=%v", run, unregistered.Load())
+	}
+	if len(events) < 2 || events[0].Type != "scanner_started" || events[len(events)-1].Type != "scanner_failed" || events[len(events)-1].Run.AttemptID != events[0].Run.AttemptID || events[len(events)-1].Run.Status != "cancelled" {
+		t.Fatalf("wrong lifecycle events: %+v", events)
 	}
 }

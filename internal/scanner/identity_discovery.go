@@ -19,7 +19,7 @@ func discoverAdditionalIdentities(ctx context.Context, targetID string, req Requ
 			continue
 		}
 		request := req
-		request.AuthContextID = auth.ID
+		request.AuthContextID, request.AuthIdentity, request.AuthRole = auth.ID, auth.Identity, auth.Role
 		request.Scope = req.Scope + ":identity:" + auth.ID
 		request.ScanDir = filepath.Join(req.ScanDir, "identities", stableJobPath(auth.ID))
 		request.TargetAuth = strings.Join(auth.Headers, "\n")

@@ -51,24 +51,28 @@ type Artifact struct {
 }
 
 type Request struct {
-	AuthContextID             string                                `json:"-"`
-	AuthContexts              []AuthContext                         `json:"-"`
-	AuthorizationExpectations []assessment.AuthorizationExpectation `json:"-"`
-	Inventory                 *AttackSurface                        `json:"-"`
-	ReplayStore               *credentials.ReplayStore              `json:"-"`
-	ReplayScope               string                                `json:"-"`
-	BrowserStorage            *credentials.BrowserStorage           `json:"-"`
-	BrowserAccessTest         bool                                  `json:"-"`
-	BrowserCheckpointMarker   string                                `json:"-"`
-	WorkflowVersion           string                                `json:"-"`
-	Gateway                   *RecordingGateway                     `json:"-"`
-	GatewayURL                string                                `json:"-"`
-	GatewayCAPath             string                                `json:"-"`
-	NetworkPorts              []int                                 `json:"-"`
-	AttemptID                 string                                `json:"-"`
-	PlanFingerprint           string                                `json:"-"`
-	InputRequests             []ScannerRequestInput                 `json:"-"`
-	Target                    string                                `json:"target"`
+	BrowserEmit               EmitFunc                                `json:"-"`
+	BrowserAttemptControl     func(string, context.CancelFunc) func() `json:"-"`
+	AuthIdentity              string                                  `json:"-"`
+	AuthRole                  string                                  `json:"-"`
+	AuthContextID             string                                  `json:"-"`
+	AuthContexts              []AuthContext                           `json:"-"`
+	AuthorizationExpectations []assessment.AuthorizationExpectation   `json:"-"`
+	Inventory                 *AttackSurface                          `json:"-"`
+	ReplayStore               *credentials.ReplayStore                `json:"-"`
+	ReplayScope               string                                  `json:"-"`
+	BrowserStorage            *credentials.BrowserStorage             `json:"-"`
+	BrowserAccessTest         bool                                    `json:"-"`
+	BrowserCheckpointMarker   string                                  `json:"-"`
+	WorkflowVersion           string                                  `json:"-"`
+	Gateway                   *RecordingGateway                       `json:"-"`
+	GatewayURL                string                                  `json:"-"`
+	GatewayCAPath             string                                  `json:"-"`
+	NetworkPorts              []int                                   `json:"-"`
+	AttemptID                 string                                  `json:"-"`
+	PlanFingerprint           string                                  `json:"-"`
+	InputRequests             []ScannerRequestInput                   `json:"-"`
+	Target                    string                                  `json:"target"`
 	// Scanners restricts this request to the named scanners. Empty runs the
 	// whole pipeline; every name must be one of OrderedNames.
 	Scanners []string `json:"-"`

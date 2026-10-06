@@ -65,8 +65,17 @@ func browserRequestAllowed(req Request, cfg Config, method, rawURL string) error
 // DiscoverBrowser records browser requests through an intercepted, bounded Go
 // client. Chrome cannot follow a redirect outside the approved request gate.
 func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
-	run = Run{AuthContextID: req.AuthContextID, Scanner: "browser", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	defer func() { run = finalizeRun(run) }()
+	run = Run{AuthContextID: req.AuthContextID, AuthIdentity: req.AuthIdentity, AuthRole: req.AuthRole, Scanner: "browser", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	defer func() {
+		run = finalizeRun(run)
+		if req.BrowserEmit != nil {
+			kind := "scanner_completed"
+			if run.Status != "completed" {
+				kind = "scanner_failed"
+			}
+			req.BrowserEmit(Event{Type: kind, Scanner: "browser", Run: run, Output: run.Reason})
+		}
+	}()
 	run.AttemptID, run.PlanFingerprint, run.WorkflowVersion = req.AttemptID, req.PlanFingerprint, req.WorkflowVersion
 	if run.AttemptID == "" {
 		attempt, err := newAssessmentAttemptID()
@@ -77,6 +86,9 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		run.AttemptID = attempt
 	}
 
+	if req.BrowserEmit != nil {
+		req.BrowserEmit(Event{Type: "scanner_started", Scanner: "browser", Run: run})
+	}
 	if err := req.BrowserStorage.Validate(); err != nil {
 		run.Status, run.Reason = "failed", "invalid browser storage configuration"
 		return
@@ -100,8 +112,15 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
+	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if req.BrowserAttemptControl != nil {
+		unregister := req.BrowserAttemptControl(run.AttemptID, cancel)
+		if unregister != nil {
+			defer unregister()
+		}
+	}
 	var authMu sync.Mutex
 	lastAuthCheck := time.Time{}
 	var authFailure error
@@ -441,7 +460,18 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		run.Outcome, run.Completeness, run.Reason = "PARTIAL", "partial", strings.Join(reasons, "; ")
 	}
-	if count == 0 {
+	if timedOut {
+		run.Status, run.ExecutionOutcome = "failed", "TIMEOUT"
+		run.Outcome, run.Reason = "TIMEOUT", "browser discovery time budget exhausted"
+		if ctx.Err() == context.Canceled {
+			run.Status, run.ExecutionOutcome, run.Outcome = "cancelled", "CANCELLED", "PARTIAL"
+			run.Reason = "browser discovery cancelled with assessment"
+			if parentCtx.Err() == nil {
+				run.Reason = "browser discovery stopped by user"
+			}
+		}
+	}
+	if count == 0 && !timedOut {
 		run.Status, run.Reason = "failed", "browser produced no approved HTTP observations"
 	}
 	return

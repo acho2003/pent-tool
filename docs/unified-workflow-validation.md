@@ -195,3 +195,12 @@ for named-role requests until per-role routing is implemented; primary scanner
 completion cannot credit those requests. Full Go, Web UI build, and native arm64
 Chromium/scanner race checks pass. The original first-attempt executor fixture
 now asserts matched role outcomes, rather than only counting returned results.
+
+Browser workers now publish identified live start/final events and register their
+cancellation callbacks with the existing per-tool stop registry. Named workers
+carry role labels in live scan details. User cancellation and deadline exhaustion
+produce separate structured execution outcomes while preserving partial discovery
+artifacts. Native arm64 Chromium race fixtures verify authenticated XHR, storage
+checkpoints, separate identity replay, and stopping a registered browser attempt
+with callback cleanup and a matching terminal event. The full Go suite and Web UI
+build pass. These checks use only disposable local fixtures.
