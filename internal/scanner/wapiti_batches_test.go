@@ -103,3 +103,60 @@ done
 		t.Fatalf("legacy limit changed: %d", got)
 	}
 }
+
+// Opt-in disposable-runtime acceptance: unlike the command receipt fixture,
+// this verifies requests actually received by a local lab through the gateway.
+func TestWapitiRuntimeBatchesExerciseSelectedInputs(t *testing.T) {
+	if os.Getenv("XALGORIX_TEST_WAPITI") != "1" {
+		t.Skip("requires the retained native Wapiti runtime")
+	}
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<html><title>Local request fixture</title><body>fixture</body></html>")
+	}))
+	defer server.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", server.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	req := Request{WorkflowVersion: "unified-v1", Target: server.URL + "/?q=0", StructuredDispatch: true, TypedAssessment: true, TestEnvironment: true, AppScope: &scope, ScanDir: t.TempDir(), AttemptID: "native-wapiti"}
+	for i := 0; i < 684; i++ {
+		raw := fmt.Sprintf("%s/?q=%d", server.URL, i)
+		req.EndpointTargets = append(req.EndpointTargets, raw)
+		req.InputRequests = append(req.InputRequests, ScannerRequestInput{EndpointID: fmt.Sprintf("request-%d", i), URL: raw, Method: "GET", Selected: true})
+	}
+	cfg := Config{WapitiPath: "/usr/local/bin/wapiti", WapitiTimeout: 3 * time.Minute, RateRPS: 10000, WebMaxEndpoints: 1000, MaxOutputBytes: 8 << 20, Budget: NewAssessmentBudget(10000, 1000, 3*time.Minute)}
+	gateway, err := NewRecordingGateway(t.Context(), req, cfg, "wapiti")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.GatewayURL, req.GatewayCAPath, req.Gateway = gateway.URL, gateway.CAPath, gateway
+	run := wapitiRunner{}.Run(t.Context(), req, cfg, nil)
+	if err := gateway.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "completed" || len(run.BatchRuns) != 14 || len(run.Submissions) != 684 {
+		for _, batch := range run.BatchRuns {
+			t.Logf("batch: %s %s stderr=%s", batch.Status, batch.Reason, readCapped(batch.StderrPath, 4000))
+		}
+		t.Fatalf("native batches: status=%s reason=%s batches=%d submissions=%d", run.Status, run.Reason, len(run.BatchRuns), len(run.Submissions))
+	}
+	events, err := ReadCoverageEvents(gateway.EventPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exercised := map[string]bool{}
+	for _, event := range events {
+		if event.Kind == "observed" {
+			for _, id := range event.EndpointIDs {
+				exercised[id] = true
+			}
+		}
+	}
+	for _, input := range req.InputRequests {
+		if !exercised[input.EndpointID] {
+			t.Errorf("no native HTTP receipt for %s", input.EndpointID)
+		}
+	}
+	t.Logf("native HTTP receipts: %d selected variants in %d batches", len(exercised), len(run.BatchRuns))
+}
