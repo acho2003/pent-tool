@@ -583,6 +583,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		runEmit := emit
 		if emit != nil {
 			runEmit = func(event Event) {
+				// The coordinator owns terminal state after cancellation, authentication,
+				// gateway evidence, and artifact handling have been reconciled.
+				if event.Type == "scanner_completed" || event.Type == "scanner_failed" {
+					return
+				}
 				if event.Run.Scanner != "" {
 					event.Run.Target = job.Target
 					event.Run.Scope = scope
@@ -623,10 +628,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		unregisterAttempt()
 		if userStopped {
 			run.Status = "cancelled"
+			run.ExecutionOutcome, run.Outcome, run.Completeness = "CANCELLED", "PARTIAL", "partial"
 			run.Reason = "scanner stopped by user; partial output and artifacts were retained"
 			run.FinishedAt = time.Now().Format(time.RFC3339Nano)
 		}
 		if budgetExpired {
+			run.ExecutionOutcome, run.Outcome, run.Completeness = "TIMEOUT", "TIMEOUT", "partial"
 			run.Status = "failed"
 			if !stageDeadline.IsZero() && time.Now().Before(webDeadlines[job.TargetID]) {
 				run.Reason = "scanner stage time budget reached; assessment coverage is partial"
@@ -662,6 +669,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		run = finalizeRun(run)
+		if emit != nil {
+			typ := "scanner_completed"
+			if run.Status != "completed" {
+				typ = "scanner_failed"
+			}
+			emit(Event{Type: typ, Scanner: job.Scanner, Run: run, Output: run.Reason})
+		}
 		CompleteEndpointCoverage(surface, job.Scanner, run)
 		_ = SaveAttackSurface(scanDir, surface)
 		appendOutcome(job, run)

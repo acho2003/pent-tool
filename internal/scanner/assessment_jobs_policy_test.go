@@ -100,12 +100,22 @@ func TestAssessmentJobCanCancelIndividualAttempt(t *testing.T) {
 		return func() {}
 	}}
 	done := make(chan []Run, 1)
-	go func() { done <- p.RunAssessmentJobs(context.Background(), plan, t.TempDir(), nil, nil) }()
+	var terminal []Run
+	go func() {
+		done <- p.RunAssessmentJobs(context.Background(), plan, t.TempDir(), nil, func(event Event) {
+			if event.Type == "scanner_completed" || event.Type == "scanner_failed" {
+				terminal = append(terminal, event.Run)
+			}
+		})
+	}()
 	<-probe.started
 	(<-registered)()
 	runs := <-done
 	if len(runs) != 1 || runs[0].Status != "cancelled" || runs[0].Reason != "scanner stopped by user; partial output and artifacts were retained" {
 		t.Fatalf("individual stop did not produce a cancelled run: %+v", runs)
+	}
+	if len(terminal) != 1 || terminal[0].Reason != runs[0].Reason || terminal[0].ExecutionOutcome != "CANCELLED" || terminal[0].Outcome != "PARTIAL" {
+		t.Fatalf("live terminal event disagrees with saved cancellation: %+v", terminal)
 	}
 }
 
