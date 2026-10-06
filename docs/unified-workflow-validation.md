@@ -204,3 +204,18 @@ artifacts. Native arm64 Chromium race fixtures verify authenticated XHR, storage
 checkpoints, separate identity replay, and stopping a registered browser attempt
 with callback cleanup and a matching terminal event. The full Go suite and Web UI
 build pass. These checks use only disposable local fixtures.
+
+The updated application-only Linux arm64 validation image is
+`xalgorix:workflow-validation-0c6c975`, revision
+`0c6c975585485a754d915af6c9ec922ae77f8a18`, measuring 1,147,720,031 bytes.
+Offline smoke checks passed all 24 required scanner commands, Chromium,
+HTTP/JavaScript discovery, native/Python libraries and source fixtures. The
+fixture HTTP server logged a benign connection reset from a closed probe; the
+smoke process completed successfully. The image reuses the retained slim runtime;
+it is not a full toolchain rebuild and no disk reclamation was performed.
+Disposable browser sessions and fixture containers were closed/removed. The
+validation tag remains available; production images, services and volumes remain
+unchanged. Expanded workflow rollout is still blocked by the outstanding items
+in Remaining acceptance, especially approved POST fuzzing, supplemental ZAP
+inventory discovery, general per-role adapter routing, complete execution restart
+acceptance and amd64 CI. No completeness percentage is inferred from these tests.
