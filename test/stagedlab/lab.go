@@ -1,0 +1,438 @@
+// Package stagedlab is a disposable, deterministic multi-origin web lab for the
+// staged assessment acceptance tests. Every listener binds to loopback, all data
+// is synthetic, and every request is recorded so tests can assert both what was
+// reached and that nothing outside the approved boundary was contacted.
+package stagedlab
+
+import (
+	"crypto/subtle"
+	"encoding/json"
+	"fmt"
+	"html"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+)
+
+const (
+	// PathPrefix is the approved path boundary on the primary origin.
+	PathPrefix = "/app/"
+	// OutsidePath lives on the primary origin but outside PathPrefix.
+	OutsidePath = "/outside/secret"
+
+	AdminUser     = "admin"
+	AdminPassword = "lab-admin-password"
+	AdminMarker   = "LAB_ADMIN_MARKER"
+	ViewerUser    = "viewer"
+	// ViewerPassword and the tokens are synthetic lab values only.
+	ViewerPassword = "lab-viewer-password"
+	ViewerMarker   = "LAB_VIEWER_MARKER"
+	AdminToken     = "lab-admin-session"
+	ViewerToken    = "lab-viewer-session"
+	CookieName     = "lab_session"
+	CSRFValue      = "lab-csrf-synthetic"
+
+	// VariantCount is the number of distinct exact request variants linked from
+	// the catalog page.
+	VariantCount = 684
+)
+
+// Hit is one request observed by the lab.
+type Hit struct {
+	Origin   string // primary, secondary, alias
+	Method   string
+	Path     string
+	RawQuery string
+	Identity string // anonymous, admin or viewer
+	Body     string
+}
+
+// URL returns the path and query exactly as received.
+func (h Hit) URL() string {
+	if h.RawQuery == "" {
+		return h.Path
+	}
+	return h.Path + "?" + h.RawQuery
+}
+
+// Lab owns the listeners and request log.
+type Lab struct {
+	Primary   *httptest.Server // HTTP, approved only below PathPrefix
+	Secondary *httptest.Server // HTTPS, approved origin without introspection
+	Alias     *httptest.Server // never approved; any contact is a violation
+	DeadURL   string           // a closed loopback port
+
+	mu        sync.Mutex
+	hits      []Hit
+	resources map[string]string
+	nextID    int
+}
+
+// Start launches the lab and registers cleanup.
+func Start(t testing.TB) *Lab {
+	t.Helper()
+	l := &Lab{resources: map[string]string{}}
+	l.Primary = httptest.NewServer(l.record("primary", l.primaryRoutes()))
+	l.Secondary = httptest.NewTLSServer(l.record("secondary", l.secondaryRoutes()))
+	l.Alias = httptest.NewServer(l.record("alias", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "unapproved alias origin")
+	})))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.DeadURL = "http://" + listener.Addr().String() + "/"
+	_ = listener.Close()
+	t.Cleanup(func() {
+		l.Primary.Close()
+		l.Secondary.Close()
+		l.Alias.Close()
+	})
+	return l
+}
+
+// Hits returns a copy of the request log.
+func (l *Lab) Hits() []Hit {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]Hit(nil), l.hits...)
+}
+
+// Reset clears the request log without touching resources.
+func (l *Lab) Reset() {
+	l.mu.Lock()
+	l.hits = nil
+	l.mu.Unlock()
+}
+
+// Resources returns the number of controlled resources that still exist.
+func (l *Lab) Resources() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.resources)
+}
+
+// ExcludedPaths are routes that an approved assessment must never contact.
+var ExcludedPaths = []string{PathPrefix + "logout", PathPrefix + "write", PathPrefix + "admin/delete"}
+
+// Forbidden returns requests that violate the approved boundary: any contact
+// with the alias origin, anything on the primary origin outside PathPrefix and
+// the excluded logout and write routes.
+func (l *Lab) Forbidden() []Hit {
+	var out []Hit
+	for _, hit := range l.Hits() {
+		switch {
+		case hit.Origin == "alias":
+			out = append(out, hit)
+		case hit.Origin == "primary" && !strings.HasPrefix(hit.Path, PathPrefix):
+			out = append(out, hit)
+		case hit.Origin == "primary" && excluded(hit.Path):
+			out = append(out, hit)
+		}
+	}
+	return out
+}
+
+func excluded(path string) bool {
+	for _, p := range ExcludedPaths {
+		if path == p {
+			return true
+		}
+	}
+	return false
+}
+
+// Variants returns the exact path+query of every cataloged request variant, in
+// catalog order. They are distinct as raw strings, which is the identity the
+// request inventory must preserve (trailing slashes, repeated and encoded
+// query values).
+func Variants() []string {
+	out := make([]string, 0, VariantCount)
+	for i := 0; i < 300; i++ {
+		out = append(out, fmt.Sprintf("%sitems?id=%d", PathPrefix, i))
+	}
+	for i := 0; i < 100; i++ {
+		out = append(out, fmt.Sprintf("%sitems/%d/", PathPrefix, i))
+	}
+	for i := 0; i < 100; i++ {
+		out = append(out, fmt.Sprintf("%sitems/%d", PathPrefix, i))
+	}
+	for i := 0; i < 84; i++ {
+		out = append(out, fmt.Sprintf("%ssearch?tag=a&tag=%d", PathPrefix, i))
+	}
+	for i := 0; i < 100; i++ {
+		out = append(out, fmt.Sprintf("%sitems?name=n%%20%d", PathPrefix, i))
+	}
+	return out
+}
+
+func (l *Lab) record(origin string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit := Hit{Origin: origin, Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Identity: identityOf(r)}
+		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+			hit.Body = string(body)
+			r.Body = io.NopCloser(strings.NewReader(hit.Body))
+		}
+		l.mu.Lock()
+		l.hits = append(l.hits, hit)
+		l.mu.Unlock()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func identityOf(r *http.Request) string {
+	if cookie, err := r.Cookie(CookieName); err == nil {
+		switch {
+		case secureEqual(cookie.Value, AdminToken):
+			return "admin"
+		case secureEqual(cookie.Value, ViewerToken):
+			return "viewer"
+		}
+	}
+	return "anonymous"
+}
+
+func secureEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
+
+func (l *Lab) primaryRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+PathPrefix+"{$}", func(w http.ResponseWriter, r *http.Request) {
+		page(w, fmt.Sprintf(`<h1>Lab home</h1>
+<a href="%[1]sabout">about</a> <a href="%[1]scatalog">catalog</a> <a href="%[1]sjs">js</a>
+<a href="%[1]slogin">login</a> <a href="%[1]slogout">logout</a> <a href="%[1]sredirect">redirect</a>
+<a href="%[2]s">outside path</a> <a href="%[3]s">alias</a> <a href="%[1]sprivate">private</a>
+<form method="get" action="%[1]ssearch"><input name="q"></form>
+<form method="post" action="%[1]swrite"><input name="note"><button>save</button></form>`, PathPrefix, OutsidePath, l.Alias.URL+"/anything"))
+	})
+	mux.HandleFunc("GET "+PathPrefix+"about", func(w http.ResponseWriter, r *http.Request) { page(w, "<h1>About</h1>") })
+	mux.HandleFunc("GET "+PathPrefix+"catalog", func(w http.ResponseWriter, r *http.Request) {
+		var b strings.Builder
+		b.WriteString("<h1>Catalog</h1>")
+		for _, v := range Variants() {
+			fmt.Fprintf(&b, `<a href="%s">v</a>`, html.EscapeString(v))
+		}
+		page(w, b.String())
+	})
+	item := func(w http.ResponseWriter, r *http.Request) { page(w, "<h1>Item</h1>") }
+	mux.HandleFunc("GET "+PathPrefix+"items", item)
+	mux.HandleFunc("GET "+PathPrefix+"items/{n}", item)
+	mux.HandleFunc("GET "+PathPrefix+"items/{n}/", item)
+	mux.HandleFunc("GET "+PathPrefix+"search", item)
+	mux.HandleFunc("GET "+PathPrefix+"redirect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, PathPrefix+"about", http.StatusFound)
+	})
+	mux.HandleFunc("GET "+PathPrefix+"redirect-out", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, l.Alias.URL+"/redirected", http.StatusFound)
+	})
+	mux.HandleFunc("GET "+OutsidePath, func(w http.ResponseWriter, r *http.Request) { page(w, "outside the approved path") })
+
+	// JavaScript-only route: the dashboard path appears only in the script.
+	mux.HandleFunc("GET "+PathPrefix+"js", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<div id="root"></div><script src="`+PathPrefix+`static/app.js"></script>`)
+	})
+	mux.HandleFunc("GET "+PathPrefix+"static/app.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		fmt.Fprintf(w, `fetch(%q,{credentials:"same-origin"}).then(r=>r.json()).then(d=>{document.getElementById("root").textContent=d.user});
+document.getElementById("root").addEventListener("click",()=>{history.pushState({},"",%q)});`, PathPrefix+"api/me", PathPrefix+"spa/dashboard")
+	})
+	mux.HandleFunc("GET "+PathPrefix+"spa/dashboard", func(w http.ResponseWriter, r *http.Request) { page(w, "<h1>Dashboard</h1>") })
+
+	// Authentication and identity-specific protected routes.
+	mux.HandleFunc("GET "+PathPrefix+"login", func(w http.ResponseWriter, r *http.Request) {
+		page(w, fmt.Sprintf(`<form method="post" action="%slogin"><input type="hidden" name="csrf" value="%s">
+<input name="username"><input name="password" type="password"><button>login</button></form>`, PathPrefix, CSRFValue))
+	})
+	mux.HandleFunc("POST "+PathPrefix+"login", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		token := ""
+		switch {
+		case r.PostForm.Get("csrf") != CSRFValue:
+		case r.PostForm.Get("username") == AdminUser && secureEqual(r.PostForm.Get("password"), AdminPassword):
+			token = AdminToken
+		case r.PostForm.Get("username") == ViewerUser && secureEqual(r.PostForm.Get("password"), ViewerPassword):
+			token = ViewerToken
+		}
+		if token == "" {
+			http.Error(w, "invalid login", http.StatusUnauthorized)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: CookieName, Value: token, Path: "/", HttpOnly: true})
+		http.Redirect(w, r, PathPrefix+"private", http.StatusSeeOther)
+	})
+	mux.HandleFunc("GET "+PathPrefix+"private", func(w http.ResponseWriter, r *http.Request) {
+		switch identityOf(r) {
+		case "admin":
+			page(w, AdminMarker)
+		case "viewer":
+			page(w, ViewerMarker)
+		default:
+			http.Error(w, "login required", http.StatusUnauthorized)
+		}
+	})
+	mux.HandleFunc("GET "+PathPrefix+"admin", func(w http.ResponseWriter, r *http.Request) {
+		switch identityOf(r) {
+		case "admin":
+			page(w, "LAB_ADMIN_ONLY")
+		case "viewer":
+			http.Error(w, "forbidden", http.StatusForbidden)
+		default:
+			http.Error(w, "login required", http.StatusUnauthorized)
+		}
+	})
+	mux.HandleFunc("GET "+PathPrefix+"api/me", func(w http.ResponseWriter, r *http.Request) {
+		identity := identityOf(r)
+		if identity == "anonymous" {
+			http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
+			return
+		}
+		writeJSON(w, map[string]string{"user": identity})
+	})
+
+	// Excluded routes. Reaching them is a boundary violation.
+	mux.HandleFunc(PathPrefix+"logout", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1})
+		page(w, "logged out")
+	})
+	mux.HandleFunc("POST "+PathPrefix+"write", func(w http.ResponseWriter, r *http.Request) { page(w, "written") })
+	mux.HandleFunc("POST "+PathPrefix+"admin/delete", func(w http.ResponseWriter, r *http.Request) { page(w, "deleted") })
+
+	// API definitions: one valid OpenAPI document and two lookalikes.
+	mux.HandleFunc("GET "+PathPrefix+"openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"openapi": "3.0.3", "info": map[string]string{"title": "Lab API", "version": "1"},
+			"paths": map[string]any{
+				PathPrefix + "api/records": map[string]any{
+					"get":  map[string]any{"operationId": "listRecords", "responses": map[string]any{"200": map[string]string{"description": "ok"}}},
+					"post": map[string]any{"operationId": "createRecord", "requestBody": map[string]any{"content": map[string]any{"application/x-www-form-urlencoded": map[string]any{"schema": map[string]any{"type": "object"}}}}, "responses": map[string]any{"201": map[string]string{"description": "created"}}},
+				},
+				PathPrefix + "api/records/{id}": map[string]any{
+					"get":    map[string]any{"operationId": "getRecord", "parameters": []any{map[string]any{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}}}, "responses": map[string]any{"200": map[string]string{"description": "ok"}}},
+					"delete": map[string]any{"operationId": "deleteRecord", "parameters": []any{map[string]any{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}}}, "responses": map[string]any{"204": map[string]string{"description": "deleted"}}},
+				},
+			},
+		})
+	})
+	mux.HandleFunc("GET "+PathPrefix+"openapi-lookalike.json", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"openapi": "3.0.3", "info": "not an object", "paths": []string{"not", "a", "map"}})
+	})
+	mux.HandleFunc("GET "+PathPrefix+"api-docs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>"openapi": "3.0.0" appears in prose, not as a schema</body></html>`)
+	})
+
+	// Controlled resource used by the approved POST campaign and its cleanup.
+	mux.HandleFunc("GET "+PathPrefix+"api/records", func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		ids := make([]string, 0, len(l.resources))
+		for id := range l.resources {
+			ids = append(ids, id)
+		}
+		l.mu.Unlock()
+		writeJSON(w, map[string]any{"records": ids})
+	})
+	mux.HandleFunc("POST "+PathPrefix+"api/records", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		l.mu.Lock()
+		l.nextID++
+		id := fmt.Sprintf("rec-%d", l.nextID)
+		l.resources[id] = r.PostForm.Get("name")
+		l.mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]string{"id": id})
+	})
+	mux.HandleFunc("GET "+PathPrefix+"api/records/{id}", func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		_, ok := l.resources[r.PathValue("id")]
+		l.mu.Unlock()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, map[string]string{"id": r.PathValue("id")})
+	})
+	mux.HandleFunc("DELETE "+PathPrefix+"api/records/{id}", func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		_, ok := l.resources[r.PathValue("id")]
+		delete(l.resources, r.PathValue("id"))
+		l.mu.Unlock()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// GraphQL with introspection enabled.
+	mux.HandleFunc("POST "+PathPrefix+"graphql", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, true) })
+	return mux
+}
+
+func (l *Lab) secondaryRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<h1>Secondary service</h1><a href="/status">status</a>`)
+	})
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]string{"status": "ok"}) })
+	mux.HandleFunc("POST /graphql", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, false) })
+	return mux
+}
+
+func graphql(w http.ResponseWriter, r *http.Request, introspection bool) {
+	var req struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, `{"errors":[{"message":"invalid request"}]}`, http.StatusBadRequest)
+		return
+	}
+	switch {
+	case strings.Contains(req.Query, "__schema"):
+		if !introspection {
+			writeJSON(w, map[string]any{"errors": []map[string]string{{"message": "introspection is disabled"}}})
+			return
+		}
+		writeJSON(w, map[string]any{"data": map[string]any{"__schema": map[string]any{
+			"queryType":    map[string]string{"name": "Query"},
+			"mutationType": map[string]string{"name": "Mutation"},
+			"types": []any{
+				map[string]any{"kind": "OBJECT", "name": "Query", "fields": []any{
+					map[string]any{"name": "record", "args": []any{map[string]any{"name": "id", "type": map[string]any{"kind": "NON_NULL", "ofType": map[string]string{"kind": "SCALAR", "name": "ID"}}}}, "type": map[string]string{"kind": "SCALAR", "name": "String"}},
+				}},
+				map[string]any{"kind": "OBJECT", "name": "Mutation", "fields": []any{
+					map[string]any{"name": "deleteRecord", "args": []any{map[string]any{"name": "id", "type": map[string]any{"kind": "NON_NULL", "ofType": map[string]string{"kind": "SCALAR", "name": "ID"}}}}, "type": map[string]string{"kind": "SCALAR", "name": "Boolean"}},
+				}},
+			},
+		}}})
+	case strings.HasPrefix(strings.TrimSpace(req.Query), "mutation"):
+		writeJSON(w, map[string]any{"errors": []map[string]string{{"message": "mutations are not available in the lab"}}})
+	default:
+		writeJSON(w, map[string]any{"data": map[string]any{"record": fmt.Sprint(req.Variables["id"])}})
+	}
+}
+
+func page(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<!doctype html><html><head><title>Lab</title></head><body>%s</body></html>", body)
+}
+
+func writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+// MustParse parses a lab URL for tests.
+func MustParse(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	return u
+}
