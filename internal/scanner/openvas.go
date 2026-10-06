@@ -286,10 +286,19 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 	if err := os.WriteFile(run.ArtifactPath, reportData, 0o600); err != nil {
 		return fail(err)
 	}
-	_ = redactArtifact(run.ArtifactPath, secretValues(req, cfg))
-	if truncateArtifact(run.ArtifactPath, cfg.MaxOutputBytes) {
+	if err := redactArtifact(run.ArtifactPath, secretValues(req, cfg)); err != nil {
+		invalidateUnsafeArtifact(&run)
+		return fail(fmt.Errorf("scanner artifact redaction failed; artifact is unavailable"))
+	}
+	bounded, boundErr := boundWebArtifact(run.ArtifactPath, "openvas", cfg.MaxOutputBytes)
+	if boundErr != nil {
+		run.ExecutionOutcome, run.Outcome, run.ParserOutcome, run.Completeness = "SUCCESS", "PARSER_FAILED", "FAILED", "partial"
+		return fail(fmt.Errorf("could not retain usable bounded scanner artifact: %w", boundErr))
+	}
+	if bounded {
 		run.Truncated = true
-		run.Reason = fmt.Sprintf("artifact truncated at configured %d-byte limit", cfg.MaxOutputBytes)
+		run.Outcome, run.Completeness = "PARTIAL", "partial"
+		run.Reason = fmt.Sprintf("complete result records retained within configured %d-byte limit", cfg.MaxOutputBytes)
 	}
 	run.ExitCode, run.Status, run.FinishedAt = 0, "completed", time.Now().Format(time.RFC3339Nano)
 	run.Progress, run.ProgressStage = 0, ""

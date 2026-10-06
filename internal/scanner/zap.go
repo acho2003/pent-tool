@@ -868,7 +868,8 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	logLine(fmt.Sprintf("ZAP alerts exported for %s (%d bytes)", target, len(report)))
 	if err := redactArtifact(run.ArtifactPath, secrets); err != nil {
-		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+		invalidateUnsafeArtifact(&run)
+		return finishServiceFailure(run, fmt.Errorf("scanner artifact redaction failed; artifact is unavailable"), secrets, cfg.MaxOutputBytes, emit)
 	}
 	bounded, boundErr := boundWebArtifact(run.ArtifactPath, "zap", cfg.MaxOutputBytes)
 	if boundErr != nil {

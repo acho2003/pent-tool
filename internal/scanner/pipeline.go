@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/storage"
 )
 
 type Pipeline struct {
@@ -900,7 +902,9 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 			}
 		}
 	}
-	_ = redactArtifact(run.ArtifactPath, secrets)
+	if err := redactArtifact(run.ArtifactPath, secrets); err != nil {
+		invalidateUnsafeArtifact(&run)
+	}
 	if run.Truncated && run.Reason == "" {
 		run.Reason = fmt.Sprintf("output truncated at configured %d-byte limit", cfg.MaxOutputBytes)
 	}
@@ -1056,8 +1060,11 @@ func redactArtifact(path string, secrets []string) error {
 		return nil
 	}
 	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
 		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("artifact is not a regular file")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1067,7 +1074,24 @@ func redactArtifact(path string, secrets []string) error {
 	if bytes.Equal(data, clean) {
 		return nil
 	}
-	return os.WriteFile(path, clean, 0o600)
+	return storage.WriteAtomic(path, clean)
+}
+
+// Never expose an artifact whose redaction failed through a successful run or
+// public download. Retain execution and parsing as separate outcomes.
+func invalidateUnsafeArtifact(run *Run) {
+	if info, err := os.Lstat(run.ArtifactPath); err == nil && info.Mode().IsRegular() {
+		_ = os.Remove(run.ArtifactPath)
+	}
+	run.ArtifactPath = ""
+	if run.Status == "completed" && run.ExecutionOutcome == "" {
+		run.ExecutionOutcome = "SUCCESS"
+	}
+	run.ParserOutcome, run.Completeness = "FAILED", "partial"
+	if run.Status == "completed" {
+		run.Status, run.Outcome = "failed", "PARSER_FAILED"
+		run.Reason = "scanner artifact redaction failed; artifact is unavailable"
+	}
 }
 
 type outputWriter struct {

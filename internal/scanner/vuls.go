@@ -92,10 +92,19 @@ func (vulsRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFun
 		return fail(fmt.Errorf("Vuls completed without a JSON report"))
 	}
 	run.ArtifactPath, run.Status, run.ExitCode, run.FinishedAt = candidates[len(candidates)-1], "completed", 0, time.Now().Format(time.RFC3339Nano)
-	_ = redactArtifact(run.ArtifactPath, secretValues(req, cfg))
-	if truncateArtifact(run.ArtifactPath, cfg.MaxOutputBytes) {
+	if err := redactArtifact(run.ArtifactPath, secretValues(req, cfg)); err != nil {
+		invalidateUnsafeArtifact(&run)
+		return fail(fmt.Errorf("scanner artifact redaction failed; artifact is unavailable"))
+	}
+	bounded, boundErr := boundWebArtifact(run.ArtifactPath, "vuls", cfg.MaxOutputBytes)
+	if boundErr != nil {
+		run.ExecutionOutcome, run.Outcome, run.ParserOutcome, run.Completeness = "SUCCESS", "PARSER_FAILED", "FAILED", "partial"
+		return fail(fmt.Errorf("could not retain usable bounded scanner artifact: %w", boundErr))
+	}
+	if bounded {
 		run.Truncated = true
-		run.Reason = fmt.Sprintf("artifact truncated at configured %d-byte limit", cfg.MaxOutputBytes)
+		run.Outcome, run.Completeness = "PARTIAL", "partial"
+		run.Reason = fmt.Sprintf("complete result records retained within configured %d-byte limit", cfg.MaxOutputBytes)
 	}
 	run = finalizeRun(run)
 	if emit != nil {

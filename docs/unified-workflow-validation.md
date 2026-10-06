@@ -173,3 +173,13 @@ Playwright fixture verifies two saved credentials, an independent immediate test
 the paired expectations in the preview payload, and removal isolation. This UI
 fixture uses mocked API responses and is separate from native execution tests.
 The full Go suite and Web UI typecheck/build pass.
+
+Artifact integrity follow-up: shared process adapters, ZAP, Vuls and OpenVAS no
+longer ignore artifact redaction errors. Failed redaction removes the public
+artifact reference, records parser incompleteness, and preserves timeout or
+cancellation independently. Redaction replacement is atomic and private. Bounded
+Vuls reports retain whole CVE entries; bounded Greenbone XML retains whole native
+result elements, native IDs and metadata. Both report partial evidence explicitly
+instead of byte-truncating JSON or XML. Local parser fixtures, the full Go suite,
+and targeted scanner race checks pass. This does not establish sanitization of
+all unknown credentials in every native artifact format.
