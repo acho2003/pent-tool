@@ -114,11 +114,13 @@ export interface AssessmentConfig {
   exclusions?: Array<{ target_id?: string; origin?: string; method?: string; path_pattern: string; reason?: string }>;
   api_definitions?: Array<{ target_id: string; definition_id: string }>;
   api_operation_inputs?: Array<{ definition_id: string; operation_id: string; path_params?: Record<string, string>; query?: Record<string, string>; request_body_ref?: string }>;
-  access?: Array<{ target_ids: string[]; kind: string; credential_id: string; verify_url?: string; verify_marker?: string; verify_browser?: boolean }>;
+  authorization_expectations?: Array<{ operation_id: string; identity: string; expect: "allow" | "deny"; resource_fixture_ref: string }>;
+  access?: Array<{ identity?: string; role?: string; target_ids: string[]; kind: string; credential_id: string; verify_url?: string; verify_marker?: string; verify_browser?: boolean }>;
   scanner_selection?: { mode?: "auto" | "custom"; variants?: string[] };
 }
 export interface CredentialMetadata { id: string; name: string; kind: string; target_ids: string[]; created_at: string; }
 export interface AssessmentPlan {
+  auth_contexts?: Array<{ id: string; target_id: string; identity: string; role?: string; primary: boolean; state: string; reason?: string }>;
   config: AssessmentConfig;
   capabilities: Array<{ capability: string; target_id: string; reference_id?: string; access_kind?: string; state: string; provenance: string; reason: string }>;
   decisions: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string; execution_mode?: string }>;
@@ -600,7 +602,11 @@ export interface CoverageEvent {
   attempt_id: string; scanner: string; endpoint_ids?: string[]; url?: string; method?: string;
   phase: string; kind: string; at: string; response_code?: number; reason?: string;
 }
+export interface AuthorizationResult {
+ endpoint_id?: string; auth_context_id?: string; identity: string; role?: string; operation_id: string; fixture_ref: string; url?: string; method?: string; expected: string; observed?: string; status: string; response_code?: number; marker_confirmed: boolean; reason?: string; evidence_reference?: string;
+}
 export interface CoverageProof {
+ authorization_results?: AuthorizationResult[];
  approved: number; eligible: number; observed: number;
   expanded_enabled: boolean; discovered: number; seeds: number; candidates: number; hosts: number;
   services: number; tls_services: number; forms: number; parameterized: number; observed_with_auth: number;

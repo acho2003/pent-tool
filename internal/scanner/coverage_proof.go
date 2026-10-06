@@ -35,24 +35,25 @@ type ProofItem struct {
 	AttemptID   string `json:"attempt_id,omitempty"`
 }
 type CoverageProof struct {
-	Items            map[string][]ProofItem `json:"-"`
-	ExpandedEnabled  bool                   `json:"expanded_enabled"`
-	Approved         int                    `json:"approved"`
-	Eligible         int                    `json:"eligible"`
-	Observed         int                    `json:"observed"`
-	Discovered       int                    `json:"discovered"`
-	Seeds            int                    `json:"seeds"`
-	Candidates       int                    `json:"candidates"`
-	Hosts            int                    `json:"hosts"`
-	Services         int                    `json:"services"`
-	TLS              int                    `json:"tls_services"`
-	Forms            int                    `json:"forms"`
-	Parameterized    int                    `json:"parameterized"`
-	ObservedWithAuth int                    `json:"observed_with_auth"`
-	Definitions      []InventoryDefinition  `json:"definitions"`
-	Scanners         []ScannerProof         `json:"scanners"`
-	NotTracked       []string               `json:"not_tracked"`
-	DiscoveryGaps    []string               `json:"discovery_gaps"`
+	AuthorizationResults []AuthorizationResult  `json:"authorization_results,omitempty"`
+	Items                map[string][]ProofItem `json:"-"`
+	ExpandedEnabled      bool                   `json:"expanded_enabled"`
+	Approved             int                    `json:"approved"`
+	Eligible             int                    `json:"eligible"`
+	Observed             int                    `json:"observed"`
+	Discovered           int                    `json:"discovered"`
+	Seeds                int                    `json:"seeds"`
+	Candidates           int                    `json:"candidates"`
+	Hosts                int                    `json:"hosts"`
+	Services             int                    `json:"services"`
+	TLS                  int                    `json:"tls_services"`
+	Forms                int                    `json:"forms"`
+	Parameterized        int                    `json:"parameterized"`
+	ObservedWithAuth     int                    `json:"observed_with_auth"`
+	Definitions          []InventoryDefinition  `json:"definitions"`
+	Scanners             []ScannerProof         `json:"scanners"`
+	NotTracked           []string               `json:"not_tracked"`
+	DiscoveryGaps        []string               `json:"discovery_gaps"`
 }
 
 func ReadCoverageEvents(path string) ([]CoverageEvent, error) {
@@ -75,6 +76,12 @@ func ReadCoverageEvents(path string) ([]CoverageEvent, error) {
 }
 func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
 	proof := CoverageProof{Items: map[string][]ProofItem{}, Definitions: []InventoryDefinition{}, Scanners: []ScannerProof{}, DiscoveryGaps: []string{}, NotTracked: []string{"parameters_tested", "templates_executed", "protected_route_coverage_percent"}}
+	for _, run := range runs {
+		for _, result := range run.AuthorizationResults {
+			result.URL = SafeTelemetryURL(result.URL)
+			proof.AuthorizationResults = append(proof.AuthorizationResults, result)
+		}
+	}
 	type sets struct {
 		selected, submitted, ack, exercised, batch, failed, skipped map[string]bool
 		recorded                                                    bool

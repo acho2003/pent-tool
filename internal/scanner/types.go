@@ -51,20 +51,23 @@ type Artifact struct {
 }
 
 type Request struct {
-	ReplayStore             *credentials.ReplayStore    `json:"-"`
-	ReplayScope             string                      `json:"-"`
-	BrowserStorage          *credentials.BrowserStorage `json:"-"`
-	BrowserAccessTest       bool                        `json:"-"`
-	BrowserCheckpointMarker string                      `json:"-"`
-	WorkflowVersion         string                      `json:"-"`
-	Gateway                 *RecordingGateway           `json:"-"`
-	GatewayURL              string                      `json:"-"`
-	GatewayCAPath           string                      `json:"-"`
-	NetworkPorts            []int                       `json:"-"`
-	AttemptID               string                      `json:"-"`
-	PlanFingerprint         string                      `json:"-"`
-	InputRequests           []ScannerRequestInput       `json:"-"`
-	Target                  string                      `json:"target"`
+	AuthContexts              []AuthContext                         `json:"-"`
+	AuthorizationExpectations []assessment.AuthorizationExpectation `json:"-"`
+	Inventory                 *AttackSurface                        `json:"-"`
+	ReplayStore               *credentials.ReplayStore              `json:"-"`
+	ReplayScope               string                                `json:"-"`
+	BrowserStorage            *credentials.BrowserStorage           `json:"-"`
+	BrowserAccessTest         bool                                  `json:"-"`
+	BrowserCheckpointMarker   string                                `json:"-"`
+	WorkflowVersion           string                                `json:"-"`
+	Gateway                   *RecordingGateway                     `json:"-"`
+	GatewayURL                string                                `json:"-"`
+	GatewayCAPath             string                                `json:"-"`
+	NetworkPorts              []int                                 `json:"-"`
+	AttemptID                 string                                `json:"-"`
+	PlanFingerprint           string                                `json:"-"`
+	InputRequests             []ScannerRequestInput                 `json:"-"`
+	Target                    string                                `json:"target"`
 	// Scanners restricts this request to the named scanners. Empty runs the
 	// whole pipeline; every name must be one of OrderedNames.
 	Scanners []string `json:"-"`
@@ -164,6 +167,7 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	AuthorizationResults  []AuthorizationResult `json:"authorization_results,omitempty"`
 	WorkflowVersion       string                `json:"workflow_version,omitempty"`
 	TemplateInventoryPath string                `json:"template_inventory_path,omitempty"`
 	DefinitionImports     []DefinitionImport    `json:"definition_imports,omitempty"`

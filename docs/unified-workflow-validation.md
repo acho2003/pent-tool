@@ -137,3 +137,29 @@ contains application revision `6d8fe6b9306561f76faab695246bba7b98817a4f` and mea
 commands, Chromium/discovery, libraries, and source fixtures. This reuses the
 existing slim runtime; no reclaimed-space claim or production replacement was
 made.
+
+## Supplied role authorization expectations
+
+Named identities are verified independently and keep separate renewal callbacks,
+headers, and browser storage. Default discovery and general scanner adapters
+still use the primary identity; this does not establish discovery coverage for
+all roles.
+
+Expanded native API checks now consume `authorization_expectations` and saved
+resource fixtures. A fixture is JSON with an exact `url` and a bounded
+`response_marker`, uploaded through the existing API fixture route. Its URL must
+match a materialized GET operation on the original authenticated target origin.
+Each expectation requires a separately verified identity and a selected inventory
+request. No IDs or business values are invented. A deny-role access finding
+requires both that role and the expected allow role to return the supplied marker
+for the same controlled resource. Generic 200 responses, redirects, expired
+credentials and missing fixtures remain explicit gaps.
+
+Saved results contain status, response digest, nonsecret context/request IDs and
+coverage event references. Response bodies and credentials are not saved. The UI
+and downloadable report consume the same saved comparison results; reports make
+no target requests. Local fixtures cover first-attempt executor routing, safe and
+vulnerable role access, credential isolation, excluded/wrong-target/write inputs,
+unknown responses, persistence and report URL redaction. Full Go tests, targeted
+scanner race tests and the Web UI typecheck/build pass. Expanded role execution
+remains behind the unified-workflow flag, which remains disabled by default.

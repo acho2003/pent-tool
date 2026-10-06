@@ -423,7 +423,21 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				req.APIEndpoints = append(req.APIEndpoints, endpoint)
 			}
 		}
+		if expanded && job.Scanner == "apichecks" {
+			req.APIFixtureDir = p.Config.APIFixtureDir
+			req.AuthorizationExpectations = plan.Config.AuthorizationExpectations
+			for _, auth := range p.Config.AssessmentAuthContexts {
+				if auth.TargetID == job.TargetID {
+					req.AuthContexts = append(req.AuthContexts, auth)
+				}
+			}
+			req.Inventory = surface
+			addAuthorizationRequestVariants(surface, req)
+			sealInventoryRequests(surface, replayStore, assessmentTargetScope(targetByID[job.TargetID]))
+			hydrateRequestReplay(surface, replayStore, assessmentTargetScope(targetByID[job.TargetID]))
+		}
 		if old, ok := completed[key]; ok && old.Status == "completed" && (!assessmentWebAuthBound(plan.Config.Access, job.TargetID) || old.Authenticated || !scannerUsesWebAuth(job.Scanner)) && VerifyChecksum(old) == nil {
+
 			req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded)
 			CompleteEndpointCoverage(surface, job.Scanner, old)
 			_ = SaveAttackSurface(scanDir, surface)

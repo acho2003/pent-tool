@@ -42,7 +42,7 @@ func (apiChecksRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 	for _, raw := range req.EndpointTargets {
 		allowedByDispatcher[raw] = true
 	}
-	if len(allowedByDispatcher) == 0 {
+	if len(allowedByDispatcher) == 0 && len(req.AuthorizationExpectations) == 0 {
 		run.GapKind = GapEmptyInput
 		return finish("skipped", "no materialized API operations passed the request policy")
 	}
@@ -194,6 +194,15 @@ func (apiChecksRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 			}
 		}
 	}
+	roleChecks, roleGaps, roleErr := runAuthorizationComparisons(ctx, req, cfg, &run, writeFinding)
+	started += roleChecks
+	if roleErr != nil {
+		_ = file.Close()
+		return finish("failed", "authorization evidence could not be persisted")
+	}
+	if roleGaps > 0 {
+		run.Outcome, run.Completeness = "PARTIAL", "partial"
+	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
 		return finish("failed", "sync API check artifact: "+err.Error())
@@ -208,6 +217,9 @@ func (apiChecksRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 	if failures > 0 {
 		run.GapKind = GapRequestFailed
 		return finish("failed", fmt.Sprintf("native API checks completed with %d failed and %d skipped operation(s)", failures, skipped))
+	}
+	if roleChecks > 0 {
+		return finish("completed", "native API checks and supplied identity/resource authorization comparisons completed")
 	}
 	return finish("completed", "checked API operations without credentials; results are limited to declared-auth and credentialed-CORS checks")
 }

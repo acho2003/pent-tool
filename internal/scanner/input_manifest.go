@@ -109,6 +109,9 @@ func BuildScannerInputs(surface *AttackSurface, req Request, scanner string) []S
 				}
 			}
 		}
+		if scanner != "apichecks" && ep.AuthContextID != "" && ep.AuthContextID != inventoryID(surface.Scope, "target-bound") {
+			input.Selected, input.Reason = false, "request requires a separate named authentication context"
+		}
 		inputs = append(inputs, input)
 	}
 	return inputs

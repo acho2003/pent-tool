@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-pdf/fpdf"
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
 func TestReportScopeLabel(t *testing.T) {
@@ -66,5 +67,18 @@ func TestReconSummaryLine(t *testing.T) {
 	}
 	if got := reconSummaryLine(reportReconSummary{Hosts: 1}); got != "Recon discovered 1 host(s) with 0 open port(s). Detected services: none recorded." {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestAuthorizationReportUsesSavedComparisonEvidence(t *testing.T) {
+	proof := scanner.BuildCoverageProof(nil, []scanner.Run{{AuthorizationResults: []scanner.AuthorizationResult{{Identity: "reader", Role: "read-only", Method: "GET", URL: "https://app.test/api/1?token=private-token", Expected: "deny", Observed: "allow", Status: "mismatch", ResponseCode: 200, AuthContextID: "context-id", EndpointID: "endpoint-id", OperationID: "getItem", FixtureRef: "fixture-ref", EvidenceRef: "coverage-events.jsonl"}}}})
+	lines := strings.Join(assessmentCoverageLines(assessmentCoverageResponse{Proof: &proof}), "\n")
+	for _, required := range []string{"reader", "expected deny, observed allow, mismatch", "context-id", "endpoint-id", "fixture-ref", "coverage-events.jsonl"} {
+		if !strings.Contains(lines, required) {
+			t.Fatalf("missing %s: %s", required, lines)
+		}
+	}
+	if strings.Contains(lines, "private-token") {
+		t.Fatal("report leaked sensitive URL value")
 	}
 }
