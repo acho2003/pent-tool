@@ -138,3 +138,19 @@ func TestAssessmentJobsNeverResumeWithInterruptedWrite(t *testing.T) {
 		t.Fatalf("interrupted write was replayed or not reported: runs=%+v calls=%d", runs, len(probe.requests))
 	}
 }
+
+func TestExpandedResumeFindsInterruptedAttemptJournal(t *testing.T) {
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	dir := t.TempDir()
+	prior, _ := OpenWriteJournal(filepath.Join(dir, "jobs", "app", "plan", "old-attempt"))
+	if err := prior.RecordIntent(WriteJournalEntry{OperationID: "old-write", Method: "POST", RedactedURL: "https://app.test/items"}); err != nil {
+		t.Fatal(err)
+	}
+	probe := &assessmentPolicyProbe{}
+	pipeline := &Pipeline{Runners: []Runner{probe}}
+	plan := AssessmentPlan{Fingerprint: "accepted", Config: assessment.AssessmentConfig{WorkflowVersion: "unified-v1"}, Jobs: []PlanJob{{ID: "nuclei", TargetID: "app", Target: "https://app.test/", Scanner: probe.Name(), Variant: probe.Name(), State: PlanSelected}}}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, dir, nil, nil)
+	if len(runs) != 1 || runs[0].GapKind != GapInterruptedWrite || len(probe.requests) != 0 {
+		t.Fatalf("legacy attempt resumed: %+v", runs)
+	}
+}

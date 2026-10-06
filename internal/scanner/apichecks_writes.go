@@ -56,7 +56,7 @@ func (apiWritesRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 	if strings.TrimSpace(fixtureDir) == "" {
 		return finish("failed", "API fixture store is unavailable")
 	}
-	journal, err := OpenWriteJournal(req.ScanDir)
+	journal, err := openRequestWriteJournal(req)
 	if err != nil {
 		run.GapKind = GapInterruptedWrite
 		return finish("failed", "write journal is unreadable; refusing to send approved API requests")

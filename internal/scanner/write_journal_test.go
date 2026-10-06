@@ -2,9 +2,12 @@ package scanner
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -81,7 +84,7 @@ func TestWriteJournalIntentPersistedBeforeSend(t *testing.T) {
 		t.Fatalf("cleanup entry = %+v", entries[0])
 	}
 	dirEntries, _ := os.ReadDir(filepath.Dir(WriteJournalPath(scanDir)))
-	if len(dirEntries) != 1 {
+	if len(dirEntries) != 2 {
 		t.Fatalf("stray journal files: %v", dirEntries)
 	}
 }
@@ -175,5 +178,108 @@ func TestWriteJournalCorruptFileTreatedAsUnresolvedNotEmpty(t *testing.T) {
 				t.Fatalf("corrupt journal was rewritten: %q", data)
 			}
 		})
+	}
+}
+
+func TestIndependentWriteJournalsSerializeWithoutLostIntents(t *testing.T) {
+	root := t.TempDir()
+	var wait sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wait.Add(1)
+		go func(i int) {
+			defer wait.Done()
+			journal, err := OpenWriteJournal(root)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := journal.RecordIntent(WriteJournalEntry{OperationID: fmt.Sprintf("operation-%d", i), Method: "POST", RedactedURL: "https://app.test/items"}); err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wait.Wait()
+	entries, err := LoadWriteJournal(root)
+	if err != nil || len(entries) != 32 {
+		t.Fatalf("lost intents: %d %v", len(entries), err)
+	}
+	first, _ := OpenWriteJournal(root)
+	second, _ := OpenWriteJournal(root)
+	if err := first.MarkSent("operation-0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.MarkCleanup("operation-0", true); err != nil {
+		t.Fatal("stale journal did not reload", err)
+	}
+	if err := second.RecordIntent(WriteJournalEntry{OperationID: "operation-1"}); !errors.Is(err, ErrWriteAlreadyJournaled) {
+		t.Fatalf("duplicate intent accepted: %v", err)
+	}
+}
+func TestWriteJournalProcessHelper(t *testing.T) {
+	root := os.Getenv("XALGORIX_TEST_JOURNAL_HELPER_ROOT")
+	if root == "" {
+		t.Skip("subprocess helper")
+	}
+	journal, err := OpenWriteJournal(root)
+	if err != nil {
+		os.Exit(4)
+	}
+	err = journal.RecordIntent(WriteJournalEntry{OperationID: "shared-operation", Method: "POST", RedactedURL: "https://app.test/items"})
+	if errors.Is(err, ErrWriteAlreadyJournaled) {
+		os.Exit(3)
+	}
+	if err != nil {
+		os.Exit(4)
+	}
+}
+func TestWriteIntentIsExclusiveAcrossProcesses(t *testing.T) {
+	root := t.TempDir()
+	commands := make([]*exec.Cmd, 4)
+	for i := range commands {
+		commands[i] = exec.Command(os.Args[0], "-test.run=^TestWriteJournalProcessHelper$")
+		commands[i].Env = append(os.Environ(), "XALGORIX_TEST_JOURNAL_HELPER_ROOT="+root)
+		if err := commands[i].Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	successes, duplicates := 0, 0
+	for _, command := range commands {
+		err := command.Wait()
+		if err == nil {
+			successes++
+		} else if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 3 {
+			duplicates++
+		} else {
+			t.Fatalf("journal subprocess: %v", err)
+		}
+	}
+	if successes != 1 || duplicates != 3 {
+		t.Fatalf("cross-process replay: successes=%d duplicates=%d", successes, duplicates)
+	}
+}
+func TestAssessmentJournalImportsPriorAttemptAndBlocksReplay(t *testing.T) {
+	root := t.TempDir()
+	legacy := filepath.Join(root, "jobs", "target", "plan", "attempt")
+	prior, _ := OpenWriteJournal(legacy)
+	entry := WriteJournalEntry{OperationID: "app:target:POST:/items", Method: "POST", RedactedURL: "https://app.test/items"}
+	if err := prior.RecordIntent(entry); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := openRequestWriteJournal(Request{WriteJournalDir: root, ScanDir: filepath.Join(root, "jobs", "target", "plan", "retry")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrated.RecordIntent(entry); !errors.Is(err, ErrWriteAlreadyJournaled) {
+		t.Fatalf("legacy intent was replayable: %v", err)
+	}
+	entries, err := LoadWriteJournal(root)
+	if err != nil || len(entries) != 1 || entries[0].State != WriteStateIntent {
+		t.Fatalf("invented migration outcome: %+v %v", entries, err)
+	}
+	if err := os.WriteFile(WriteJournalPath(legacy), []byte(`{"schema_version":99}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openRequestWriteJournal(Request{WriteJournalDir: root}); err == nil {
+		t.Fatal("corrupt prior attempt treated as absent")
 	}
 }

@@ -130,6 +130,8 @@ func ApproveDiscoveryConfig(plan AssessmentPlan, preview DiscoveryPreview, finge
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
 	}
+	// Destination review never renews consent for previously approved writes.
+	cfg.WriteApprovals = nil
 	candidates := map[string]DiscoveryCandidate{}
 	for _, c := range preview.Candidates {
 		candidates[c.ID] = c

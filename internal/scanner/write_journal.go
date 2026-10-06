@@ -83,6 +83,7 @@ type writeJournalFile struct {
 type WriteJournal struct {
 	mu      sync.Mutex
 	path    string
+	root    string
 	entries []WriteJournalEntry
 }
 
@@ -99,7 +100,7 @@ func OpenWriteJournal(scanDir string) (*WriteJournal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &WriteJournal{path: WriteJournalPath(scanDir), entries: entries}, nil
+	return &WriteJournal{root: scanDir, path: WriteJournalPath(scanDir), entries: entries}, nil
 }
 
 // LoadWriteJournal returns the persisted entries. A missing journal is empty;
@@ -156,6 +157,11 @@ func (j *WriteJournal) RecordIntent(entry WriteJournalEntry) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	unlock, err := j.refreshWithDiskLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if j.indexLocked(entry.OperationID) >= 0 {
 		return fmt.Errorf("%w: %s", ErrWriteAlreadyJournaled, entry.OperationID)
 	}
@@ -191,6 +197,11 @@ func (j *WriteJournal) MarkCleanup(operationID string, succeeded bool) error {
 func (j *WriteJournal) transition(operationID string, from WriteState, apply func(*WriteJournalEntry)) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	unlock, err := j.refreshWithDiskLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	i := j.indexLocked(operationID)
 	if i < 0 {
 		return fmt.Errorf("write journal: unknown operation %q", operationID)
@@ -220,8 +231,101 @@ func (j *WriteJournal) commitLocked(entries []WriteJournalEntry) error {
 	if err := storage.WriteAtomic(j.path, append(data, '\n')); err != nil {
 		return err
 	}
+	// The rename and a newly created workflow directory must survive a crash
+	// before any request is sent; syncing only the JSON file is insufficient.
+	for _, path := range []string{filepath.Dir(j.path), j.root} {
+		directory, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		syncErr := directory.Sync()
+		closeErr := directory.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
 	j.entries = entries
 	return nil
 }
 
 func journalNow() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// refreshWithDiskLock serializes independent processes and reloads the latest
+// state before any transition. The OS releases the lock after a crash.
+func (j *WriteJournal) refreshWithDiskLock() (func(), error) {
+	if err := storage.EnsureSecureDir(filepath.Dir(j.path)); err != nil {
+		return nil, err
+	}
+	unlock, err := lockWriteJournal(j.path + ".lock")
+	if err != nil {
+		return nil, err
+	}
+	entries, err := LoadWriteJournal(j.root)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	j.entries = entries
+	return unlock, nil
+}
+
+func openRequestWriteJournal(req Request) (*WriteJournal, error) {
+	if req.WriteJournalDir == "" {
+		return OpenWriteJournal(req.ScanDir)
+	}
+	journal, err := OpenWriteJournal(req.WriteJournalDir)
+	if err != nil {
+		return nil, err
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	unlock, err := journal.refreshWithDiskLock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	next := slices.Clone(journal.entries)
+	seen := map[string]bool{}
+	for _, entry := range next {
+		seen[entry.OperationID] = true
+	}
+	// Prior expanded runs used per-attempt journals. Import their saved intents
+	// without inventing outcomes, so upgrading cannot permit an old write again.
+	err = filepath.WalkDir(filepath.Join(req.WriteJournalDir, "jobs"), func(path string, entry os.DirEntry, walkErr error) error {
+		if errors.Is(walkErr, os.ErrNotExist) {
+			return nil
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Name() != "write-journal-v1.json" {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return ErrWriteJournalCorrupt
+		}
+		prior, err := LoadWriteJournal(filepath.Dir(filepath.Dir(path)))
+		if err != nil {
+			return err
+		}
+		for _, item := range prior {
+			if !seen[item.OperationID] {
+				next = append(next, item)
+				seen[item.OperationID] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(next) != len(journal.entries) {
+		if err := journal.commitLocked(next); err != nil {
+			return nil, err
+		}
+	}
+	return journal, nil
+}

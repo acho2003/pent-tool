@@ -48,6 +48,15 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	if len(plan.Jobs) > 0 && strings.TrimSpace(plan.Fingerprint) == "" {
 		return failedAssessmentJobs(plan.Jobs, scanDir, "", "accepted plan fingerprint is required", emit)
 	}
+	if UnifiedWorkflowEnabled() && plan.Config.WorkflowVersion == "unified-v1" {
+		if _, err := openRequestWriteJournal(Request{WriteJournalDir: scanDir}); err != nil {
+			runs := failedAssessmentJobs(plan.Jobs, scanDir, plan.Fingerprint, "write journal recovery failed; automatic resume was refused", emit)
+			for i := range runs {
+				runs[i].GapKind = GapInterruptedWrite
+			}
+			return runs
+		}
+	}
 	if unresolved, err := UnresolvedWrites(scanDir); err != nil || len(unresolved) > 0 {
 		runs := failedAssessmentJobs(plan.Jobs, scanDir, plan.Fingerprint, "unresolved write journal prevents automatic resume", emit)
 		for i := range runs {
@@ -326,6 +335,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment,
 		}
 		if job.Scanner == "apiwrites" {
+			if expanded {
+				req.WriteJournalDir = scanDir
+			}
 			req.APIFixtureDir = p.Config.APIFixtureDir
 			for _, endpoint := range plan.APIEndpoints {
 				if endpoint.TargetID == job.TargetID {

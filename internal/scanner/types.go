@@ -111,7 +111,8 @@ type Request struct {
 	TestEnvironment bool `json:"-"`
 	// WriteApprovals are target-filtered, previewed approvals. Only apiwrites
 	// consumes them, after prerequisites pass and with a persistent write journal.
-	WriteApprovals []assessment.WriteApproval `json:"-"`
+	WriteApprovals  []assessment.WriteApproval `json:"-"`
+	WriteJournalDir string                     `json:"-"`
 	// APIFixtureDir is the private content-addressed fixture store used by the
 	// native approved-write adapter.
 	APIFixtureDir         string        `json:"-"`

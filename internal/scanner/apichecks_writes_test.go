@@ -43,7 +43,7 @@ func TestAPIWriteIsJournaledExecutedOnceAndCleanedWithoutBody(t *testing.T) {
 	cfg := assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeAPI}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: server.URL + "/api"}}}
 	scope := assessment.AppScopeForTarget(cfg, "app")
 	approval := assessment.WriteApproval{TargetID: "app", Method: "POST", Path: "/items", OperationID: "createItem", FixtureRef: fixture.Ref, ContentType: fixture.ContentType, CleanupMethod: http.MethodDelete, CleanupPath: "/items/test-item"}
-	req := Request{Target: server.URL + "/api", Scope: "app:app", ScanDir: scanDir, TypedAssessment: true, TestEnvironment: true, AppScope: &scope, APIFixtureDir: fixtureDir, APIOperationEndpoints: []APIEndpoint{{Method: "POST", Path: "/items", OperationID: "createItem"}}, WriteApprovals: []assessment.WriteApproval{approval}}
+	req := Request{WriteJournalDir: scanDir, Target: server.URL + "/api", Scope: "app:app", ScanDir: filepath.Join(scanDir, "jobs", "first-attempt"), TypedAssessment: true, TestEnvironment: true, AppScope: &scope, APIFixtureDir: fixtureDir, APIOperationEndpoints: []APIEndpoint{{Method: "POST", Path: "/items", OperationID: "createItem"}}, WriteApprovals: []assessment.WriteApproval{approval}}
 	run := (apiWritesRunner{}).Run(context.Background(), req, Config{APIFixtureDir: fixtureDir, Budget: NewAssessmentBudget(100, 10, time.Minute)}, nil)
 	if run.Status != "completed" || len(run.APIEndpointResults) != 1 || run.APIEndpointResults[0].Status != "completed" {
 		t.Fatalf("write result=%+v", run)
@@ -54,6 +54,7 @@ func TestAPIWriteIsJournaledExecutedOnceAndCleanedWithoutBody(t *testing.T) {
 	}
 	// The duplicate request is denied by the persistent journal even if a caller
 	// mistakenly asks the runner to execute this plan again.
+	req.ScanDir = filepath.Join(scanDir, "jobs", "second-attempt")
 	again := (apiWritesRunner{}).Run(context.Background(), req, Config{APIFixtureDir: fixtureDir, Budget: NewAssessmentBudget(100, 10, time.Minute)}, nil)
 	if again.Status != "failed" || creates.Load() != 1 || deletes.Load() != 1 {
 		t.Fatalf("write replayed: status=%s creates=%d deletes=%d", again.Status, creates.Load(), deletes.Load())
