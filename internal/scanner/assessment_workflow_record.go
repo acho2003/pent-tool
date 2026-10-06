@@ -26,8 +26,11 @@ func saveAssessmentWorkflow(scanDir string, plan AssessmentPlan, runs []Run) err
 	for _, stage := range stages {
 		stageRuns := grouped[stage]
 		record := StageRecord{Stage: stage, Status: StageStatusCompleted, InputChecksum: StageInputChecksum(policy.Hash, upstream, nil), OutputChecksums: RunOutputChecksums(stageRuns), ToolVersions: map[string]string{}}
-		completed, skipped := 0, 0
+		completed, skipped, incomplete := 0, 0, false
 		for _, run := range stageRuns {
+			if run.Completeness == "partial" || run.Outcome == "PARTIAL" {
+				incomplete = true
+			}
 			if run.Status == "completed" {
 				completed++
 			}
@@ -48,7 +51,7 @@ func saveAssessmentWorkflow(scanDir string, plan AssessmentPlan, runs []Run) err
 			}
 		}
 		switch {
-		case completed == len(stageRuns):
+		case completed == len(stageRuns) && !incomplete:
 			record.Status = StageStatusCompleted
 		case skipped == len(stageRuns):
 			record.Status = StageStatusSkipped
@@ -61,6 +64,10 @@ func saveAssessmentWorkflow(scanDir string, plan AssessmentPlan, runs []Run) err
 			if job.Stage == stage {
 				record.JobIDs = append(record.JobIDs, job.ID)
 			}
+		}
+		if len(record.JobIDs) > len(stageRuns) && record.Status == StageStatusCompleted {
+			record.Status = StageStatusRunning
+			record.FinishedAt = ""
 		}
 		sort.Strings(record.JobIDs)
 		manifest.Stages = append(manifest.Stages, record)

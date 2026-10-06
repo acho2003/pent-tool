@@ -146,6 +146,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	surfaces := map[string]*AttackSurface{}
 	results := make([]Run, 0, len(plan.Jobs))
 	jobOutcomes := make(map[string]Run, len(plan.Jobs))
+	var checkpointErr error
 	appendOutcome := func(job PlanJob, run Run) {
 		run.Stage = job.Stage
 		run.WorkflowVersion = plan.Config.WorkflowVersion
@@ -159,6 +160,13 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		results = append(results, run)
 		jobOutcomes[job.ID] = run
+		if err := saveAssessmentWorkflow(scanDir, plan, results); err != nil {
+			checkpointErr = err
+			last := &results[len(results)-1]
+			last.Status, last.GapKind = "failed", GapInterruptedWrite
+			last.Reason = "workflow checkpoint could not be stored: " + err.Error()
+			jobOutcomes[job.ID] = *last
+		}
 	}
 	authVerified := make(map[string]bool)
 	webDeadlines := map[string]time.Time{}
@@ -338,6 +346,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
 			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment,
+		}
+		if checkpointErr != nil {
+			run := plannedJobNotRun(job, req, plan.Fingerprint, "workflow checkpoint failed; dependent execution was refused", emit)
+			run.GapKind = GapInterruptedWrite
+			appendOutcome(job, run)
+			continue
 		}
 		if job.Scanner == "apiwrites" {
 			if expanded {

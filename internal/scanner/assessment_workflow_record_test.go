@@ -29,3 +29,16 @@ func TestAssessmentWorkflowRecordsActualStageOutcomes(t *testing.T) {
 		t.Fatalf("stage evidence: crawl=%+v templates=%+v", crawl, template)
 	}
 }
+
+func TestWorkflowCheckpointDoesNotClaimPartialEvidenceCompleted(t *testing.T) {
+	dir := t.TempDir()
+	plan := AssessmentPlan{Fingerprint: "sha256:partial", Jobs: []PlanJob{{ID: "one", Scanner: "nuclei", Stage: StageTemplates}}}
+	if err := saveAssessmentWorkflow(dir, plan, []Run{{Scanner: "nuclei", Stage: StageTemplates, Status: "completed", Completeness: "partial", Outcome: "PARTIAL"}}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, ok := LoadWorkflowManifest(dir)
+	stage, _ := manifest.Stage(StageTemplates)
+	if !ok || stage.Status != StageStatusPartial {
+		t.Fatalf("partial evidence claimed clean completion: %+v", stage)
+	}
+}
