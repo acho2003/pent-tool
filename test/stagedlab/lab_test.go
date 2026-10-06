@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -168,4 +169,42 @@ func post(t *testing.T, c *http.Client, target, body string) string {
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
 	return string(out)
+}
+
+func TestControlHandlerReportsAndResets(t *testing.T) {
+	lab := Start(t)
+	control := httptestServer(t, lab.ControlHandler())
+	get(t, http.DefaultClient, lab.Alias.URL+"/x")
+	request := func(method, path string, header bool) *http.Response {
+		req, _ := http.NewRequest(method, control+path, nil)
+		if header {
+			req.Header.Set("X-Lab-Control", "local-only")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	if resp := request(http.MethodGet, "/forbidden", false); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("control without header: %d", resp.StatusCode)
+	}
+	resp := request(http.MethodGet, "/forbidden", true)
+	var hits []Hit
+	if err := json.NewDecoder(resp.Body).Decode(&hits); err != nil || len(hits) != 1 || hits[0].Origin != "alias" {
+		t.Fatalf("forbidden: %v %+v", err, hits)
+	}
+	if resp := request(http.MethodPost, "/reset", true); resp.StatusCode != http.StatusNoContent || len(lab.Hits()) != 0 {
+		t.Fatalf("reset: %d hits=%d", resp.StatusCode, len(lab.Hits()))
+	}
+	if len(lab.Hits()) != 0 {
+		t.Fatal("control calls must not be recorded")
+	}
+}
+
+func httptestServer(t *testing.T, h http.Handler) string {
+	t.Helper()
+	server := httptest.NewServer(h)
+	t.Cleanup(server.Close)
+	return server.URL
 }

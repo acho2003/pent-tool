@@ -44,12 +44,12 @@ const (
 
 // Hit is one request observed by the lab.
 type Hit struct {
-	Origin   string // primary, secondary, alias
-	Method   string
-	Path     string
-	RawQuery string
-	Identity string // anonymous, admin or viewer
-	Body     string
+	Origin   string `json:"origin"` // primary, secondary, alias
+	Method   string `json:"method"`
+	Path     string `json:"path"`
+	RawQuery string `json:"raw_query"`
+	Identity string `json:"identity"` // anonymous, admin or viewer
+	Body     string `json:"body"`
 }
 
 // URL returns the path and query exactly as received.
@@ -67,6 +67,10 @@ type Lab struct {
 	Alias     *httptest.Server // never approved; any contact is a violation
 	DeadURL   string           // a closed loopback port
 
+	// AliasURL is the public base URL of the unapproved alias origin. Pages link
+	// and redirect to it so crawlers can be shown leaving the approved scope.
+	AliasURL string
+
 	mu        sync.Mutex
 	hits      []Hit
 	resources map[string]string
@@ -76,13 +80,11 @@ type Lab struct {
 // Start launches the lab and registers cleanup.
 func Start(t testing.TB) *Lab {
 	t.Helper()
-	l := &Lab{resources: map[string]string{}}
-	l.Primary = httptest.NewServer(l.record("primary", l.primaryRoutes()))
-	l.Secondary = httptest.NewTLSServer(l.record("secondary", l.secondaryRoutes()))
-	l.Alias = httptest.NewServer(l.record("alias", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "unapproved alias origin")
-	})))
+	l := New()
+	l.Primary = httptest.NewServer(l.PrimaryHandler())
+	l.Secondary = httptest.NewTLSServer(l.SecondaryHandler())
+	l.Alias = httptest.NewServer(l.AliasHandler())
+	l.AliasURL = l.Alias.URL
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +97,46 @@ func Start(t testing.TB) *Lab {
 		l.Alias.Close()
 	})
 	return l
+}
+
+// New returns a lab with no listeners. Callers serve the Primary, Secondary and
+// Alias handlers themselves and set AliasURL to the alias origin's public URL.
+func New() *Lab { return &Lab{resources: map[string]string{}} }
+
+// PrimaryHandler serves the HTTP origin approved below PathPrefix.
+func (l *Lab) PrimaryHandler() http.Handler { return l.record("primary", l.primaryRoutes()) }
+
+// SecondaryHandler serves the second approved origin (HTTPS when wrapped in TLS).
+func (l *Lab) SecondaryHandler() http.Handler { return l.record("secondary", l.secondaryRoutes()) }
+
+// AliasHandler serves the origin that must never be contacted.
+func (l *Lab) AliasHandler() http.Handler {
+	return l.record("alias", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "unapproved alias origin")
+	}))
+}
+
+// ControlHandler exposes the recorder for out-of-process drivers. It is not
+// linked from any page and is excluded from the request log.
+func (l *Lab) ControlHandler() http.Handler {
+	mux := http.NewServeMux()
+	guard := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Lab-Control") != "local-only" {
+				http.NotFound(w, r)
+				return
+			}
+			next(w, r)
+		}
+	}
+	mux.HandleFunc("GET /hits", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, l.Hits()) }))
+	mux.HandleFunc("GET /forbidden", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, l.Forbidden()) }))
+	mux.HandleFunc("GET /resources", guard(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]int{"resources": l.Resources()})
+	}))
+	mux.HandleFunc("POST /reset", guard(func(w http.ResponseWriter, r *http.Request) { l.Reset(); w.WriteHeader(http.StatusNoContent) }))
+	return mux
 }
 
 // Hits returns a copy of the request log.
@@ -209,7 +251,7 @@ func (l *Lab) primaryRoutes() http.Handler {
 <a href="%[1]slogin">login</a> <a href="%[1]slogout">logout</a> <a href="%[1]sredirect">redirect</a>
 <a href="%[2]s">outside path</a> <a href="%[3]s">alias</a> <a href="%[1]sprivate">private</a>
 <form method="get" action="%[1]ssearch"><input name="q"></form>
-<form method="post" action="%[1]swrite"><input name="note"><button>save</button></form>`, PathPrefix, OutsidePath, l.Alias.URL+"/anything"))
+<form method="post" action="%[1]swrite"><input name="note"><button>save</button></form>`, PathPrefix, OutsidePath, l.AliasURL+"/anything"))
 	})
 	mux.HandleFunc("GET "+PathPrefix+"about", func(w http.ResponseWriter, r *http.Request) { page(w, "<h1>About</h1>") })
 	mux.HandleFunc("GET "+PathPrefix+"catalog", func(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +271,7 @@ func (l *Lab) primaryRoutes() http.Handler {
 		http.Redirect(w, r, PathPrefix+"about", http.StatusFound)
 	})
 	mux.HandleFunc("GET "+PathPrefix+"redirect-out", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, l.Alias.URL+"/redirected", http.StatusFound)
+		http.Redirect(w, r, l.AliasURL+"/redirected", http.StatusFound)
 	})
 	mux.HandleFunc("GET "+OutsidePath, func(w http.ResponseWriter, r *http.Request) { page(w, "outside the approved path") })
 
