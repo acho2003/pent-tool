@@ -708,7 +708,9 @@ func (r commandRunner) Name() string           { return r.name }
 func (r commandRunner) Descriptor() Descriptor { return r.desc }
 func (r commandRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
 	spec := r.build(req, cfg)
-	return executeSpec(ctx, r.name, req, cfg, spec, emit)
+	// A policy-restricted adapter (for example testssl under a path boundary)
+	// refuses with a tagged gap; every other adapter runs unchanged.
+	return executePolicySpec(ctx, r.name, req, cfg, spec, emit)
 }
 
 func withOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

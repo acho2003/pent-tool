@@ -203,6 +203,10 @@ func (openVASRunner) Run(ctx context.Context, req Request, cfg Config, emit Emit
 			return fail(fmt.Errorf("Greenbone port list not found; feed may still be syncing"))
 		}
 		portSpec = fmt.Sprintf(`<port_list id="%s"/>`, portListID)
+		// No approved or discovered port evidence reached this run, so Greenbone
+		// tests every IANA-assigned TCP port. Say so, so completed is not read as
+		// a bounded port set.
+		run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationPortsNotBounded, Reason: "no approved or discovered port list was available, so Greenbone scanned the \"All IANA assigned TCP\" port list"})
 	}
 	sshCredential := ""
 	if req.GVMSSHCredentialID != "" {

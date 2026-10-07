@@ -2,10 +2,20 @@ package scanner
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+)
+
+// Largest network one nmap job may cover: 256 IPv4 addresses or 256 IPv6 addresses.
+const (
+	nmapMinIPv4PrefixBits = 24
+	nmapMinIPv6PrefixBits = 120
+	nmapMaxRate           = "100"
 )
 
 // nmapAssessmentRunner is the assessment adapter for nmap: service and version
@@ -31,13 +41,28 @@ func buildNmap(req Request, cfg Config) commandSpec {
 	if !ok {
 		return commandSpec{notApp: "nmap requires one IP address, CIDR range, hostname, or domain without a scheme, port, or path", timeout: cfg.NmapTimeout}
 	}
+	if prefix, err := netip.ParsePrefix(host); err == nil {
+		minimum := nmapMinIPv4PrefixBits
+		if prefix.Addr().Is6() {
+			minimum = nmapMinIPv6PrefixBits
+		}
+		if prefix.Bits() < minimum {
+			return commandSpec{notApp: fmt.Sprintf("nmap is limited to networks of at most 256 addresses (/%d for IPv4, /%d for IPv6); %s is larger", nmapMinIPv4PrefixBits, nmapMinIPv6PrefixBits, host), timeout: cfg.NmapTimeout}
+		}
+	}
+	if cfg.ScopeGuard != nil {
+		if blocked, reason := cfg.ScopeGuard(guardURL(host), nmapGuardAddresses(host)); blocked {
+			return commandSpec{notApp: reason, timeout: cfg.NmapTimeout}
+		}
+	}
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "nmap", "nmap.xml")
 	// -sT uses TCP connect scanning without raw sockets; -sV detects
-	// service/version on open ports and -oX writes the parsed XML.
+	// service/version on open ports and -oX writes the parsed XML. -n skips
+	// reverse DNS and --max-rate bounds the probe rate.
 	// "--" stops option parsing so a target can never be read as a flag.
 	return commandSpec{
 		path:     cfg.NmapPath,
-		args:     []string{"-sT", "-sV", "-oX", artifact, "--", host},
+		args:     []string{"-sT", "-sV", "-n", "--max-rate", nmapMaxRate, "-oX", artifact, "--", host},
 		artifact: artifact,
 		timeout:  cfg.NmapTimeout,
 		prepare:  func() error { return os.MkdirAll(filepath.Dir(artifact), 0o700) },
@@ -71,4 +96,23 @@ func validNmapHostname(host string) bool {
 		return false
 	}
 	return true
+}
+
+// nmapGuardAddresses returns the addresses the scope guard should judge for an
+// nmap target: the address itself, a network's base address, or what a hostname
+// resolves to right now (bounded, best effort; nmap resolves it again itself).
+func nmapGuardAddresses(host string) []string {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return []string{addr.String()}
+	}
+	if prefix, err := netip.ParsePrefix(host); err == nil {
+		return []string{prefix.Addr().String()}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return nil
+	}
+	return addresses
 }

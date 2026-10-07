@@ -43,6 +43,20 @@ func buildNikto(req Request, cfg Config) commandSpec {
 	if u.EscapedPath() != "" && u.EscapedPath() != "/" {
 		return commandSpec{notApp: "this Nikto adapter is limited to application root URLs because Nikto cannot enforce a nested path boundary", timeout: cfg.NiktoTimeout}
 	}
+	if req.AppScope != nil {
+		root := u.String()
+		if allowed, why := req.AppScope.Allows(root); !allowed {
+			return commandSpec{notApp: "the Nikto target is outside the approved scope: " + why, timeout: cfg.NiktoTimeout}
+		}
+		if excluded, why := req.AppScope.Excluded("GET", root); excluded {
+			return commandSpec{notApp: "the Nikto target is an excluded route: " + why, timeout: cfg.NiktoTimeout}
+		}
+	}
+	if cfg.ScopeGuard != nil {
+		if blocked, reason := cfg.ScopeGuard(u.String(), nil); blocked {
+			return commandSpec{notApp: reason, timeout: cfg.NiktoTimeout}
+		}
+	}
 	duration := cfg.NiktoTimeout
 	base := filepath.Join(req.ScanDir, "scanner-output", "nikto")
 	artifact := filepath.Join(base, "results.json")

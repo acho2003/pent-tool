@@ -10,8 +10,9 @@ import (
 // with the default low-impact request policy. They are shown verbatim at plan
 // preview and on the refused run, so they explain the gap to the operator.
 const (
-	wapitiPolicyReason = "Wapiti is restricted under the default low-impact policy: its crawler submits discovered forms and its default modules include SSRF with an external callback; it runs only with a reviewed GET-only module allowlist when the target is declared a test environment"
-	niktoPolicyReason  = "Nikto is restricted because route exclusions are configured: it requests its own fixed test paths and cannot honour excluded routes"
+	wapitiPolicyReason  = "Wapiti is restricted under the default low-impact policy: its crawler submits discovered forms and its default modules include SSRF with an external callback; it runs only with a reviewed GET-only module allowlist when the target is declared a test environment"
+	niktoPolicyReason   = "Nikto is restricted because route exclusions are configured: it requests its own fixed test paths and cannot honour excluded routes"
+	testsslPolicyReason = "testssl is restricted because the approved boundary is below the origin root or excludes it: testssl issues its own HTTP request to the origin root, which would fall outside the approved paths"
 )
 
 // AdapterPolicyRestriction reports whether the request policy of cfg forbids
@@ -28,7 +29,28 @@ func AdapterPolicyRestriction(id string, cfg assessment.AssessmentConfig) (restr
 // exclusions.
 func requestPolicyRestriction(id string, req Request) (bool, string) {
 	excluded := req.AppScope != nil && len(req.AppScope.Exclusions()) > 0
-	return adapterPolicyRestriction(id, req.TestEnvironment, excluded)
+	if restricted, reason := adapterPolicyRestriction(id, req.TestEnvironment, excluded); restricted {
+		return true, reason
+	}
+	if id == "testssl" && req.AppScope != nil && originRootOutsideBoundary(req) {
+		return true, testsslPolicyReason
+	}
+	return false, ""
+}
+
+// originRootOutsideBoundary reports whether any approved origin is bounded below
+// its root, or the root request is excluded, so a tool that always requests "/"
+// would leave the approved paths.
+func originRootOutsideBoundary(req Request) bool {
+	for _, origin := range req.AppScope.Origins() {
+		if origin.PathPrefix != "" && origin.PathPrefix != "/" {
+			return true
+		}
+		if excluded, _ := req.AppScope.Excluded("GET", origin.Origin()+"/"); excluded {
+			return true
+		}
+	}
+	return false
 }
 
 func adapterPolicyRestriction(id string, testEnvironment, hasExclusions bool) (bool, string) {

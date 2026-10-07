@@ -171,6 +171,9 @@ const (
 	// through the recording gateway, so the approved path boundary, exclusions
 	// and request budget are not enforced for it by the gateway.
 	LimitationScopeNotGatewayEnforced = "scope_not_gateway_enforced"
+	// LimitationPortsNotBounded: a network scan used its tool's full default
+	// port list because no approved or discovered ports were available.
+	LimitationPortsNotBounded = "network_ports_not_bounded"
 )
 
 // RunLimitation records a category of coverage a run that otherwise completed

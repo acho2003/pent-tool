@@ -12,9 +12,17 @@ import (
 // testssl's refuse-to-overwrite behavior never triggers on a first run; on
 // resume the terminal run is reused and testssl is not re-invoked.
 func buildTestssl(req Request, cfg Config) commandSpec {
+	if restricted, reason := requestPolicyRestriction("testssl", req); restricted {
+		return commandSpec{notApp: reason, timeout: cfg.TestsslTimeout}
+	}
 	target := strings.TrimSpace(req.Target)
 	if target == "" || strings.HasPrefix(target, "artifact://") {
 		return commandSpec{notApp: "testssl requires a host or URL target", timeout: cfg.TestsslTimeout}
+	}
+	if cfg.ScopeGuard != nil {
+		if blocked, reason := cfg.ScopeGuard(guardURL(target), nil); blocked {
+			return commandSpec{notApp: reason, timeout: cfg.TestsslTimeout}
+		}
 	}
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "testssl", "results.json")
 	args := []string{
@@ -53,4 +61,13 @@ func testsslConnectFailure(_ int, output string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+// guardURL turns a bare host or host:port target into a URL the scope guard can
+// parse; URL targets pass through unchanged.
+func guardURL(target string) string {
+	if strings.Contains(target, "://") {
+		return target
+	}
+	return "http://" + target + "/"
 }
