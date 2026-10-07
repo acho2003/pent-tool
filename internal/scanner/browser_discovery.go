@@ -458,7 +458,14 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		for _, reason := range reasons {
 			run.Limitations = append(run.Limitations, RunLimitation{Kind: "browser_discovery_limit", Reason: reason})
 		}
-		run.Outcome, run.Completeness, run.Reason = "PARTIAL", "partial", strings.Join(reasons, "; ")
+		run.Outcome, run.Completeness = "PARTIAL", "partial"
+		// An access test that did not confirm its marker keeps that specific
+		// reason: a browser's implicit requests (for example the origin-root
+		// favicon, outside a path boundary) are excluded and recorded as limits,
+		// but must not replace the verdict the anonymous negative control reads.
+		if !(req.BrowserAccessTest && !checkpointConfirmed) {
+			run.Reason = strings.Join(reasons, "; ")
+		}
 	}
 	if timedOut {
 		run.Status, run.ExecutionOutcome = "failed", "TIMEOUT"
