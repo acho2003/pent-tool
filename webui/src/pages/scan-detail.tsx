@@ -675,7 +675,6 @@ function AttackSurfaceCard({ scanId, runsSignature }: { scanId: string; runsSign
 				<div className="flex items-center justify-between text-xs text-muted-foreground"><span>Page {Math.min(page, totalPages)} of {totalPages} · {data.total} endpoint{data.total === 1 ? "" : "s"}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Previous</Button><Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Next</Button></div></div>
 			</>}
 		<EndpointTraceDialog scanId={scanId} endpointId={tracedEndpoint} onClose={()=>setTracedEndpoint(null)} />
-		<EndpointTraceDialog scanId={scanId} endpointId={tracedEndpoint} onClose={()=>setTracedEndpoint(null)} />
 		</CardContent>
 	</Card>;
 }

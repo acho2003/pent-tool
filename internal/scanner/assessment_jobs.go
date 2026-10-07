@@ -71,7 +71,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	if p == nil {
 		p = NewPipeline(Config{})
 	} else if p.Runners == nil {
+		attemptControl := p.AttemptControl
 		p = NewPipeline(p.Config)
+		p.AttemptControl = attemptControl
 	} else {
 		applyDefaults(&p.Config)
 	}
@@ -248,7 +250,39 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		if surface == nil && katanaAvailable(p.Config) && spec.notApp == "" && (!authBound || authVerified[target.ID]) {
-			crawlRun := executeSpec(ctx, "katana", crawlReq, p.Config, spec, emit)
+			// The crawl is the longest preparation tool, so it gets its own attempt
+			// ID and cancellation like every other job: a per-tool stop must reach
+			// it without ending the assessment.
+			crawlAttemptID, attemptErr := newAssessmentAttemptID()
+			crawlCtx, crawlCancel := context.WithCancel(ctx)
+			unregisterCrawl := func() {}
+			crawlEmit := emit
+			if attemptErr == nil {
+				if p.AttemptControl != nil {
+					unregisterCrawl = p.AttemptControl(crawlAttemptID, crawlCancel)
+				}
+				if emit != nil {
+					crawlEmit = func(event Event) {
+						if event.Run.Scanner != "" {
+							event.Run.AttemptID = crawlAttemptID
+						}
+						emit(event)
+					}
+				}
+			}
+			crawlRun := executeSpec(crawlCtx, "katana", crawlReq, p.Config, spec, crawlEmit)
+			crawlUserStopped := crawlCtx.Err() == context.Canceled && ctx.Err() == nil
+			crawlCancel()
+			unregisterCrawl()
+			if attemptErr == nil {
+				crawlRun.AttemptID = crawlAttemptID
+			}
+			if crawlUserStopped {
+				crawlRun.Status = "cancelled"
+				crawlRun.ExecutionOutcome, crawlRun.Outcome, crawlRun.Completeness = "CANCELLED", "PARTIAL", "partial"
+				crawlRun.Reason = "scanner stopped by user; partial output and artifacts were retained"
+				crawlRun.FinishedAt = time.Now().Format(time.RFC3339Nano)
+			}
 			crawlRun.Scope = crawlScope
 			crawlRun.Authenticated = authBound && crawlReq.TargetAuth != "" && crawlRun.Status == "completed"
 			crawlRun.Stage = StageCrawl
