@@ -23,6 +23,10 @@
 # Wapiti report, a missing Dalfox binary, no ZAP, and session expiry mid-run, and
 # check that each is reported as a failure or gap and never as a clean result.
 #
+# Set STAGED_SUITE=api to import OpenAPI and GraphQL definitions with supplied inputs,
+# run an exactly-once write with declared cleanup, and compare two identities'
+# access to a resource fixture.
+#
 # Set STAGED_SUITE=scanners to run Nuclei (signed deterministic template), Wapiti
 # including an approved bounded form POST campaign, Dalfox and a dedicated ZAP
 # daemon in one assessment (STAGED_ZAP_TIMEOUT caps ZAP in seconds).
@@ -163,6 +167,8 @@ if [[ "${STAGED_SUITE:-}" == ui ]]; then
   if [[ $status -eq 0 ]]; then run_ui_phase || status=$?; fi
 elif [[ "${STAGED_SUITE:-}" == identities ]]; then
   run_phase identities || status=$?
+elif [[ "${STAGED_SUITE:-}" == api ]]; then
+  run_phase api || status=$?
 elif [[ "${STAGED_SUITE:-}" == scanners ]]; then
   run_phase scanners || status=$?
 elif [[ "${STAGED_SUITE:-}" == recovery-auth ]]; then

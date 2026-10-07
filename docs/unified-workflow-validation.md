@@ -335,7 +335,8 @@ introspection, 684 distinct exact request variants, excluded logout/write routes
 and a recorder that reports any request outside the boundary.
 
 Select a suite with `STAGED_SUITE`: default (full assessment, revision and
-report), `recovery`, `ui` or `identities`. Results are native Linux arm64 with the
+report), `recovery`, `ui`, `identities`, `api`, `scanners`, `failures`,
+`recovery-write` or `recovery-auth`. Results are native Linux arm64 with the
 `xalgorix:workflow-validation-e69bc21` runtime and an application binary built
 from the working tree; httpx and katana selected, `web-gentle` profile.
 
@@ -346,8 +347,19 @@ from the working tree; httpx and katana selected, `web-gentle` profile.
 | ui | real Chromium against the dashboard: auth redirect and wrong-password error; the 12 coverage tiles equal the saved summary; drill-down members; exact endpoint trace; PDF download; candidate approval and revision start; the ten-minute inactivity prompt; per-tool Stop on the katana crawl; Stop all; wizard boundary, exclusions and plan fingerprint | 36 passed, 0 failed (re-run on the final commit) |
 | identities | credentials stored encrypted; HTTP and browser access tests with an anonymous negative control; role separation (viewer refused the admin-only route; a public page fails the control); the assessment records authenticated observations and an independent discovery run for the additional identity; no synthetic credential, cookie or session value appears in any API response, saved artifact, output stream or the report | 34 passed, 0 failed after correcting one wrong assertion (only additional identities get their own discovery run; the primary identity uses the normal authenticated crawl) |
 
+| api | OpenAPI and GraphQL (SDL) definitions are accepted by content hash and lookalikes, HTML prose and introspection JSON are refused; supplied path and GraphQL inputs; read-only operations tested natively; a GraphQL mutation never eligible; an exactly-once approved write reaches the lab once, its declared cleanup once, and leaves no resource; admin allowed and viewer denied a resource fixture with the marker confirmed; a GraphQL endpoint with introspection is validated and one with it disabled is recorded unavailable; no credential or fixture body in any response or the report | 45 passed, 0 failed |
+| scanners | Nuclei with a signed deterministic template, Wapiti, Dalfox and a dedicated ZAP daemon in one assessment (web-thorough profile); every per-scanner drill-down total equals its summary; unproven metrics stay NOT TRACKED; Nuclei observations come only from the signed template; the approved form campaign sends exactly its cap of 12 POSTs with only the approved field names, then runs its declared cleanup and leaves no resource | 89 passed, 0 failed |
+| failures | a missing binary and an unconfigured ZAP are planned unavailable with reasons and show as coverage gaps with no run; truncated Nuclei JSON and an empty Wapiti report end as PARSER_FAILED with a reason, never a clean zero-finding result; sessions expired while Nuclei runs are recorded as an authentication gap on that run, the authenticated capability is reported expired, and coverage is partial | 34 passed, 0 failed |
+| recovery-write | a SIGKILL while an approved form campaign is in flight: no further POST, no replayed cleanup, every job refused with "unresolved write journal prevents automatic resume", the uncleaned resources stay visible and no run claims completion | 8 passed, 0 failed |
+| recovery-auth | a SIGKILL during an authenticated crawl: the resumed assessment logs in again from the vault credentials and none of its authenticated requests carries a session token issued before the restart | 7 passed, 0 failed |
+
 The UI suite uses `playwright-core` with the runtime image's own Chromium and a Node
-binary copied from a pinned Node image, so it needs no browser download.
+binary copied from a pinned Node image, so it needs no browser download. The
+scanners suite signs a throwaway Nuclei template offline
+(`runtime/staged-nuclei-prepare.sh`) and runs a pinned ZAP image; the failures
+suite uses the scripts in `runtime/staged-fakes`. All suites were re-run on the
+final commit, in the order default (82 passed, 2 known limitations), recovery, ui,
+identities, api, scanners, failures, recovery-write and recovery-auth.
 
 ### Defects found by these runs and fixed
 
@@ -370,6 +382,16 @@ binary copied from a pinned Node image, so it needs no browser download.
 - A browser's implicit favicon request, excluded for a path-bounded target, replaced
   the access test's failure reason and made every path-prefixed target fail the
   browser access test's anonymous negative control.
+- A GraphQL operation path was joined onto a target path that already contained the
+  endpoint, inventing `/app/graphql/app/graphql`: an inventory row and a probe for a
+  URL that does not exist (two code paths).
+- `manual_seeds` were validated and then ignored by the executor; they are now merged
+  into the inventory for the first target whose scope allows them and never when
+  excluded.
+- An approved write that ran once with cleanup still showed as skipped on its
+  operation; the apiwrites outcome is now joined onto the operation.
+- A session lost mid-run while Nuclei, Wapiti or Dalfox was running left authenticated
+  access reported as verified; only a ZAP failure downgraded it.
 
 ### Boundary and private-evidence audit (static review)
 
@@ -394,13 +416,15 @@ coverage job rows, the scan detail page and the report. Still open:
   deletion does not use the retention containment check; no startup sweep removes
   raw output left by a crashed run (it is now withheld from download, not deleted).
 
-### Not yet covered by a staged run
+### Not covered
 
-API definition and GraphQL imports, the approved POST campaign inside a full
-assessment, Nuclei/Wapiti/Dalfox/ZAP execution in a staged assessment, authorization
-comparisons with supplied resource fixtures, and any amd64 run. Component-level
-native fixtures for most of these pass (see above); they are not a staged
-end-to-end result. The expanded workflow remains disabled by default.
+Real staged runs now cover definitions, the exactly-once write, authorization
+comparisons, all four active scanners, the approved campaign, injected failures and
+three restart scenarios. Not covered: restart during an auth credential rotation
+(only stale-session reuse after a hard kill is checked), the optional adapters
+(nikto, testssl, nmap, masscan, OpenVAS), authorization comparisons for more than
+two identities, authenticated ZAP execution, any run longer than the web-thorough
+budget, and any amd64 run. The expanded workflow remains disabled by default.
 
 `.github/workflows/amd64-validation.yml` is a non-publishing workflow (read-only
 permissions, no registry login, no push) that builds the amd64 runtime locally, runs
