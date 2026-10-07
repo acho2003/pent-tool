@@ -153,3 +153,44 @@ func TestGraphQLOperationURLIsNotJoinedToTheTargetPath(t *testing.T) {
 		}
 	}
 }
+
+// Manual seeds are validated at plan time; the executor must actually merge them
+// into the inventory (to the first target whose scope allows them) and never
+// merge an excluded one.
+func TestManualSeedsAreMergedIntoTheInventory(t *testing.T) {
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	bin := filepath.Join(t.TempDir(), "katana")
+	script := `#!/bin/sh
+while [ $# -gt 0 ]; do
+ case "$1" in -o) shift; printf '{"request":{"method":"GET","endpoint":"http://127.0.0.1:1/app/crawled"},"response":{"status_code":200}}\n' > "$1" ;; esac
+ shift
+done
+`
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := assessment.Target{ID: "app", Kind: assessment.KindURL, Value: "http://127.0.0.1:1/app/"}
+	plan := katanaLimitationPlan("unified-v1", target)
+	plan.Config.ManualSeeds = []string{"http://127.0.0.1:1/app/graphql-noint", "http://127.0.0.1:1/app/logout"}
+	plan.Config.Exclusions = []assessment.Exclusion{{PathPattern: "/app/logout", Reason: "session"}}
+	root := t.TempDir()
+	pipeline := Pipeline{Config: Config{KatanaPath: bin, WebMaxEndpoints: 10, RateRPS: 10}}
+	pipeline.RunAssessmentJobs(t.Context(), plan, root, nil, nil)
+	seeded, excluded := false, false
+	for _, surface := range LoadAttackSurfaces(root) {
+		for _, endpoint := range surface.Endpoints {
+			if strings.HasSuffix(endpoint.URL, "/app/graphql-noint") && endpoint.ObservationKind == "seed" {
+				seeded = true
+			}
+			if strings.HasSuffix(endpoint.URL, "/app/logout") && endpoint.State != "excluded" {
+				excluded = true
+			}
+		}
+	}
+	if !seeded {
+		t.Fatal("the validated manual seed was not merged into the inventory")
+	}
+	if excluded {
+		t.Fatal("an excluded manual seed became an active inventory entry")
+	}
+}

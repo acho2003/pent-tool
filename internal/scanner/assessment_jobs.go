@@ -352,6 +352,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		surface.WorkflowVersion = plan.Config.WorkflowVersion
 		EnsureSeedEndpoint(surface, inventoryTarget)
+		for _, seed := range plan.Config.ManualSeeds {
+			// Operator-supplied seeds are validated against the approved scope and
+			// exclusions at plan time. Each belongs to the first target whose scope
+			// allows it, so shared origins do not duplicate it.
+			if manualSeedOwner(plan.Config, appScopes, seed) == target.ID {
+				EnsureSeedEndpoint(surface, seed)
+			}
+		}
 		var apiEndpoints []APIEndpoint
 		for _, endpoint := range plan.APIEndpoints {
 			if endpoint.TargetID == target.ID {
@@ -835,6 +843,25 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		last.Reason = "workflow manifest could not be stored: " + err.Error()
 	}
 	return results
+}
+
+// manualSeedOwner returns the ID of the first target whose approved scope allows
+// seed and does not exclude it, or "" when none does.
+func manualSeedOwner(cfg assessment.AssessmentConfig, scopes map[string]*assessment.AppScope, seed string) string {
+	for _, target := range cfg.Targets {
+		scope := scopes[target.ID]
+		if scope == nil {
+			continue
+		}
+		if allowed, _ := scope.Allows(seed); !allowed {
+			continue
+		}
+		if excluded, _ := scope.Excluded("GET", seed); excluded {
+			continue
+		}
+		return target.ID
+	}
+	return ""
 }
 
 // crawlEvidenceReusable reports whether leftover katana output for crawlScope may
