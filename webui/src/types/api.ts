@@ -292,7 +292,7 @@ export interface AssessmentCoverage {
   assessment_mode?: AssessmentMode;
   assessment_types?: AssessmentType[];
   type_coverage?: Array<{ type: AssessmentType; state: string; reason: string }>;
-  jobs?: Array<{ id: string; scanner: string; variant: string; target_id: string; target: string; assessment_types?: AssessmentType[]; planned_state: string; status: string; reason?: string; has_artifact: boolean; artifact_state: string }>;
+  jobs?: Array<{ id: string; scanner: string; variant: string; target_id: string; target: string; assessment_types?: AssessmentType[]; planned_state: string; status: string; reason?: string; has_artifact: boolean; artifact_state: string; limitations?: Array<{ kind: string; reason?: string }> }>;
   capabilities?: Array<{ capability: string; target_id?: string; state: string; reason: string }>;
   api_operations?: Array<{ target_id: string; method: string; path: string; origin?: string; status: string; reason: string; eligible: boolean }>;
   api_operation_counts?: { discovered: number; eligible: number; attempted: number; completed: number; batch_completed: number; failed: number; skipped: number; not_attempted: number };

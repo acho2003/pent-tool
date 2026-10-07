@@ -167,6 +167,10 @@ const (
 	// LimitationStandardEngineFallback: katana fell back from the headless
 	// browser engine to its standard (non-JavaScript) engine.
 	LimitationStandardEngineFallback = "standard_engine_fallback"
+	// LimitationScopeNotGatewayEnforced: the adapter's traffic does not pass
+	// through the recording gateway, so the approved path boundary, exclusions
+	// and request budget are not enforced for it by the gateway.
+	LimitationScopeNotGatewayEnforced = "scope_not_gateway_enforced"
 )
 
 // RunLimitation records a category of coverage a run that otherwise completed

@@ -171,6 +171,9 @@ func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
 			line += " - " + job.Reason
 		}
 		lines = append(lines, line)
+		for _, limitation := range job.Limitations {
+			lines = append(lines, fmt.Sprintf("Limitation %s (%s): %s", job.Scanner, limitation.Kind, limitation.Reason))
+		}
 	}
 	for _, operation := range coverage.Operations {
 		line := fmt.Sprintf("API %s %s: %s", operation.Method, operation.Path, operation.Status)

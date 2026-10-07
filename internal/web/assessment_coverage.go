@@ -24,6 +24,9 @@ type assessmentJobCoverage struct {
 	FinishedAt      string            `json:"finished_at,omitempty"`
 	HasArtifact     bool              `json:"has_artifact"`
 	ArtifactState   string            `json:"artifact_state"`
+	// Limitations are categories the run did not cover, such as an adapter whose
+	// traffic is not gateway-enforced. A completed status is not full coverage.
+	Limitations []scanner.RunLimitation `json:"limitations,omitempty"`
 }
 
 type assessmentCapabilityCoverage struct {
@@ -225,6 +228,7 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 			item.StartedAt, item.FinishedAt = run.StartedAt, run.FinishedAt
 			item.ArtifactState = assessmentArtifactState(scanDir, run)
 			item.HasArtifact = item.ArtifactState == "verified"
+			item.Limitations = append([]scanner.RunLimitation(nil), run.Limitations...)
 			break
 		}
 		if job.State == scanner.PlanConditional && item.Status == "queued" {

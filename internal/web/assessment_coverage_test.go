@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -139,5 +140,43 @@ func TestAssessmentCoverageMarksNativeAPIChecksPerOperation(t *testing.T) {
 	coverage := buildAssessmentCoverage(record.ID, record, "")
 	if coverage.Operations[0].Status != "tested" || coverage.OperationCounts.Completed != 1 || coverage.OperationCounts.BatchCompleted != 0 || coverage.TypeCoverage[0].State != "complete" {
 		t.Fatalf("native API operation coverage=%+v counts=%+v type=%+v jobs=%+v", coverage.Operations, coverage.OperationCounts, coverage.TypeCoverage, coverage.Jobs)
+	}
+}
+
+func TestAssessmentCoverageAndReportExposeRunLimitations(t *testing.T) {
+	s := newTestServer(t, nil)
+	scanDir := filepath.Join(s.dataDir, "limit-app", "2026-10-07", "limit-scan")
+	if err := os.MkdirAll(filepath.Join(scanDir, "scanner-output"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(scanDir, "scanner-output", "katana.jsonl")
+	if err := os.WriteFile(artifactPath, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := &scanner.AssessmentPlan{
+		Config:      assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/app/"}}},
+		Jobs:        []scanner.PlanJob{{ID: "katana:app:katana", State: scanner.PlanSelected, Scanner: "katana", TargetID: "app", Target: "https://app.example.test/app/", AssessmentType: assessment.TypeWebApplication, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication}, Variant: "katana"}},
+		Fingerprint: "sha256:limit-plan",
+	}
+	run := scanner.Run{Scanner: "katana", Variant: "katana", PlanFingerprint: plan.Fingerprint, Target: "https://app.example.test/app/", Status: "completed", ArtifactPath: artifactPath,
+		Limitations: []scanner.RunLimitation{{Kind: scanner.LimitationScopeNotGatewayEnforced, Reason: "katana is not routed through the recording gateway"}}}
+	run.Checksum = scanner.CalculateChecksum(run)
+	record := &ScanRecord{SchemaVersion: 3, ID: "limit-scan", Status: "finished", Profile: "web-gentle", PlanFingerprint: plan.Fingerprint, AssessmentPlan: plan, ScannerRuns: []scanner.Run{run}}
+	s.saveScanRecordTo(record, scanDir)
+
+	rr := httptest.NewRecorder()
+	s.handleAssessmentCoverage(rr, httptest.NewRequest(http.MethodGet, "/api/scans/limit-scan/coverage", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"limitations":[{"kind":"scope_not_gateway_enforced"`) {
+		t.Fatalf("coverage did not expose the limitation: %d %s", rr.Code, rr.Body.String())
+	}
+	var coverage assessmentCoverageResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &coverage); err != nil || len(coverage.Jobs) != 1 || coverage.Jobs[0].Status != "completed" {
+		t.Fatalf("decode: %v %+v", err, coverage.Jobs)
+	}
+	lines := assessmentCoverageLines(coverage)
+	if !slices.ContainsFunc(lines, func(l string) bool {
+		return strings.HasPrefix(l, "Limitation katana (scope_not_gateway_enforced): ") && strings.Contains(l, "recording gateway")
+	}) {
+		t.Fatalf("report lines omit the limitation: %q", lines)
 	}
 }

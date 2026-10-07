@@ -151,6 +151,11 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		run.Stage = job.Stage
 		run.AuthContextID, run.AuthIdentity, run.AuthRole = job.AuthContextID, job.AuthIdentity, job.AuthRole
 		run.WorkflowVersion = plan.Config.WorkflowVersion
+		if expanded && run.Status != "skipped" && run.Status != "not_applicable" && run.GapKind != GapToolUnavailable {
+			// Every started job passes through here, including katana whose crawl
+			// runs during surface preparation rather than in the job loop.
+			run.Limitations = withDirectEgressLimitation(run.Limitations, job.Scanner)
+		}
 		if surfaces[job.TargetID] == nil && expanded {
 			surfaces[job.TargetID] = &AttackSurface{SchemaVersion: AttackSurfaceSchemaVersion, ClassifierVersion: AttackSurfaceClassifierVersion, Scope: scopeForInventoryJob(job), Target: job.Target, Endpoints: []AttackSurfaceEndpoint{}}
 		}
