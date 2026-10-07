@@ -17,6 +17,7 @@ build/
 !webui/tsconfig.app.json
 !webui/tsconfig.node.json
 !webui/package-lock.json
+!runtime/ui-acceptance/package-lock.json
 !internal/web/static/.eslintrc.json
 xalgorix-data/
 *_assessment/

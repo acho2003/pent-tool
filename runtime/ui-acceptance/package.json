@@ -1,0 +1,10 @@
+{
+  "name": "xalgorix-ui-acceptance",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-browser acceptance driver for the staged assessment lab. Uses playwright-core with the runtime image's own Chromium; no browser is downloaded.",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.62.1"
+  }
+}

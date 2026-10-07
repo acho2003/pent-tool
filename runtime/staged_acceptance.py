@@ -31,9 +31,24 @@ ALIAS = os.environ.get("STAGED_ALIAS", "http://lab-alias:8081")
 TIMEOUT = int(os.environ.get("STAGED_SCAN_TIMEOUT", "2400"))
 REUSE_SCAN = os.environ.get("STAGED_REUSE_SCAN", "")
 RESULT_PATH = os.environ.get("STAGED_RESULT", "")
+PHASE = os.environ.get("STAGED_PHASE", "full")
+STATE_PATH = os.environ.get("STAGED_STATE", "/out/state.json")
 PATH_PREFIX = "/app/"
 
 results = []
+
+
+def load_state():
+    try:
+        with open(STATE_PATH) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    with open(STATE_PATH, "w") as handle:
+        json.dump(state, handle, indent=2)
 
 
 def limitation(name, detail):
@@ -91,7 +106,7 @@ def lab(method, path):
     request = urllib.request.Request(LAB_CONTROL + path, method=method, headers={"X-Lab-Control": "local-only"})
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = response.read()
-    return json.loads(payload) if payload else None
+    return json.loads(payload) if payload else None  # the recorder returns null for an empty list
 
 
 def plan_config(variants):
@@ -221,7 +236,7 @@ def verify_assessment(client, scan_id, label, expect_secondary):
         check(label + ": endpoint trace resolves exact request", status == 200 and trace.get("endpoint", {}).get("url") == sample["url"], status)
 
     # No forbidden traffic reached the lab, apart from limitations recorded below.
-    forbidden = lab("GET", "/forbidden")
+    forbidden = (lab("GET", "/forbidden") or [])
     known = [h for h in forbidden if is_known_limitation(h)]
     unknown = [h for h in forbidden if not is_known_limitation(h)]
     check(label + ": no unexplained traffic outside the approved boundary", not unknown,
@@ -241,7 +256,7 @@ def verify_assessment(client, scan_id, label, expect_secondary):
     return coverage
 
 
-def main():
+def phase_full():
     client = Client()
     if not client.login():
         return finish()
@@ -309,10 +324,304 @@ def main():
     if child is None:
         return finish()
     verify_assessment(client, child_id, "revision", expect_secondary=True)
-    hits = lab("GET", "/hits")
+    hits = (lab("GET", "/hits") or [])
     check("approved secondary origin was contacted only after approval", any(h["origin"] == "secondary" for h in hits), len(hits))
     check("alias origin was never contacted", not any(h["origin"] == "alias" for h in hits))
     return finish()
+
+
+def scan_record(client, scan_id):
+    status, record = client.call("GET", "/api/scans/" + scan_id)
+    return record if status == 200 and isinstance(record, dict) else {}
+
+
+def run_summary(record):
+    return {"%s/%s" % (r.get("scanner"), r.get("scope", "")): {"status": r.get("status"), "attempt": r.get("attempt_id")} for r in record.get("scanner_runs") or []}
+
+
+def phase_recovery_base():
+    """Complete a base assessment and capture the pending discovery preview."""
+    client = Client()
+    if not client.login():
+        return finish()
+    config = plan_config(["httpx", "katana"])
+    status, plan = client.call("POST", "/api/scans/plan", config)
+    check("recovery: plan preview accepted", status == 200 and not plan.get("errors"), status)
+    lab("POST", "/reset")
+    status, ack, scan_id = start_scan(client, config, plan["fingerprint"], "staged-recovery-base")
+    check("recovery: base assessment started", status == 200 and bool(scan_id), status)
+    record = wait_terminal(client, scan_id, "base")
+    check("recovery: base assessment finished", record is not None and record.get("status") == "finished", record.get("status") if record else "timeout")
+    status, preview = client.call("GET", "/api/scans/%s/discovery" % scan_id)
+    check("recovery: discovery awaiting approval before restart", status == 200 and preview.get("state") == "awaiting_approval", status)
+    save_state({"config": config, "base_id": scan_id, "plan_fingerprint": record.get("plan_fingerprint"), "preview": preview})
+    return finish()
+
+
+def phase_recovery_pending():
+    """After a graceful restart: the pending approval survives and still works."""
+    state = load_state()
+    client = Client()
+    if not client.login():
+        return finish()
+    base_id, saved = state["base_id"], state["preview"]
+    status, preview = client.call("GET", "/api/scans/%s/discovery" % base_id)
+    check("restart: pending preview fingerprint is unchanged", status == 200 and preview.get("fingerprint") == saved["fingerprint"], preview.get("fingerprint") if isinstance(preview, dict) else status)
+    check("restart: pending preview still awaits approval", preview.get("state") == "awaiting_approval", preview.get("state"))
+    check("restart: candidate identities are unchanged", sorted(c["id"] for c in preview["candidates"]) == sorted(c["id"] for c in saved["candidates"]))
+    record = scan_record(client, base_id)
+    check("restart: finished base record is still finished", record.get("status") == "finished", record.get("status"))
+    status, _ = client.call("POST", "/api/scans/%s/discovery" % base_id, {"fingerprint": "stale", "selected_ids": [preview["candidates"][0]["id"]]})
+    check("restart: stale approval is still rejected with HTTP 409", status == 409, status)
+    secondary = next((c for c in preview["candidates"] if c["value"] == SECONDARY), None)
+    check("restart: secondary candidate is still present", secondary is not None)
+    if not secondary:
+        return finish()
+    status, revision = client.call("POST", "/api/scans/%s/discovery" % base_id, {"fingerprint": preview["fingerprint"], "selected_ids": [secondary["id"]]})
+    check("restart: pending approval can be accepted after restart", status == 200 and isinstance(revision, dict), status)
+    if isinstance(revision, dict):
+        check("restart: accepted revision links the persisted parent", revision.get("parent_fingerprint") == state["plan_fingerprint"], revision.get("parent_fingerprint"))
+        state["revision"] = revision
+        save_state(state)
+    return finish()
+
+
+def phase_recovery_accepted():
+    """After a second restart: the accepted revision persists; start it and wait until it is mid-run."""
+    state = load_state()
+    client = Client()
+    if not client.login():
+        return finish()
+    base_id, revision = state["base_id"], state["revision"]
+    status, preview = client.call("GET", "/api/scans/%s/discovery" % base_id)
+    approved = (preview or {}).get("approved_revision") or {}
+    check("restart: accepted revision survives a second restart", approved.get("plan", {}).get("fingerprint") == revision["plan"]["fingerprint"], approved.get("plan", {}).get("fingerprint"))
+    check("restart: accepted revision keeps parent and preview links", approved.get("parent_fingerprint") == revision["parent_fingerprint"] and approved.get("preview_fingerprint") == revision["preview_fingerprint"])
+    check("restart: accepted parent plan is unchanged", scan_record(client, base_id).get("plan_fingerprint") == state["plan_fingerprint"])
+    lab("POST", "/reset")
+    plan_after = approved["plan"]
+    status, ack, child_id = start_scan(client, plan_after["config"], plan_after["fingerprint"], "staged-recovery-revision")
+    check("restart: accepted revision starts after restart", status == 200 and bool(child_id), status)
+    if not child_id:
+        return finish()
+    # Wait until at least one job completed and another is still running.
+    deadline, summary = time.time() + 600, {}
+    while time.time() < deadline:
+        record = scan_record(client, child_id)
+        summary = run_summary(record)
+        states = [v["status"] for v in summary.values()]
+        if "completed" in states and "running" in states:
+            break
+        time.sleep(3)
+    check("restart: revision is mid-run with a completed and a running job", "completed" in [v["status"] for v in summary.values()] and "running" in [v["status"] for v in summary.values()], summary)
+    state["child_id"], state["midrun"] = child_id, summary
+    save_state(state)
+    return finish()
+
+
+def phase_recovery_midrun():
+    """After a hard kill during execution: nothing is claimed complete that did not finish."""
+    state = load_state()
+    client = Client()
+    if not client.login():
+        return finish()
+    child_id, before = state["child_id"], state["midrun"]
+    first = scan_record(client, child_id)
+    print("  status after restart: %s reason=%s" % (first.get("status"), first.get("stop_reason")), flush=True)
+    check("kill: interrupted record is not left running without a process", first.get("status") != "running" or bool(first.get("scanner_runs")), first.get("status"))
+    # Watch for an automatic retry. A terminal record that stays unchanged for
+    # 30 s (longer than the 5 s startup auto-resume delay) is the final outcome.
+    deadline, last, stable_since, record = time.time() + 1500, None, time.time(), first
+    while time.time() < deadline:
+        record = scan_record(client, child_id)
+        current = (record.get("status"), json.dumps(run_summary(record), sort_keys=True))
+        if current != last:
+            print("  %s %s" % (record.get("status"), run_summary(record)), flush=True)
+            last, stable_since = current, time.time()
+        if record.get("status") in ("finished", "failed", "stopped") and time.time() - stable_since >= 30:
+            break
+        time.sleep(5)
+    summary = run_summary(record)
+    for key, was in before.items():
+        now = summary.get(key)
+        if was["status"] == "completed":
+            check("kill: completed attempt %s is retained, not re-run" % key, bool(now) and now["attempt"] == was["attempt"] and now["status"] == "completed", "before=%s now=%s" % (was, now))
+        else:
+            # The interrupted attempt must be re-run under a new attempt ID and
+            # recorded as completed, never dropped, left running, or treated as
+            # finished from truncated output. A completed crawl is relabelled from
+            # its discovery scope to its job scope, so match on the scanner family.
+            family = key.split("/", 1)[0]
+            rerun = {k: v for k, v in summary.items() if k.split("/", 1)[0] == family and v["status"] == "completed" and v["attempt"] and v["attempt"] != was["attempt"]}
+            check("kill: interrupted %s attempt (%s) was re-run under a new attempt ID and completed" % (key, was["attempt"]), bool(rerun), "before=%s now=%s" % (was, rerun or summary))
+    skipped = [k for k, v in summary.items() if k.startswith("katana/") and v["status"] == "skipped"]
+    check("kill: no selected katana crawl ended skipped after the restart", not skipped, skipped)
+    check("kill: the resumed assessment finished", record.get("status") == "finished", record.get("status"))
+    status, listing = client.call("GET", "/api/scans")
+    running = [i for i in listing or [] if i.get("status") == "running"]
+    check("kill: no scan is left in a stale running state", not running or record.get("status") == "running", [i["id"] for i in running])
+    state["after_kill"] = {"status": record.get("status"), "stop_reason": record.get("stop_reason"), "runs": summary}
+    save_state(state)
+    return finish()
+
+
+def phase_recovery_stop():
+    """Start a scan and stop it explicitly; a later restart must not resume it."""
+    state = load_state()
+    client = Client()
+    if not client.login():
+        return finish()
+    config = state["config"]
+    status, plan = client.call("POST", "/api/scans/plan", config)
+    status, ack, scan_id = start_scan(client, config, plan["fingerprint"], "staged-recovery-stop")
+    check("stop: scan started", status == 200 and bool(scan_id), status)
+    if not scan_id:
+        return finish()
+    deadline = time.time() + 300
+    while time.time() < deadline and scan_record(client, scan_id).get("status") != "running":
+        time.sleep(2)
+    time.sleep(5)
+    status, _ = client.call("POST", "/api/stop", {})
+    check("stop: explicit stop accepted", status == 200, status)
+    deadline = time.time() + 120
+    while time.time() < deadline and scan_record(client, scan_id).get("status") not in ("stopped", "finished", "failed"):
+        time.sleep(2)
+    record = scan_record(client, scan_id)
+    check("stop: scan is stopped by the user", record.get("status") == "stopped", "%s %s" % (record.get("status"), record.get("stop_reason")))
+    state["stop_id"] = scan_id
+    save_state(state)
+    return finish()
+
+
+def phase_recovery_after_stop():
+    state = load_state()
+    client = Client()
+    if not client.login():
+        return finish()
+    time.sleep(45)  # longer than the 5 s startup auto-resume delay
+    record = scan_record(client, state["stop_id"])
+    check("restart: explicitly stopped scan stays stopped", record.get("status") == "stopped", "%s %s" % (record.get("status"), record.get("stop_reason")))
+    status, listing = client.call("GET", "/api/scans")
+    check("restart: nothing was auto-resumed after an explicit stop", not [i for i in listing or [] if i.get("status") in ("running", "pending")], [(i["id"], i["status"]) for i in listing or []])
+    forbidden = [h for h in (lab("GET", "/forbidden") or []) if not is_known_limitation(h)]
+    check("recovery: no unexplained traffic outside the boundary across restarts", not forbidden, forbidden[:2])
+    return finish()
+
+
+LAB_SECRETS = [
+    "lab-admin-password", "lab-viewer-password", "lab-admin-session", "lab-viewer-session", "lab_session=lab",
+]
+
+
+def identity_config(admin_id, viewer_id):
+    config = plan_config(["httpx", "katana"])
+    config["assessment_mode"] = "GRAY_BOX"
+
+    def binding(credential_id, identity, role, marker):
+        return {"target_ids": ["app"], "kind": "FORM_LOGIN", "credential_id": credential_id, "identity": identity, "role": role,
+                "verify_url": PRIMARY + PATH_PREFIX + "private", "verify_marker": marker, "negative_marker": marker, "verify_browser": True}
+    config["access"] = [binding(admin_id, "admin", "administrator", "LAB_ADMIN_MARKER"), binding(viewer_id, "viewer", "viewer", "LAB_VIEWER_MARKER")]
+    return config
+
+
+def phase_identities():
+    """Two supplied identities with protected markers, an anonymous control and secret hygiene."""
+    client = Client()
+    if not client.login():
+        return finish()
+    ids = {}
+    for name, user, password in (("admin", "admin", "lab-admin-password"), ("viewer", "viewer", "lab-viewer-password")):
+        status, meta = client.call("POST", "/api/credentials", {"name": "staged " + name, "kind": "FORM_LOGIN", "target_ids": ["app"],
+                                    "values": {"login_url": PRIMARY + PATH_PREFIX + "login", "username": user, "password": password, "csrf_field": "csrf"}})
+        check("identity: %s credential stored in the encrypted vault" % name, status == 201 and isinstance(meta, dict) and meta.get("id"), status)
+        ids[name] = meta.get("id") if isinstance(meta, dict) else None
+        check("identity: %s credential metadata exposes no secret" % name, password not in json.dumps(meta))
+    if not all(ids.values()):
+        return finish()
+
+    def access_test(credential, marker, verify_path, browser):
+        return client.call("POST", "/api/credentials/%s/test" % credential, {"target_id": "app", "target_url": PRIMARY + PATH_PREFIX,
+                           "verify_url": PRIMARY + PATH_PREFIX + verify_path, "verify_marker": marker, "browser": browser})
+    for browser in (False, True):
+        mode = "browser" if browser else "HTTP"
+        status, body = access_test(ids["admin"], "LAB_ADMIN_MARKER", "private", browser)
+        check("identity: admin %s access test verifies the protected marker with an anonymous control" % mode, status == 200 and body.get("verified") is True, body)
+        status, body = access_test(ids["viewer"], "LAB_VIEWER_MARKER", "private", browser)
+        check("identity: viewer %s access test verifies its own marker" % mode, status == 200 and body.get("verified") is True, body)
+    status, body = access_test(ids["viewer"], "LAB_ADMIN_ONLY", "admin", False)
+    check("identity: viewer is refused the admin-only route", status == 200 and body.get("verified") is False, body)
+    status, body = access_test(ids["admin"], "LAB_ADMIN_MARKER", "about", False)
+    check("identity: a public page is rejected by the anonymous negative control", status == 200 and body.get("verified") is False, body)
+
+    config = identity_config(ids["admin"], ids["viewer"])
+    status, plan = client.call("POST", "/api/scans/plan", config)
+    check("identity: plan preview with two named identities", status == 200 and not plan.get("errors"), plan.get("errors") if isinstance(plan, dict) else status)
+    if not isinstance(plan, dict) or not plan.get("fingerprint"):
+        return finish()
+    lab("POST", "/reset")
+    status, ack, scan_id = start_scan(client, config, plan["fingerprint"], "staged-identities")
+    check("identity: assessment started", status == 200 and bool(scan_id), status)
+    if not scan_id:
+        return finish()
+    record = wait_terminal(client, scan_id, "identities")
+    check("identity: assessment finished", record is not None and record.get("status") == "finished", record.get("status") if record else "timeout")
+    if record is None:
+        return finish()
+
+    status, coverage = client.call("GET", "/api/scans/%s/coverage" % scan_id)
+    proof = coverage.get("proof") or {}
+    discovery = proof.get("identity_discovery") or []
+    # The first identity is the primary one and keeps the normal authenticated
+    # crawl; every additional identity gets an independent browser discovery run.
+    labels = sorted(i.get("identity") for i in discovery)
+    check("identity: the additional identity has its own browser discovery run", labels == ["viewer"], labels)
+    check("identity: every identity names its role and authentication state", all(i.get("role") and i.get("auth_state") for i in discovery), discovery)
+    check("identity: requests observed with authentication are counted", (proof.get("observed_with_auth") or 0) > 0, proof.get("observed_with_auth"))
+    items = surface_items(client, scan_id)
+    private = [i for i in items if i.get("url", "").endswith("/app/private")]
+    check("identity: the protected route is in the inventory", bool(private), len(items))
+    hits = (lab("GET", "/hits") or [])
+    seen = {h["identity"] for h in hits if h["path"] in (PATH_PREFIX + "private", PATH_PREFIX + "api/me")}
+    check("identity: the lab saw both identities and an anonymous control", {"admin", "viewer", "anonymous"} <= seen, sorted(seen))
+    forbidden = [h for h in (lab("GET", "/forbidden") or []) if not is_known_limitation(h)]
+    check("identity: no unexplained traffic outside the boundary", not forbidden, forbidden[:2])
+
+    # No synthetic credential, cookie or session value may appear in anything the
+    # API, the saved artifacts or the offline report expose.
+    surfaces = {}
+    for name, path in (("scan record", "/api/scans/" + scan_id), ("coverage", "/api/scans/%s/coverage" % scan_id),
+                       ("discovery", "/api/scans/%s/discovery" % scan_id), ("findings", "/api/scans/%s/findings" % scan_id),
+                       ("credential list", "/api/credentials")):
+        surfaces[name] = json.dumps(client.call("GET", path)[1])
+    surfaces["attack surface"] = json.dumps(items)
+    for run in (client.call("GET", "/api/scans/" + scan_id)[1].get("scanner_runs") or []):
+        scope = run.get("scope") or ""
+        if run.get("scanner") in ("httpx", "katana") and run.get("status") in ("completed", "failed", "cancelled"):
+            status, body = client.call("GET", "/api/scans/%s/%s/artifact?scope=%s" % (scan_id, run["scanner"], scope), raw=True)
+            if status == 200:
+                surfaces["%s artifact (%s)" % (run["scanner"], scope)] = body.decode("utf-8", "replace")
+            for stream in ("stdout", "stderr", "combined"):
+                status, body = client.call("GET", "/api/scans/%s/output/%s/%s?scope=%s" % (scan_id, run["scanner"], stream, scope), raw=True)
+                if status == 200:
+                    surfaces["%s %s (%s)" % (run["scanner"], stream, scope)] = body.decode("utf-8", "replace")
+    status, pdf = client.call("GET", "/api/report/" + scan_id, raw=True)
+    surfaces["report text"] = pdf_text(pdf)
+    for name, text in surfaces.items():
+        leaked = [secret for secret in LAB_SECRETS if secret in text]
+        check("identity: %s contains no synthetic credential or session value" % name, not leaked, leaked)
+    return finish()
+
+
+PHASES = {
+    "full": phase_full,
+    "recovery-base": phase_recovery_base,
+    "recovery-pending": phase_recovery_pending,
+    "recovery-accepted": phase_recovery_accepted,
+    "recovery-midrun": phase_recovery_midrun,
+    "recovery-stop": phase_recovery_stop,
+    "recovery-after-stop": phase_recovery_after_stop,
+    "identities": phase_identities,
+}
 
 
 def finish():
@@ -328,4 +637,6 @@ def finish():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if PHASE not in PHASES:
+        sys.exit("unknown STAGED_PHASE %r; expected one of %s" % (PHASE, sorted(PHASES)))
+    sys.exit(PHASES[PHASE]())

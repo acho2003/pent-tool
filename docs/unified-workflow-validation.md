@@ -322,37 +322,86 @@ ZAP discovery and 684-request seeding fixtures passed. Its temporary service
 containers and internal network were removed by the script. No full staged
 assessment or undiscovered-asset completeness claim follows from these results.
 
-## Staged lab acceptance (API level)
+## Staged acceptance suites
 
-`runtime/staged-acceptance.sh IMAGE [APPLICATION_BINARY]` runs a complete
-assessment through the public API against the checked-in staged lab
-(`test/stagedlab`) on a private, internal Docker network and removes only the
-containers and network it created. The lab has an approved path boundary
-(`/app`), an HTTPS secondary origin that is only a discovery candidate, an
-unapproved alias origin, 684 distinct exact request variants, excluded logout and
-write routes, and a recorder that reports any request outside the boundary.
+`runtime/staged-acceptance.sh IMAGE [APPLICATION_BINARY]` runs real assessments
+against the checked-in staged lab (`test/stagedlab`) on a private, internal Docker
+network and removes only the containers, network and volume it created. It never
+publishes ports, attaches to production services or prunes Docker. The lab has an
+approved path boundary (`/app`), an HTTPS secondary origin that is only a discovery
+candidate, an unapproved alias origin, a dead port, two identities with protected
+markers, valid and lookalike API definitions, GraphQL with and without
+introspection, 684 distinct exact request variants, excluded logout/write routes
+and a recorder that reports any request outside the boundary.
 
-Recorded outcome on native Linux arm64 (runtime `xalgorix:workflow-validation-e69bc21`
-with the application binary built from the working tree; httpx and katana
-selected, `web-gentle` profile): 82 checks passed, 0 failed, 2 known limitations.
-Checked: plan preview and stale-fingerprint HTTP 409; job outcomes and verified
-artifacts; every coverage drill-down total equals its summary count; all 684
-variants present in the inventory with a disposition; the excluded write route
-dispositioned and never requested; alias origin never contacted and never counted
-as a live service; stale discovery approval HTTP 409; approval of the secondary
-origin creates a child revision that leaves the parent unchanged and clears
-write/fuzz consent; the revision runs and contacts the secondary origin; the PDF
-report's inventory totals equal the API totals for both assessments.
+Select a suite with `STAGED_SUITE`: default (full assessment, revision and
+report), `recovery`, `ui` or `identities`. Results are native Linux arm64 with the
+`xalgorix:workflow-validation-e69bc21` runtime and an application binary built
+from the working tree; httpx and katana selected, `web-gentle` profile.
 
-Known limitations recorded by the run (not passes):
+| Suite | What it proves | Recorded outcome |
+| --- | --- | --- |
+| default | plan preview and stale-fingerprint HTTP 409; job outcomes and verified artifacts; every coverage drill-down total equals its summary; all 684 variants in the inventory with a disposition; excluded write route dispositioned and never requested; alias never contacted nor counted live; stale discovery approval HTTP 409; approval creates an immutable child revision that clears write/fuzz consent; the revision runs and reaches the secondary origin; PDF totals equal API totals | 82 passed, 0 failed, 2 known limitations |
+| recovery | pending approval, accepted revision and parent links survive two graceful restarts; after a SIGKILL mid-crawl the record is stopped (`server_restart`), then auto-resumed with completed httpx attempts retained under their original attempt IDs and the interrupted crawl re-run under a new attempt ID; an explicit stop is terminal across a restart and nothing is auto-resumed | all phases passed |
+| ui | real Chromium against the dashboard: auth redirect and wrong-password error; the 12 coverage tiles equal the saved summary; drill-down members; exact endpoint trace; PDF download; candidate approval and revision start; the ten-minute inactivity prompt; per-tool Stop on the katana crawl; Stop all; wizard boundary, exclusions and plan fingerprint | 36 passed, 0 failed |
+| identities | credentials stored encrypted; HTTP and browser access tests with an anonymous negative control; role separation (viewer refused the admin-only route; a public page fails the control); the assessment records authenticated observations and an independent discovery run for the additional identity; no synthetic credential, cookie or session value appears in any API response, saved artifact, output stream or the report | 33 passed; the one failure was an incorrect assertion, corrected in the driver |
 
-- katana's headless Chromium requests `/favicon.ico` on the approved origin root,
-  outside the `/app` path prefix. katana is not routed through the recording
-  gateway, so its `-cs`/`-cos` fences cannot constrain the browser's own fetch.
-- The browser navigation queue limit (500) is reached; only 501 of the 684
-  variants were fetched by the browser. The shortfall is reported by the
-  application as a discovery gap.
+The UI suite uses `playwright-core` with the runtime image's own Chromium and a Node
+binary copied from a pinned Node image, so it needs no browser download.
 
-Not covered by this run: the UI, authenticated identities, API/GraphQL
-definitions, the approved POST campaign, restart recovery, Nuclei/Wapiti/Dalfox/
-ZAP execution, and amd64. Those remain open.
+### Defects found by these runs and fixed
+
+- After a hard kill the resumed assessment parsed the truncated katana output as a
+  finished crawl: the crawl was not re-run and the job ended skipped. Leftover crawl
+  output is now trusted only with no earlier attempt recorded or a completed one
+  with matching checksums.
+- The katana crawl had no attempt ID, so the scan page offered no per-tool Stop for
+  the longest preparation tool. It now registers a cancellable attempt.
+- `EndpointTraceDialog` was rendered twice, hiding the first modal from assistive
+  technology.
+- The artifact route served `run.ArtifactPath` as soon as the tool started, although
+  the file is sanitized only when the run ends. A running run, or one orphaned by a
+  crash, could expose raw request/response bytes. It now returns 409 unless the run
+  is terminal. Live output streams are unchanged.
+- The finding status update returned an unredacted finding.
+- The artifact sanitizer missed credentials embedded as JSON inside a string value.
+- The recording gateway did not check resolved upstream addresses against the scope
+  guard (DNS rebinding); it now resolves, checks and pins the dial.
+- A browser's implicit favicon request, excluded for a path-bounded target, replaced
+  the access test's failure reason and made every path-prefixed target fail the
+  browser access test's anonymous negative control.
+
+### Boundary and private-evidence audit (static review)
+
+Only nuclei, wapiti, dalfox and ZAP traffic passes through the recording gateway.
+httpx, apichecks, historical providers and the Go browser validate scope natively.
+katana, testssl, nikto, nmap, masscan and OpenVAS run without the gateway; their
+runs now record a `scope_not_gateway_enforced` limitation that is shown on the
+coverage job rows, the scan detail page and the report. Still open:
+
+- katana's headless Chromium requests `/favicon.ico` outside the approved path
+  prefix (recorded by every staged run as a known limitation).
+- testssl, nikto and nmap send traffic that is not checked against the path prefix,
+  exclusions or request budget. OpenVAS falls back to all TCP ports when no nmap
+  port evidence exists.
+- Header credentials, the gateway password and the Wapiti POST body appear on child
+  process command lines and are readable through `/proc` inside the container.
+- Child-tool output files may be created with the default umask inside a 0700
+  directory before sanitization; stdout/stderr streams are redacted only by exact
+  known-secret match per chunk.
+- apichecks `findings.jsonl` is not passed through the artifact sanitizer;
+  `XALGORIX_SCAN_HEADERS` is not marked sensitive in the settings API; scan
+  deletion does not use the retention containment check; no startup sweep removes
+  raw output left by a crashed run (it is now withheld from download, not deleted).
+
+### Not yet covered by a staged run
+
+API definition and GraphQL imports, the approved POST campaign inside a full
+assessment, Nuclei/Wapiti/Dalfox/ZAP execution in a staged assessment, authorization
+comparisons with supplied resource fixtures, and any amd64 run. Component-level
+native fixtures for most of these pass (see above); they are not a staged
+end-to-end result. The expanded workflow remains disabled by default.
+
+`.github/workflows/amd64-validation.yml` is a non-publishing workflow (read-only
+permissions, no registry login, no push) that builds the amd64 runtime locally, runs
+the smoke test, the native fixtures and a staged suite. It has not been run.

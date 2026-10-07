@@ -1,0 +1,87 @@
+# Non-publishing amd64 validation of the unified assessment workflow.
+#
+# This workflow never logs in to a registry and never pushes an image: it has
+# read-only repository permissions and builds the amd64 runtime into the local
+# Docker daemon only. Run it manually to obtain an actual amd64 result before the
+# publication workflow (docker.yml) is used. It does not enable the rollout flag.
+name: amd64 validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Staged acceptance suite: default (full assessment) or recovery (restarts and a hard kill)"
+        type: choice
+        options:
+          - default
+          - recovery
+        default: default
+
+permissions:
+  contents: read
+
+concurrency:
+  group: amd64-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build and validate the amd64 runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free hosted runner SDK space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 1
+
+      - name: Build amd64 validation image (local only, not pushed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: xalgorix:ci
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=validation
+
+      - name: Verify scanner runtime
+        run: docker run --rm --network none --entrypoint python3 xalgorix:ci /usr/local/share/xalgorix/smoke-test.py
+
+      - name: Verify native workflow fixtures
+        run: |
+          fixture_bin=$(mktemp -d)
+          trap 'rm -rf "$fixture_bin"' EXIT
+          docker run --rm -v "$PWD:/src:ro" -v "$fixture_bin:/out" -w /src \
+            golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d \
+            bash -ec 'go test -race -c -o /out/scanner.test ./internal/scanner; go test -race -c -o /out/web.test ./internal/web'
+          runtime/workflow-acceptance.sh xalgorix:ci "$fixture_bin/scanner.test" "$fixture_bin/web.test"
+
+      - name: Staged assessment acceptance
+        env:
+          STAGED_RESULT_DIR: ${{ runner.temp }}/staged-acceptance
+          STAGED_SUITE: ${{ inputs.suite == 'recovery' && 'recovery' || '' }}
+        run: runtime/staged-acceptance.sh xalgorix:ci
+
+      - name: Keep staged acceptance results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: staged-acceptance-${{ inputs.suite }}
+          path: |
+            ${{ runner.temp }}/staged-acceptance/*.json
+            ${{ runner.temp }}/staged-acceptance/*.log
+          if-no-files-found: warn
