@@ -180,3 +180,41 @@ func TestAssessmentCoverageAndReportExposeRunLimitations(t *testing.T) {
 		t.Fatalf("report lines omit the limitation: %q", lines)
 	}
 }
+
+func TestAssessmentCoverageReflectsApprovedWriteOutcomes(t *testing.T) {
+	s := newTestServer(t, nil)
+	scanDir := filepath.Join(s.dataDir, "write-app", "2026-10-07", "write-scan")
+	if err := os.MkdirAll(scanDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := "https://app.example.test/app/"
+	plan := &scanner.AssessmentPlan{
+		Config: assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeAPI}, TestEnvironment: true, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}},
+		Jobs:   []scanner.PlanJob{{ID: "apiwrites:app:apiwrites", State: scanner.PlanSelected, Scanner: "apiwrites", TargetID: "app", Target: target, AssessmentType: assessment.TypeAPI, AssessmentTypes: []assessment.Type{assessment.TypeAPI}, Variant: "apiwrites"}},
+		APIEndpoints: []scanner.APIEndpoint{
+			{TargetID: "app", Method: "POST", Path: "/api/notes", Origin: target, Source: "openapi", Resolved: false, Eligible: false, Reason: "request body needs an explicit safe request example"},
+			{TargetID: "app", Method: "POST", Path: "/api/other", Origin: target, Source: "openapi", Resolved: false, Eligible: false, Reason: "request body needs an explicit safe request example"},
+		},
+		Fingerprint: "sha256:write-plan",
+	}
+	run := scanner.Run{Scanner: "apiwrites", Variant: "apiwrites", PlanFingerprint: plan.Fingerprint, Target: target, Status: "completed",
+		APIEndpointResults: []scanner.APIEndpointResult{{Method: "POST", Path: "/api/notes", Origin: target, Status: "completed"}}}
+	record := &ScanRecord{SchemaVersion: 3, ID: "write-scan", Status: "finished", Profile: "web-gentle", PlanFingerprint: plan.Fingerprint, AssessmentPlan: plan, ScannerRuns: []scanner.Run{run}}
+	s.saveScanRecordTo(record, scanDir)
+	rr := httptest.NewRecorder()
+	s.handleAssessmentCoverage(rr, httptest.NewRequest(http.MethodGet, "/api/scans/write-scan/coverage", nil))
+	var coverage assessmentCoverageResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &coverage); err != nil {
+		t.Fatalf("decode: %v %s", err, rr.Body.String())
+	}
+	status := map[string]string{}
+	for _, operation := range coverage.Operations {
+		status[operation.Path] = operation.Status
+	}
+	if status["/api/notes"] != "tested" || status["/api/other"] != "skipped" {
+		t.Fatalf("operation statuses = %v; an executed approved write is tested and an unapproved one stays skipped", status)
+	}
+	if coverage.OperationCounts.Completed != 1 || coverage.OperationCounts.Skipped != 1 {
+		t.Fatalf("counts = %+v", coverage.OperationCounts)
+	}
+}

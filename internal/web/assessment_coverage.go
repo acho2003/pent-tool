@@ -190,6 +190,38 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 				break
 			}
 		}
+		// An approved write is sent by its own job, not by apichecks or ZAP, so its
+		// outcome is joined here: otherwise a write that ran once with cleanup would
+		// still read "skipped: needs an explicit safe request example".
+		writeTarget := ""
+		for _, target := range plan.Config.Targets {
+			if target.ID == endpoint.TargetID {
+				writeTarget = target.Value
+				break
+			}
+		}
+		for _, run := range record.ScannerRuns {
+			if run.Scanner != "apiwrites" || run.PlanFingerprint != plan.Fingerprint || run.Target != writeTarget {
+				continue
+			}
+			for _, result := range run.APIEndpointResults {
+				if result.Method != endpoint.Method || result.Path != endpoint.Path {
+					continue
+				}
+				switch result.Status {
+				case "completed":
+					operation.Status, operation.Reason = "tested", "Approved write was sent once and its declared cleanup completed."
+				case "written":
+					operation.Status, operation.Reason = "incomplete", "Approved write was sent but its declared cleanup was not confirmed."
+				case "cleanup_failed", "failed":
+					operation.Status, operation.Reason = "failed", result.Reason
+				default:
+					if operation.Status == "skipped" && result.Reason != "" {
+						operation.Reason = result.Reason
+					}
+				}
+			}
+		}
 		switch operation.Status {
 		case "attempted":
 			coverage.OperationCounts.Attempted++
