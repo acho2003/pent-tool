@@ -1191,7 +1191,12 @@ func openAPIInventoryURL(applicationURL string, endpoint APIEndpoint) (string, e
 		}
 		base.Scheme, base.Host, base.Path = origin.Scheme, origin.Host, origin.Path
 	}
-	base.Path = strings.TrimSuffix(base.Path, "/") + "/" + strings.TrimLeft(operationPath, "/")
+	if endpoint.Source == "graphql" {
+		// A GraphQL operation's path is the endpoint's own absolute path.
+		base.Path = "/" + strings.TrimLeft(operationPath, "/")
+	} else {
+		base.Path = strings.TrimSuffix(base.Path, "/") + "/" + strings.TrimLeft(operationPath, "/")
+	}
 	base.RawPath, base.RawQuery, base.Fragment = "", "", ""
 	return base.String(), nil
 }

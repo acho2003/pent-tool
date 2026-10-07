@@ -150,6 +150,13 @@ func TestGraphQLOperationURLIsNotJoinedToTheTargetPath(t *testing.T) {
 			if urlErr == nil && got != want && !strings.HasPrefix(got, want+"?") {
 				t.Fatalf("target %s: operation %s mapped to %s, want %s", target, endpoint.OperationID, got, want)
 			}
+			// The inventory row for an operation that is not eligible (a mutation)
+			// must use the same endpoint, not an invented duplicate.
+			endpoint.RequestURL, endpoint.Resolved, endpoint.Eligible = "", false, false
+			inventory, inventoryErr := openAPIInventoryURL(target, endpoint)
+			if inventoryErr != nil || inventory != want {
+				t.Fatalf("target %s: inventory URL for %s = %q (%v), want %s", target, endpoint.OperationID, inventory, inventoryErr, want)
+			}
 		}
 	}
 }
