@@ -209,3 +209,91 @@ func httptestServer(t *testing.T, h http.Handler) string {
 	t.Cleanup(server.Close)
 	return server.URL
 }
+
+func TestGraphQLOverGETIntrospectionAndDisabledSibling(t *testing.T) {
+	lab := Start(t)
+	introspection := url.QueryEscape(`{ __schema { queryType { name fields { name } } } }`)
+	body := get(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"graphql?query="+introspection)
+	var decoded struct {
+		Data struct {
+			Schema struct {
+				QueryType struct {
+					Fields []struct{ Name string }
+				} `json:"queryType"`
+				MutationType struct {
+					Fields []struct{ Name string }
+				} `json:"mutationType"`
+			} `json:"__schema"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil || len(decoded.Data.Schema.QueryType.Fields) != 1 || decoded.Data.Schema.QueryType.Fields[0].Name != "record" || decoded.Data.Schema.MutationType.Fields[0].Name != "deleteRecord" {
+		t.Fatalf("introspection shape: %v %s", err, body)
+	}
+	value := get(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"graphql?query="+url.QueryEscape(`query($id: ID!){ record(id: $id) }`)+"&variables="+url.QueryEscape(`{"id":"rec-1"}`))
+	if !strings.Contains(value, `"record":"rec-1"`) {
+		t.Fatalf("variables were not applied: %s", value)
+	}
+	disabled := get(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"graphql-noint?query="+introspection)
+	if !strings.Contains(disabled, "introspection is disabled") {
+		t.Fatalf("sibling endpoint must answer 200 with introspection disabled: %s", disabled)
+	}
+}
+
+func TestNotesAndRecordsHavePurgeAllCleanupRoutes(t *testing.T) {
+	lab := Start(t)
+	post(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"api/notes", "text=one")
+	post(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"api/records", "name=a")
+	post(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"api/records", "name=b")
+	if lab.Resources() != 3 {
+		t.Fatalf("resources = %d", lab.Resources())
+	}
+	del := func(path string) int {
+		req, _ := http.NewRequest(http.MethodDelete, lab.Primary.URL+PathPrefix+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if del("api/notes/fixture") != http.StatusNoContent || lab.Resources() != 2 {
+		t.Fatalf("notes cleanup left %d resources", lab.Resources())
+	}
+	if del("api/records/fixture") != http.StatusNoContent || lab.Resources() != 0 {
+		t.Fatalf("records cleanup left %d resources", lab.Resources())
+	}
+	if del("api/records/fixture") != http.StatusNoContent {
+		t.Fatal("cleanup must be idempotent")
+	}
+}
+
+func TestSpecDocumentsAreServedByTheControlAPI(t *testing.T) {
+	lab := Start(t)
+	control := httptestServer(t, lab.ControlHandler())
+	fetch := func(name string) string {
+		req, _ := http.NewRequest(http.MethodGet, control+"/specs/"+name, nil)
+		req.Header.Set("X-Lab-Control", "local-only")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("%s: %v %v", name, err, resp)
+		}
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(resp.Body)
+		return string(data)
+	}
+	var valid struct {
+		Paths map[string]map[string]struct {
+			OperationID string `json:"operationId"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(fetch("openapi.json")), &valid); err != nil || valid.Paths["/admin"]["get"].OperationID != "getAdminPanel" || valid.Paths["/api/notes"]["post"].OperationID != "createNote" {
+		t.Fatalf("openapi document: %v %+v", err, valid)
+	}
+	if !strings.Contains(fetch("schema.graphql"), "type Query") || !strings.Contains(fetch("introspection.json"), "__schema") {
+		t.Fatal("graphql documents missing")
+	}
+	req, _ := http.NewRequest(http.MethodGet, control+"/specs/openapi.json", nil)
+	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusNotFound {
+		t.Fatal("spec endpoint must require the control header")
+	}
+}

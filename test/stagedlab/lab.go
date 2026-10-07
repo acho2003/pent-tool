@@ -142,6 +142,15 @@ func (l *Lab) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /resources", guard(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]int{"resources": l.Resources()})
 	}))
+	mux.HandleFunc("GET /specs/{name}", guard(func(w http.ResponseWriter, r *http.Request) {
+		body, contentType, ok := Spec(r.PathValue("name"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		_, _ = io.WriteString(w, body)
+	}))
 	mux.HandleFunc("GET /variants", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, Variants()) }))
 	mux.HandleFunc("POST /reset", guard(func(w http.ResponseWriter, r *http.Request) { l.Reset(); w.WriteHeader(http.StatusNoContent) }))
 	return mux
@@ -159,6 +168,16 @@ func (l *Lab) Reset() {
 	l.mu.Lock()
 	l.hits = nil
 	l.mu.Unlock()
+}
+
+func (l *Lab) purge(prefix string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id := range l.resources {
+		if strings.HasPrefix(id, prefix) {
+			delete(l.resources, id)
+		}
+	}
 }
 
 // Resources returns the number of controlled resources that still exist.
@@ -425,8 +444,31 @@ document.getElementById("root").addEventListener("click",()=>{history.pushState(
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// GraphQL with introspection enabled.
-	mux.HandleFunc("POST "+PathPrefix+"graphql", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, true) })
+	// Literal, idempotent cleanup routes: an approved campaign may create many
+	// records and the cleanup path cannot carry a placeholder.
+	mux.HandleFunc("DELETE "+PathPrefix+"api/records/fixture", func(w http.ResponseWriter, r *http.Request) {
+		l.purge("rec-")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST "+PathPrefix+"api/notes", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		l.mu.Lock()
+		l.nextID++
+		id := fmt.Sprintf("note-%d", l.nextID)
+		l.resources[id] = r.PostForm.Get("text")
+		l.mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]string{"id": id})
+	})
+	mux.HandleFunc("DELETE "+PathPrefix+"api/notes/fixture", func(w http.ResponseWriter, r *http.Request) {
+		l.purge("note-")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// GraphQL: introspection enabled over GET and POST, and a sibling endpoint that
+	// answers 200 with introspection disabled.
+	mux.HandleFunc(PathPrefix+"graphql", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, true) })
+	mux.HandleFunc(PathPrefix+"graphql-noint", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, false) })
 	return mux
 }
 
@@ -436,7 +478,7 @@ func (l *Lab) secondaryRoutes() http.Handler {
 		page(w, `<h1>Secondary service</h1><a href="/status">status</a>`)
 	})
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]string{"status": "ok"}) })
-	mux.HandleFunc("POST /graphql", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, false) })
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, false) })
 	return mux
 }
 
@@ -445,7 +487,12 @@ func graphql(w http.ResponseWriter, r *http.Request, introspection bool) {
 		Query     string         `json:"query"`
 		Variables map[string]any `json:"variables"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+	if r.Method == http.MethodGet {
+		req.Query = r.URL.Query().Get("query")
+		if raw := r.URL.Query().Get("variables"); raw != "" {
+			_ = json.Unmarshal([]byte(raw), &req.Variables)
+		}
+	} else if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, `{"errors":[{"message":"invalid request"}]}`, http.StatusBadRequest)
 		return
 	}
@@ -455,17 +502,14 @@ func graphql(w http.ResponseWriter, r *http.Request, introspection bool) {
 			writeJSON(w, map[string]any{"errors": []map[string]string{{"message": "introspection is disabled"}}})
 			return
 		}
+		idArg := map[string]any{"name": "id", "type": map[string]any{"kind": "NON_NULL", "ofType": map[string]string{"kind": "SCALAR", "name": "ID"}}}
 		writeJSON(w, map[string]any{"data": map[string]any{"__schema": map[string]any{
-			"queryType":    map[string]string{"name": "Query"},
-			"mutationType": map[string]string{"name": "Mutation"},
-			"types": []any{
-				map[string]any{"kind": "OBJECT", "name": "Query", "fields": []any{
-					map[string]any{"name": "record", "args": []any{map[string]any{"name": "id", "type": map[string]any{"kind": "NON_NULL", "ofType": map[string]string{"kind": "SCALAR", "name": "ID"}}}}, "type": map[string]string{"kind": "SCALAR", "name": "String"}},
-				}},
-				map[string]any{"kind": "OBJECT", "name": "Mutation", "fields": []any{
-					map[string]any{"name": "deleteRecord", "args": []any{map[string]any{"name": "id", "type": map[string]any{"kind": "NON_NULL", "ofType": map[string]string{"kind": "SCALAR", "name": "ID"}}}}, "type": map[string]string{"kind": "SCALAR", "name": "Boolean"}},
-				}},
-			},
+			"queryType": map[string]any{"name": "Query", "fields": []any{
+				map[string]any{"name": "record", "args": []any{idArg}, "type": map[string]string{"kind": "SCALAR", "name": "String"}},
+			}},
+			"mutationType": map[string]any{"name": "Mutation", "fields": []any{
+				map[string]any{"name": "deleteRecord", "args": []any{idArg}, "type": map[string]string{"kind": "SCALAR", "name": "Boolean"}},
+			}},
 		}}})
 	case strings.HasPrefix(strings.TrimSpace(req.Query), "mutation"):
 		writeJSON(w, map[string]any{"errors": []map[string]string{{"message": "mutations are not available in the lab"}}})
