@@ -441,6 +441,12 @@ three restart scenarios. Not covered: restart during an auth credential rotation
 two identities, authenticated ZAP execution, any run longer than the web-thorough
 budget, and any amd64 run. The expanded workflow remains disabled by default.
 
+**Platform scope.** Every result in this document is native Linux arm64 under Docker
+on the operator's own machine, which is the deployment target. No amd64 run was made
+and none is required for that deployment. Anyone deploying on amd64 hardware should
+run the workflow below (or the same suites locally on an amd64 host) first, because
+the scanner binaries and Chromium are built per architecture.
+
 `.github/workflows/amd64-validation.yml` is a non-publishing workflow (read-only
 permissions, no registry login, no push) that builds the amd64 runtime locally, runs
 the smoke test, the native fixtures and a staged suite. It has not been run.
