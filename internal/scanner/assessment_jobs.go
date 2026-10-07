@@ -232,6 +232,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			crawlReq.AuthRefresh = p.Config.AssessmentAuthRefresh[target.ID]
 		}
 		spec := buildKatana(crawlReq, p.Config)
+		if !crawlEvidenceReusable(existing, crawlScope) {
+			// A prior crawl attempt was interrupted, cancelled or failed. Its raw
+			// output may be truncated, so it can neither seed the inventory nor
+			// stand in for a completed crawl; discard it and crawl again.
+			_ = os.Remove(spec.artifact)
+		}
 		surface, valid := LoadAttackSurface(scanDir, inventoryScope, spec.artifact)
 		if valid && authBound && !attackSurfaceObservedWithAuth(surface) {
 			surface, valid = nil, false
@@ -795,6 +801,24 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		last.Reason = "workflow manifest could not be stored: " + err.Error()
 	}
 	return results
+}
+
+// crawlEvidenceReusable reports whether leftover katana output for crawlScope may
+// be trusted. Output is untrusted when an earlier katana attempt for that scope
+// is recorded but is not a completed run whose artifacts still match their
+// checksum, which is what a process killed mid-crawl leaves behind. With no
+// recorded attempt at all (a fixture or a fresh scan) the artifact is parsed as
+// before.
+func crawlEvidenceReusable(existing []Run, crawlScope string) bool {
+	for _, old := range existing {
+		if old.Scanner != "katana" || old.Scope != crawlScope {
+			continue
+		}
+		if old.Status != "completed" || VerifyChecksum(old) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func assessmentTargetScope(target assessment.Target) string {
