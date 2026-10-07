@@ -3,6 +3,8 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
@@ -67,5 +69,35 @@ func TestExpandedKatanaRunRecordsGatewayLimitationLegacyDoesNot(t *testing.T) {
 		if l.Kind == LimitationScopeNotGatewayEnforced {
 			t.Fatalf("legacy workflow must not carry the expanded limitation: %+v", l)
 		}
+	}
+}
+
+func TestOutputWriterRedactsAcrossChunkBoundariesAndAppliesTheFullSanitizer(t *testing.T) {
+	var sink strings.Builder
+	var seq atomic.Int64
+	var emitted []string
+	writer := newOutputWriter(&sink, "stdout", "nuclei", 0, []string{"split-secret-value"}, &seq, func(e Event) { emitted = append(emitted, e.Output) })
+	// A known secret split across two reads, then a credential no exact match knows.
+	_, _ = writer.Write([]byte("matched at split-sec"))
+	_, _ = writer.Write([]byte("ret-value done\nAuthorization: Bearer unknown-token-123\nGET /x?access_token=abc&page=2 HTTP/1.1\n"))
+	_, _ = writer.Write([]byte("unfinished line with password=hunter2"))
+	if strings.Contains(sink.String(), "split-secret-value") || strings.Contains(sink.String(), "unknown-token-123") || strings.Contains(sink.String(), "hunter2") {
+		t.Fatalf("a credential reached the stream: %q", sink.String())
+	}
+	if strings.Contains(sink.String(), "unfinished") {
+		t.Fatalf("an unfinished line must be held until it ends: %q", sink.String())
+	}
+	writer.Flush()
+	out := sink.String()
+	for _, leaked := range []string{"split-secret-value", "unknown-token-123", "hunter2", "abc&"} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("%q survived: %q", leaked, out)
+		}
+	}
+	if !strings.Contains(out, "unfinished line with") || !strings.Contains(out, "page=2") || len(emitted) == 0 {
+		t.Fatalf("useful output was lost: %q emitted=%v", out, emitted)
+	}
+	if strings.Join(emitted, "") != out {
+		t.Fatalf("the live events and the saved stream disagree: %q vs %q", strings.Join(emitted, ""), out)
 	}
 }

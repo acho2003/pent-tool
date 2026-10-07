@@ -846,6 +846,8 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if monitorAuth {
 		authErr = <-authResult
 	}
+	outW.Flush()
+	errW.Flush()
 	run.Truncated = outW.Truncated() || errW.Truncated()
 	run.ExitCode = 0
 	if err != nil {
@@ -1099,6 +1101,16 @@ func invalidateUnsafeArtifact(run *Run) {
 	}
 }
 
+// outputHoldLimit bounds how much of an unfinished line is held back before it is
+// written anyway, so a tool that never prints a newline is not delayed forever.
+const outputHoldLimit = 8 << 10
+
+// outputWriter redacts a tool's live output before it reaches the saved stream,
+// the transcript or a WebSocket client. It works on whole lines: a credential
+// split across two pipe reads is joined before it is matched, and the full
+// artifact sanitizer (headers, bearer tokens, assignments, URLs) applies, not only
+// the exact known-secret replacement. An unfinished line is held until it ends
+// (or until Flush, or outputHoldLimit).
 type outputWriter struct {
 	mu              sync.Mutex
 	dst             io.Writer
@@ -1108,17 +1120,42 @@ type outputWriter struct {
 	seq             *atomic.Int64
 	emit            EmitFunc
 	truncated       bool
+	pending         []byte
 }
 
 func newOutputWriter(dst io.Writer, stream, scanner string, max int64, secrets []string, seq *atomic.Int64, emit EmitFunc) *outputWriter {
 	return &outputWriter{dst: dst, stream: stream, scanner: scanner, max: max, secrets: secrets, seq: seq, emit: emit}
 }
+
 func (w *outputWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	rawLen := len(p)
-	clean := redact(string(p), w.secrets)
-	b := []byte(clean)
+	w.pending = append(w.pending, p...)
+	cut := bytes.LastIndexAny(w.pending, "\r\n") + 1
+	if cut == 0 && len(w.pending) >= outputHoldLimit {
+		cut = len(w.pending)
+	}
+	if cut > 0 {
+		complete := w.pending[:cut]
+		w.pending = append([]byte(nil), w.pending[cut:]...)
+		w.writeLocked(complete)
+	}
+	return len(p), nil
+}
+
+// Flush writes any unfinished line. Call it once the tool has exited.
+func (w *outputWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.pending) > 0 {
+		pending := w.pending
+		w.pending = nil
+		w.writeLocked(pending)
+	}
+}
+
+func (w *outputWriter) writeLocked(chunk []byte) {
+	b := []byte(sanitizeArtifactText(string(chunk), w.secrets))
 	if w.max > 0 && w.written+int64(len(b)) > w.max {
 		remain := w.max - w.written
 		if remain > 0 {
@@ -1135,7 +1172,6 @@ func (w *outputWriter) Write(p []byte) (int, error) {
 	if w.emit != nil && len(b) > 0 {
 		w.emit(Event{Type: "scanner_output", Scanner: w.scanner, Stream: w.stream, Sequence: w.seq.Add(1), Output: string(b)})
 	}
-	return rawLen, nil
 }
 func (w *outputWriter) Truncated() bool { w.mu.Lock(); defer w.mu.Unlock(); return w.truncated }
 
