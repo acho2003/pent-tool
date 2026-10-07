@@ -71,5 +71,19 @@ libraries. The Docker publication workflow compiles them in the pinned Go
 Bookworm builder. The script uses only disposable local fixtures and an isolated
 pinned ZAP service. It preserves production services and volumes, and never runs
 Docker pruning. Dalfox timeout dispositions and native request receipts do not
-prove that every vulnerability check completed. Full staged UI acceptance and
-rollout approval remain separate from these adapter checks.
+prove that every vulnerability check completed. Rollout approval remains separate
+from these adapter checks.
+
+### Staged assessment acceptance
+
+`runtime/staged-acceptance.sh IMAGE [APPLICATION_BINARY]` runs real assessments
+through the server in disposable containers on a private, internal network against
+the checked-in lab in `test/stagedlab`. `STAGED_SUITE` selects `default`,
+`recovery`, `ui`, `identities`, `api`, `scanners`, `failures`, `recovery-write` or
+`recovery-auth`; see the script header and
+[docs/unified-workflow-validation.md](../docs/unified-workflow-validation.md) for
+what each proves and the recorded outcomes. It creates and removes only its own
+containers, network and volume, publishes no ports and never prunes Docker. Run a
+suite from a copy of the repository files: editing the script or driver while a
+suite runs breaks it mid-run. `.github/workflows/amd64-validation.yml` runs the
+same checks on amd64 without publishing anything; it must be dispatched manually.
