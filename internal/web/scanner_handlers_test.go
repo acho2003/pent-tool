@@ -927,3 +927,59 @@ func TestScannerArtifactIsWithheldUntilTheRunIsTerminal(t *testing.T) {
 		t.Fatalf("live output stream must stay available: %d %q", rr.Code, rr.Body.String())
 	}
 }
+
+// A symbolic link inside a scan directory must not lead the artifact and stream
+// routes to a file outside it, even though its path is lexically inside.
+func TestSafeScannerPathRejectsSymlinksOutOfTheScanDirectory(t *testing.T) {
+	root := t.TempDir()
+	scanDir := filepath.Join(root, "scan")
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.MkdirAll(scanDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(scanDir, "artifact.json")
+	if err := os.WriteFile(inside, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(scanDir, "link.json")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	if _, ok := safeScannerPath(scanDir, inside); !ok {
+		t.Fatal("a regular file inside the scan directory must be allowed")
+	}
+	if _, ok := safeScannerPath(scanDir, "artifact.json"); !ok {
+		t.Fatal("a relative path inside the scan directory must be allowed")
+	}
+	if _, ok := safeScannerPath(scanDir, link); ok {
+		t.Fatal("a symlink to a file outside the scan directory was allowed")
+	}
+	if _, ok := safeScannerPath(scanDir, filepath.Join(scanDir, "..", "outside.txt")); ok {
+		t.Fatal("a lexical escape was allowed")
+	}
+}
+
+// Raw output left by a run that was still active when the process died is never
+// sanitized by anything, so startup removes it. Terminal runs keep their files.
+func TestStartupRemovesRawArtifactsOfRunsThatNeverFinished(t *testing.T) {
+	s := newTestServer(t, nil)
+	var rawPath, keptPath string
+	saveScannerScan(t, s, "crashed-scan", func(dir string) []scanner.Run {
+		rawPath = writeFile(t, filepath.Join(dir, "hosts", "a.test", "nuclei.jsonl"), "RAW Authorization: Bearer crash-secret")
+		keptPath = writeFile(t, filepath.Join(dir, "hosts", "a.test", "wapiti.json"), "sanitized")
+		return []scanner.Run{
+			{Scanner: "nuclei", Scope: "host:a.test", Target: "a.test", Status: "running", ArtifactPath: rawPath},
+			{Scanner: "wapiti", Scope: "host:a.test", Target: "a.test", Status: "completed", ArtifactPath: keptPath},
+		}
+	})
+	s.rebuildInstancesFromDisk()
+	if _, err := os.Stat(rawPath); !os.IsNotExist(err) {
+		t.Fatalf("the interrupted run's raw artifact is still on disk: %v", err)
+	}
+	if data, err := os.ReadFile(keptPath); err != nil || string(data) != "sanitized" {
+		t.Fatalf("a terminal run's artifact must be kept: %v %q", err, data)
+	}
+}

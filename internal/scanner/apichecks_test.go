@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,4 +98,38 @@ func TestAPIChecksRunnerRegisteredForWebAPIPlan(t *testing.T) {
 		}
 	}
 	t.Fatalf("API plan has no native API check job: %+v", plan.Jobs)
+}
+
+// The saved findings artifact carries full request URLs, so it must be sanitized
+// like every other native artifact before it can be downloaded or parsed.
+func TestAPIChecksArtifactIsSanitized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer server.Close()
+	approved, err := assessment.ParseApprovedOrigin("app", server.URL+"/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{approved})
+	req := Request{
+		Target: server.URL + "/api/", Scope: "app:app", ScanDir: t.TempDir(), TypedAssessment: true, AppScope: &scope,
+		EndpointTargets: []string{server.URL + "/api/items?access_token=artifact-secret&page=1"},
+		APIEndpoints:    []APIEndpoint{{Method: http.MethodGet, Path: "/items", Origin: server.URL, Source: "openapi", Resolved: true, Eligible: true, SecuritySchemes: []string{"bearerAuth"}}},
+	}
+	run := (apiChecksRunner{}).Run(context.Background(), req, Config{Budget: NewAssessmentBudget(20, 10, time.Minute)}, nil)
+	if run.Status != "completed" {
+		t.Fatalf("run=%+v", run)
+	}
+	data, err := os.ReadFile(run.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "artifact-secret") {
+		t.Fatalf("the saved artifact still carries a credential-bearing query value: %s", data)
+	}
+	if !strings.Contains(string(data), "page=1") {
+		t.Fatalf("sanitization removed useful URL detail: %s", data)
+	}
 }

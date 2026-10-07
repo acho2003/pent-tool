@@ -2960,8 +2960,11 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
 		// Try to find and delete from disk
 		dir, rec := s.findScanByID(scanID)
+		// Directories are removed only after the scan has been halted below, and
+		// only when they lie strictly inside the data directory.
+		var doomed []string
 		if dir != "" {
-			_ = os.RemoveAll(dir)
+			doomed = append(doomed, dir)
 		}
 		if rec != nil {
 			for _, entry := range s.findAllScans() {
@@ -2969,7 +2972,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if isChildOfScan(rec, &entry.rec) {
-					_ = os.RemoveAll(entry.dir)
+					doomed = append(doomed, entry.dir)
 				}
 			}
 		}
@@ -3009,6 +3012,13 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 			delete(s.instances, id)
 		}
 		s.instancesMu.Unlock()
+		for _, target := range doomed {
+			if !s.safeToDeleteScanDir(target) {
+				log.Printf("[delete] refusing to remove %q: not inside the data directory", target)
+				continue
+			}
+			_ = os.RemoveAll(target)
+		}
 		s.invalidateScanListCache()
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"deleted"}`))

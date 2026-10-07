@@ -518,7 +518,22 @@ func safeScannerPath(scanDir, path string) (string, bool) {
 	abs, _ := filepath.Abs(path)
 	root, _ := filepath.Abs(scanDir)
 	rel, err := filepath.Rel(root, abs)
-	return abs, err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return abs, false
+	}
+	// The lexical check is not enough: a symbolic link inside the scan directory
+	// must not lead the download or stream routes to a file outside it.
+	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		realRoot, rootErr := filepath.EvalSymlinks(root)
+		if rootErr != nil {
+			return abs, false
+		}
+		relReal, relErr := filepath.Rel(realRoot, resolved)
+		if relErr != nil || relReal == ".." || strings.HasPrefix(relReal, ".."+string(os.PathSeparator)) {
+			return abs, false
+		}
+	}
+	return abs, true
 }
 
 func (s *Server) handleReportAction(w http.ResponseWriter, r *http.Request) {

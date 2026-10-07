@@ -38,6 +38,7 @@ var version = "4.5.100"
 const defaultWebPort = 9137
 
 func main() {
+	restrictFileCreationMode()
 	// Top-level crash recovery — catches panics that escape all other handlers.
 	// Critical for service mode where stderr may not be visible.
 	defer func() {

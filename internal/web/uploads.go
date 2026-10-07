@@ -129,7 +129,7 @@ func (s *Server) handleUploadLogo(w http.ResponseWriter, r *http.Request) {
 	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixMilli(), safeName, ext)
 	dstPath := filepath.Join(logosDir, fileName)
 
-	dst, err := os.Create(dstPath)
+	dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		log.Printf("[ERROR] Failed to create logo file: %v", err)
 		http.Error(w, "server error", http.StatusInternalServerError)
@@ -205,7 +205,7 @@ func (s *Server) handleUploadContext(w http.ResponseWriter, r *http.Request) {
 	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixMilli(), safeName, ext)
 	dstPath := filepath.Join(contextDir, fileName)
 
-	dst, err := os.Create(dstPath)
+	dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		log.Printf("[ERROR] Failed to create context file: %v", err)
 		http.Error(w, "server error", http.StatusInternalServerError)

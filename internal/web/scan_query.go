@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 )
 
@@ -726,6 +727,11 @@ func finalizeScanRecordForResponse(rec *ScanRecord) {
 // Running scans from a previous server instance are marked as "stopped" since the agent process is gone.
 func (s *Server) rebuildInstancesFromDisk() {
 	for _, entry := range s.findAllScans() {
+		// A run that was still active when the previous process ended left raw,
+		// unsanitized output behind (sanitization happens when a run finishes).
+		// Nothing will ever sanitize it, and a resumed run starts a new attempt,
+		// so it is removed rather than kept on disk.
+		s.discardUnsanitizedArtifacts(entry.dir, entry.rec.ScannerRuns)
 		// If scan was "running" from a previous server instance, it's no longer active.
 		// Persist the correction so /api/scans and /api/instances agree after restart.
 		if entry.rec.Status == "running" {
@@ -780,4 +786,17 @@ func (s *Server) rebuildInstancesFromDisk() {
 	// Statuses may have been rewritten on disk above (running → stopped), so
 	// drop any memoized scan list built before recovery.
 	s.invalidateScanListCache()
+}
+
+// discardUnsanitizedArtifacts removes the native artifact of every run that never
+// reached a terminal state. Only files inside the scan directory are touched.
+func (s *Server) discardUnsanitizedArtifacts(scanDir string, runs []scanner.Run) {
+	for _, run := range runs {
+		if run.Terminal() || run.ArtifactPath == "" {
+			continue
+		}
+		if path, ok := safeScannerPath(scanDir, run.ArtifactPath); ok {
+			_ = os.Remove(path)
+		}
+	}
 }

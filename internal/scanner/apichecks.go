@@ -210,6 +210,12 @@ func (apiChecksRunner) Run(ctx context.Context, req Request, cfg Config, emit Em
 	if err := file.Close(); err != nil {
 		return finish("failed", "close API check artifact: "+err.Error())
 	}
+	// Findings carry full request URLs; sanitize the saved artifact like every
+	// other native artifact before the run can be downloaded or parsed.
+	if err := redactArtifact(artifact, req.Secrets); err != nil {
+		invalidateUnsafeArtifact(&run)
+		return finish("failed", "scanner artifact redaction failed; artifact is unavailable")
+	}
 	if started == 0 && failures == 0 {
 		run.GapKind = GapEmptyInput
 		return finish("skipped", "no eligible API operations were checked")

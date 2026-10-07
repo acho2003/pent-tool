@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -283,5 +284,17 @@ func TestHandleScanAckIsPendingNotStarted(t *testing.T) {
 	}
 	if resp["instance_id"] == "" {
 		t.Error("ack must include an instance_id")
+	}
+}
+
+// Deleting a scan removes its directory only when it lies strictly inside the
+// data directory; a record whose directory resolves elsewhere is left alone.
+func TestDeleteScanRefusesDirectoriesOutsideTheDataDirectory(t *testing.T) {
+	s := newTestServer(t, nil)
+	if s.safeToDeleteScanDir(s.dataDir) || s.safeToDeleteScanDir(filepath.Dir(s.dataDir)) || s.safeToDeleteScanDir("/") {
+		t.Fatal("the data directory, its parent or the root must never be deletable")
+	}
+	if !s.safeToDeleteScanDir(filepath.Join(s.dataDir, "target", "2026-10-07", "scan")) {
+		t.Fatal("a scan directory inside the data directory must be deletable")
 	}
 }
