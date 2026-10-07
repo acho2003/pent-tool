@@ -58,3 +58,16 @@ func TestMalformedArtifactsCannotBypassSanitization(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeArtifactTextRedactsCredentialsInsideEmbeddedJSON(t *testing.T) {
+	raw := `body={"access_token":"embedded-secret","user":"bob","session":"sess-secret"} token=plain-secret GET /x?next=1`
+	got := sanitizeArtifactText(raw, nil)
+	for _, secret := range []string{"embedded-secret", "sess-secret", "plain-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("%q survived sanitization: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, `"user":"bob"`) || !strings.Contains(got, "GET /x?next=1") {
+		t.Fatalf("unrelated content was altered: %s", got)
+	}
+}

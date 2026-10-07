@@ -13,7 +13,10 @@ import (
 
 var artifactBearer = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+`)
 var artifactHeader = regexp.MustCompile(`(?im)^(authorization|proxy-authorization|cookie|set-cookie|x-api-key)\s*:\s*[^\r\n]*`)
-var artifactAssignment = regexp.MustCompile(`(?i)\b(password|passwd|access_token|refresh_token|api_key|apikey|client_secret|sessionid|csrf_token)\s*[:=]\s*[^\s&,;"'<>]+`)
+
+// The key may itself be quoted (a JSON document embedded in a string value), so
+// an optional quote is allowed before the delimiter and before the value.
+var artifactAssignment = regexp.MustCompile(`(?i)\b(password|passwd|access_token|refresh_token|id_token|auth_token|api_key|apikey|client_secret|secret|token|session_id|sessionid|session|csrf_token)["']?\s*[:=]\s*["']?[^\s&,;"'<>]+`)
 var artifactURL = regexp.MustCompile(`https?://[^\s"'<>]+`)
 
 func sanitizeArtifactText(raw string, secrets []string) string {
