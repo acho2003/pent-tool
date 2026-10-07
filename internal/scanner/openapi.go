@@ -94,7 +94,15 @@ func apiEndpointURL(applicationURL string, endpoint APIEndpoint) (string, error)
 			return "", fmt.Errorf("definition origin does not match mapped target")
 		}
 	}
-	base.Path = strings.TrimSuffix(base.Path, "/") + "/" + strings.TrimLeft(operationPath, "/")
+	if endpoint.Source == "graphql" {
+		// A GraphQL operation's path is the endpoint's own absolute path (taken
+		// from the target or the discovered URL), not a path relative to the
+		// target. Joining it would duplicate the endpoint, for example
+		// /app/graphql/app/graphql, and invent a request that does not exist.
+		base.Path = "/" + strings.TrimLeft(operationPath, "/")
+	} else {
+		base.Path = strings.TrimSuffix(base.Path, "/") + "/" + strings.TrimLeft(operationPath, "/")
+	}
 	base.RawPath = ""
 	base.RawQuery, base.Fragment = "", ""
 	resolved := base.String()

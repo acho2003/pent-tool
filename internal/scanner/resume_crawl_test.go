@@ -123,3 +123,33 @@ func TestKatanaCrawlHasItsOwnCancellableAttempt(t *testing.T) {
 		t.Fatalf("running event carried attempt %q, want %q", running.AttemptID, attemptID)
 	}
 }
+
+// A GraphQL operation's path is the endpoint's own absolute path. Mapping it onto
+// a target that already includes that path must not duplicate the endpoint.
+func TestGraphQLOperationURLIsNotJoinedToTheTargetPath(t *testing.T) {
+	sdl := []byte("type Query {\n  record(id: ID = \"x\"): String\n}\n\ntype Mutation {\n  deleteRecord(id: ID!): Boolean\n}\n")
+	for _, target := range []string{"http://lab.test:8080/app/graphql", "http://lab.test:8080/"} {
+		want := "http://lab.test:8080/app/graphql"
+		if target == "http://lab.test:8080/" {
+			want = "http://lab.test:8080/graphql"
+		}
+		endpoints, err := ParseAPIDefinition(sdl, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, endpoint := range endpoints {
+			endpoint.Resolved, endpoint.Eligible, endpoint.Method = true, true, "GET"
+			endpoint.RequestURL = ""
+			got, urlErr := apiEndpointURL(target, endpoint)
+			if urlErr != nil {
+				// A materialized query is required for GraphQL reads; the path must
+				// still be right when it is available.
+				endpoint.RequestURL = want + "?query=x"
+				got, urlErr = apiEndpointURL(target, endpoint)
+			}
+			if urlErr == nil && got != want && !strings.HasPrefix(got, want+"?") {
+				t.Fatalf("target %s: operation %s mapped to %s, want %s", target, endpoint.OperationID, got, want)
+			}
+		}
+	}
+}
