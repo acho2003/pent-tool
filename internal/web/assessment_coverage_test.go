@@ -218,3 +218,23 @@ func TestAssessmentCoverageReflectsApprovedWriteOutcomes(t *testing.T) {
 		t.Fatalf("counts = %+v", coverage.OperationCounts)
 	}
 }
+
+func TestAssessmentCoverageReportsSessionExpiryFromAnyAuthenticatedTool(t *testing.T) {
+	target := "https://app.example.test/Portal"
+	plan := &scanner.AssessmentPlan{Config: assessment.AssessmentConfig{Mode: assessment.ModeGrayBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}},
+		Capabilities: []assessment.CapabilityEvidence{{Capability: assessment.CapAuthWeb, TargetID: "app", State: assessment.StateVerified, Reason: "verified before the run"}},
+		Jobs:         []scanner.PlanJob{{ID: "nuclei:app", Scanner: "nuclei", TargetID: "app", Target: target, State: scanner.PlanSelected, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication}}}}
+	expired := scanner.Run{Scanner: "nuclei", Target: target, Status: "failed", GapKind: scanner.GapAuthExpired, AuthState: assessment.StateExpired, Reason: "authenticated session expired or rotated; retry with verified credentials"}
+	record := &ScanRecord{AssessmentPlan: plan, Status: "finished", ScannerRuns: []scanner.Run{expired}}
+	coverage := buildAssessmentCoverage("expired-nuclei", record, "")
+	if len(coverage.Capabilities) != 1 || coverage.Capabilities[0].State != assessment.StateExpired || !strings.Contains(coverage.Capabilities[0].Reason, "nuclei") {
+		t.Fatalf("a mid-run expiry reported by nuclei left the capability verified: %+v", coverage.Capabilities)
+	}
+	// A named identity losing its own session does not downgrade the primary capability.
+	role := expired
+	role.AuthIdentity = "viewer"
+	record.ScannerRuns = []scanner.Run{role}
+	if got := buildAssessmentCoverage("expired-role", record, "").Capabilities[0].State; got != assessment.StateVerified {
+		t.Fatalf("an additional identity's expiry changed the primary capability to %s", got)
+	}
+}

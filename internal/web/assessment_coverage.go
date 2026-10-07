@@ -117,6 +117,21 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 	for _, capability := range plan.Capabilities {
 		state, reason := capability.State, capability.Reason
 		if capability.Capability == assessment.CapAuthWeb {
+			targetValue := ""
+			for _, target := range plan.Config.Targets {
+				if target.ID == capability.TargetID {
+					targetValue = target.Value
+					break
+				}
+			}
+			for _, run := range record.ScannerRuns {
+				// Any authenticated tool that lost the primary session mid-run means the
+				// capability that was verified up front no longer describes the whole run.
+				if run.AuthIdentity == "" && run.Target == targetValue && targetValue != "" && state == assessment.StateVerified &&
+					(run.GapKind == scanner.GapAuthExpired || run.AuthState == assessment.StateExpired) {
+					state, reason = assessment.StateExpired, "authenticated session expired during scanning ("+run.Scanner+"); remaining authenticated checks were not completed"
+				}
+			}
 			for _, run := range record.ScannerRuns {
 				if run.Scanner == "zap" && run.Status == "failed" && strings.Contains(run.Reason, "authenticated session") {
 					for _, job := range plan.Jobs {
