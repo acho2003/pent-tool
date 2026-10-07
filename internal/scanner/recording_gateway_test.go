@@ -283,3 +283,50 @@ func TestInputManifestPreservesNonsecretAuthenticationContext(t *testing.T) {
 		t.Fatalf("unsafe context manifest: %s", data)
 	}
 }
+
+func TestGatewayChecksResolvedAddressesWithTheScopeGuard(t *testing.T) {
+	hits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.Write([]byte("ok")) }))
+	defer target.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", target.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	run := func(block bool) (int, string) {
+		var resolvedSeen []string
+		cfg := Config{ScopeGuard: func(raw string, resolved []string) (bool, string) {
+			// The pre-request URL check passes no addresses; only the dial-time
+			// check sees what the host resolved to.
+			if len(resolved) == 0 {
+				return false, ""
+			}
+			resolvedSeen = resolved
+			return block, "scope guard: resolved address " + resolved[0] + " is the scanner host"
+		}}
+		g, err := NewRecordingGateway(t.Context(), Request{Target: target.URL, AppScope: &scope, ScanDir: t.TempDir()}, cfg, "nuclei")
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxy, _ := url.Parse(g.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+		response, err := client.Get(target.URL + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if err := g.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if len(resolvedSeen) == 0 {
+			t.Fatal("scope guard was never given the resolved addresses")
+		}
+		events, _ := os.ReadFile(g.EventPath)
+		return response.StatusCode, string(events)
+	}
+	if status, events := run(false); status != 200 || hits != 1 || strings.Contains(events, `"kind":"blocked"`) {
+		t.Fatalf("allowed address was blocked: status=%d hits=%d events=%s", status, hits, events)
+	}
+	hits = 0
+	if status, events := run(true); status != 502 || hits != 0 || !strings.Contains(events, `"kind":"blocked"`) || !strings.Contains(events, "resolved address") {
+		t.Fatalf("blocked address reached the target: status=%d hits=%d events=%s", status, hits, events)
+	}
+}

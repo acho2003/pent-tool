@@ -133,6 +133,7 @@ func NewRecordingGateway(ctx context.Context, req Request, cfg Config, scanner s
 	g.URL = u.String()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	transport.DialContext = g.guardedDial
 	g.client = &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	g.server = &http.Server{Handler: g, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	for _, input := range req.InputRequests {
@@ -145,6 +146,49 @@ func NewRecordingGateway(ctx context.Context, req Request, cfg Config, scanner s
 	go g.server.Serve(g.listener)
 	return g, nil
 }
+
+// guardedDial resolves the upstream host itself, rejects it when the scope
+// guard blocks any resolved address (for example a name that now points at the
+// scanner host or dashboard listener), and connects to the addresses it
+// checked so a second lookup cannot return something different.
+func (g *RecordingGateway) guardedDial(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	var addresses []string
+	if ip := net.ParseIP(host); ip != nil {
+		addresses = []string{ip.String()}
+	} else {
+		resolved, lookupErr := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		for _, entry := range resolved {
+			addresses = append(addresses, entry.IP.String())
+		}
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("no addresses for %s", host)
+	}
+	if g.cfg.ScopeGuard != nil {
+		if blocked, reason := g.cfg.ScopeGuard("http://"+address+"/", addresses); blocked {
+			g.record(CoverageEvent{Kind: "blocked", URL: "http://" + address + "/", Reason: reason})
+			return nil, fmt.Errorf("blocked by scope guard")
+		}
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	var lastErr error
+	for _, address := range addresses {
+		connection, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(address, port))
+		if dialErr == nil {
+			return connection, nil
+		}
+		lastErr = dialErr
+	}
+	return nil, lastErr
+}
+
 func (g *RecordingGateway) Close() error {
 	g.mu.Lock()
 	g.closing = true
