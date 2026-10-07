@@ -112,9 +112,14 @@ dedicated daemon on an isolated internal Docker network. Optional
 socket. These checks do not scan public targets.
 
 Expanded acceptance is not complete merely because these adapter fixtures pass.
-Wapiti POST fuzzing, browser storage access, the complete staged/restart workflow,
-and the full 684-request execution fixture still need acceptance before enabling
-the expanded workflow by default.
+Staged end-to-end suites (`runtime/staged-acceptance.sh`) now run real assessments
+through the server, the dashboard in a real browser, two identities, definition
+imports, Nuclei, Wapiti with an approved form campaign, Dalfox, ZAP, injected
+failures and hard-kill restarts; their outcomes are recorded in
+[unified-workflow-validation.md](unified-workflow-validation.md). What still blocks
+enabling the expanded workflow by default is an actual amd64 validation run, a
+final rollout review, and the boundary limitations listed there (adapters that run
+outside the recording gateway, and credentials visible on child command lines).
 
 New web/API/network plans accepted while rollout is enabled carry `workflow_version: unified-v1`. Saved plans without that marker retain the legacy executor, even if rollout is later enabled. Expanded plans cannot execute while the flag is disabled. Coverage uses the persisted inventory version rather than the current server flag.
 

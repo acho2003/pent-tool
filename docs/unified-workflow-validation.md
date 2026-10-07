@@ -393,28 +393,43 @@ identities, api, scanners, failures, recovery-write and recovery-auth.
 - A session lost mid-run while Nuclei, Wapiti or Dalfox was running left authenticated
   access reported as verified; only a ZAP failure downgraded it.
 
-### Boundary and private-evidence audit (static review)
+### Boundary and private-evidence audit
+
+A static review of every adapter and of native output handling found the gaps
+below. Fixed, each with a test: testssl is refused (as a policy gap) when the
+approved boundary is below the origin root or excludes it; nikto checks its root URL
+against the approved scope, exclusions and the scope guard; nmap refuses networks
+larger than 256 addresses, asks the scope guard about the address it resolves to,
+skips reverse DNS and caps its rate; an OpenVAS run that fell back to every IANA
+TCP port records `network_ports_not_bounded`; new files are created owner-only
+(process umask 077, inherited by scanner children); startup removes the raw artifact
+of any run that never finished; the apichecks artifact is sanitized; live output is
+redacted by whole line with the full sanitizer (a secret split across two reads, or
+one no exact match knows, no longer reaches the saved stream, transcript or a
+WebSocket client); scan deletion halts the scan first and removes only directories
+inside the data directory; artifact paths are resolved through symbolic links;
+uploads are created 0600; raw artifacts are withheld until their run is terminal.
 
 Only nuclei, wapiti, dalfox and ZAP traffic passes through the recording gateway.
 httpx, apichecks, historical providers and the Go browser validate scope natively.
 katana, testssl, nikto, nmap, masscan and OpenVAS run without the gateway; their
-runs now record a `scope_not_gateway_enforced` limitation that is shown on the
-coverage job rows, the scan detail page and the report. Still open:
+runs carry a `scope_not_gateway_enforced` limitation shown on the coverage job rows,
+the scan detail page and the report. Remaining, accepted limitations:
 
 - katana's headless Chromium requests `/favicon.ico` outside the approved path
-  prefix (recorded by every staged run as a known limitation).
-- testssl, nikto and nmap send traffic that is not checked against the path prefix,
-  exclusions or request budget. OpenVAS falls back to all TCP ports when no nmap
-  port evidence exists.
-- Header credentials, the gateway password and the Wapiti POST body appear on child
-  process command lines and are readable through `/proc` inside the container.
-- Child-tool output files may be created with the default umask inside a 0700
-  directory before sanitization; stdout/stderr streams are redacted only by exact
-  known-secret match per chunk.
-- apichecks `findings.jsonl` is not passed through the artifact sanitizer;
-  `XALGORIX_SCAN_HEADERS` is not marked sensitive in the settings API; scan
-  deletion does not use the retention containment check; no startup sweep removes
-  raw output left by a crashed run (it is now withheld from download, not deleted).
+  prefix (recorded by every staged run as a known limitation). Its traffic is not
+  recorded as coverage events and not counted against the request budget; the same
+  holds for testssl, nikto, nmap, masscan and OpenVAS.
+- Header credentials, the per-attempt gateway password and the Wapiti POST body are
+  passed on child command lines, so processes inside the same container can read
+  them from `/proc`. The scanner runs as the container's only workload; the gateway
+  password is valid only for one attempt, is scoped to the approved origins and the
+  bound credential for that target, and the gateway closes when the attempt ends.
+  Do not share the container's PID namespace with untrusted processes.
+- The scan headers setting is shown unmasked by design (attribution identifiers);
+  credentials belong in Target auth, which is masked.
+- OpenVAS ignores web path, method and exclusion rules by nature; it is bounded by
+  host and, when nmap evidence exists, by port.
 
 ### Not covered
 
