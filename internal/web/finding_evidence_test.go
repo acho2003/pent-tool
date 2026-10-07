@@ -100,3 +100,28 @@ func TestFindingObservationAPIReturnsRedactedLocationAndEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestFindingStatusUpdateResponseIsRedacted(t *testing.T) {
+	s := newTestServer(t, nil)
+	dir := filepath.Join(s.dataDir, "patch-test")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := json.Marshal(ScanRecord{ID: "patch-test", Target: "example.test", Status: "finished"})
+	if err := os.WriteFile(filepath.Join(dir, "scan.json"), rec, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &scanner.FindingsSnapshot{
+		SchemaVersion:  scanner.FindingsSchemaVersion,
+		UniqueFindings: []scanner.SecurityFinding{{ID: "finding-1", Title: "Issue", Severity: "high", Status: scanner.StatusPotential, Target: "https://example.test/?token=patch-secret", Endpoints: []scanner.FindingEndpoint{{Endpoint: "https://example.test/?api_key=patch-secret"}}}},
+	}
+	if err := scanner.SaveFindingsSnapshot(dir, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	body := strings.NewReader(`{"status":"ACCEPTED_RISK","reason":"reviewed"}`)
+	s.handleFindingsAPI(w, httptest.NewRequest(http.MethodPatch, "/api/scans/patch-test/findings/finding-1", body))
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "patch-secret") {
+		t.Fatalf("status update response leaked a credential or failed: %d %s", w.Code, w.Body.String())
+	}
+}

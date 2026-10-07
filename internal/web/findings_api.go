@@ -111,7 +111,7 @@ func (s *Server) handleFindingsAPI(w http.ResponseWriter, r *http.Request) {
 			}
 			rec.Vulns = snapshotSummaries(snapshot)
 			s.saveScanRecordTo(rec, dir)
-			writeFindingJSON(w, http.StatusOK, finding)
+			writeFindingJSON(w, http.StatusOK, sanitizeSecurityFinding(*finding))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

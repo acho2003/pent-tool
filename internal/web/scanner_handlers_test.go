@@ -900,3 +900,30 @@ func TestPlanFingerprintIncludesToolVersionsAndCredentialRevision(t *testing.T) 
 		t.Fatal("credential rotation did not change the plan fingerprint")
 	}
 }
+
+// A run's artifact path is recorded when the tool starts, but the file is only
+// sanitized when the run ends. It must not be downloadable while the run is
+// active or after a crash left the run non-terminal.
+func TestScannerArtifactIsWithheldUntilTheRunIsTerminal(t *testing.T) {
+	s := newTestServer(t, nil)
+	saveScannerScan(t, s, "artifact-live", func(dir string) []scanner.Run {
+		return []scanner.Run{
+			{Scanner: "nuclei", Scope: "host:live.test", Target: "live.test", Status: "running", ArtifactPath: writeFile(t, filepath.Join(dir, "hosts", "live.test", "nuclei.jsonl"), "RAW Authorization: Bearer secret"), StdoutPath: writeFile(t, filepath.Join(dir, "hosts", "live.test", "stdout.log"), "live output")},
+			{Scanner: "wapiti", Scope: "host:done.test", Target: "done.test", Status: "completed", ArtifactPath: writeFile(t, filepath.Join(dir, "hosts", "done.test", "wapiti.json"), "sanitized")},
+		}
+	})
+	get := func(url string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		s.handleScannerOutput(rr, httptest.NewRequest(http.MethodGet, url, nil))
+		return rr
+	}
+	if rr := get("/api/scans/artifact-live/nuclei/artifact"); rr.Code != http.StatusConflict || strings.Contains(rr.Body.String(), "secret") {
+		t.Fatalf("running run's artifact was served: %d %q", rr.Code, rr.Body.String())
+	}
+	if rr := get("/api/scans/artifact-live/wapiti/artifact"); rr.Code != 200 || rr.Body.String() != "sanitized" {
+		t.Fatalf("terminal artifact must stay available: %d %q", rr.Code, rr.Body.String())
+	}
+	if rr := get("/api/scans/artifact-live/output/nuclei/stdout?scope=host:live.test"); rr.Code != 200 || rr.Body.String() != "live output" {
+		t.Fatalf("live output stream must stay available: %d %q", rr.Code, rr.Body.String())
+	}
+}

@@ -363,6 +363,13 @@ func (s *Server) handleScannerOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filePath := ""
+	if artifact && !run.Terminal() {
+		// The artifact path is recorded when the tool starts, but the file is only
+		// sanitized once the run ends. A running run, or one orphaned by a crash,
+		// may still hold raw request, response and credential material.
+		http.Error(w, "artifact is not available until the scanner run has finished", http.StatusConflict)
+		return
+	}
 	if artifact {
 		filePath = run.ArtifactPath
 	} else if stream == "stdout" {
