@@ -13,6 +13,20 @@
 # Set STAGED_SUITE=recovery to run the application restart/recovery suite
 # (graceful restarts and a hard kill mid-run) instead of the default suite.
 #
+# Set STAGED_SUITE=recovery-auth to hard-kill the application during an authenticated
+# crawl and verify the resumed assessment logs in again instead of reusing sessions.
+#
+# Set STAGED_SUITE=recovery-write to hard-kill the application while an approved
+# form campaign is in flight and verify that nothing is replayed after the restart.
+#
+# Set STAGED_SUITE=failures to inject failures: truncated Nuclei JSON, an empty
+# Wapiti report, a missing Dalfox binary, no ZAP, and session expiry mid-run, and
+# check that each is reported as a failure or gap and never as a clean result.
+#
+# Set STAGED_SUITE=scanners to run Nuclei (signed deterministic template), Wapiti
+# including an approved bounded form POST campaign, Dalfox and a dedicated ZAP
+# daemon in one assessment (STAGED_ZAP_TIMEOUT caps ZAP in seconds).
+#
 # Set STAGED_SUITE=identities to run two supplied identities (protected markers,
 # an anonymous control, role separation) and check that no synthetic credential
 # appears in any API response, saved artifact, output stream or the report.
@@ -38,9 +52,10 @@ prefix="xalgorix-staged-$$"
 network="$prefix-net"
 lab_container="$prefix-lab"
 app_container="$prefix-app"
+zap_container="$prefix-zap"
 data_volume="$prefix-data"
 cleanup() {
-  docker rm -f "$app_container" "$lab_container" >/dev/null 2>&1 || true
+  docker rm -f "$app_container" "$lab_container" "$zap_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   docker volume rm "$data_volume" >/dev/null 2>&1 || true
 }
@@ -63,6 +78,45 @@ docker run -d --name "$lab_container" --network "$network" \
   --network-alias lab-primary --network-alias lab-secondary --network-alias lab-alias \
   --entrypoint /lab/stagedlab -v "$result_dir/stagedlab:/lab/stagedlab:ro" "$image" >/dev/null
 
+# The scanners suite adds a signed deterministic Nuclei template (prepared offline)
+# and a dedicated disposable ZAP daemon on the same internal network.
+scanner_env=()
+if [[ "${STAGED_SUITE:-}" == scanners ]]; then
+  mkdir -p "$result_dir/nuclei"
+  docker run --rm --network none \
+    -v "$repo_root/runtime/staged-nuclei-prepare.sh:/prep.sh:ro" -v "$result_dir/nuclei:/nuclei" \
+    --entrypoint sh "$image" /prep.sh /nuclei
+  zap_key=$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')
+  docker run -d --name "$zap_container" --network "$network" --network-alias zap --memory 2500m \
+    ghcr.io/zaproxy/zaproxy@sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2 \
+    zap.sh -Xmx1g -silent -daemon -host 0.0.0.0 -port 8080 \
+    -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true \
+    -config "api.key=$zap_key" -config api.filexfer=true >/dev/null
+  docker run --rm --network "$network" -e ZAP_KEY="$zap_key" --entrypoint python3 "$image" -c '
+import os, time, urllib.request
+url = "http://zap:8080/JSON/core/view/version/?apikey=" + os.environ["ZAP_KEY"]
+for _ in range(120):
+    try:
+        urllib.request.urlopen(url, timeout=2).read()
+        break
+    except Exception:
+        time.sleep(1)
+else:
+    raise SystemExit("Disposable ZAP did not become ready")
+'
+  scanner_env=(-e XALGORIX_NUCLEI_TEMPLATES_DIR=/nuclei/templates -e "NUCLEI_USER_CERTIFICATE=$(cat "$result_dir/nuclei/certificate.pem")"
+    -e XALGORIX_ZAP_URL=http://zap:8080 -e "XALGORIX_ZAP_API_KEY=$zap_key" -e XALGORIX_ZAP_DEDICATED=true
+    -e XALGORIX_SCANNER_GATEWAY_HOST=dashboard -e XALGORIX_ZAP_TIMEOUT_SECONDS="${STAGED_ZAP_TIMEOUT:-900}"
+    -v "$result_dir/nuclei:/nuclei:ro")
+fi
+
+# The failures suite replaces scanners with ones that fail in realistic ways:
+# truncated JSON, an empty report and a missing binary; ZAP stays unconfigured.
+if [[ "${STAGED_SUITE:-}" == failures ]]; then
+  scanner_env=(-e XALGORIX_NUCLEI_PATH=/fakes/nuclei-malformed -e XALGORIX_WAPITI_PATH=/fakes/wapiti-empty
+    -e XALGORIX_DALFOX_PATH=/nonexistent/dalfox -v "$repo_root/runtime/staged-fakes:/fakes:ro")
+fi
+
 app_mounts=()
 if [[ -n "$app_binary" ]]; then
   app_mounts=(-v "$(cd "$(dirname "$app_binary")" && pwd)/$(basename "$app_binary"):/usr/local/bin/xalgorix:ro")
@@ -73,7 +127,7 @@ docker run -d --name "$app_container" --network "$network" --network-alias app -
   -e XALGORIX_DATA_DIR=/data -e XALGORIX_CREDENTIAL_KEY_FILE=/run/key/credential.key \
   -e XALGORIX_BIND=0.0.0.0 \
   -v "$data_volume:/data" -v "$result_dir/credential.key:/run/key/credential.key:ro" \
-  ${app_mounts[@]+"${app_mounts[@]}"} "$image" --web --port 8888 >/dev/null
+  ${scanner_env[@]+"${scanner_env[@]}"} ${app_mounts[@]+"${app_mounts[@]}"} "$image" --web --port 8888 >/dev/null
 
 run_phase() {
   local phase=$1
@@ -109,6 +163,16 @@ if [[ "${STAGED_SUITE:-}" == ui ]]; then
   if [[ $status -eq 0 ]]; then run_ui_phase || status=$?; fi
 elif [[ "${STAGED_SUITE:-}" == identities ]]; then
   run_phase identities || status=$?
+elif [[ "${STAGED_SUITE:-}" == scanners ]]; then
+  run_phase scanners || status=$?
+elif [[ "${STAGED_SUITE:-}" == recovery-auth ]]; then
+  run_phase auth-start || status=$?
+  if [[ $status -eq 0 ]]; then restart_after_kill; run_phase auth-after-kill || status=$?; fi
+elif [[ "${STAGED_SUITE:-}" == recovery-write ]]; then
+  run_phase write-start || status=$?
+  if [[ $status -eq 0 ]]; then restart_after_kill; run_phase write-after-kill || status=$?; fi
+elif [[ "${STAGED_SUITE:-}" == failures ]]; then
+  run_phase failures || status=$?
 elif [[ "${STAGED_SUITE:-}" == recovery ]]; then
   run_phase recovery-base || status=$?
   if [[ $status -eq 0 ]]; then restart_graceful; run_phase recovery-pending || status=$?; fi

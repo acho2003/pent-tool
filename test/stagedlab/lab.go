@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -51,7 +53,11 @@ type Hit struct {
 	Identity string `json:"identity"` // anonymous, admin or viewer
 	// UserAgent identifies which tool produced the request.
 	UserAgent string `json:"user_agent"`
-	Body      string `json:"body"`
+	// Login is the 1-based number of the login that issued the session token the
+	// request carried, or 0 when it carried none. Every login issues a new token, so
+	// this shows whether authenticated traffic reused an older session.
+	Login int    `json:"login"`
+	Body  string `json:"body"`
 }
 
 // URL returns the path and query exactly as received.
@@ -77,10 +83,15 @@ type Lab struct {
 	// approved before any tool may contact it.
 	SecondaryURL string
 
-	mu        sync.Mutex
-	hits      []Hit
-	resources map[string]string
-	nextID    int
+	mu           sync.Mutex
+	sessions     map[string]string // issued session token -> identity
+	sessionLogin map[string]int    // issued session token -> the login that created it (1-based)
+	logins       int
+	recordDelay  time.Duration // artificial latency for POST /api/records, set through the control API
+	expired      bool          // when set, every session is treated as expired and logins are refused
+	hits         []Hit
+	resources    map[string]string
+	nextID       int
 }
 
 // Start launches the lab and registers cleanup.
@@ -108,7 +119,9 @@ func Start(t testing.TB) *Lab {
 
 // New returns a lab with no listeners. Callers serve the Primary, Secondary and
 // Alias handlers themselves and set AliasURL to the alias origin's public URL.
-func New() *Lab { return &Lab{resources: map[string]string{}} }
+func New() *Lab {
+	return &Lab{resources: map[string]string{}, sessions: map[string]string{}, sessionLogin: map[string]int{}}
+}
 
 // PrimaryHandler serves the HTTP origin approved below PathPrefix.
 func (l *Lab) PrimaryHandler() http.Handler { return l.record("primary", l.primaryRoutes()) }
@@ -152,6 +165,25 @@ func (l *Lab) ControlHandler() http.Handler {
 		_, _ = io.WriteString(w, body)
 	}))
 	mux.HandleFunc("GET /variants", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, Variants()) }))
+	mux.HandleFunc("POST /delay-records", guard(func(w http.ResponseWriter, r *http.Request) {
+		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
+		l.mu.Lock()
+		l.recordDelay = time.Duration(ms) * time.Millisecond
+		l.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	mux.HandleFunc("POST /expire", guard(func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		l.expired = true
+		l.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	mux.HandleFunc("POST /restore", guard(func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		l.expired = false
+		l.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	mux.HandleFunc("POST /reset", guard(func(w http.ResponseWriter, r *http.Request) { l.Reset(); w.WriteHeader(http.StatusNoContent) }))
 	return mux
 }
@@ -249,7 +281,7 @@ func Variants() []string {
 
 func (l *Lab) record(origin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit := Hit{Origin: origin, Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Identity: identityOf(r), UserAgent: r.UserAgent()}
+		hit := Hit{Origin: origin, Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Identity: l.identity(r), UserAgent: r.UserAgent(), Login: l.loginOf(r)}
 		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 			hit.Body = string(body)
@@ -262,13 +294,28 @@ func (l *Lab) record(origin string, next http.Handler) http.Handler {
 	})
 }
 
-func identityOf(r *http.Request) string {
+// loginOf returns the login number that issued the request's session token.
+func (l *Lab) loginOf(r *http.Request) int {
+	cookie, err := r.Cookie(CookieName)
+	if err != nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sessionLogin[cookie.Value]
+}
+
+// identity names the caller, or anonymous when the lab is simulating session
+// expiry.
+func (l *Lab) identity(r *http.Request) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.expired {
+		return "anonymous"
+	}
 	if cookie, err := r.Cookie(CookieName); err == nil {
-		switch {
-		case secureEqual(cookie.Value, AdminToken):
-			return "admin"
-		case secureEqual(cookie.Value, ViewerToken):
-			return "viewer"
+		if identity, ok := l.sessions[cookie.Value]; ok {
+			return identity
 		}
 	}
 	return "anonymous"
@@ -282,6 +329,7 @@ func (l *Lab) primaryRoutes() http.Handler {
 		page(w, fmt.Sprintf(`<h1>Lab home</h1>
 <a href="%[1]sabout">about</a> <a href="%[1]scatalog">catalog</a> <a href="%[1]sjs">js</a>
 <a href="%[1]slogin">login</a> <a href="%[1]slogout">logout</a> <a href="%[1]sredirect">redirect</a>
+<a href="%[1]sitems?id=1">item 1</a> <a href="%[1]sitems?id=2">item 2</a> <a href="%[1]ssearch?q=hello">search</a>
 <a href="%[2]s">outside path</a> <a href="%[3]s">alias</a> <a href="%[4]s">secondary</a> <a href="%[1]sprivate">private</a>
 <form method="get" action="%[1]ssearch"><input name="q"></form>
 <form method="post" action="%[1]swrite"><input name="note"><button>save</button></form>`, PathPrefix, OutsidePath, l.AliasURL+"/anything", l.SecondaryURL+"/"))
@@ -325,24 +373,38 @@ document.getElementById("root").addEventListener("click",()=>{history.pushState(
 <input name="username"><input name="password" type="password"><button>login</button></form>`, PathPrefix, CSRFValue))
 	})
 	mux.HandleFunc("POST "+PathPrefix+"login", func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		expired := l.expired
+		l.mu.Unlock()
+		if expired {
+			http.Error(w, "logins are disabled while sessions are expired", http.StatusUnauthorized)
+			return
+		}
 		_ = r.ParseForm()
-		token := ""
+		token, identity := "", ""
 		switch {
 		case r.PostForm.Get("csrf") != CSRFValue:
 		case r.PostForm.Get("username") == AdminUser && secureEqual(r.PostForm.Get("password"), AdminPassword):
-			token = AdminToken
+			token, identity = AdminToken, "admin"
 		case r.PostForm.Get("username") == ViewerUser && secureEqual(r.PostForm.Get("password"), ViewerPassword):
-			token = ViewerToken
+			token, identity = ViewerToken, "viewer"
 		}
 		if token == "" {
 			http.Error(w, "invalid login", http.StatusUnauthorized)
 			return
 		}
+		// Every login issues a new token so a request can be traced to its login.
+		l.mu.Lock()
+		l.logins++
+		token = fmt.Sprintf("%s-%d", token, l.logins)
+		l.sessions[token] = identity
+		l.sessionLogin[token] = l.logins
+		l.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: CookieName, Value: token, Path: "/", HttpOnly: true})
 		http.Redirect(w, r, PathPrefix+"private", http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET "+PathPrefix+"private", func(w http.ResponseWriter, r *http.Request) {
-		switch identityOf(r) {
+		switch l.identity(r) {
 		case "admin":
 			page(w, AdminMarker)
 		case "viewer":
@@ -352,7 +414,7 @@ document.getElementById("root").addEventListener("click",()=>{history.pushState(
 		}
 	})
 	mux.HandleFunc("GET "+PathPrefix+"admin", func(w http.ResponseWriter, r *http.Request) {
-		switch identityOf(r) {
+		switch l.identity(r) {
 		case "admin":
 			page(w, "LAB_ADMIN_ONLY")
 		case "viewer":
@@ -362,7 +424,7 @@ document.getElementById("root").addEventListener("click",()=>{history.pushState(
 		}
 	})
 	mux.HandleFunc("GET "+PathPrefix+"api/me", func(w http.ResponseWriter, r *http.Request) {
-		identity := identityOf(r)
+		identity := l.identity(r)
 		if identity == "anonymous" {
 			http.Error(w, `{"error":"login required"}`, http.StatusUnauthorized)
 			return
@@ -413,6 +475,12 @@ document.getElementById("root").addEventListener("click",()=>{history.pushState(
 		writeJSON(w, map[string]any{"records": ids})
 	})
 	mux.HandleFunc("POST "+PathPrefix+"api/records", func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		delay := l.recordDelay
+		l.mu.Unlock()
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 		_ = r.ParseForm()
 		l.mu.Lock()
 		l.nextID++

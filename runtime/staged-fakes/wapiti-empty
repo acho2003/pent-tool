@@ -1,0 +1,9 @@
+#!/bin/sh
+# Staged failure injection: a scanner that exits 0 but writes an empty report.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) shift; : > "$1" ;;
+  esac
+  shift
+done
+exit 0

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Staged failure injection: a scanner that answers the template inventory listing,
+# runs for a while (so authentication monitoring has a running scanner to watch),
+# then exits 0 leaving truncated JSON.
+for arg in "$@"; do
+  if [ "$arg" = "-tl" ]; then
+    echo "staged/fake-template.yaml"
+    exit 0
+  fi
+done
+sleep 75
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -jle) shift; printf '{"template-id":"truncated","matched-at":' > "$1" ;;
+  esac
+  shift
+done
+exit 0

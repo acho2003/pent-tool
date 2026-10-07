@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVariantsAreDistinctAndCatalogLinksAllOfThem(t *testing.T) {
@@ -296,4 +297,85 @@ func TestSpecDocumentsAreServedByTheControlAPI(t *testing.T) {
 	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusNotFound {
 		t.Fatal("spec endpoint must require the control header")
 	}
+}
+
+func TestSessionExpiryDisablesLoginsAndSessionsUntilRestored(t *testing.T) {
+	lab := Start(t)
+	control := httptestServer(t, lab.ControlHandler())
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	resp, err := client.PostForm(lab.Primary.URL+PathPrefix+"login", url.Values{"csrf": {CSRFValue}, "username": {AdminUser}, "password": {AdminPassword}})
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("login before expiry: %v %v", err, resp)
+	}
+	resp.Body.Close()
+	post := func(path string) {
+		req, _ := http.NewRequest(http.MethodPost, control+path, nil)
+		req.Header.Set("X-Lab-Control", "local-only")
+		if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != http.StatusNoContent {
+			t.Fatalf("%s: %v %v", path, err, r)
+		}
+	}
+	post("/expire")
+	if got := status(t, client, lab.Primary.URL+PathPrefix+"private"); got != http.StatusUnauthorized {
+		t.Fatalf("expired session still accepted: %d", got)
+	}
+	resp, _ = http.PostForm(lab.Primary.URL+PathPrefix+"login", url.Values{"csrf": {CSRFValue}, "username": {AdminUser}, "password": {AdminPassword}})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("login accepted while expired: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	post("/restore")
+	if got := status(t, client, lab.Primary.URL+PathPrefix+"private"); got != http.StatusOK {
+		t.Fatalf("session not restored: %d", got)
+	}
+}
+
+func TestRecordDelayCanBeSetThroughTheControlAPI(t *testing.T) {
+	lab := Start(t)
+	control := httptestServer(t, lab.ControlHandler())
+	req, _ := http.NewRequest(http.MethodPost, control+"/delay-records?ms=300", nil)
+	req.Header.Set("X-Lab-Control", "local-only")
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delay: %v %v", err, resp)
+	}
+	started := time.Now()
+	post(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"api/records", "name=slow")
+	if elapsed := time.Since(started); elapsed < 250*time.Millisecond {
+		t.Fatalf("POST was not delayed: %s", elapsed)
+	}
+}
+
+func TestEachLoginIssuesANewTokenAndHitsRecordWhichLoginIssuedIt(t *testing.T) {
+	lab := Start(t)
+	login := func() *http.Client {
+		jar, _ := cookiejar.New(nil)
+		client := &http.Client{Jar: jar}
+		resp, err := client.PostForm(lab.Primary.URL+PathPrefix+"login", url.Values{"csrf": {CSRFValue}, "username": {AdminUser}, "password": {AdminPassword}})
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("login: %v %v", err, resp)
+		}
+		resp.Body.Close()
+		return client
+	}
+	first, second := login(), login()
+	lab.Reset()
+	get(t, first, lab.Primary.URL+PathPrefix+"api/me")
+	get(t, second, lab.Primary.URL+PathPrefix+"api/me")
+	get(t, http.DefaultClient, lab.Primary.URL+PathPrefix+"about")
+	hits := lab.Hits()
+	if len(hits) != 3 || hits[0].Login != 1 || hits[1].Login != 2 || hits[2].Login != 0 {
+		t.Fatalf("login attribution wrong: %+v", hits)
+	}
+	if hits[0].Identity != "admin" || hits[1].Identity != "admin" || hits[2].Identity != "anonymous" {
+		t.Fatalf("identity attribution wrong: %+v", hits)
+	}
+	// A token that was never issued is not accepted.
+	req, _ := http.NewRequest(http.MethodGet, lab.Primary.URL+PathPrefix+"api/me", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: AdminToken})
+	resp, _ := http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a never-issued token was accepted: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
 }
