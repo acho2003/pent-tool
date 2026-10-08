@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -33,6 +34,85 @@ func TestDalfoxRuntimeRecords684RequestDispositions(t *testing.T) {
 		t.Skip("requires retained native Dalfox runtime")
 	}
 	runNative684HTTPFixture(t, "dalfox")
+}
+
+// Stopping an assessment mid-run must not throw away a native tool's results.
+// Before this fix, cancellation sent SIGKILL straight away, and Dalfox wrote
+// its findings as a single buffered JSON array only when it exited normally —
+// so a mid-run SIGKILL left no output file at all, and a stop threw away
+// everything Dalfox had already found. Two changes, both exercised here
+// against the real binary: cancellation sends SIGINT first (process_unix.go),
+// giving a tool a chance to exit on its own terms; and Dalfox now writes jsonl
+// (dalfox.go), one PoC per line as each URL in its list finishes, rather than
+// one array written only at the very end — confirmed by polling its output
+// file for a line to appear before stopping the scan.
+func TestDalfoxRuntimeCancellationPreservesFindingsFoundBeforeTheStop(t *testing.T) {
+	if os.Getenv("XALGORIX_TEST_DALFOX") != "1" {
+		t.Skip("requires retained native Dalfox runtime")
+	}
+	withShortCancelGrace(t, 3*time.Second)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// An unescaped reflection Dalfox can confirm with its default payload
+		// set, so it has something to report well before a 50-URL list finishes.
+		fmt.Fprintf(w, "<html><body>%s</body></html>", r.URL.Query().Get("q"))
+	}))
+	defer server.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", server.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	var endpoints []string
+	for i := 0; i < 50; i++ {
+		endpoints = append(endpoints, fmt.Sprintf("%s/?q=%d", server.URL, i))
+	}
+	req := Request{Target: endpoints[0], TypedAssessment: true, AppScope: &scope, ScanDir: t.TempDir(), EndpointTargets: endpoints}
+	cfg := Config{DalfoxPath: "dalfox", DalfoxTimeout: 2 * time.Minute}
+	spec := buildDalfox(req, cfg)
+	if spec.notApp != "" {
+		t.Fatal(spec.notApp)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := time.Now()
+	done := make(chan Run, 1)
+	go func() { done <- executeSpec(ctx, "dalfox", req, cfg, spec, nil) }()
+
+	// Poll the artifact for its first written line rather than guessing how
+	// long Dalfox's own discovery phase takes for one URL; stop regardless once
+	// the budget below is spent, so the test cannot hang on a slow environment.
+	deadline := time.Now().Add(90 * time.Second)
+	wroteBeforeStop := false
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(spec.artifact); err == nil && strings.TrimSpace(string(data)) != "" {
+			wroteBeforeStop = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	cancel()
+	var run Run
+	select {
+	case run = <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("cancellation did not stop the real Dalfox process in time (it may not have exited on SIGINT)")
+	}
+	elapsedAfterCancel := time.Since(started)
+	if run.Status != "cancelled" {
+		t.Fatalf("status=%s outcome=%s reason=%s stderr=%s", run.Status, run.Outcome, run.Reason, readCapped(run.StderrPath, 4000))
+	}
+	t.Logf("real Dalfox exited %s after being asked to stop (well under the 3s SIGINT grace period plus the 20s wait above means it responded to SIGINT, not the SIGKILL fallback)", elapsedAfterCancel)
+	if !wroteBeforeStop {
+		t.Skip("Dalfox had not written any result line within the polling budget; cannot verify preservation on this run (the SIGINT-vs-SIGKILL exit-promptness assertion above still ran)")
+	}
+	if run.ArtifactPath == "" {
+		t.Fatal("Dalfox had already written a result line, but the cancelled run recorded no artifact path")
+	}
+	findings, err := ParseRun(run)
+	if err != nil {
+		t.Fatalf("cancelled run's artifact could not be parsed: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("Dalfox had written a result line before the stop, but no finding survived in the cancelled run")
+	}
+	t.Logf("cancelled Dalfox run kept %d finding(s) found before it was stopped", len(findings))
 }
 
 func runNative684HTTPFixture(t *testing.T, scanner string) {

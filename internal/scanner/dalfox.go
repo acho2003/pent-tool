@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -79,7 +80,12 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 	}
 
 	base := filepath.Join(req.ScanDir, "scanner-output", "dalfox")
-	artifact := filepath.Join(base, "results.json")
+	// jsonl (one PoC object per line), not a single buffered JSON array: Dalfox
+	// writes this file incrementally as each target in the list finishes, so a
+	// cancelled run (see process_unix.go) keeps whatever it had already found,
+	// instead of losing everything because the single closing "]" of a json
+	// array is only ever written once the whole list completes.
+	artifact := filepath.Join(base, "results.jsonl")
 	listPath := filepath.Join(base, "targets.txt")
 
 	duration := cfg.DalfoxTimeout
@@ -89,8 +95,9 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 
 	// Bounded, machine-readable detection run (flags verified against the
 	// pinned dalfox v2.13.0 cmd/root.go):
-	//   file <list>   : test the discovered parameterized URLs
-	//   --format json : structured PoC output for the parser
+	//   file <list>    : test the discovered parameterized URLs
+	//   --format jsonl : one PoC object per line, written incrementally as each
+	//                    target finishes (see the artifact comment above)
 	//   --silence --no-color : quiet, parseable stdout
 	//   --skip-bav    : skip basic-another-vuln probing (stay focused on XSS)
 	//   --skip-mining-all : no DOM/dictionary parameter mining; only the
@@ -102,7 +109,7 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 	//   --timeout     : per-request timeout in seconds
 	args := []string{
 		"file", listPath,
-		"--format", "json",
+		"--format", "jsonl",
 		"-o", artifact,
 		"--silence",
 		"--no-color",
@@ -144,7 +151,7 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 	}
 }
 
-// dalfoxPoC is one entry of dalfox's `--format json` output array.
+// dalfoxPoC is one line of dalfox's `--format jsonl` output.
 type dalfoxPoC struct {
 	Type       string `json:"type"`
 	InjectType string `json:"inject_type"`
@@ -158,24 +165,33 @@ type dalfoxPoC struct {
 	PoC        string `json:"poc"`
 }
 
-// parseDalfox reads dalfox's JSON PoC array into normalized findings. Only actual
-// vulnerability entries (type "V" / "G") are reported; informational grep/analysis
-// lines are ignored.
+// parseDalfox reads dalfox's jsonl PoC lines into normalized findings. Only
+// actual vulnerability entries (type "V" / "G") are reported; informational
+// grep/analysis lines are ignored. Lines are decoded one at a time (like
+// parseNuclei) rather than as a single JSON document: a run cancelled mid-write
+// (process_unix.go) can leave an incomplete final line, which must not discard
+// every earlier, complete line it already wrote.
 func parseDalfox(artifact string) ([]Finding, error) {
-	data, err := os.ReadFile(artifact)
+	file, err := os.Open(artifact)
 	if err != nil {
 		return nil, err
 	}
-	data = []byte(strings.TrimSpace(string(data)))
-	if len(data) == 0 {
-		return nil, nil
-	}
-	var pocs []dalfoxPoC
-	if err := json.Unmarshal(data, &pocs); err != nil {
-		return nil, fmt.Errorf("parse dalfox json: %w", err)
-	}
+	defer file.Close()
 	var findings []Finding
-	for i, p := range pocs {
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		raw := strings.TrimSpace(scanner.Text())
+		if raw == "" {
+			continue
+		}
+		var p dalfoxPoC
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			return findings, fmt.Errorf("parse dalfox jsonl: line %d: %w", lineNum, err)
+		}
+		i := lineNum - 1
 		if !strings.EqualFold(p.Type, "V") && !strings.EqualFold(p.Type, "G") {
 			continue // skip non-vulnerability rows
 		}
@@ -205,6 +221,9 @@ func parseDalfox(artifact string) ([]Finding, error) {
 			EvidenceRef: p.PoC,
 			CWE:         cwe,
 		})
+	}
+	if err := scanner.Err(); err != nil {
+		return findings, fmt.Errorf("parse dalfox jsonl: %w", err)
 	}
 	return findings, nil
 }

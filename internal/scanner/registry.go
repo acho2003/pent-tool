@@ -76,7 +76,7 @@ var webScannerMetadata = map[string]struct {
 	"apichecks":   {[]string{PolicyExclusions, PolicyGetHeadOnly, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
 	"testssl":     {[]string{PolicyGetHeadOnly}, "json"},
 	"nikto":       {[]string{PolicyRateLimited}, "json"},
-	"dalfox":      {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "json"},
+	"dalfox":      {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
 	"wapiti":      {[]string{PolicyExclusions, PolicyWriteCapable}, "json"},
 }
 

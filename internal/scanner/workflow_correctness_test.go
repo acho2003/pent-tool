@@ -30,8 +30,10 @@ func TestAssessmentForwardsWapitiAndDalfoxPolicyAndAuth(t *testing.T) {
 			marker := bin + ".args"
 			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + marker + "\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then shift; printf '{\"vulnerabilities\":{}}' > \"$1\"; fi; shift; done\n"
 			if name == "dalfox" {
-				script = strings.ReplaceAll(script, `{\"vulnerabilities\":{}}`, `[]`)
-				script = strings.ReplaceAll(script, `{"vulnerabilities":{}}`, `[]`)
+				// Dalfox writes jsonl (one PoC object per line), not a single
+				// buffered JSON document; an empty artifact is simply empty.
+				script = strings.ReplaceAll(script, `{\"vulnerabilities\":{}}`, ``)
+				script = strings.ReplaceAll(script, `{"vulnerabilities":{}}`, ``)
 			}
 			if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
 				t.Fatal(err)

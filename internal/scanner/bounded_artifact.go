@@ -27,7 +27,7 @@ func boundWebArtifact(path, scanner string, limit int64) (bool, error) {
 		return false, nil
 	}
 	switch scanner {
-	case "nuclei":
+	case "nuclei", "dalfox":
 		file, err := os.Open(path)
 		if err != nil {
 			return true, err
@@ -56,7 +56,7 @@ func boundWebArtifact(path, scanner string, limit int64) (bool, error) {
 		return true, storage.WriteAtomic(path, retained.Bytes())
 	case "openvas":
 		return boundXMLArtifact(path, limit)
-	case "zap", "wapiti", "dalfox", "vuls":
+	case "zap", "wapiti", "vuls":
 	default:
 		return truncateArtifact(path, limit), nil
 	}

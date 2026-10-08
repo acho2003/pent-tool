@@ -59,8 +59,8 @@ func TestBuildDalfox_BoundedRunOverDiscoveredURLs(t *testing.T) {
 	if !hasArg(spec.args, "file") {
 		t.Errorf("dalfox should run in file mode over the discovered list; args=%v", spec.args)
 	}
-	if fmtv, _ := argValue(spec.args, "--format"); fmtv != "json" {
-		t.Errorf("--format = %q, want json", fmtv)
+	if fmtv, _ := argValue(spec.args, "--format"); fmtv != "jsonl" {
+		t.Errorf("--format = %q, want jsonl (written incrementally, so a cancelled run keeps what it found)", fmtv)
 	}
 	if !hasArg(spec.args, "--skip-bav") {
 		t.Errorf("expected --skip-bav to stay focused on XSS")
@@ -116,7 +116,7 @@ func TestDalfoxSkipsMiningSingleWorkerDelayFromRate(t *testing.T) {
 func TestDalfoxCompletedRunRecordsHeadlessLimitation(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-dalfox")
-	script := "#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then shift; out=$1; fi; shift; done\nprintf '[]' > \"$out\"\n"
+	script := "#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then shift; out=$1; fi; shift; done\nprintf '' > \"$out\"\n"
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -155,14 +155,15 @@ func TestDalfoxSendsVerifiedAuthHeadersOnly(t *testing.T) {
 	}
 }
 
-func TestParseDalfox_JSONFindings(t *testing.T) {
+func TestParseDalfox_JSONLFindings(t *testing.T) {
 	dir := t.TempDir()
-	art := filepath.Join(dir, "results.json")
-	// A vulnerability row (V) and an informational grep row (G-ignored non-V/G? G kept) plus a non-vuln row.
-	body := `[
-	  {"type":"V","method":"GET","data":"https://app.test/s?q=<script>","param":"q","evidence":"reflected","cwe":"79","severity":"high","message_str":"reflected XSS","poc":"https://app.test/s?q=<script>alert(1)</script>"},
-	  {"type":"I","method":"GET","data":"https://app.test/s?q=1","param":"q","message_str":"info only"}
-	]`
+	art := filepath.Join(dir, "results.jsonl")
+	// A vulnerability row (V), an informational row (I, ignored) and a blank
+	// line (as a trailing newline from Dalfox's own writer would produce).
+	body := "" +
+		`{"type":"V","method":"GET","data":"https://app.test/s?q=<script>","param":"q","evidence":"reflected","cwe":"79","severity":"high","message_str":"reflected XSS","poc":"https://app.test/s?q=<script>alert(1)</script>"}` + "\n" +
+		`{"type":"I","method":"GET","data":"https://app.test/s?q=1","param":"q","message_str":"info only"}` + "\n" +
+		"\n"
 	if err := os.WriteFile(art, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -185,9 +186,29 @@ func TestParseDalfox_JSONFindings(t *testing.T) {
 	}
 }
 
+// A run cancelled mid-write (process_unix.go) can leave an incomplete final
+// line. That must not discard every earlier, complete line already written —
+// the same resilience parseNuclei already has for its own jsonl artifact.
+func TestParseDalfox_PreservesCompleteLinesBeforeATruncatedLast(t *testing.T) {
+	dir := t.TempDir()
+	art := filepath.Join(dir, "results.jsonl")
+	body := `{"type":"V","method":"GET","data":"https://app.test/s?q=1","param":"q","severity":"high","message_str":"reflected XSS"}` + "\n" +
+		`{"type":"V","method":"GET","data":"https://app.test/s?q=2","param":"q","severity":"medium","message_str":"reflected XSS"` // no closing brace: killed mid-write
+	if err := os.WriteFile(art, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := parseDalfox(art)
+	if err == nil {
+		t.Fatal("expected an error reporting the truncated line")
+	}
+	if len(findings) != 1 || findings[0].Target != "https://app.test/s?q=1" {
+		t.Fatalf("the complete first line was not preserved: %+v (err=%v)", findings, err)
+	}
+}
+
 func TestParseDalfox_EmptyArtifact(t *testing.T) {
 	dir := t.TempDir()
-	art := filepath.Join(dir, "empty.json")
+	art := filepath.Join(dir, "empty.jsonl")
 	if err := os.WriteFile(art, []byte("  "), 0o600); err != nil {
 		t.Fatal(err)
 	}
