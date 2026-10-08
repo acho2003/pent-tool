@@ -17,8 +17,6 @@ func ScannerRegistry() []ScannerDefinition {
 		{ID: "subfinder", Name: "subfinder", Category: PhaseRecon, AssessmentTypes: []assessment.Type{assessment.TypeNetwork, assessment.TypeWebApplication, assessment.TypeAPI}, TargetKinds: []assessment.TargetKind{assessment.KindDomain}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "conditional", Risk: "low", Available: true, Summary: "Discover approved subdomains"},
 		{ID: "amass", Name: "amass", Category: PhaseRecon, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, TargetKinds: []assessment.TargetKind{assessment.KindDomain}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Gather passive subdomain candidates"},
 		{ID: "dnsx", Name: "dnsx", Category: PhaseRecon, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, TargetKinds: []assessment.TargetKind{assessment.KindDomain, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "automatic", Risk: "low", Available: false, Summary: "Resolve approved hostnames and record DNS evidence"},
-		{ID: "gau", Name: "gau", Category: PhaseRecon, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, TargetKinds: []assessment.TargetKind{assessment.KindDomain, assessment.KindURL}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Collect archived URL candidates"},
-		{ID: "waybackurls", Name: "waybackurls", Category: PhaseRecon, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, TargetKinds: []assessment.TargetKind{assessment.KindDomain, assessment.KindURL}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Collect Wayback URL candidates"},
 		{ID: "httpx", Name: "httpx", Category: PhaseRecon, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, TargetKinds: []assessment.TargetKind{assessment.KindDomain, assessment.KindURL, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, DefaultSelection: "automatic", Risk: "low", Available: true, Summary: "Probe approved origins for live web services"},
 		{ID: "nmap", Name: "nmap", Category: PhaseRecon, AssessmentTypes: network, TargetKinds: []assessment.TargetKind{assessment.KindDomain, assessment.KindIP, assessment.KindCIDR, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "automatic", Risk: "medium", Available: true, Summary: "Discover approved network services"},
 		{ID: "katana", Name: "katana", Category: PhaseRecon, AssessmentTypes: append(append([]assessment.Type{}, web...), api...), TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindDomain, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, DefaultSelection: "automatic", Risk: "low", Available: false, Summary: "Headless crawl of a web host to discover in-scope URLs and API endpoints"},
@@ -63,21 +61,19 @@ var webScannerMetadata = map[string]struct {
 	policy []string
 	format string
 }{
-	"subfinder":   {[]string{PolicyRateLimited}, "jsonl"},
-	"amass":       {[]string{PolicyRateLimited}, "text"},
-	"dnsx":        {[]string{PolicyRateLimited}, "jsonl"},
-	"gau":         {[]string{}, "text"},
-	"waybackurls": {[]string{}, "text"},
-	"sslyze":      {[]string{PolicyGetHeadOnly}, "json"},
-	"httpx":       {[]string{PolicyGetHeadOnly, PolicyRateLimited}, "jsonl"},
-	"katana":      {[]string{PolicyExclusions, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
-	"nuclei":      {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
-	"zap":         {[]string{PolicyExclusions, PolicyScopeRegex, PolicyWriteCapable}, "json"},
-	"apichecks":   {[]string{PolicyExclusions, PolicyGetHeadOnly, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
-	"testssl":     {[]string{PolicyGetHeadOnly}, "json"},
-	"nikto":       {[]string{PolicyRateLimited}, "json"},
-	"dalfox":      {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
-	"wapiti":      {[]string{PolicyExclusions, PolicyWriteCapable}, "json"},
+	"subfinder": {[]string{PolicyRateLimited}, "jsonl"},
+	"amass":     {[]string{PolicyRateLimited}, "text"},
+	"dnsx":      {[]string{PolicyRateLimited}, "jsonl"},
+	"sslyze":    {[]string{PolicyGetHeadOnly}, "json"},
+	"httpx":     {[]string{PolicyGetHeadOnly, PolicyRateLimited}, "jsonl"},
+	"katana":    {[]string{PolicyExclusions, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
+	"nuclei":    {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
+	"zap":       {[]string{PolicyExclusions, PolicyScopeRegex, PolicyWriteCapable}, "json"},
+	"apichecks": {[]string{PolicyExclusions, PolicyGetHeadOnly, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
+	"testssl":   {[]string{PolicyGetHeadOnly}, "json"},
+	"nikto":     {[]string{PolicyRateLimited}, "json"},
+	"dalfox":    {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
+	"wapiti":    {[]string{PolicyExclusions, PolicyWriteCapable}, "json"},
 }
 
 // scannerGroups assigns each scanner to a New-Assessment UI group. Recon/web
@@ -86,7 +82,7 @@ var webScannerMetadata = map[string]struct {
 // adapters under their respective groups.
 var scannerGroups = map[string]string{
 	"auth":      GroupWebAPI,
-	"subfinder": GroupWebAPI, "amass": GroupWebAPI, "dnsx": GroupWebAPI, "gau": GroupWebAPI, "waybackurls": GroupWebAPI, "sslyze": GroupWebAPI, "httpx": GroupWebAPI, "katana": GroupWebAPI,
+	"subfinder": GroupWebAPI, "amass": GroupWebAPI, "dnsx": GroupWebAPI, "sslyze": GroupWebAPI, "httpx": GroupWebAPI, "katana": GroupWebAPI,
 	"nuclei": GroupWebAPI, "zap": GroupWebAPI, "apichecks": GroupWebAPI, "apiwrites": GroupWebAPI, "testssl": GroupWebAPI,
 	"nikto": GroupWebAPI, "dalfox": GroupWebAPI, "wapiti": GroupWebAPI,
 	"nmap": GroupNetwork, "masscan": GroupNetwork, "openvas": GroupNetwork,

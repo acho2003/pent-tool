@@ -23,7 +23,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "gau" || id == "waybackurls" || id == "sslyze" || id == "apichecks" || id == "apiwrites" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -133,8 +133,6 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["subfinder"] = subfinderRunner{}
 	byName["amass"] = amassRunner{}
 	byName["httpx"] = httpxRunner{}
-	byName["gau"] = historicalRunner{provider: "gau"}
-	byName["waybackurls"] = historicalRunner{provider: "waybackurls"}
 	byName["sslyze"] = sslyzeRunner{}
 	byName["apichecks"] = apiChecksRunner{}
 	byName["apiwrites"] = apiWritesRunner{}

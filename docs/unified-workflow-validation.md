@@ -411,7 +411,7 @@ inside the data directory; artifact paths are resolved through symbolic links;
 uploads are created 0600; raw artifacts are withheld until their run is terminal.
 
 Only nuclei, wapiti, dalfox and ZAP traffic passes through the recording gateway.
-httpx, apichecks, historical providers and the Go browser validate scope natively.
+httpx, apichecks and the Go browser validate scope natively.
 katana, testssl, nikto, nmap, masscan and OpenVAS run without the gateway; their
 runs carry a `scope_not_gateway_enforced` limitation shown on the coverage job rows,
 the scan detail page and the report. Remaining, accepted limitations:

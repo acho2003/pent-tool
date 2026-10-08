@@ -646,10 +646,8 @@ func validateScopePolicy(cfg AssessmentConfig, ids map[string]bool) []Problem {
 				probs = append(probs, blocking("discovery.subdomain.domain_required", "subdomain providers require a domain target"))
 			}
 		}
-		switch dp.Historical {
-		case "", ProviderGau, ProviderWaybackurls:
-		default:
-			probs = append(probs, blocking("discovery.historical.invalid", fmt.Sprintf("historical provider %q must be one of gau, waybackurls or none (waybackurls is an alternative to gau, not an addition)", dp.Historical)))
+		if dp.Historical != "" {
+			probs = append(probs, blocking("discovery.historical.removed", "historical URL providers (gau, waybackurls) are no longer part of the workflow; remove discovery_providers.historical"))
 		}
 		switch dp.TLS {
 		case "", ProviderTestssl, ProviderSSLyze:

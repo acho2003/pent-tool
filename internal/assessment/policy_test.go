@@ -151,9 +151,9 @@ func TestValidateDiscoveryProvidersMutuallyExclusiveAndOptIn(t *testing.T) {
 		mut  func(*AssessmentConfig)
 		code string
 	}{
-		"both historical": {func(c *AssessmentConfig) { c.DiscoveryProviders = &DiscoveryProviders{Historical: "gau,waybackurls"} }, "discovery.historical.invalid"},
-		"both tls":        {func(c *AssessmentConfig) { c.DiscoveryProviders = &DiscoveryProviders{TLS: "testssl+sslyze"} }, "discovery.tls.invalid"},
-		"unknown tls":     {func(c *AssessmentConfig) { c.DiscoveryProviders = &DiscoveryProviders{TLS: "sslscan"} }, "discovery.tls.invalid"},
+		"historical removed": {func(c *AssessmentConfig) { c.DiscoveryProviders = &DiscoveryProviders{Historical: "gau"} }, "discovery.historical.removed"},
+		"both tls":           {func(c *AssessmentConfig) { c.DiscoveryProviders = &DiscoveryProviders{TLS: "testssl+sslyze"} }, "discovery.tls.invalid"},
+		"unknown tls":        {func(c *AssessmentConfig) { c.DiscoveryProviders = &DiscoveryProviders{TLS: "sslscan"} }, "discovery.tls.invalid"},
 		"unknown sub": {func(c *AssessmentConfig) {
 			c.DiscoveryProviders = &DiscoveryProviders{Subdomain: []string{"assetfinder"}}
 		}, "discovery.subdomain.invalid"},
@@ -171,7 +171,7 @@ func TestValidateDiscoveryProvidersMutuallyExclusiveAndOptIn(t *testing.T) {
 		}
 	}
 	ok := with(func(c *AssessmentConfig) {
-		c.DiscoveryProviders = &DiscoveryProviders{Subdomain: []string{"subfinder", "amass"}, Historical: "waybackurls", TLS: "sslyze"}
+		c.DiscoveryProviders = &DiscoveryProviders{Subdomain: []string{"subfinder", "amass"}, TLS: "sslyze"}
 	})
 	if FirstBlocking(ok) != nil {
 		t.Errorf("valid provider selection rejected: %+v", ok)

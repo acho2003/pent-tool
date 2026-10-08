@@ -454,7 +454,7 @@ func TestPlanFingerprintStableWithinRegistryWhenNewFieldsEmpty(t *testing.T) {
 	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}}}
 	nilMaps := PlanAssessment(PlanInput{Config: cfg})
 	emptyMaps := PlanAssessment(PlanInput{Config: cfg, ToolVersions: map[string]string{}, CredentialRevisions: map[string]string{}})
-	if nilMaps.RegistryVersion != "12" || nilMaps.Fingerprint != emptyMaps.Fingerprint {
+	if nilMaps.RegistryVersion != "13" || nilMaps.Fingerprint != emptyMaps.Fingerprint {
 		t.Fatalf("empty fingerprint inputs changed the fingerprint: %q vs %q (registry %q)", nilMaps.Fingerprint, emptyMaps.Fingerprint, nilMaps.RegistryVersion)
 	}
 	if got := planFingerprint(nilMaps, nil, nil); got != nilMaps.Fingerprint {
@@ -462,12 +462,12 @@ func TestPlanFingerprintStableWithinRegistryWhenNewFieldsEmpty(t *testing.T) {
 	}
 }
 
-func TestRegistryVersionIsEleven(t *testing.T) {
-	if PlanRegistryVersion != "12" {
-		t.Fatalf("PlanRegistryVersion = %q, want 12", PlanRegistryVersion)
+func TestRegistryVersionIsThirteen(t *testing.T) {
+	if PlanRegistryVersion != "13" {
+		t.Fatalf("PlanRegistryVersion = %q, want 13", PlanRegistryVersion)
 	}
 	plan := PlanAssessment(PlanInput{Config: assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "h", Kind: assessment.KindIP, Value: "192.0.2.1"}}}})
-	if plan.RegistryVersion != "12" {
+	if plan.RegistryVersion != "13" {
 		t.Fatalf("plan registry version = %q", plan.RegistryVersion)
 	}
 }
@@ -491,7 +491,7 @@ func TestDiscoveryProvidersSelectInAutoModeWithoutCustomDemotion(t *testing.T) {
 	cfg := assessment.AssessmentConfig{
 		Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication},
 		Targets:            []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
-		DiscoveryProviders: &assessment.DiscoveryProviders{TLS: assessment.ProviderSSLyze, Historical: assessment.ProviderWaybackurls},
+		DiscoveryProviders: &assessment.DiscoveryProviders{TLS: assessment.ProviderSSLyze},
 	}
 	plan := PlanAssessment(PlanInput{Config: cfg})
 	if len(plan.Errors) != 0 {
@@ -500,7 +500,7 @@ func TestDiscoveryProvidersSelectInAutoModeWithoutCustomDemotion(t *testing.T) {
 	if plan.Config.ScannerSelection.Mode != "auto" {
 		t.Fatalf("provider selection switched mode to %q", plan.Config.ScannerSelection.Mode)
 	}
-	var testssl, sslyze, wayback *PlanDecision
+	var testssl, sslyze *PlanDecision
 	for i := range plan.Decisions {
 		d := &plan.Decisions[i]
 		if d.TargetID != "app" {
@@ -511,8 +511,6 @@ func TestDiscoveryProvidersSelectInAutoModeWithoutCustomDemotion(t *testing.T) {
 			testssl = d
 		case "sslyze":
 			sslyze = d
-		case "waybackurls":
-			wayback = d
 		case "nuclei", "zap":
 			if d.State != PlanSelected || d.ReasonCode == "selection.customized" {
 				t.Errorf("auto-mode scanner %s demoted by provider selection: %+v", d.Scanner, d)
@@ -522,8 +520,8 @@ func TestDiscoveryProvidersSelectInAutoModeWithoutCustomDemotion(t *testing.T) {
 	if testssl == nil || testssl.State != PlanSkipped || testssl.ReasonCode != "selection.provider_alternative" {
 		t.Fatalf("testssl not skipped as provider alternative: %+v", testssl)
 	}
-	if sslyze == nil || sslyze.State != PlanUnavailable || wayback == nil || wayback.State != PlanUnavailable {
-		t.Fatalf("unregistered chosen providers must surface as unavailable: sslyze=%+v wayback=%+v", sslyze, wayback)
+	if sslyze == nil || sslyze.State != PlanUnavailable {
+		t.Fatalf("unregistered chosen provider must surface as unavailable: sslyze=%+v", sslyze)
 	}
 	for _, job := range plan.Jobs {
 		if job.Scanner == "testssl" {
@@ -545,13 +543,13 @@ func TestDiscoveryProvidersSelectInAutoModeWithoutCustomDemotion(t *testing.T) {
 }
 
 func TestProviderSelectionsMarkAlternatives(t *testing.T) {
-	chosen, replaced := providerSelections(&assessment.DiscoveryProviders{Subdomain: []string{"amass"}, Historical: "waybackurls", TLS: "sslyze"})
-	for _, id := range []string{"amass", "waybackurls", "sslyze"} {
+	chosen, replaced := providerSelections(&assessment.DiscoveryProviders{Subdomain: []string{"amass"}, TLS: "sslyze"})
+	for _, id := range []string{"amass", "sslyze"} {
 		if !chosen[id] {
 			t.Errorf("%s not chosen", id)
 		}
 	}
-	if replaced["subfinder"] != "amass" || replaced["gau"] != "waybackurls" || replaced["testssl"] != "sslyze" {
+	if replaced["subfinder"] != "amass" || replaced["testssl"] != "sslyze" {
 		t.Fatalf("alternatives = %v", replaced)
 	}
 	if c, r := providerSelections(nil); len(c) != 0 || len(r) != 0 {

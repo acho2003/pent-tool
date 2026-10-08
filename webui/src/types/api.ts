@@ -113,7 +113,7 @@ export interface AssessmentConfig {
   assessment_targets: AssessmentTarget[];
   profile?: string;
   subdomain_discovery?: boolean;
-  discovery_providers?: { subdomain?: string[]; historical?: "gau" | "waybackurls"; tls?: "testssl" | "sslyze" };
+  discovery_providers?: { subdomain?: string[]; tls?: "testssl" | "sslyze" };
   exclusions?: Array<{ target_id?: string; origin?: string; method?: string; path_pattern: string; reason?: string }>;
   api_definitions?: Array<{ target_id: string; definition_id: string }>;
   api_operation_inputs?: Array<{ definition_id: string; operation_id: string; path_params?: Record<string, string>; query?: Record<string, string>; request_body_ref?: string }>;

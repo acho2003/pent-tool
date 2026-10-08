@@ -81,7 +81,7 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 9: simpler header-auth verification).
-const PlanRegistryVersion = "12"
+const PlanRegistryVersion = "13"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -390,7 +390,6 @@ func providerSelections(dp *assessment.DiscoveryProviders) (map[string]bool, map
 		}
 	}
 	for _, pair := range []struct{ choice, a, b string }{
-		{dp.Historical, assessment.ProviderGau, assessment.ProviderWaybackurls},
 		{dp.TLS, assessment.ProviderTestssl, assessment.ProviderSSLyze},
 	} {
 		switch pair.choice {
@@ -406,10 +405,8 @@ func providerSelections(dp *assessment.DiscoveryProviders) (map[string]bool, map
 // providerTemplates maps provider IDs without a registry entry yet to the
 // registered scanner whose target kinds and assessment types they share.
 var providerTemplates = map[string]string{
-	assessment.ProviderAmass:       "subfinder",
-	assessment.ProviderGau:         "katana",
-	assessment.ProviderWaybackurls: "katana",
-	assessment.ProviderSSLyze:      "testssl",
+	assessment.ProviderAmass:  "subfinder",
+	assessment.ProviderSSLyze: "testssl",
 }
 
 // unregisteredProviderDecisions makes a chosen provider that has no adapter in
@@ -419,7 +416,7 @@ func unregisteredProviderDecisions(cfg assessment.AssessmentConfig) []PlanDecisi
 	if dp == nil {
 		return nil
 	}
-	ids := append(append([]string{}, dp.Subdomain...), dp.Historical, dp.TLS)
+	ids := append(append([]string{}, dp.Subdomain...), dp.TLS)
 	var out []PlanDecision
 	for _, id := range ids {
 		if id == "" {

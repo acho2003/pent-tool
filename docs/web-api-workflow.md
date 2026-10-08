@@ -23,11 +23,9 @@ Subdomain enumeration is off by default. When authorized, enable it to run
 Subfinder; Amass can be selected as additional passive evidence. Discovered
 names remain candidates and are not scanned unless independently in scope.
 
-Historical discovery is also opt-in because it contacts public archive
-providers. Select either gau or waybackurls. Archived URLs are candidates,
-query values are discarded, and eligible paths are revalidated before use.
-TLS assessment selects one provider for each approved HTTPS hostname and port;
-the default is testssl.sh, with SSLyze available as an alternative.
+Historical URL providers (gau, waybackurls) are not part of the workflow, and
+a request that sets `discovery_providers.historical` is rejected. TLS
+assessment runs testssl.sh for each approved HTTPS hostname and port.
 
 ## API definitions
 

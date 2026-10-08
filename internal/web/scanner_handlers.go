@@ -22,7 +22,7 @@ import (
 func (s *Server) scannerAvailability() map[string]bool {
 	available := map[string]bool{}
 	paths := map[string]string{
-		"subfinder": s.cfg.SubfinderPath, "amass": s.cfg.AmassPath, "dnsx": s.cfg.DNSXPath, "gau": s.cfg.GauPath, "waybackurls": s.cfg.WaybackurlsPath, "httpx": s.cfg.HttpxPath, "nmap": s.cfg.NmapPath, "masscan": s.cfg.MasscanPath, "nikto": s.cfg.NiktoPath,
+		"subfinder": s.cfg.SubfinderPath, "amass": s.cfg.AmassPath, "dnsx": s.cfg.DNSXPath, "httpx": s.cfg.HttpxPath, "nmap": s.cfg.NmapPath, "masscan": s.cfg.MasscanPath, "nikto": s.cfg.NiktoPath,
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "sslyze": s.cfg.SSLyzePath, "vuls": s.cfg.VulsPath,
 		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 		"lynis": s.cfg.SSHPath,
