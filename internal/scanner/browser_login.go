@@ -191,13 +191,21 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		_ = page.Navigate(verifyURL)
 		_ = page.WaitLoad()
 		page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
+		normalizedMarker := normalizeVisibleText(p.Marker)
 		found := false
-		deadline := time.Now().Add(10 * time.Second)
+		lastLen := 0
+		deadline := time.Now().Add(25 * time.Second)
 		for {
 			text, evalErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
-			if evalErr == nil && strings.Contains(text.Value.Str(), p.Marker) {
-				found = true
-				break
+			if evalErr == nil {
+				rendered := text.Value.Str()
+				lastLen = len([]rune(rendered))
+				// Whitespace-tolerant match: a heading split across elements comes
+				// back with newlines/extra spaces between the words.
+				if strings.Contains(normalizeVisibleText(rendered), normalizedMarker) {
+					found = true
+					break
+				}
 			}
 			if time.Now().After(deadline) {
 				break
@@ -205,11 +213,21 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 			time.Sleep(500 * time.Millisecond)
 		}
 		if !found {
-			return BrowserLoginResult{}, fmt.Errorf("logged in, but the response marker was not visible on the protected page")
+			finalURL := verifyURL
+			if info, infoErr := page.Info(); infoErr == nil && info.URL != "" {
+				finalURL = info.URL
+			}
+			return BrowserLoginResult{}, fmt.Errorf("logged in, but the response marker was not visible on the protected page (ended at %s, %d characters rendered)", SafeTelemetryURL(finalURL), lastLen)
 		}
 	}
 
 	return BrowserLoginResult{CookieHeader: cookieHeader, Storage: storage}, nil
+}
+
+// normalizeVisibleText collapses runs of whitespace to single spaces so a
+// marker still matches when a heading is split across elements or lines.
+func normalizeVisibleText(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // sameBrowserOrigin reports whether a live page URL is on the bound origin.
