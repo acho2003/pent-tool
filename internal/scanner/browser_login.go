@@ -178,6 +178,11 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	if err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("open login page")
 	}
+	// Give the headless browser a real desktop viewport and user agent so a
+	// responsive SPA renders its full layout (not a near-empty/mobile shell) and
+	// does not serve a bot-stripped page.
+	_ = page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{Width: 1366, Height: 900, DeviceScaleFactor: 1})
+	_ = page.SetUserAgent(&proto.NetworkSetUserAgentOverride{UserAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"})
 	if err := page.Navigate(p.LoginURL); err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("navigate to the login page")
 	}
@@ -270,7 +275,9 @@ func pollForMarker(page *rod.Page, normalizedMarker string, timeout time.Duratio
 	deadline := time.Now().Add(timeout)
 	last := ""
 	for {
-		text, evalErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
+		// textContent captures DOM text regardless of visibility/viewport, so the
+		// marker is found even when innerText reports little in headless.
+		text, evalErr := page.Eval(`() => { const b = document.body; if (!b) return ""; const t = b.textContent || ""; return t.trim() ? t : (b.innerText || ""); }`)
 		if evalErr == nil {
 			last = text.Value.Str()
 			if strings.Contains(normalizeVisibleText(last), normalizedMarker) {
