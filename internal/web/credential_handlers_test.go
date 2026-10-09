@@ -118,3 +118,104 @@ func TestCredentialTestEndpointVerifiesBoundCredential(t *testing.T) {
 		t.Fatal("cross-target credential was sent to target")
 	}
 }
+
+// A FORM_LOGIN credential with submit_format "browser" must route to the
+// browser-login path. Without Chromium configured it fails clearly rather than
+// falling back to the HTTP replayer — proving the branch is wired.
+func TestCredentialTestBrowserLoginGracefulWithoutChromium(t *testing.T) {
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, "login page")
+	}))
+	defer app.Close()
+	s := newTestServer(t, nil)
+	s.cfg.AllowLocalTargets = true
+	s.cfg.BrowserPath = "" // no Chromium
+	keyPath := filepath.Join(t.TempDir(), "credential-key")
+	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{0x43}, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	vault, err := s.credentialVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := vault.Create(credentials.Record{Name: "form", Kind: assessment.AccessFormLogin, TargetIDs: []string{"target-1"}, Values: map[string]string{
+		"login_url": app.URL + "/login", "username": "u@example.test", "password": "p", "submit_format": "browser",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"target_id":"target-1","target_url":%q,"verify_url":%q}`, app.URL, app.URL+"/login")
+	rr := httptest.NewRecorder()
+	s.handleCredentialDetail(rr, httptest.NewRequest(http.MethodPost, "/api/credentials/"+meta.ID+"/test", strings.NewReader(body)))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"state":"failed"`) || !strings.Contains(rr.Body.String(), "Chromium is unavailable") {
+		t.Fatalf("expected a browser-login-unavailable failure; status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `"password"`) || strings.Contains(rr.Body.String(), "\"p\"") {
+		t.Fatalf("response leaked credential values: %s", rr.Body.String())
+	}
+}
+
+// End-to-end: a real browser logs into a local fixture, and the captured
+// session verifies. Opt-in: needs Chromium.
+func TestCredentialTestBrowserLoginEndToEnd(t *testing.T) {
+	chrome := os.Getenv("XALGORIX_TEST_CHROMIUM")
+	if chrome == "" {
+		t.Skip("requires Chromium")
+	}
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	const marker = "private dashboard"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if err := r.ParseForm(); err == nil && r.PostForm.Get("email") == "u@example.test" && r.PostForm.Get("password") == "p@ss" {
+				http.SetCookie(w, &http.Cookie{Name: "sid", Value: "ok", Path: "/"})
+				http.Redirect(w, r, "/home", http.StatusFound)
+				return
+			}
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<form id="f" method="post" action="/login"><input name="email" type="email"><input name="password" type="password"><button type="button" onclick="document.getElementById('f').submit()">in</button></form>`))
+	})
+	mux.HandleFunc("/home", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("sid"); err != nil || c.Value != "ok" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		_, _ = fmt.Fprint(w, marker)
+	})
+	app := httptest.NewServer(mux)
+	defer app.Close()
+
+	s := newTestServer(t, nil)
+	s.cfg.AllowLocalTargets = true
+	s.cfg.BrowserPath = chrome
+	keyPath := filepath.Join(t.TempDir(), "credential-key")
+	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{0x44}, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XALGORIX_CREDENTIAL_KEY_FILE", keyPath)
+	vault, err := s.credentialVault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := vault.Create(credentials.Record{Name: "form", Kind: assessment.AccessFormLogin, TargetIDs: []string{"target-1"}, Values: map[string]string{
+		"login_url": app.URL + "/login", "username": "u@example.test", "password": "p@ss",
+		"username_field": "email", "password_field": "password", "submit_format": "browser",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"target_id":"target-1","target_url":%q,"verify_url":%q,"verify_marker":%q}`, app.URL, app.URL+"/home", marker)
+	rr := httptest.NewRecorder()
+	s.handleCredentialDetail(rr, httptest.NewRequest(http.MethodPost, "/api/credentials/"+meta.ID+"/test", strings.NewReader(body)))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"verified":true`) {
+		t.Fatalf("browser login did not verify: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "p@ss") || strings.Contains(rr.Body.String(), "sid=ok") {
+		t.Fatalf("response leaked credential/session values: %s", rr.Body.String())
+	}
+}

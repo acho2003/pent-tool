@@ -190,6 +190,48 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 	defer cancel()
 	scope := applicationScope(req.TargetURL)
 	if record.Kind == assessment.AccessFormLogin {
+		// A "browser" submit format logs in through a real browser (for
+		// NextAuth/SPA logins the HTTP replayer cannot reproduce), then verifies
+		// the captured session exactly as an operator-supplied credential. The
+		// marker is optional here: without one the check falls back to the
+		// authenticated-vs-anonymous contrast, as the header path does.
+		if strings.EqualFold(strings.TrimSpace(record.Values["submit_format"]), "browser") {
+			cookieHeader, capturedStorage, loginErr := s.captureBrowserLoginSession(ctx, req.TargetURL, verifyURL, req.VerifyMarker, record.Values)
+			if loginErr != nil {
+				result.State, result.Reason = "failed", "browser login failed: "+loginErr.Error()
+				writeCredentialTestResult(w, result)
+				return
+			}
+			lines := []string{cookieHeader}
+			storage := capturedStorage
+			if storage == nil {
+				storage = record.BrowserStorage
+			}
+			if req.Browser || storage != nil {
+				if err := s.verifyBrowserCredential(ctx, req.TargetURL, verifyURL, req.VerifyMarker, lines, storage, true); err != nil {
+					result.State, result.Reason = "failed", err.Error()
+					writeCredentialTestResult(w, result)
+					return
+				}
+				result.State, result.Verified, result.Reason = "verified", true, "Browser login succeeded; protected-route marker and anonymous negative control passed"
+				writeCredentialTestResult(w, result)
+				return
+			}
+			positive, probeErr := probeHeaderSession(ctx, verifyURL, req.VerifyMarker, lines, req.TargetURL)
+			if probeErr == nil && req.VerifyMarker != "" {
+				probeErr = verifyNegativeControl(ctx, scope, verifyURL, req.VerifyMarker)
+			} else if probeErr == nil {
+				probeErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
+			}
+			if probeErr != nil {
+				result.State, result.Reason = "failed", probeErr.Error()
+				writeCredentialTestResult(w, result)
+				return
+			}
+			result.State, result.Verified, result.Reason = "verified", true, "Browser login succeeded and the captured session passed the protected-page and anonymous-control checks"
+			writeCredentialTestResult(w, result)
+			return
+		}
 		if req.VerifyMarker == "" {
 			result.Reason = "form login requires a verification marker"
 			writeCredentialTestResult(w, result)

@@ -52,6 +52,46 @@ func (s *Server) verifyBrowserCredential(ctx context.Context, appURL, verifyURL,
 	return nil
 }
 
+// captureBrowserLoginSession drives a real browser login for a FORM_LOGIN
+// credential whose submit_format is "browser", returning the captured session
+// as a Cookie header (and any web storage). The caller verifies the captured
+// session exactly as it would an operator-supplied one.
+func (s *Server) captureBrowserLoginSession(ctx context.Context, appURL, verifyURL, marker string, values map[string]string) (string, *credentials.BrowserStorage, error) {
+	if !scanner.UnifiedWorkflowEnabled() {
+		return "", nil, fmt.Errorf("browser login requires the expanded workflow flag")
+	}
+	if s.cfg.BrowserPath == "" {
+		return "", nil, fmt.Errorf("Chromium is unavailable for browser login")
+	}
+	dir, err := os.MkdirTemp("", "xalgorix-browser-login-")
+	if err != nil {
+		return "", nil, fmt.Errorf("browser login storage unavailable")
+	}
+	defer os.RemoveAll(dir)
+	scope := applicationScope(appURL)
+	cfg := scanner.Config{KatanaChromePath: s.cfg.BrowserPath, ScopeGuard: func(raw string, _ []string) (bool, string) {
+		if s.isBlockedTargetForScan(raw, nil) {
+			return true, "target blocked by application scope guard"
+		}
+		return false, ""
+	}}
+	result, err := scanner.CaptureBrowserLogin(ctx, cfg, dir, scanner.BrowserLoginParams{
+		AppScope:       &scope,
+		LoginURL:       strings.TrimSpace(values["login_url"]),
+		VerifyURL:      verifyURL,
+		Marker:         marker,
+		Username:       values["username"],
+		Password:       values["password"],
+		UsernameField:  values["username_field"],
+		PasswordField:  values["password_field"],
+		SubmitSelector: values["submit_selector"],
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return result.CookieHeader, result.Storage, nil
+}
+
 func (s *Server) assessmentBrowserStorage(plan *scanner.AssessmentPlan) map[string]*credentials.BrowserStorage {
 	result := map[string]*credentials.BrowserStorage{}
 	if plan == nil || plan.Config.WorkflowVersion != "unified-v1" {
