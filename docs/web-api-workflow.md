@@ -70,6 +70,16 @@ and optionally provide a protected verification URL and response marker. With
 neither set, Xalgorix checks the approved target URL and compares authenticated
 and anonymous status/redirect behavior; if they look identical, provide a
 protected URL or marker. Form login still requires a protected URL and marker.
+
+Form login supports three submission modes. "HTML form post" and "JSON API"
+replay the login over HTTP. "Real browser login" drives a headless browser
+through the page's own login — suited to single-page apps and NextAuth/Auth.js
+logins that need a CSRF round-trip or set their session cookie from a different
+endpoint than the form posts to. In browser mode the username/password field
+settings are CSS selectors or input names, credentials are only ever entered on
+the login page's own origin (cross-origin requests are blocked), and the
+captured session cookie is forwarded to the scanners and refreshed on expiry.
+
 The assessment verifies access before authenticated discovery. Credentials are
 not sent to archive providers or sibling hosts.
 
