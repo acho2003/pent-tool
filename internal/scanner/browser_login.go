@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -100,6 +101,26 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	// forwarded to the live site (so the server can set its session cookie);
 	// any cross-origin request is failed, which is the credential boundary.
 	crossOrigin := false
+	var reqMu sync.Mutex
+	var loginRequests []string
+	recordLoginRequest := func(method, path string, status int) {
+		if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+			return
+		}
+		reqMu.Lock()
+		if len(loginRequests) < 20 {
+			loginRequests = append(loginRequests, fmt.Sprintf("%s %s→%d", method, path, status))
+		}
+		reqMu.Unlock()
+	}
+	loginSummary := func() string {
+		reqMu.Lock()
+		defer reqMu.Unlock()
+		if len(loginRequests) == 0 {
+			return "no login POST was observed, so the submit did not trigger a sign-in request"
+		}
+		return strings.Join(loginRequests, "; ")
+	}
 	router := browser.HijackRequests()
 	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	if err := router.Add("*", "", func(h *rod.Hijack) {
@@ -125,7 +146,9 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		}
 		if err := h.LoadResponse(client, true); err != nil {
 			h.Response.Fail(proto.NetworkErrorReasonFailed)
+			return
 		}
+		recordLoginRequest(h.Request.Method(), h.Request.URL().Path, h.Response.Payload().ResponseCode)
 	}); err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("prepare login request boundary")
 	}
@@ -172,9 +195,9 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	cookieHeader, cookieNames, err := captureCookieHeader(page, bound)
 	if err != nil {
 		if crossOrigin {
-			return BrowserLoginResult{}, fmt.Errorf("login did not establish a session (a cross-origin step was blocked by the credential boundary)")
+			return BrowserLoginResult{}, fmt.Errorf("login did not establish a session (a cross-origin step was blocked by the credential boundary; login requests: %s)", loginSummary())
 		}
-		return BrowserLoginResult{}, err
+		return BrowserLoginResult{}, fmt.Errorf("%v (login requests: %s)", err, loginSummary())
 	}
 
 	storage := captureStorage(page, bound)
@@ -225,7 +248,7 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 			// Cookie names (not values) tell us whether a real session was
 			// established: if only pre-login cookies are present, the submission
 			// itself did not authenticate.
-			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s with %d chars; cookies captured: %s). If no session/auth cookie is listed, the login submission did not authenticate — check the username/password field names and credentials", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), lastLen, strings.Join(cookieNames, ", "))
+			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s with %d chars; cookies captured: %s; login requests: %s). If no session/auth cookie and no 2xx login request are shown, the submission did not authenticate — check the username/password field names and credentials", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), lastLen, strings.Join(cookieNames, ", "), loginSummary())
 		}
 	}
 
