@@ -232,7 +232,7 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		// that state and can fail to re-render, so only navigate if the marker
 		// is not already present where login landed.
 		page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
-		found, lastLen := pollForMarker(page, normalizedMarker, 15*time.Second)
+		found, rendered := pollForMarker(page, normalizedMarker, 20*time.Second)
 		if !found {
 			verifyURL := p.VerifyURL
 			if verifyURL == "" {
@@ -246,17 +246,17 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 				_ = page.WaitLoad()
 				page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
 			}
-			found, lastLen = pollForMarker(page, normalizedMarker, 20*time.Second)
+			found, rendered = pollForMarker(page, normalizedMarker, 20*time.Second)
 		}
 		if !found {
 			finalURL := landingURL
 			if info, infoErr := page.Info(); infoErr == nil && info.URL != "" {
 				finalURL = info.URL
 			}
-			// Cookie names (not values) tell us whether a real session was
-			// established: if only pre-login cookies are present, the submission
-			// itself did not authenticate.
-			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s with %d chars; cookies captured: %s; login requests: %s). If a session cookie is listed the login worked, so the marker text may differ from the protected page", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), lastLen, strings.Join(cookieNames, ", "), loginSummary())
+			// Classify the rendered page so the cause is clear: a session cookie
+			// means the login worked, so the remaining issue is the headless
+			// render or the marker text, not authentication.
+			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s; %s; cookies captured: %s; login requests: %s)", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), classifyRender(rendered), strings.Join(cookieNames, ", "), loginSummary())
 		}
 	}
 
@@ -266,22 +266,37 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 // pollForMarker polls the page's visible text for the (already normalized)
 // marker until it appears or the timeout elapses, returning whether it was
 // found and the last rendered length.
-func pollForMarker(page *rod.Page, normalizedMarker string, timeout time.Duration) (bool, int) {
+func pollForMarker(page *rod.Page, normalizedMarker string, timeout time.Duration) (bool, string) {
 	deadline := time.Now().Add(timeout)
-	lastLen := 0
+	last := ""
 	for {
 		text, evalErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
 		if evalErr == nil {
-			rendered := text.Value.Str()
-			lastLen = len([]rune(rendered))
-			if strings.Contains(normalizeVisibleText(rendered), normalizedMarker) {
-				return true, lastLen
+			last = text.Value.Str()
+			if strings.Contains(normalizeVisibleText(last), normalizedMarker) {
+				return true, last
 			}
 		}
 		if time.Now().After(deadline) {
-			return false, lastLen
+			return false, last
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// classifyRender describes why a page lacked the marker, without echoing its
+// content: a JS-disabled shell (app did not render), the sign-in screen (session
+// not applied), or a page that rendered but without the marker text.
+func classifyRender(text string) string {
+	low := strings.ToLower(text)
+	n := len([]rune(strings.TrimSpace(text)))
+	switch {
+	case strings.Contains(low, "enable javascript"):
+		return fmt.Sprintf("the app did not render in the headless browser (JavaScript-disabled fallback shown, %d chars)", n)
+	case n < 400 && (strings.Contains(low, "password") || strings.Contains(low, "sign in") || strings.Contains(low, "log in")):
+		return fmt.Sprintf("the page is still the sign-in screen (%d chars), so the session was not applied on this navigation", n)
+	default:
+		return fmt.Sprintf("the page rendered %d characters but not the marker, so the marker text likely differs from the page", n)
 	}
 }
 
