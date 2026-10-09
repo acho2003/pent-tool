@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -135,5 +136,71 @@ func TestCaptureBrowserLoginBlocksCrossOriginCredentialSubmission(t *testing.T) 
 	})
 	if err == nil {
 		t.Fatal("cross-origin credential submission was not blocked")
+	}
+}
+
+// Reproduces the Auth.js/NextAuth failure: the sign-in is a fetch() POST that
+// returns 200 and sets the session cookie on that response (no redirect). When
+// the intercepted response's Set-Cookie is not persisted by the browser, the
+// intercepting client's own cookie jar must still carry the session into the
+// later dashboard navigation so the protected marker renders. Opt-in: Chromium.
+func TestCaptureBrowserLoginHandlesFetchSetCookieSessions(t *testing.T) {
+	chrome := os.Getenv("XALGORIX_TEST_CHROMIUM")
+	if chrome == "" {
+		t.Skip("requires Chromium")
+	}
+	const marker = "Welcome back"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		// Inputs are not in a form; sign-in is a fetch() that sets the cookie via
+		// a 200 response, then client-side-navigates — the Auth.js shape.
+		_, _ = w.Write([]byte(`<html><body>
+<input id="email" name="email" type="email">
+<input id="password" name="password" type="password">
+<button type="button" onclick="fetch('/api/auth/callback/credentials',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})}).then(r=>{if(r.ok)location.href='/dashboard/overview'})">Sign in</button>
+</body></html>`))
+	})
+	mux.HandleFunc("/api/auth/callback/credentials", func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Email, Password string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Email != "u@example.test" || body.Password != "p@ss" {
+			http.Error(w, "bad", http.StatusUnauthorized)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "__Secure-authjs.session-token", Value: "sess-123", Path: "/", HttpOnly: true})
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	mux.HandleFunc("/dashboard/overview", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("__Secure-authjs.session-token"); err != nil || c.Value != "sess-123" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body><h1>" + marker + ", operator</h1></body></html>"))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	origin, _ := assessment.ParseApprovedOrigin("app", server.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+
+	result, err := CaptureBrowserLogin(t.Context(), Config{KatanaChromePath: chrome}, t.TempDir(), BrowserLoginParams{
+		AppScope:      &scope,
+		LoginURL:      server.URL + "/login",
+		VerifyURL:     server.URL + "/dashboard/overview",
+		Marker:        marker,
+		Username:      "u@example.test",
+		Password:      "p@ss",
+		UsernameField: "email",
+		PasswordField: "password",
+	})
+	if err != nil {
+		t.Fatalf("fetch-set-cookie login capture failed: %v", err)
+	}
+	if !strings.Contains(result.CookieHeader, "__Secure-authjs.session-token=sess-123") {
+		t.Fatalf("session cookie not captured from the fetch login: %q", result.CookieHeader)
 	}
 }

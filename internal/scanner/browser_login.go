@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -122,7 +124,17 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		return strings.Join(loginRequests, "; ")
 	}
 	router := browser.HijackRequests()
-	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	// The intercepting client keeps its own cookie jar. Fulfilling an intercepted
+	// request does not reliably persist Set-Cookie in Chromium (notably __Secure-/
+	// __Host- session cookies), so the jar is the authoritative session store: it
+	// captures the cookie the login response sets and re-sends it on the browser's
+	// later same-origin requests, so the protected page loads authenticated.
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return BrowserLoginResult{}, fmt.Errorf("browser login cookie store unavailable")
+	}
+	boundURL, _ := url.Parse(bound.Origin() + "/")
+	client := &http.Client{Jar: jar, Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	if err := router.Add("*", "", func(h *rod.Hijack) {
 		origin, _ := assessment.ParseApprovedOrigin("", h.Request.URL().String())
 		if origin.Origin() != bound.Origin() {
@@ -192,7 +204,7 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		landingURL = info.URL
 	}
 
-	cookieHeader, cookieNames, err := captureCookieHeader(page, bound)
+	cookieHeader, cookieNames, err := captureCookieHeader(jar, boundURL)
 	if err != nil {
 		if crossOrigin {
 			return BrowserLoginResult{}, fmt.Errorf("login did not establish a session (a cross-origin step was blocked by the credential boundary; login requests: %s)", loginSummary())
@@ -342,13 +354,12 @@ func fieldSelectors(field string, fallbacks []string) []string {
 // captureCookieHeader builds a Cookie header from the session cookies the
 // browser holds for the bound host. Cookies with unsafe names/values are
 // dropped rather than forwarded.
-func captureCookieHeader(page *rod.Page, bound assessment.ApprovedOrigin) (string, []string, error) {
-	cookies, err := page.Cookies([]string{bound.Origin() + "/"})
-	if err != nil {
+func captureCookieHeader(jar http.CookieJar, boundURL *url.URL) (string, []string, error) {
+	if jar == nil || boundURL == nil {
 		return "", nil, fmt.Errorf("the browser session cookies could not be read after login")
 	}
 	var parts, names []string
-	for _, cookie := range cookies {
+	for _, cookie := range jar.Cookies(boundURL) {
 		if cookie == nil || cookie.Name == "" {
 			continue
 		}
