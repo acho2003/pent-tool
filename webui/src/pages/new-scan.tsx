@@ -270,7 +270,7 @@ export default function NewScanPage() {
     }
     const repoTargetIds = assessmentTargets.filter((target) => target.id.startsWith("artifact-")).map((target) => target.id);
     const planAccess = [
-      ...savedAccess.map((access) => ({ target_ids: [access.credentialId], identity: access.identity || undefined, role: access.role || undefined, kind: access.kind, credential_id: access.credentialId, verify_url: access.verifyURL.trim(), verify_marker: access.verifyMarker, verify_browser:access.verifyBrowser || access.browserStorage })),
+      ...savedAccess.map((access) => ({ target_ids: [access.targetId], identity: access.identity || undefined, role: access.role || undefined, kind: access.kind, credential_id: access.credentialId, verify_url: access.verifyURL.trim(), verify_marker: access.verifyMarker, verify_browser:access.verifyBrowser || access.browserStorage })),
       ...(repoCredentialId && artifactKind === "repository" && repoTargetIds.length ? [{ target_ids: repoTargetIds, kind: "REPOSITORY_CREDENTIALS", credential_id: repoCredentialId }] : []),
     ];
     setPlanning(true);
