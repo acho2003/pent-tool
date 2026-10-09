@@ -75,7 +75,7 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		passwordField = "password"
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	profileDir, err := os.MkdirTemp(scanDir, "browser-login-")
@@ -105,8 +105,22 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	if err := router.Add("*", "", func(h *rod.Hijack) {
 		origin, _ := assessment.ParseApprovedOrigin("", h.Request.URL().String())
 		if origin.Origin() != bound.Origin() {
-			crossOrigin = true
-			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+			method := h.Request.Method()
+			// Cross-origin sub-resources (scripts, styles, fonts, read-only APIs)
+			// may load so the login and dashboard pages render, but never with a
+			// credential and never with a state-changing method — so the typed
+			// password can never be submitted to a different origin (e.g. an SSO
+			// provider), which is the credential boundary.
+			if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+				crossOrigin = true
+				h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+				return
+			}
+			h.Request.Req().Header.Del("Authorization")
+			h.Request.Req().Header.Del("Cookie")
+			if err := h.LoadResponse(client, true); err != nil {
+				h.Response.Fail(proto.NetworkErrorReasonFailed)
+			}
 			return
 		}
 		if err := h.LoadResponse(client, true); err != nil {
@@ -170,15 +184,27 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		if ok, _ := p.AppScope.Allows(verifyURL); !ok {
 			return BrowserLoginResult{}, fmt.Errorf("verification URL is outside the approved application scope")
 		}
-		if err := page.Navigate(verifyURL); err != nil {
-			return BrowserLoginResult{}, fmt.Errorf("the protected page could not be opened after login")
+		// A single-page app often satisfies this navigation with client-side
+		// routing, which surfaces as a benign ERR_ABORTED from Navigate/WaitLoad;
+		// the authoritative signal is whether the marker renders, so poll for it
+		// rather than treating those errors as fatal.
+		_ = page.Navigate(verifyURL)
+		_ = page.WaitLoad()
+		page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
+		found := false
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			text, evalErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
+			if evalErr == nil && strings.Contains(text.Value.Str(), p.Marker) {
+				found = true
+				break
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
-		if err := page.WaitLoad(); err != nil {
-			return BrowserLoginResult{}, fmt.Errorf("the protected page did not load after login")
-		}
-		page.WaitRequestIdle(1000*time.Millisecond, nil, nil, nil)()
-		text, err := page.Eval(`() => document.body ? document.body.innerText : ""`)
-		if err != nil || !strings.Contains(text.Value.Str(), p.Marker) {
+		if !found {
 			return BrowserLoginResult{}, fmt.Errorf("logged in, but the response marker was not visible on the protected page")
 		}
 	}
