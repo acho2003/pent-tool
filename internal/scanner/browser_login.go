@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -103,6 +104,7 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	// forwarded to the live site (so the server can set its session cookie);
 	// any cross-origin request is failed, which is the credential boundary.
 	crossOrigin := false
+	var loginDone atomic.Bool
 	var reqMu sync.Mutex
 	var loginRequests []string
 	recordLoginRequest := func(method, path string, status int) {
@@ -144,7 +146,12 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 			// credential and never with a state-changing method — so the typed
 			// password can never be submitted to a different origin (e.g. an SSO
 			// provider), which is the credential boundary.
-			if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+			// Before the session is captured, block cross-origin state-changing
+			// requests so the typed password cannot reach another origin. Once
+			// login is done the password is no longer in play, so cross-origin
+			// data calls may proceed (still credential-stripped) to let the
+			// protected page fully render for the marker check.
+			if !loginDone.Load() && method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
 				crossOrigin = true
 				h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 				return
@@ -211,60 +218,71 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		}
 		return BrowserLoginResult{}, fmt.Errorf("%v (login requests: %s)", err, loginSummary())
 	}
+	// The session is captured; let cross-origin data calls render the dashboard.
+	loginDone.Store(true)
 
 	storage := captureStorage(page, bound)
 
 	// When a marker is supplied, confirm it on the protected page. The anonymous
 	// negative control is the caller's responsibility, as with every credential.
 	if strings.TrimSpace(p.Marker) != "" {
-		verifyURL := p.VerifyURL
-		if verifyURL == "" {
-			verifyURL = p.LoginURL
-		}
-		if ok, _ := p.AppScope.Allows(verifyURL); !ok {
-			return BrowserLoginResult{}, fmt.Errorf("verification URL is outside the approved application scope")
-		}
-		// A single-page app often satisfies this navigation with client-side
-		// routing, which surfaces as a benign ERR_ABORTED from Navigate/WaitLoad;
-		// the authoritative signal is whether the marker renders, so poll for it
-		// rather than treating those errors as fatal.
-		_ = page.Navigate(verifyURL)
-		_ = page.WaitLoad()
-		page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
 		normalizedMarker := normalizeVisibleText(p.Marker)
-		found := false
-		lastLen := 0
-		deadline := time.Now().Add(25 * time.Second)
-		for {
-			text, evalErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
-			if evalErr == nil {
-				rendered := text.Value.Str()
-				lastLen = len([]rune(rendered))
-				// Whitespace-tolerant match: a heading split across elements comes
-				// back with newlines/extra spaces between the words.
-				if strings.Contains(normalizeVisibleText(rendered), normalizedMarker) {
-					found = true
-					break
-				}
+		// First, the page the app already rendered after login, letting its own
+		// client-side routing settle. A hard reload of an SPA sub-route tears down
+		// that state and can fail to re-render, so only navigate if the marker
+		// is not already present where login landed.
+		page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
+		found, lastLen := pollForMarker(page, normalizedMarker, 15*time.Second)
+		if !found {
+			verifyURL := p.VerifyURL
+			if verifyURL == "" {
+				verifyURL = p.LoginURL
 			}
-			if time.Now().After(deadline) {
-				break
+			if ok, _ := p.AppScope.Allows(verifyURL); !ok {
+				return BrowserLoginResult{}, fmt.Errorf("verification URL is outside the approved application scope")
 			}
-			time.Sleep(500 * time.Millisecond)
+			if info, infoErr := page.Info(); infoErr != nil || info.URL != verifyURL {
+				_ = page.Navigate(verifyURL)
+				_ = page.WaitLoad()
+				page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
+			}
+			found, lastLen = pollForMarker(page, normalizedMarker, 20*time.Second)
 		}
 		if !found {
-			finalURL := verifyURL
+			finalURL := landingURL
 			if info, infoErr := page.Info(); infoErr == nil && info.URL != "" {
 				finalURL = info.URL
 			}
 			// Cookie names (not values) tell us whether a real session was
 			// established: if only pre-login cookies are present, the submission
 			// itself did not authenticate.
-			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s with %d chars; cookies captured: %s; login requests: %s). If no session/auth cookie and no 2xx login request are shown, the submission did not authenticate — check the username/password field names and credentials", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), lastLen, strings.Join(cookieNames, ", "), loginSummary())
+			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s with %d chars; cookies captured: %s; login requests: %s). If a session cookie is listed the login worked, so the marker text may differ from the protected page", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), lastLen, strings.Join(cookieNames, ", "), loginSummary())
 		}
 	}
 
 	return BrowserLoginResult{CookieHeader: cookieHeader, Storage: storage}, nil
+}
+
+// pollForMarker polls the page's visible text for the (already normalized)
+// marker until it appears or the timeout elapses, returning whether it was
+// found and the last rendered length.
+func pollForMarker(page *rod.Page, normalizedMarker string, timeout time.Duration) (bool, int) {
+	deadline := time.Now().Add(timeout)
+	lastLen := 0
+	for {
+		text, evalErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
+		if evalErr == nil {
+			rendered := text.Value.Str()
+			lastLen = len([]rune(rendered))
+			if strings.Contains(normalizeVisibleText(rendered), normalizedMarker) {
+				return true, lastLen
+			}
+		}
+		if time.Now().After(deadline) {
+			return false, lastLen
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // normalizeVisibleText collapses runs of whitespace to single spaces so a
