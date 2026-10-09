@@ -102,16 +102,30 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 			}
 			var lines []string
 			if binding.Kind == assessment.AccessFormLogin {
-				cookieHeader, loginErr := verifyFormSession(ctx, target.Value, verifyURL, binding.VerifyMarker, record.Values)
-				var configErr formConfigError
-				if errors.As(loginErr, &configErr) {
-					setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login is not usable ("+configErr.Error()+"); authenticated scanning was skipped")
-					continue
-				}
-				if loginErr != nil {
-					// verifyFormSession errors are fixed, secret-free phrases.
-					setAuthVerification(plan, targetID, assessment.StateFailed, "form login or session verification failed ("+loginErr.Error()+"); authenticated scanning was skipped")
-					continue
+				var cookieHeader string
+				if strings.EqualFold(strings.TrimSpace(record.Values["submit_format"]), "browser") {
+					// NextAuth/SPA logins: drive a real browser instead of the HTTP
+					// replayer. The captured session is a Cookie header verified
+					// exactly like the replayed one below.
+					ch, _, captureErr := s.captureBrowserLoginSession(ctx, target.Value, verifyURL, binding.VerifyMarker, record.Values)
+					if captureErr != nil {
+						setAuthVerification(plan, targetID, assessment.StateFailed, "browser login failed ("+captureErr.Error()+"); authenticated scanning was skipped")
+						continue
+					}
+					cookieHeader = ch
+				} else {
+					ch, loginErr := verifyFormSession(ctx, target.Value, verifyURL, binding.VerifyMarker, record.Values)
+					var configErr formConfigError
+					if errors.As(loginErr, &configErr) {
+						setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login is not usable ("+configErr.Error()+"); authenticated scanning was skipped")
+						continue
+					}
+					if loginErr != nil {
+						// verifyFormSession errors are fixed, secret-free phrases.
+						setAuthVerification(plan, targetID, assessment.StateFailed, "form login or session verification failed ("+loginErr.Error()+"); authenticated scanning was skipped")
+						continue
+					}
+					cookieHeader = ch
 				}
 				lines = []string{cookieHeader}
 				if record.BrowserStorage != nil || binding.VerifyBrowser {
@@ -277,9 +291,19 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 				return nil, fmt.Errorf("authenticated session expired again after %d renewals; renewal limit reached", maxSessionRenewals)
 			}
 			renewals++
-			cookie, err := verifyFormSession(ctx, appURL, verifyURL, marker, formValues)
-			if err != nil {
-				return nil, fmt.Errorf("authenticated session renewal failed")
+			var cookie string
+			if strings.EqualFold(strings.TrimSpace(formValues["submit_format"]), "browser") {
+				ch, _, err := s.captureBrowserLoginSession(ctx, appURL, verifyURL, marker, formValues)
+				if err != nil {
+					return nil, fmt.Errorf("authenticated session renewal failed")
+				}
+				cookie = ch
+			} else {
+				ch, err := verifyFormSession(ctx, appURL, verifyURL, marker, formValues)
+				if err != nil {
+					return nil, fmt.Errorf("authenticated session renewal failed")
+				}
+				cookie = ch
 			}
 			next := append([]string(nil), current...)
 			for i, line := range next {
