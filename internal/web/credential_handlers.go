@@ -197,7 +197,10 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 		}
 		cookieHeader, loginErr := verifyFormSession(ctx, req.TargetURL, verifyURL, req.VerifyMarker, record.Values)
 		if loginErr != nil {
-			result.State, result.Reason = "failed", "form login or protected-page verification failed"
+			// Surface the specific reason (rejected status, missing session
+			// cookie, marker not found at a path). These messages are written to
+			// carry only status codes and paths, never credential values.
+			result.State, result.Reason = "failed", "form login failed: "+loginErr.Error()
 			writeCredentialTestResult(w, result)
 			return
 		}
