@@ -155,7 +155,7 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	if err := inputInto(page, passwordField, []string{"input[type=password]", "input[name=password]"}, p.Password); err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("the password field could not be found on the login page")
 	}
-	if err := submitLogin(page, p.SubmitSelector); err != nil {
+	if err := submitLogin(page, p.SubmitSelector, passwordField); err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("the login form could not be submitted")
 	}
 
@@ -164,7 +164,12 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	_ = page.WaitLoad()
 	page.WaitRequestIdle(1500*time.Millisecond, nil, nil, nil)()
 
-	cookieHeader, err := captureCookieHeader(page, bound)
+	landingURL := ""
+	if info, infoErr := page.Info(); infoErr == nil {
+		landingURL = info.URL
+	}
+
+	cookieHeader, cookieNames, err := captureCookieHeader(page, bound)
 	if err != nil {
 		if crossOrigin {
 			return BrowserLoginResult{}, fmt.Errorf("login did not establish a session (a cross-origin step was blocked by the credential boundary)")
@@ -217,7 +222,10 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 			if info, infoErr := page.Info(); infoErr == nil && info.URL != "" {
 				finalURL = info.URL
 			}
-			return BrowserLoginResult{}, fmt.Errorf("logged in, but the response marker was not visible on the protected page (ended at %s, %d characters rendered)", SafeTelemetryURL(finalURL), lastLen)
+			// Cookie names (not values) tell us whether a real session was
+			// established: if only pre-login cookies are present, the submission
+			// itself did not authenticate.
+			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s with %d chars; cookies captured: %s). If no session/auth cookie is listed, the login submission did not authenticate — check the username/password field names and credentials", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), lastLen, strings.Join(cookieNames, ", "))
 		}
 	}
 
@@ -242,14 +250,7 @@ func sameBrowserOrigin(pageURL string, bound assessment.ApprovedOrigin) bool {
 // inputInto types text into the first matching element, trying the configured
 // field first (as a raw selector, then as an input name) and then fallbacks.
 func inputInto(page *rod.Page, field string, fallbacks []string, text string) error {
-	selectors := []string{}
-	if strings.ContainsAny(field, ".#[ >:") {
-		selectors = append(selectors, field)
-	} else if field != "" {
-		selectors = append(selectors, fmt.Sprintf("input[name=%q]", field), "#"+field)
-	}
-	selectors = append(selectors, fallbacks...)
-	for _, selector := range selectors {
+	for _, selector := range fieldSelectors(field, fallbacks) {
 		el, err := page.Timeout(3 * time.Second).Element(selector)
 		if err != nil || el == nil {
 			continue
@@ -265,39 +266,65 @@ func inputInto(page *rod.Page, field string, fallbacks []string, text string) er
 	return fmt.Errorf("field not found")
 }
 
-// submitLogin clicks the submit control, or presses Enter as a fallback so a
-// form without an explicit button still submits.
-func submitLogin(page *rod.Page, selector string) error {
+// submitLogin submits the login form. It first presses Enter in the password
+// field — the most reliable trigger for React/SPA forms whose submit is wired to
+// the form's onSubmit rather than a native button — and also clicks a submit
+// control, so forms that need either path still go through.
+func submitLogin(page *rod.Page, selector, passwordField string) error {
+	submitted := false
+	// Enter in the password field.
+	for _, candidate := range fieldSelectors(passwordField, []string{"input[type=password]", "input[name=password]"}) {
+		el, err := page.Timeout(2 * time.Second).Element(candidate)
+		if err != nil || el == nil {
+			continue
+		}
+		if el.Focus() == nil && el.Type(input.Enter) == nil {
+			submitted = true
+		}
+		break
+	}
+	// Click an explicit or native submit control.
 	candidates := []string{}
 	if strings.TrimSpace(selector) != "" {
 		candidates = append(candidates, selector)
 	}
 	candidates = append(candidates, "button[type=submit]", "input[type=submit]", "button")
 	for _, candidate := range candidates {
-		el, err := page.Timeout(3 * time.Second).Element(candidate)
+		el, err := page.Timeout(2 * time.Second).Element(candidate)
 		if err != nil || el == nil {
 			continue
 		}
-		if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
-			continue
+		if el.Click(proto.InputMouseButtonLeft, 1) == nil {
+			submitted = true
+			break
 		}
+	}
+	if submitted {
 		return nil
 	}
-	if page.Keyboard != nil {
-		return page.Keyboard.Press(input.Enter)
-	}
 	return fmt.Errorf("no submit control")
+}
+
+// fieldSelectors builds the ordered selector list for a configured field name.
+func fieldSelectors(field string, fallbacks []string) []string {
+	selectors := []string{}
+	if strings.ContainsAny(field, ".#[ >:") {
+		selectors = append(selectors, field)
+	} else if field != "" {
+		selectors = append(selectors, fmt.Sprintf("input[name=%q]", field), "#"+field)
+	}
+	return append(selectors, fallbacks...)
 }
 
 // captureCookieHeader builds a Cookie header from the session cookies the
 // browser holds for the bound host. Cookies with unsafe names/values are
 // dropped rather than forwarded.
-func captureCookieHeader(page *rod.Page, bound assessment.ApprovedOrigin) (string, error) {
+func captureCookieHeader(page *rod.Page, bound assessment.ApprovedOrigin) (string, []string, error) {
 	cookies, err := page.Cookies([]string{bound.Origin() + "/"})
 	if err != nil {
-		return "", fmt.Errorf("the browser session cookies could not be read after login")
+		return "", nil, fmt.Errorf("the browser session cookies could not be read after login")
 	}
-	var parts []string
+	var parts, names []string
 	for _, cookie := range cookies {
 		if cookie == nil || cookie.Name == "" {
 			continue
@@ -306,11 +333,12 @@ func captureCookieHeader(page *rod.Page, bound assessment.ApprovedOrigin) (strin
 			continue
 		}
 		parts = append(parts, cookie.Name+"="+cookie.Value)
+		names = append(names, cookie.Name)
 	}
 	if len(parts) == 0 {
-		return "", fmt.Errorf("login did not establish a session cookie")
+		return "", nil, fmt.Errorf("login did not establish a session cookie")
 	}
-	return "Cookie: " + strings.Join(parts, "; "), nil
+	return "Cookie: " + strings.Join(parts, "; "), names, nil
 }
 
 // captureStorage reads localStorage/sessionStorage for the bound origin. It is
