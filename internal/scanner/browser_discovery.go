@@ -359,6 +359,14 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		pageCtx, pageCancel := context.WithTimeout(ctx, 20*time.Second)
 		page, err := browser.Context(pageCtx).Page(proto.TargetCreateTarget{URL: "about:blank"})
+		if err == nil {
+			// A desktop viewport and user agent let a responsive single-page app
+			// render its full layout in headless Chromium (matching the login
+			// capture), so authenticated SPA pages are crawled and checked against
+			// what actually renders rather than a near-empty mobile/bot shell.
+			_ = page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{Width: 1366, Height: 900, DeviceScaleFactor: 1})
+			_ = page.SetUserAgent(&proto.NetworkSetUserAgentOverride{UserAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"})
+		}
 		if err == nil && req.BrowserStorage != nil {
 			storage, encodeErr := json.Marshal(req.BrowserStorage)
 			boundURL, _ := json.Marshal(bound.Origin())
@@ -379,7 +387,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		}
 		if err == nil && req.BrowserAccessTest {
 			result, checkpointErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
-			checkpointConfirmed = checkpointErr == nil && req.BrowserCheckpointMarker != "" && strings.Contains(result.Value.Str(), req.BrowserCheckpointMarker)
+			checkpointConfirmed = checkpointErr == nil && req.BrowserCheckpointMarker != "" && strings.Contains(normalizeVisibleText(result.Value.Str()), normalizeVisibleText(req.BrowserCheckpointMarker))
 		}
 		if err == nil && !req.BrowserAccessTest {
 			result, e := page.Eval(`() => JSON.stringify({links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),forms:Array.from(document.forms).map(f=>({action:f.action,method:f.method,fields:Array.from(f.elements).filter(e=>e.name).map(e=>({name:e.name}))}))})`)
