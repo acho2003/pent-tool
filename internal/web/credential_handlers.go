@@ -207,7 +207,12 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 			if storage == nil {
 				storage = record.BrowserStorage
 			}
-			if req.Browser || storage != nil {
+			// A browser-login credential is a JS/SPA app by definition, so when a
+			// marker is given it is verified in the browser (real render + anonymous
+			// negative control) — an HTTP marker check would miss JS-rendered
+			// content. Without a marker (an explicit opt-out) it falls back to the
+			// authenticated-versus-anonymous contrast.
+			if req.VerifyMarker != "" {
 				if err := s.verifyBrowserCredential(ctx, req.TargetURL, verifyURL, req.VerifyMarker, lines, storage, true); err != nil {
 					result.State, result.Reason = "failed", err.Error()
 					writeCredentialTestResult(w, result)
@@ -217,10 +222,8 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 				writeCredentialTestResult(w, result)
 				return
 			}
-			positive, probeErr := probeHeaderSession(ctx, verifyURL, req.VerifyMarker, lines, req.TargetURL)
-			if probeErr == nil && req.VerifyMarker != "" {
-				probeErr = verifyNegativeControl(ctx, scope, verifyURL, req.VerifyMarker)
-			} else if probeErr == nil {
+			positive, probeErr := probeHeaderSession(ctx, verifyURL, "", lines, req.TargetURL)
+			if probeErr == nil {
 				probeErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
 			}
 			if probeErr != nil {
@@ -228,7 +231,7 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 				writeCredentialTestResult(w, result)
 				return
 			}
-			result.State, result.Verified, result.Reason = "verified", true, "Browser login succeeded and the captured session passed the protected-page and anonymous-control checks"
+			result.State, result.Verified, result.Reason = "verified", true, "Browser login succeeded and the captured session passed the authenticated-versus-anonymous control"
 			writeCredentialTestResult(w, result)
 			return
 		}

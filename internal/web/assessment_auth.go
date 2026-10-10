@@ -102,11 +102,11 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 			}
 			var lines []string
 			if binding.Kind == assessment.AccessFormLogin {
+				browserLogin := strings.EqualFold(strings.TrimSpace(record.Values["submit_format"]), "browser")
 				var cookieHeader string
-				if strings.EqualFold(strings.TrimSpace(record.Values["submit_format"]), "browser") {
+				if browserLogin {
 					// NextAuth/SPA logins: drive a real browser instead of the HTTP
-					// replayer. The captured session is a Cookie header verified
-					// exactly like the replayed one below.
+					// replayer. The captured session is a Cookie header.
 					ch, _, captureErr := s.captureBrowserLoginSession(ctx, target.Value, verifyURL, binding.VerifyMarker, record.Values)
 					if captureErr != nil {
 						setAuthVerification(plan, targetID, assessment.StateFailed, "browser login failed ("+captureErr.Error()+"); authenticated scanning was skipped")
@@ -128,19 +128,31 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 					cookieHeader = ch
 				}
 				lines = []string{cookieHeader}
-				if record.BrowserStorage != nil || binding.VerifyBrowser {
+				if browserLogin {
+					// A browser-login credential is a JS/SPA app: verify the captured
+					// session in the browser (real render + anonymous negative
+					// control). An HTTP marker check is unsound here — the marker is
+					// JS-rendered, so it is never present in the anonymous raw HTML
+					// and the negative control would pass without proving anything.
 					if err := s.verifyBrowserCredential(ctx, target.Value, verifyURL, binding.VerifyMarker, lines, record.BrowserStorage, true); err != nil {
-						setAuthVerification(plan, targetID, assessment.StateFailed, "browser protected-route verification failed")
+						setAuthVerification(plan, targetID, assessment.StateFailed, "browser protected-route verification failed ("+err.Error()+"); authenticated scanning was skipped")
 						continue
 					}
-				}
-				negativeMarker := binding.NegativeMarker
-				if negativeMarker == "" {
-					negativeMarker = binding.VerifyMarker
-				}
-				if controlErr := verifyNegativeControl(ctx, scope, verifyURL, negativeMarker); controlErr != nil {
-					setAuthVerification(plan, targetID, assessment.StateFailed, "negative control failed ("+controlErr.Error()+"); authenticated scanning was skipped")
-					continue
+				} else {
+					if record.BrowserStorage != nil || binding.VerifyBrowser {
+						if err := s.verifyBrowserCredential(ctx, target.Value, verifyURL, binding.VerifyMarker, lines, record.BrowserStorage, true); err != nil {
+							setAuthVerification(plan, targetID, assessment.StateFailed, "browser protected-route verification failed")
+							continue
+						}
+					}
+					negativeMarker := binding.NegativeMarker
+					if negativeMarker == "" {
+						negativeMarker = binding.VerifyMarker
+					}
+					if controlErr := verifyNegativeControl(ctx, scope, verifyURL, negativeMarker); controlErr != nil {
+						setAuthVerification(plan, targetID, assessment.StateFailed, "negative control failed ("+controlErr.Error()+"); authenticated scanning was skipped")
+						continue
+					}
 				}
 			} else {
 				var convErr error
