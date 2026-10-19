@@ -7,8 +7,10 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
+	"path/filepath"
 	"sync"
 
 	"github.com/xalgord/xalgorix/v4/internal/credentials"
@@ -70,6 +72,59 @@ func (p pgCredentialBlobs) Delete(id string) error {
 		return credentials.ErrNotFound
 	}
 	return p.store.Delete(context.Background(), credentialCollection, id)
+}
+
+const scanCollection = "scans"
+
+// mirrorScanToRecordStore dual-writes a scan record to Postgres so the rerouted
+// read paths stay fresh. Best-effort: a store error is logged, not fatal, and
+// the file write remains the source of truth on disk.
+func mirrorScanToRecordStore(id string, data []byte) {
+	if id == "" || !recordstore.Enabled() {
+		return
+	}
+	store, err := recordStore()
+	if err != nil {
+		return
+	}
+	if err := store.PutJSON(context.Background(), scanCollection, id, data); err != nil {
+		log.Printf("[recordstore] mirror scan %s failed: %v", id, err)
+	}
+}
+
+// recordStoreScans serves scan entries from Postgres when the prototype flag is
+// set. It returns ok=false (so callers fall back to the filesystem walk) when
+// the store is disabled or unavailable. The artifact directory is reconstructed
+// from the scan id, which equals its _assessments/<id> directory name.
+func (s *Server) recordStoreScans(lite bool) ([]scanEntry, bool) {
+	if !recordstore.Enabled() {
+		return nil, false
+	}
+	store, err := recordStore()
+	if err != nil {
+		return nil, false
+	}
+	docs, err := store.ListJSON(context.Background(), scanCollection)
+	if err != nil {
+		log.Printf("[recordstore] list scans failed: %v", err)
+		return nil, false
+	}
+	out := make([]scanEntry, 0, len(docs))
+	for _, data := range docs {
+		var rec ScanRecord
+		if lite {
+			var l scanRecordLite
+			if json.Unmarshal(data, &l) != nil {
+				continue
+			}
+			rec = l.ScanRecord
+			rec.Events = nil
+		} else if json.Unmarshal(data, &rec) != nil {
+			continue
+		}
+		out = append(out, scanEntry{dir: filepath.Join(s.dataDir, "_assessments", rec.ID), rec: rec})
+	}
+	return out, true
 }
 
 // applyRecordStore points the vault at Postgres when the prototype flag is set.

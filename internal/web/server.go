@@ -2665,6 +2665,9 @@ func (s *Server) saveScanRecordTo(rec *ScanRecord, scanDir string) {
 		log.Printf("Error: failed to save scan record to %s: %v", scanDir, err)
 		s.broadcast(WSEvent{Type: "error", Content: fmt.Sprintf("⚠️ Failed to save scan data: %v", err)})
 	}
+	// PROTOTYPE: mirror the record into Postgres so the rerouted read paths see
+	// it. No-op unless XALGORIX_STORE=postgres.
+	mirrorScanToRecordStore(rec.ID, data)
 }
 
 // diskAvailable returns available bytes on the filesystem containing path, or 0 on error.

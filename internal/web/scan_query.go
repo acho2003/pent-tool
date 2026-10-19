@@ -125,6 +125,9 @@ type scanEntry struct {
 // findAllScans recursively walks dataDir to find all scan.json files.
 // Structure: dataDir/target/date/slug/scan.json
 func (s *Server) findAllScans() []scanEntry {
+	if entries, ok := s.recordStoreScans(false); ok {
+		return entries
+	}
 	var results []scanEntry
 	_ = filepath.WalkDir(s.dataDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -175,6 +178,9 @@ type scanRecordLite struct {
 // effectively free. Callers that need the event log (report generation,
 // scan-detail) must use findAllScans instead.
 func (s *Server) findAllScanSummaries() []scanEntry {
+	if entries, ok := s.recordStoreScans(true); ok {
+		return entries
+	}
 	var results []scanEntry
 
 	s.scanSummaryCacheMu.Lock()
