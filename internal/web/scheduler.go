@@ -302,26 +302,37 @@ func (s *Server) loadSchedulesFromDisk() {
 		log.Printf("[SCHEDULER] Error creating schedules dir: %v", err)
 		return
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		log.Printf("[SCHEDULER] Error reading schedules dir: %v", err)
-		return
+	// PROTOTYPE: when Postgres is enabled, schedule documents come from the
+	// store instead of the directory. Each doc goes through the same normalize
+	// path below.
+	var payloads [][]byte
+	if docs, ok := s.recordStoreSchedules(); ok {
+		payloads = docs
+	} else {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			log.Printf("[SCHEDULER] Error reading schedules dir: %v", err)
+			return
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				log.Printf("[SCHEDULER] Error reading schedule file %s: %v", path, err)
+				continue
+			}
+			payloads = append(payloads, data)
+		}
 	}
 	s.schedulesMu.Lock()
 	defer s.schedulesMu.Unlock()
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			log.Printf("[SCHEDULER] Error reading schedule file %s: %v", path, err)
-			continue
-		}
+	for _, data := range payloads {
 		var sch ScanSchedule
 		if err := json.Unmarshal(data, &sch); err != nil {
-			log.Printf("[SCHEDULER] Error decoding schedule %s: %v", path, err)
+			log.Printf("[SCHEDULER] Error decoding schedule: %v", err)
 			continue
 		}
 		normalizeScheduleActivity(&sch)
@@ -361,6 +372,7 @@ func (s *Server) saveScheduleToDisk(sch *ScanSchedule) error {
 		_ = os.Remove(tmpPath) // best-effort cleanup
 		return fmt.Errorf("rename: %w", err)
 	}
+	mirrorScheduleToRecordStore(sch.ID, data)
 	return nil
 }
 
@@ -370,6 +382,7 @@ func (s *Server) deleteScheduleFromDisk(id string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	deleteFromRecordStore(id, scheduleCollection)
 	return nil
 }
 

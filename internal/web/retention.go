@@ -191,6 +191,7 @@ func (s *Server) pruneExpiredScans(days int) int {
 			continue
 		}
 		removed++
+		deleteFromRecordStore(entry.rec.ID, scanCollection, reportCollection)
 		log.Printf("[RETENTION] Deleted scan %s (%s), last activity %s",
 			entry.rec.ID, entry.rec.Target, ref.Format(time.RFC3339))
 
@@ -201,6 +202,7 @@ func (s *Server) pruneExpiredScans(days int) int {
 			}
 			if isChildOfScan(&entry.rec, &child.rec) && s.safeToDeleteScanDir(child.dir) {
 				_ = os.RemoveAll(child.dir)
+				deleteFromRecordStore(child.rec.ID, scanCollection, reportCollection)
 			}
 		}
 	}

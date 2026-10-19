@@ -169,6 +169,7 @@ func (s *Server) pruneInstancesUnder(folderAbs string) {
 				inst.cancel()
 			}
 			delete(s.instances, id)
+			deleteFromRecordStore(id, scanCollection, reportCollection)
 		}
 	}
 }

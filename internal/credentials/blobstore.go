@@ -19,6 +19,11 @@ type BlobStore interface {
 	Delete(id string) error
 }
 
+// FileBlobStore returns the on-disk encrypted-record backend for a vault
+// directory. It is exported so a composite (dual-write) backend can keep the
+// file tree as a complete, always-current copy alongside another store.
+func FileBlobStore(root string) BlobStore { return fileBlobs{root: root} }
+
 // fileBlobs is the original on-disk backend: encrypted records as <id>.json in
 // the vault directory, written atomically with 0600 permissions.
 type fileBlobs struct{ root string }

@@ -127,9 +127,100 @@ func (s *Server) recordStoreScans(lite bool) ([]scanEntry, bool) {
 	return out, true
 }
 
-// applyRecordStore points the vault at Postgres when the prototype flag is set.
-// On any store error it leaves the file-backed default in place.
-func applyRecordStore(v *credentials.Vault) *credentials.Vault {
+const (
+	scheduleCollection = "schedules"
+	reportCollection   = "reports"
+)
+
+// recordStoreSchedules serves schedule documents from Postgres when enabled.
+func (s *Server) recordStoreSchedules() ([][]byte, bool) {
+	if !recordstore.Enabled() {
+		return nil, false
+	}
+	store, err := recordStore()
+	if err != nil {
+		return nil, false
+	}
+	docs, err := store.ListJSON(context.Background(), scheduleCollection)
+	if err != nil {
+		log.Printf("[recordstore] list schedules failed: %v", err)
+		return nil, false
+	}
+	return docs, true
+}
+
+// mirrorScheduleToRecordStore upserts a schedule record to Postgres (best-effort).
+func mirrorScheduleToRecordStore(id string, data []byte) {
+	if id == "" || !recordstore.Enabled() {
+		return
+	}
+	store, err := recordStore()
+	if err != nil {
+		return
+	}
+	if err := store.PutJSON(context.Background(), scheduleCollection, id, data); err != nil {
+		log.Printf("[recordstore] mirror schedule %s failed: %v", id, err)
+	}
+}
+
+// deleteFromRecordStore removes a record from one or more collections for an id
+// (best-effort), keeping Postgres consistent when the file copy is deleted.
+func deleteFromRecordStore(id string, collections ...string) {
+	if id == "" || !recordstore.Enabled() {
+		return
+	}
+	store, err := recordStore()
+	if err != nil {
+		return
+	}
+	for _, c := range collections {
+		if err := store.Delete(context.Background(), c, id); err != nil {
+			log.Printf("[recordstore] delete %s/%s failed: %v", c, id, err)
+		}
+	}
+}
+
+// dualBlobs writes every credential to both backends and reads from the primary
+// (Postgres), falling back to the secondary (files) when the primary is absent
+// or unreachable. Files stay a complete, always-current copy, so a Postgres
+// loss never loses credentials and rollback to files is lossless.
+type dualBlobs struct {
+	primary   credentials.BlobStore
+	secondary credentials.BlobStore
+}
+
+func (d dualBlobs) Put(id string, data []byte) error {
+	// File first (local durability), then Postgres. Both must succeed so the
+	// file copy and the database never silently diverge.
+	if err := d.secondary.Put(id, data); err != nil {
+		return err
+	}
+	return d.primary.Put(id, data)
+}
+
+func (d dualBlobs) Get(id string) ([]byte, error) {
+	if data, err := d.primary.Get(id); err == nil && data != nil {
+		return data, nil
+	}
+	return d.secondary.Get(id)
+}
+
+func (d dualBlobs) List() ([]string, error) {
+	if ids, err := d.primary.List(); err == nil {
+		return ids, nil
+	}
+	return d.secondary.List()
+}
+
+func (d dualBlobs) Delete(id string) error {
+	_ = d.secondary.Delete(id)
+	return d.primary.Delete(id)
+}
+
+// applyRecordStore points the vault at Postgres when the prototype flag is set,
+// dual-writing to the file tree under root. On any store error it leaves the
+// file-backed default in place.
+func applyRecordStore(v *credentials.Vault, root string) *credentials.Vault {
 	if v == nil || !recordstore.Enabled() {
 		return v
 	}
@@ -137,6 +228,9 @@ func applyRecordStore(v *credentials.Vault) *credentials.Vault {
 	if err != nil {
 		return v
 	}
-	v.UseBlobs(pgCredentialBlobs{store: store})
+	v.UseBlobs(dualBlobs{
+		primary:   pgCredentialBlobs{store: store},
+		secondary: credentials.FileBlobStore(root),
+	})
 	return v
 }

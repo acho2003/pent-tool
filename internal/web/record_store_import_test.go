@@ -131,3 +131,85 @@ func TestScanReadsFromPostgres(t *testing.T) {
 	}
 	t.Logf("served %d scans from postgres, all artifact dirs present, lookup by id works", len(full))
 }
+
+// TestSchedulesInPostgres proves schedule records round-trip through the store.
+func TestSchedulesInPostgres(t *testing.T) {
+	if !recordstore.Enabled() {
+		t.Skip("set XALGORIX_STORE=postgres to run the prototype schedule test")
+	}
+	ctx := context.Background()
+	store, err := recordstore.Open(ctx, recordstore.DSN())
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	defer store.Close()
+	// clean slate
+	if ids, _ := store.ListIDs(ctx, "schedules"); len(ids) > 0 {
+		for _, id := range ids {
+			_ = store.Delete(ctx, "schedules", id)
+		}
+	}
+	srv := &Server{}
+	mirrorScheduleToRecordStore("sched-1", []byte(`{"id":"sched-1","name":"nightly"}`))
+	docs, ok := srv.recordStoreSchedules()
+	if !ok || len(docs) != 1 {
+		t.Fatalf("recordStoreSchedules ok=%v len=%d, want 1", ok, len(docs))
+	}
+	deleteFromRecordStore("sched-1", scheduleCollection)
+	docs, _ = srv.recordStoreSchedules()
+	if len(docs) != 0 {
+		t.Fatalf("after delete len=%d, want 0", len(docs))
+	}
+}
+
+// TestCredentialDualWrite proves a credential saved through the dual-write
+// backend lands in BOTH Postgres and the encrypted file tree, so a Postgres
+// loss never loses credentials.
+func TestCredentialDualWrite(t *testing.T) {
+	if !recordstore.Enabled() {
+		t.Skip("set XALGORIX_STORE=postgres to run the dual-write test")
+	}
+	ctx := context.Background()
+	store, err := recordstore.Open(ctx, recordstore.DSN())
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	defer store.Close()
+
+	root := t.TempDir()
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 7)
+	}
+	vault, err := credentials.Open(root, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault.UseBlobs(dualBlobs{
+		primary:   pgCredentialBlobs{store: store},
+		secondary: credentials.FileBlobStore(root),
+	})
+
+	meta, err := vault.Create(credentials.Record{
+		Name: "dual", Kind: "APPLICATION_HEADERS",
+		TargetIDs: []string{"target-1"}, Values: map[string]string{"Cookie": "x"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Delete(ctx, "credentials", meta.ID) })
+
+	// In Postgres:
+	if blob, err := store.GetBytes(ctx, "credentials", meta.ID); err != nil || blob == nil {
+		t.Fatalf("credential not in postgres: %v", err)
+	}
+	// In the file tree:
+	if fi, err := os.Stat(filepath.Join(root, meta.ID+".json")); err != nil || fi.Size() == 0 {
+		t.Fatalf("credential not written to file tree: %v", err)
+	}
+	// And it decrypts back through the vault:
+	rec, err := vault.Get(meta.ID, "target-1")
+	if err != nil || rec.Name != "dual" {
+		t.Fatalf("read back: %v (%+v)", err, rec)
+	}
+}

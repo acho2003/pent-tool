@@ -43,11 +43,12 @@ func (s *Server) credentialVault() (*credentials.Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := credentials.New(path.Join(s.dataDir, "_credentials"), key)
+	root := path.Join(s.dataDir, "_credentials")
+	v, err := credentials.New(root, key)
 	if err != nil {
 		return nil, err
 	}
-	return applyRecordStore(v), nil
+	return applyRecordStore(v, root), nil
 }
 
 func (s *Server) openCredentialVault() (*credentials.Vault, error) {
@@ -55,11 +56,12 @@ func (s *Server) openCredentialVault() (*credentials.Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := credentials.Open(path.Join(s.dataDir, "_credentials"), key)
+	root := path.Join(s.dataDir, "_credentials")
+	v, err := credentials.Open(root, key)
 	if err != nil {
 		return nil, err
 	}
-	return applyRecordStore(v), nil
+	return applyRecordStore(v, root), nil
 }
 
 func (s *Server) handleCredentials(w http.ResponseWriter, r *http.Request) {
