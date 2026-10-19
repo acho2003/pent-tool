@@ -628,6 +628,17 @@ func validateScopePolicy(cfg AssessmentConfig, ids map[string]bool) []Problem {
 		probs = append(probs, blocking("blackbox.test_environment.forbidden", "Black Box cannot declare a test environment; use Gray Box or White Box"))
 	}
 
+	switch cfg.WapitiMode {
+	case "", "safe", "full":
+	default:
+		probs = append(probs, blocking("wapiti.mode.invalid", "wapiti_mode must be empty, \"safe\" (GET-only) or \"full\" (forms and all modules)"))
+	}
+	if cfg.WapitiMode == "full" && cfg.Mode == ModeBlackBox {
+		// Full mode submits discovered forms (state-changing) and runs external
+		// callback modules; that is incompatible with a Black Box posture.
+		probs = append(probs, blocking("wapiti.mode.full_forbidden", "wapiti_mode \"full\" submits forms and runs external-callback modules; use Gray Box or White Box"))
+	}
+
 	if dp := cfg.DiscoveryProviders; dp != nil {
 		for _, p := range dp.Subdomain {
 			if p != ProviderSubfinder && p != ProviderAmass {

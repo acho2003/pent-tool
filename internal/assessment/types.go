@@ -287,7 +287,15 @@ type AssessmentConfig struct {
 	Exclusions []Exclusion `json:"exclusions,omitempty"`
 	// TestEnvironment declares the targets are disposable test systems. It is a
 	// prerequisite for state-changing tests and is forbidden in Black Box.
-	TestEnvironment    bool                `json:"test_environment,omitempty"`
+	TestEnvironment bool `json:"test_environment,omitempty"`
+	// WapitiMode is the operator's explicit enable switch for the Wapiti web
+	// fuzzer, which the default low-impact policy otherwise restricts. "" leaves
+	// it restricted; "safe" enables the reviewed GET-only module allowlist (no
+	// form submission, no external callbacks); "full" enables Wapiti's full
+	// crawling and module set, which submits discovered forms (writes) and can
+	// make the target call out to external hosts. "full" is an explicit,
+	// high-impact operator choice.
+	WapitiMode         string              `json:"wapiti_mode,omitempty"`
 	DiscoveryProviders *DiscoveryProviders `json:"discovery_providers,omitempty"`
 	// ManualSeeds are operator-supplied entry URLs merged into the inventory.
 	// Each must lie inside some target's AppScope and not be excluded.

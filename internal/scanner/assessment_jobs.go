@@ -410,7 +410,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			ScanDir: filepath.Join(scanDir, "jobs", stableJobPath(job.TargetID), stableJobPath(plan.Fingerprint),
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, TypedAssessment: true,
-			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment,
+			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment, WapitiMode: plan.Config.WapitiMode,
 		}
 		if checkpointErr != nil {
 			run := plannedJobNotRun(job, req, plan.Fingerprint, "workflow checkpoint failed; dependent execution was refused", emit)

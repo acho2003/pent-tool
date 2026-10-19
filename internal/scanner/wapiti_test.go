@@ -185,3 +185,52 @@ func TestParseWapiti_EmptyArtifact(t *testing.T) {
 		t.Errorf("empty artifact should yield no findings, got %v err=%v", f, err)
 	}
 }
+
+// Full mode is the operator's explicit high-impact run: within the start URL's
+// folder it crawls, submits forms, and runs every module. It is reached only
+// when wapiti_mode is "full" and still honours scope exclusions and bounds.
+func TestBuildWapitiFull_CrawlsFormsAllModules(t *testing.T) {
+	origin, err := assessment.ParseApprovedOrigin("app", "https://app.test/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin}, assessment.Exclusion{PathPattern: "/logout"})
+	spec := buildWapitiFull(Request{
+		Target:     "https://app.test/portal",
+		ScanDir:    t.TempDir(),
+		AppScope:   &scope,
+		WapitiMode: "full",
+	}, Config{WapitiPath: "/usr/bin/wapiti", WapitiTimeout: 10 * time.Minute})
+
+	if spec.notApp != "" {
+		t.Fatalf("unexpected notApp: %s", spec.notApp)
+	}
+	if s, _ := argValue(spec.args, "--scope"); s != "folder" {
+		t.Errorf("--scope = %q, want folder (crawl within the start folder)", s)
+	}
+	if m, _ := argValue(spec.args, "-m"); m != "all" {
+		t.Errorf("-m = %q, want all (every module, including form-based and callback checks)", m)
+	}
+	if m, _ := argValue(spec.args, "-m"); strings.Contains(m, ":get") {
+		t.Errorf("full mode must not use the GET-only allowlist, got -m %q", m)
+	}
+	if d, _ := argValue(spec.args, "-d"); d != "2" {
+		t.Errorf("-d = %q, want a bounded crawl depth", d)
+	}
+	if !hasArg(spec.args, "--max-scan-time") {
+		t.Error("expected a bounded --max-scan-time")
+	}
+	// Excluded routes are kept out even while crawling.
+	if !hasArg(spec.args, "-x") {
+		t.Error("expected scope exclusions passed as -x patterns")
+	}
+}
+
+func TestBuildWapitiFull_RejectsOutOfScopeTarget(t *testing.T) {
+	origin, _ := assessment.ParseApprovedOrigin("app", "https://app.test/")
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	spec := buildWapitiFull(Request{Target: "https://evil.test/", ScanDir: t.TempDir(), AppScope: &scope, WapitiMode: "full"}, Config{WapitiPath: "wapiti", WapitiTimeout: time.Minute})
+	if spec.notApp == "" {
+		t.Error("expected notApp for an out-of-scope target")
+	}
+}

@@ -256,3 +256,21 @@ func hasCapForTarget(ev []CapabilityEvidence, c Capability, targetID string) boo
 	}
 	return false
 }
+
+func TestValidate_WapitiMode(t *testing.T) {
+	base := func(mode string, m Mode) AssessmentConfig {
+		return AssessmentConfig{Mode: m, Types: []Type{TypeWebApplication}, Targets: []Target{{ID: "app", Kind: KindURL, Value: "https://app.example.test/"}}, WapitiMode: mode}
+	}
+	if problem := FirstBlocking(Validate(Normalize(base("safe", ModeGrayBox)))); problem != nil {
+		t.Fatalf("safe wapiti mode rejected: %+v", problem)
+	}
+	if problem := FirstBlocking(Validate(Normalize(base("full", ModeGrayBox)))); problem != nil {
+		t.Fatalf("full wapiti mode rejected in Gray Box: %+v", problem)
+	}
+	if !hasCode(Validate(Normalize(base("loud", ModeGrayBox))), "wapiti.mode.invalid") {
+		t.Fatal("an unknown wapiti mode was accepted")
+	}
+	if !hasCode(Validate(Normalize(base("full", ModeBlackBox))), "wapiti.mode.full_forbidden") {
+		t.Fatal("full wapiti mode was accepted in Black Box")
+	}
+}

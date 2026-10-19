@@ -21,7 +21,7 @@ const (
 // same rule at execution time from the Request (requestPolicyRestriction).
 // Exclusions are counted assessment-wide, which can only restrict more.
 func AdapterPolicyRestriction(id string, cfg assessment.AssessmentConfig) (restricted bool, reason string) {
-	return adapterPolicyRestriction(id, cfg.TestEnvironment, len(cfg.Exclusions) > 0)
+	return adapterPolicyRestriction(id, cfg.TestEnvironment, len(cfg.Exclusions) > 0, cfg.WapitiMode)
 }
 
 // requestPolicyRestriction is AdapterPolicyRestriction evaluated on the
@@ -29,7 +29,7 @@ func AdapterPolicyRestriction(id string, cfg assessment.AssessmentConfig) (restr
 // exclusions.
 func requestPolicyRestriction(id string, req Request) (bool, string) {
 	excluded := req.AppScope != nil && len(req.AppScope.Exclusions()) > 0
-	if restricted, reason := adapterPolicyRestriction(id, req.TestEnvironment, excluded); restricted {
+	if restricted, reason := adapterPolicyRestriction(id, req.TestEnvironment, excluded, req.WapitiMode); restricted {
 		return true, reason
 	}
 	if id == "testssl" && req.AppScope != nil && originRootOutsideBoundary(req) {
@@ -53,10 +53,12 @@ func originRootOutsideBoundary(req Request) bool {
 	return false
 }
 
-func adapterPolicyRestriction(id string, testEnvironment, hasExclusions bool) (bool, string) {
+func adapterPolicyRestriction(id string, testEnvironment, hasExclusions bool, wapitiMode string) (bool, string) {
 	switch id {
 	case "wapiti":
-		if !testEnvironment {
+		// The operator can enable Wapiti explicitly with a mode; declaring a test
+		// environment keeps enabling the safe GET-only run as before.
+		if !testEnvironment && wapitiMode != "safe" && wapitiMode != "full" {
 			return true, wapitiPolicyReason
 		}
 	case "nikto":

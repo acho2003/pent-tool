@@ -31,10 +31,97 @@ func (r wapitiRunner) Run(ctx context.Context, req Request, cfg Config, emit Emi
 	if req.WapitiPostApproval != nil {
 		return runWapitiPost(ctx, req, cfg, emit)
 	}
-	if expandedWorkflowRequest(req) && len(req.EndpointTargets) > 50 && req.TestEnvironment {
+	if req.WapitiMode == "full" {
+		// Explicit high-impact run: Wapiti crawls within the approved folder and
+		// runs its full module set, submitting discovered forms. Not routed
+		// through the GET-only batch path.
+		return executeSpec(ctx, r.Name(), req, cfg, buildWapitiFull(req, cfg), emit)
+	}
+	if expandedWorkflowRequest(req) && len(req.EndpointTargets) > 50 && (req.TestEnvironment || req.WapitiMode == "safe") {
 		return runWapitiBatches(ctx, req, cfg, emit)
 	}
 	return executePolicySpec(ctx, r.Name(), req, cfg, buildWapiti(req, cfg), emit)
+}
+
+// wapitiFullDepth bounds how far full-mode crawling follows links from the
+// start URL, so an explicit full run still cannot wander unbounded.
+const wapitiFullDepth = 2
+
+// buildWapitiFull is the explicit "full" run: within the start URL's folder
+// scope it crawls, submits discovered forms, and runs every module ("-m all",
+// including form-based attacks and external-callback checks). It honours scope
+// exclusions as -x patterns and stays bounded by depth and scan time. It is
+// reached only when the operator selected wapiti_mode "full".
+func buildWapitiFull(req Request, cfg Config) commandSpec {
+	if strings.TrimSpace(cfg.WapitiPath) == "" {
+		return commandSpec{notApp: "Wapiti executable is not configured", timeout: cfg.WapitiTimeout}
+	}
+	target := strings.TrimSpace(req.Target)
+	if req.StructuredDispatch {
+		if ts := wapitiAllowedTargets(req.AppScope, requestEndpointTargets(req)); len(ts) > 0 {
+			target = ts[0]
+		}
+	}
+	u, err := url.Parse(target)
+	if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return commandSpec{notApp: "Wapiti requires an explicit HTTP(S) URL", timeout: cfg.WapitiTimeout}
+	}
+	if len(wapitiAllowedTargets(req.AppScope, []string{target})) == 0 {
+		return commandSpec{notApp: "Wapiti target is outside the approved scope or excluded", timeout: cfg.WapitiTimeout}
+	}
+
+	base := filepath.Join(req.ScanDir, "scanner-output", "wapiti")
+	artifact := filepath.Join(base, "results.json")
+
+	duration := cfg.WapitiTimeout
+	if duration <= 0 || duration > wapitiMaxDuration {
+		duration = wapitiMaxDuration
+	}
+	scanSeconds := int(duration / time.Second)
+	if scanSeconds > 30 {
+		scanSeconds -= 15
+	}
+	if scanSeconds < 1 {
+		scanSeconds = 1
+	}
+
+	args := []string{
+		"-u", target,
+		"--scope", "folder",
+		"-d", strconv.Itoa(wapitiFullDepth),
+		"-m", "all",
+		"--tasks", "1",
+		"--max-scan-time", strconv.Itoa(scanSeconds),
+		"--flush-session",
+		"--format", "json",
+		"-o", artifact,
+		"--verify-ssl", "0",
+	}
+	// Keep excluded routes out even while crawling, and carry auth headers so the
+	// fuzz runs as the authenticated identity.
+	for _, x := range wapitiExcludePatterns(req.AppScope, []string{target}) {
+		args = append(args, "-x", x)
+	}
+	for _, h := range cfg.ScanHeaders {
+		if strings.TrimSpace(h) != "" {
+			args = append(args, "-H", strings.TrimSpace(h))
+		}
+	}
+	for _, h := range strings.Split(req.TargetAuth, "\n") {
+		if strings.TrimSpace(h) != "" {
+			args = append(args, "-H", strings.TrimSpace(h))
+		}
+	}
+
+	return commandSpec{
+		path:     cfg.WapitiPath,
+		args:     args,
+		artifact: artifact,
+		timeout:  duration,
+		prepare: func() error {
+			return os.MkdirAll(base, 0o700)
+		},
+	}
 }
 
 // wapitiMaxStartURLs bounds how many discovered endpoints are added as extra

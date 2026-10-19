@@ -122,6 +122,9 @@ type Request struct {
 	// TestEnvironment records that the operator declared the target a test
 	// environment. It informs builders; it never enables writes on its own.
 	TestEnvironment bool `json:"-"`
+	// WapitiMode is the operator's enable switch for the Wapiti fuzzer: ""
+	// (restricted), "safe" (GET-only allowlist) or "full" (forms + all modules).
+	WapitiMode string `json:"-"`
 	// WriteApprovals are target-filtered, previewed approvals. Only apiwrites
 	// consumes them, after prerequisites pass and with a persistent write journal.
 	WriteApprovals  []assessment.WriteApproval `json:"-"`
