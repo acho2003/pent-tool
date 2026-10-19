@@ -105,6 +105,7 @@ export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_COD
 export interface AssessmentTarget { id: string; type: string; value: string; }
 export interface AssessmentConfig {
   test_environment?: boolean;
+  wapiti_mode?: "" | "safe" | "full";
   fuzz_approvals?: Array<{target_id: string; method: "POST"; path: string; operation_id: string; fixture_ref: string; content_type: "application/x-www-form-urlencoded"; cleanup_method: "DELETE"; cleanup_path: string; scanner: "wapiti"; request_limit: number; repeat_testing_approved: boolean}>;
  workflow_version?: string;
  parent_assessment_id?: string; parent_plan_fingerprint?: string; approval_preview_fingerprint?: string;
