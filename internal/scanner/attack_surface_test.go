@@ -159,8 +159,8 @@ func TestCompleteEndpointCoverageRecordsBatchCompletedForBatchAdapters(t *testin
 }
 
 func TestClassifierVersionBumpReparsesCachedSnapshot(t *testing.T) {
-	if AttackSurfaceClassifierVersion != 6 {
-		t.Fatalf("classifier version = %d, want 6", AttackSurfaceClassifierVersion)
+	if AttackSurfaceClassifierVersion != 7 {
+		t.Fatalf("classifier version = %d, want 7", AttackSurfaceClassifierVersion)
 	}
 	dir := t.TempDir()
 	raw := filepath.Join(dir, "results.jsonl")
@@ -212,5 +212,20 @@ func TestUnifiedSnapshotRedactsSPARoutesWithoutMutatingInventory(t *testing.T) {
 	}
 	if surface.Endpoints[0].SPARoutes[0] != route {
 		t.Fatal("snapshot mutated runtime inventory")
+	}
+}
+
+func TestClassifyNextRuntimeEndpointsAsAPI(t *testing.T) {
+	for _, tc := range []struct {
+		path, contentType string
+	}{
+		{"/_next/data/build-id/dashboard.json", "application/json"},
+		{"/dashboard", "text/x-component; charset=utf-8"},
+		{"/stream", "application/vnd.turbo-stream.html"},
+	} {
+		kind, _ := classifyAttackSurfaceEndpoint(tc.path, tc.contentType)
+		if kind != "api" {
+			t.Errorf("classifyAttackSurfaceEndpoint(%q, %q) = %q, want api", tc.path, tc.contentType, kind)
+		}
 	}
 }

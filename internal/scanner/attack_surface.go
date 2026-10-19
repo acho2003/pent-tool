@@ -27,7 +27,7 @@ const (
 	// contacting the target) instead of being reused. v2: endpoint State,
 	// exclusions and placeholder refusal. v3: retain scoped OpenAPI operations
 	// that still need explicit inputs.
-	AttackSurfaceClassifierVersion = 6
+	AttackSurfaceClassifierVersion = 7
 )
 
 // Endpoint states. An empty State (seeds, OpenAPI merges, the legacy parse and
@@ -481,11 +481,12 @@ func canonicalizeAttackSurfaceURL(raw string) (observed, canonical, route, endpo
 
 func classifyAttackSurfaceEndpoint(endpointPath, contentType string) (kind string, sensitive bool) {
 	lowerPath := strings.ToLower(endpointPath)
+	lowerContentType := strings.ToLower(contentType)
 	ext := strings.ToLower(path.Ext(lowerPath))
 	staticExts := map[string]bool{".js": true, ".mjs": true, ".css": true, ".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".ico": true, ".woff": true, ".woff2": true, ".ttf": true, ".map": true, ".webp": true}
 	if staticExts[ext] {
 		kind = "static"
-	} else if strings.Contains(lowerPath, "/api/") || strings.HasPrefix(lowerPath, "/api") || strings.Contains(lowerPath, "/rest/") || strings.HasPrefix(lowerPath, "/rest") || strings.Contains(lowerPath, "graphql") || strings.Contains(lowerPath, "swagger") || strings.Contains(lowerPath, "openapi") || strings.Contains(strings.ToLower(contentType), "application/json") {
+	} else if isNextRuntimeEndpoint(lowerPath, lowerContentType) || strings.Contains(lowerPath, "/api/") || strings.HasPrefix(lowerPath, "/api") || strings.Contains(lowerPath, "/rest/") || strings.HasPrefix(lowerPath, "/rest") || strings.Contains(lowerPath, "graphql") || strings.Contains(lowerPath, "swagger") || strings.Contains(lowerPath, "openapi") || strings.Contains(lowerContentType, "application/json") {
 		kind = "api"
 	} else {
 		kind = "web"
@@ -497,6 +498,18 @@ func classifyAttackSurfaceEndpoint(endpointPath, contentType string) (kind strin
 		}
 	}
 	return kind, sensitive
+}
+
+// isNextRuntimeEndpoint identifies server-side surfaces emitted by Next.js.
+// App Router requests use RSC/Flight content types and Pages Router data
+// requests live under /_next/data/<build-id>.json; neither necessarily has an
+// /api prefix, but both represent application routes and should be included
+// in API-oriented coverage instead of being treated as ordinary web pages.
+func isNextRuntimeEndpoint(lowerPath, lowerContentType string) bool {
+	return strings.HasPrefix(lowerPath, "/_next/data/") ||
+		strings.Contains(lowerContentType, "text/x-component") ||
+		strings.Contains(lowerContentType, "text/x-component;") ||
+		strings.Contains(lowerContentType, "application/vnd.turbo-stream.html")
 }
 
 func endpointParameters(raw string) []EndpointParameter {

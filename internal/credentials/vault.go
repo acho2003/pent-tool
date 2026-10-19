@@ -55,8 +55,17 @@ type Metadata struct {
 }
 
 type Vault struct {
-	root string
-	aead cipher.AEAD
+	root  string
+	aead  cipher.AEAD
+	blobs BlobStore
+}
+
+// UseBlobs swaps the encrypted-record backend (prototype: a Postgres-backed
+// store). Records stay encrypted; only where the ciphertext lives changes.
+func (v *Vault) UseBlobs(b BlobStore) {
+	if v != nil && b != nil {
+		v.blobs = b
+	}
 }
 
 func New(root string, key []byte) (*Vault, error) {
@@ -80,7 +89,7 @@ func Open(root string, key []byte) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Vault{root: root, aead: aead}, nil
+	return &Vault{root: root, aead: aead, blobs: fileBlobs{root: root}}, nil
 }
 
 func newAEAD(key []byte) (cipher.AEAD, error) {
@@ -183,18 +192,15 @@ func (v *Vault) RevisionOf(id string) (int, error) {
 }
 
 func (v *Vault) List() ([]Metadata, error) {
-	entries, err := os.ReadDir(v.root)
+	ids, err := v.blobs.List()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Metadata, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		record, err := v.read(strings.TrimSuffix(entry.Name(), ".json"))
+	out := make([]Metadata, 0, len(ids))
+	for _, id := range ids {
+		record, err := v.read(id)
 		if err != nil {
-			return nil, fmt.Errorf("read credential %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("read credential %s: %w", id, err)
 		}
 		out = append(out, metadata(record))
 	}
@@ -262,13 +268,7 @@ func (v *Vault) Delete(id string) error {
 	if !validID(id) {
 		return ErrNotFound
 	}
-	if err := os.Remove(filepath.Join(v.root, id+".json")); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ErrNotFound
-		}
-		return err
-	}
-	return nil
+	return v.blobs.Delete(id)
 }
 
 // RotateKey re-encrypts every credential into a staging directory before
@@ -289,7 +289,7 @@ func (v *Vault) RotateKey(newKey []byte) error {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	staged := &Vault{root: stage, aead: newAEAD}
+	staged := &Vault{root: stage, aead: newAEAD, blobs: fileBlobs{root: stage}}
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -327,44 +327,19 @@ func (v *Vault) write(record Record) error {
 	}
 	sealed := v.aead.Seal(nil, nonce, plain, []byte(record.ID))
 	payload := append(nonce, sealed...)
-	path := filepath.Join(v.root, record.ID+".json")
-	tmp, err := os.CreateTemp(v.root, ".credential-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(payload); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return nil
+	return v.blobs.Put(record.ID, payload)
 }
 
 func (v *Vault) read(id string) (Record, error) {
 	if !validID(id) {
 		return Record{}, ErrNotFound
 	}
-	payload, err := os.ReadFile(filepath.Join(v.root, id+".json"))
+	payload, err := v.blobs.Get(id)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Record{}, ErrNotFound
-		}
 		return Record{}, err
+	}
+	if payload == nil {
+		return Record{}, ErrNotFound
 	}
 	if len(payload) < v.aead.NonceSize() {
 		return Record{}, errors.New("credential ciphertext is truncated")
