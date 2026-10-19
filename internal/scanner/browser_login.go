@@ -263,9 +263,65 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 			// render or the marker text, not authentication.
 			return BrowserLoginResult{}, fmt.Errorf("the session marker was not visible (after submit the page was at %s; verify ended at %s; %s; cookies captured: %s; login requests: %s)", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), classifyRender(rendered), strings.Join(cookieNames, ", "), loginSummary())
 		}
+	} else {
+		// Markerless: confirm the login landed on an authenticated protected page
+		// (in scope, not a login route, no password field, real content). This
+		// catches a failed login early (a wrong password leaves the browser on the
+		// sign-in form). The authoritative anonymous negative control runs later
+		// when the caller verifies the captured session.
+		verifyURL := p.VerifyURL
+		if verifyURL == "" {
+			verifyURL = p.LoginURL
+		}
+		if ok, _ := p.AppScope.Allows(verifyURL); !ok {
+			return BrowserLoginResult{}, fmt.Errorf("verification URL is outside the approved application scope")
+		}
+		page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
+		if info, infoErr := page.Info(); infoErr != nil || info.URL != verifyURL {
+			_ = page.Navigate(verifyURL)
+			_ = page.WaitLoad()
+			page.WaitRequestIdle(2*time.Second, nil, nil, nil)()
+		}
+		landed, rendered := browserLandingProbe(page)
+		if !browserAuthLanding(p.AppScope, landed, pageHasPasswordInput(page), len([]rune(strings.TrimSpace(rendered)))) {
+			finalURL := landingURL
+			if landed != "" {
+				finalURL = landed
+			}
+			return BrowserLoginResult{}, fmt.Errorf("the login did not reach a protected page (after submit the page was at %s; verify ended at %s; %s; cookies captured: %s; login requests: %s)", SafeTelemetryURL(landingURL), SafeTelemetryURL(finalURL), classifyRender(rendered), strings.Join(cookieNames, ", "), loginSummary())
+		}
 	}
 
 	return BrowserLoginResult{CookieHeader: cookieHeader, Storage: storage}, nil
+}
+
+// browserLandingProbe returns the page's current URL and visible text, polling
+// briefly so a single-page app that fetches its content after navigation has a
+// chance to render before the markerless landing check reads it.
+func browserLandingProbe(page *rod.Page) (finalURL, visibleText string) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if info, err := page.Info(); err == nil {
+			finalURL = info.URL
+		}
+		if text, err := page.Eval(`() => { const b = document.body; if (!b) return ""; const t = b.textContent || ""; return t.trim() ? t : (b.innerText || ""); }`); err == nil {
+			visibleText = text.Value.Str()
+		}
+		if !looksLikeAuthPath(finalURL) && len([]rune(strings.TrimSpace(visibleText))) >= 200 {
+			return finalURL, visibleText
+		}
+		if time.Now().After(deadline) {
+			return finalURL, visibleText
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// pageHasPasswordInput reports whether a visible password field is present, the
+// signal that a page is still a login form rather than an authenticated page.
+func pageHasPasswordInput(page *rod.Page) bool {
+	res, err := page.Eval(`() => !!document.querySelector('input[type=password]')`)
+	return err == nil && res.Value.Bool()
 }
 
 // pollForMarker polls the page's visible text for the (already normalized)
@@ -311,6 +367,51 @@ func classifyRender(text string) string {
 // marker still matches when a heading is split across elements or lines.
 func normalizeVisibleText(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// browserAuthLanding decides, for a markerless browser verification, whether a
+// navigation landed on an authenticated protected page. It is true only when
+// the final URL is inside the approved application scope, is not a login/
+// sign-in route, the page shows no password field, and it rendered real
+// content. It is deliberately one-sided: the caller pairs it with an anonymous
+// negative control (the same check with no credentials), which must come back
+// false, so an app that renders the same page to everyone is never upgraded to
+// "authenticated".
+func browserAuthLanding(scope *assessment.AppScope, finalURL string, hasPasswordInput bool, visibleRunes int) bool {
+	if hasPasswordInput {
+		return false
+	}
+	if visibleRunes < 200 {
+		return false
+	}
+	if strings.TrimSpace(finalURL) == "" {
+		return false
+	}
+	if looksLikeAuthPath(finalURL) {
+		return false
+	}
+	if scope == nil {
+		return false
+	}
+	ok, _ := scope.Allows(finalURL)
+	return ok
+}
+
+// looksLikeAuthPath reports whether a URL's path is a login/sign-in route, so a
+// session that is bounced back to authentication is not mistaken for a verified
+// protected page. "logout" is intentionally not matched.
+func looksLikeAuthPath(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	p := strings.ToLower(u.Path)
+	for _, needle := range []string{"login", "signin", "sign-in", "sign_in"} {
+		if strings.Contains(p, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // sameBrowserOrigin reports whether a live page URL is on the bound origin.

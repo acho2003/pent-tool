@@ -294,8 +294,8 @@ func Validate(cfg AssessmentConfig) []Problem {
 		}
 		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin {
 			if strings.TrimSpace(ab.CredentialID) != "" {
-				if ab.Kind == AccessFormLogin && (strings.TrimSpace(ab.VerifyURL) == "" || strings.TrimSpace(ab.VerifyMarker) == "") {
-					probs = append(probs, blocking("access.verification_required", "form login requires an in-scope verify_url and expected verify_marker"))
+				if ab.Kind == AccessFormLogin && strings.TrimSpace(ab.VerifyURL) == "" {
+					probs = append(probs, blocking("access.verification_required", "form login requires an in-scope verify_url; a verify_marker is optional (markerless login verifies by redirect behavior)"))
 				} else if ab.VerifyURL != "" {
 					if err := validateTargetValue(Target{Kind: KindURL, Value: ab.VerifyURL}); err != nil {
 						probs = append(probs, blocking("access.verify_url.invalid", "credential verification URL must be an absolute HTTP(S) URL without embedded credentials or fragments"))

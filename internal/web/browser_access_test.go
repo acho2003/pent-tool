@@ -13,15 +13,18 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-func TestBrowserAccessRequiresEnabledWorkerAndMarker(t *testing.T) {
+func TestBrowserAccessRequiresEnabledWorker(t *testing.T) {
 	server := newTestServer(t, nil)
 	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "0")
 	if err := server.verifyBrowserCredential(context.Background(), "https://app.test/", "https://app.test/", "marker", []string{"Cookie: session=fixture"}, nil, true); err == nil || !strings.Contains(err.Error(), "flag") {
 		t.Fatal(err)
 	}
+	// With the flag on, a missing marker is no longer rejected: markerless
+	// verification is redirect-based. Verification still needs Chromium, so an
+	// unconfigured worker fails on Chromium, not on the absent marker.
 	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
-	if err := server.verifyBrowserCredential(context.Background(), "https://app.test/", "https://app.test/", "", nil, nil, true); err == nil || !strings.Contains(err.Error(), "marker") {
-		t.Fatal(err)
+	if err := server.verifyBrowserCredential(context.Background(), "https://app.test/", "https://app.test/", "", nil, nil, true); err == nil || !strings.Contains(err.Error(), "Chromium") {
+		t.Fatalf("markerless should reach the Chromium check, got: %v", err)
 	}
 }
 func TestAssessmentBrowserStorageDoesNotBindAliasesOrLegacyPlans(t *testing.T) {

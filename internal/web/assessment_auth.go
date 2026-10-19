@@ -96,13 +96,17 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 				setAuthCapability(plan, targetID, assessment.StateUnavailable, "verification URL is outside the application origin or path boundary")
 				continue
 			}
-			if binding.Kind == assessment.AccessFormLogin && binding.VerifyMarker == "" {
-				setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login requires a verification marker")
+			formBrowserLogin := binding.Kind == assessment.AccessFormLogin && strings.EqualFold(strings.TrimSpace(record.Values["submit_format"]), "browser")
+			if binding.Kind == assessment.AccessFormLogin && binding.VerifyMarker == "" && !formBrowserLogin {
+				// Markerless verification is redirect-based and needs a real
+				// browser. The HTTP form replayer cannot evaluate it, so a marker
+				// stays required there.
+				setAuthCapability(plan, targetID, assessment.StateUnavailable, "form login without a verify_marker requires browser login (submit_format=browser); add a marker or switch the credential to browser login")
 				continue
 			}
 			var lines []string
 			if binding.Kind == assessment.AccessFormLogin {
-				browserLogin := strings.EqualFold(strings.TrimSpace(record.Values["submit_format"]), "browser")
+				browserLogin := formBrowserLogin
 				var cookieHeader string
 				if browserLogin {
 					// NextAuth/SPA logins: drive a real browser instead of the HTTP

@@ -386,8 +386,29 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 			}
 		}
 		if err == nil && req.BrowserAccessTest {
-			result, checkpointErr := page.Eval(`() => document.body ? document.body.innerText : ""`)
-			checkpointConfirmed = checkpointErr == nil && req.BrowserCheckpointMarker != "" && strings.Contains(normalizeVisibleText(result.Value.Str()), normalizeVisibleText(req.BrowserCheckpointMarker))
+			// Gather the signals both verification modes need in one eval: the
+			// visible text (for a marker match), whether a password field is on
+			// the page, and the final URL (for markerless redirect checking).
+			result, checkpointErr := page.Eval(`() => { const b = document.body; const t = b ? (b.innerText || b.textContent || "") : ""; return JSON.stringify({text: t, pw: !!document.querySelector('input[type=password]'), url: location.href}); }`)
+			if checkpointErr == nil {
+				var probe struct {
+					Text string `json:"text"`
+					PW   bool   `json:"pw"`
+					URL  string `json:"url"`
+				}
+				if json.Unmarshal([]byte(result.Value.Str()), &probe) == nil {
+					if strings.TrimSpace(req.BrowserCheckpointMarker) != "" {
+						// Marker mode: confirm the supplied text is on the page.
+						checkpointConfirmed = strings.Contains(normalizeVisibleText(probe.Text), normalizeVisibleText(req.BrowserCheckpointMarker))
+					} else {
+						// Markerless mode: confirm the navigation landed on an
+						// authenticated protected page (in scope, not a login
+						// route, no password field, real content). The anonymous
+						// negative control must fail the same check.
+						checkpointConfirmed = browserAuthLanding(req.AppScope, probe.URL, probe.PW, len([]rune(strings.TrimSpace(probe.Text))))
+					}
+				}
+			}
 		}
 		if err == nil && !req.BrowserAccessTest {
 			result, e := page.Eval(`() => JSON.stringify({links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),forms:Array.from(document.forms).map(f=>({action:f.action,method:f.method,fields:Array.from(f.elements).filter(e=>e.name).map(e=>({name:e.name}))}))})`)
@@ -449,7 +470,11 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	run.Completeness = "complete"
 	if req.BrowserAccessTest {
 		if !checkpointConfirmed {
-			run.Status, run.AuthState, run.Authenticated, run.Reason = "failed", "failed", false, "browser protected-route marker was not confirmed"
+			reason := "browser protected-route marker was not confirmed"
+			if strings.TrimSpace(req.BrowserCheckpointMarker) == "" {
+				reason = "browser protected route was not reached without authentication"
+			}
+			run.Status, run.AuthState, run.Authenticated, run.Reason = "failed", "failed", false, reason
 		} else {
 			run.AuthState = "verified"
 		}

@@ -207,27 +207,15 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 			if storage == nil {
 				storage = record.BrowserStorage
 			}
-			// A browser-login credential is a JS/SPA app by definition, so when a
-			// marker is given it is verified in the browser (real render + anonymous
-			// negative control) — an HTTP marker check would miss JS-rendered
-			// content. Without a marker (an explicit opt-out) it falls back to the
-			// authenticated-versus-anonymous contrast.
-			if req.VerifyMarker != "" {
-				if err := s.verifyBrowserCredential(ctx, req.TargetURL, verifyURL, req.VerifyMarker, lines, storage, true); err != nil {
-					result.State, result.Reason = "failed", err.Error()
-					writeCredentialTestResult(w, result)
-					return
-				}
-				result.State, result.Verified, result.Reason = "verified", true, "Browser login succeeded; protected-route marker and anonymous negative control passed"
-				writeCredentialTestResult(w, result)
-				return
-			}
-			positive, probeErr := probeHeaderSession(ctx, verifyURL, "", lines, req.TargetURL)
-			if probeErr == nil {
-				probeErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
-			}
-			if probeErr != nil {
-				result.State, result.Reason = "failed", probeErr.Error()
+			// A browser-login credential is a JS/SPA app by definition, so the
+			// captured session is always verified in the browser (real render +
+			// anonymous negative control) — an HTTP check would miss JS-rendered
+			// content and cannot see a client-side redirect. With a marker the
+			// protected page is confirmed by its text; without one it is confirmed
+			// by redirect behavior (the authenticated session stays on the page
+			// while the anonymous control is gated).
+			if err := s.verifyBrowserCredential(ctx, req.TargetURL, verifyURL, req.VerifyMarker, lines, storage, true); err != nil {
+				result.State, result.Reason = "failed", err.Error()
 				writeCredentialTestResult(w, result)
 				return
 			}

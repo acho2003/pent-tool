@@ -15,9 +15,9 @@ func (s *Server) verifyBrowserCredential(ctx context.Context, appURL, verifyURL,
 	if !scanner.UnifiedWorkflowEnabled() {
 		return fmt.Errorf("browser access testing requires the expanded workflow flag")
 	}
-	if marker == "" {
-		return fmt.Errorf("browser access testing requires a protected-route response marker")
-	}
+	// A marker is optional: with one, the protected page is confirmed by its
+	// text; without one, it is confirmed by redirect behavior (the authenticated
+	// session stays on the protected page while the anonymous control is gated).
 	if s.cfg.BrowserPath == "" {
 		return fmt.Errorf("Chromium is unavailable for browser access testing")
 	}
@@ -43,9 +43,16 @@ func (s *Server) verifyBrowserCredential(ctx context.Context, appURL, verifyURL,
 		request.ScanDir = dir + "/anonymous"
 		anonymous := scanner.DiscoverBrowser(ctx, request, cfg)
 		if anonymous.AuthState == "verified" {
-			return fmt.Errorf("browser marker is also visible without credentials; negative control failed")
+			return fmt.Errorf("the protected page is reachable without credentials; negative control failed")
 		}
-		if anonymous.Status != "failed" || anonymous.Reason != "browser protected-route marker was not confirmed" {
+		// The anonymous pass must fail for the right reason: with a marker, the
+		// marker was absent; markerless, the protected page was not reached (the
+		// session was gated). Any other failure means the control is inconclusive.
+		expected := "browser protected-route marker was not confirmed"
+		if strings.TrimSpace(marker) == "" {
+			expected = "browser protected route was not reached without authentication"
+		}
+		if anonymous.Status != "failed" || anonymous.Reason != expected {
 			return fmt.Errorf("browser anonymous negative control could not be evaluated")
 		}
 	}

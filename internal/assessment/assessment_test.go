@@ -128,9 +128,14 @@ func TestValidate_APIdefinitionsRequireExplicitTargetAssociation(t *testing.T) {
 func TestValidate_FormLoginRequiresVerificationAndOneURLTarget(t *testing.T) {
 	base := AssessmentConfig{Mode: ModeGrayBox, Types: []Type{TypeWebApplication}, Targets: []Target{{ID: "app", Kind: KindURL, Value: "https://app.example.test/Portal"}, {ID: "other", Kind: KindURL, Value: "https://other.example.test"}}, Access: []AccessBinding{{Kind: AccessFormLogin, TargetIDs: []string{"app"}, CredentialID: "credential"}}}
 	if !hasCode(Validate(Normalize(base)), "access.verification_required") {
-		t.Fatal("form login without a verification marker was accepted")
+		t.Fatal("form login without a verification URL was accepted")
 	}
+	// A verify_url with no marker is now valid: markerless login verifies by
+	// redirect behavior instead of a text marker.
 	base.Access[0].VerifyURL = "https://app.example.test/Portal/account"
+	if problem := FirstBlocking(Validate(Normalize(base))); problem != nil {
+		t.Fatalf("markerless form login was rejected: %+v", problem)
+	}
 	base.Access[0].VerifyMarker = "Account dashboard"
 	if problem := FirstBlocking(Validate(Normalize(base))); problem != nil {
 		t.Fatalf("valid form login was rejected: %+v", problem)
