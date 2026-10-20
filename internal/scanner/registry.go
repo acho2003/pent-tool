@@ -23,6 +23,7 @@ func ScannerRegistry() []ScannerDefinition {
 		{ID: "nuclei", Name: "nuclei", Category: PhaseWeb, AssessmentTypes: append(append([]assessment.Type{}, web...), api...), TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindDomain, assessment.KindIP, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, DefaultSelection: "automatic", Risk: "medium", Available: true, Summary: "Template-based web vulnerability checks"},
 		{ID: "zap", Name: "zap", Category: PhaseWeb, AssessmentTypes: append(append([]assessment.Type{}, web...), api...), TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindDomain, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, OptionalCapabilities: []assessment.Capability{assessment.CapAuthWeb, assessment.CapSchema}, SupportsAuthentication: true, DefaultSelection: "automatic", Risk: "high", Available: true, Summary: "Crawl and test web applications and APIs"},
 		{ID: "apichecks", Name: "Native API checks", Category: PhaseWeb, AssessmentTypes: api, TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindDomain, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, DefaultSelection: "automatic", Risk: "low", Available: true, Summary: "Check declared authentication and credentialed CORS on eligible API operations"},
+		{ID: "kube-exposure", Name: "Kubernetes exposure", Category: PhaseWeb, AssessmentTypes: append(append([]assessment.Type{}, web...), api...), TargetKinds: []assessment.TargetKind{assessment.KindURL}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, DefaultSelection: "optional", Risk: "low", Available: true, Summary: "Check externally visible Kubernetes-related management surfaces without cluster access"},
 		{ID: "testssl", Name: "testssl", Category: PhaseWeb, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication, assessment.TypeNetwork}, TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindDomain, assessment.KindIP, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "automatic", Risk: "low", Available: true, Summary: "Assess TLS configuration"},
 		{ID: "sslyze", Name: "sslyze", Category: PhaseWeb, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindDomain, assessment.KindIP, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Assess an approved TLS service"},
 		{ID: "openvas", Name: "openvas", Category: PhaseServer, AssessmentTypes: network, TargetKinds: []assessment.TargetKind{assessment.KindDomain, assessment.KindIP, assessment.KindCIDR, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapNetwork}, OptionalCapabilities: []assessment.Capability{assessment.CapSSH}, DefaultSelection: "automatic", Risk: "medium", Available: true, Summary: "Run Greenbone network vulnerability checks"},
@@ -41,7 +42,7 @@ func ScannerRegistry() []ScannerDefinition {
 		{ID: "kube-bench", Name: "kube-bench", Category: PhaseKubernetes, AssessmentTypes: []assessment.Type{assessment.TypeKubernetes, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindKubernetesCluster}, RequiredCapabilities: []assessment.Capability{assessment.CapKubernetes}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "CIS Kubernetes benchmark checks against a supplied kubeconfig"},
 	}
 	for i := range defs {
-		defs[i].Selectable = slices.Contains(OrderedNames, defs[i].ID)
+		defs[i].Selectable = slices.Contains(OrderedNames, defs[i].ID) || slices.Contains(assessmentOnlyNames, defs[i].ID)
 		defs[i].Group = scannerGroups[defs[i].ID]
 		if defs[i].Group == GroupWebAPI {
 			meta := webScannerMetadata[defs[i].ID]
@@ -61,19 +62,20 @@ var webScannerMetadata = map[string]struct {
 	policy []string
 	format string
 }{
-	"subfinder": {[]string{PolicyRateLimited}, "jsonl"},
-	"amass":     {[]string{PolicyRateLimited}, "text"},
-	"dnsx":      {[]string{PolicyRateLimited}, "jsonl"},
-	"sslyze":    {[]string{PolicyGetHeadOnly}, "json"},
-	"httpx":     {[]string{PolicyGetHeadOnly, PolicyRateLimited}, "jsonl"},
-	"katana":    {[]string{PolicyExclusions, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
-	"nuclei":    {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
-	"zap":       {[]string{PolicyExclusions, PolicyScopeRegex, PolicyWriteCapable}, "json"},
-	"apichecks": {[]string{PolicyExclusions, PolicyGetHeadOnly, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
-	"testssl":   {[]string{PolicyGetHeadOnly}, "json"},
-	"nikto":     {[]string{PolicyRateLimited}, "json"},
-	"dalfox":    {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
-	"wapiti":    {[]string{PolicyExclusions, PolicyWriteCapable}, "json"},
+	"subfinder":     {[]string{PolicyRateLimited}, "jsonl"},
+	"amass":         {[]string{PolicyRateLimited}, "text"},
+	"dnsx":          {[]string{PolicyRateLimited}, "jsonl"},
+	"sslyze":        {[]string{PolicyGetHeadOnly}, "json"},
+	"httpx":         {[]string{PolicyGetHeadOnly, PolicyRateLimited}, "jsonl"},
+	"katana":        {[]string{PolicyExclusions, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
+	"nuclei":        {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
+	"kube-exposure": {[]string{PolicyExclusions, PolicyGetHeadOnly, PolicyRateLimited}, "jsonl"},
+	"zap":           {[]string{PolicyExclusions, PolicyScopeRegex, PolicyWriteCapable}, "json"},
+	"apichecks":     {[]string{PolicyExclusions, PolicyGetHeadOnly, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
+	"testssl":       {[]string{PolicyGetHeadOnly}, "json"},
+	"nikto":         {[]string{PolicyRateLimited}, "json"},
+	"dalfox":        {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
+	"wapiti":        {[]string{PolicyExclusions, PolicyWriteCapable}, "json"},
 }
 
 // scannerGroups assigns each scanner to a New-Assessment UI group. Recon/web
@@ -84,7 +86,8 @@ var scannerGroups = map[string]string{
 	"auth":      GroupWebAPI,
 	"subfinder": GroupWebAPI, "amass": GroupWebAPI, "dnsx": GroupWebAPI, "sslyze": GroupWebAPI, "httpx": GroupWebAPI, "katana": GroupWebAPI,
 	"nuclei": GroupWebAPI, "zap": GroupWebAPI, "apichecks": GroupWebAPI, "apiwrites": GroupWebAPI, "testssl": GroupWebAPI,
-	"nikto": GroupWebAPI, "dalfox": GroupWebAPI, "wapiti": GroupWebAPI,
+	"kube-exposure": GroupWebAPI,
+	"nikto":         GroupWebAPI, "dalfox": GroupWebAPI, "wapiti": GroupWebAPI,
 	"nmap": GroupNetwork, "masscan": GroupNetwork, "openvas": GroupNetwork,
 	"vuls": GroupNetwork, "lynis": GroupNetwork,
 	"trivy": GroupCode, "semgrep": GroupCode, "gitleaks": GroupCode, "osv": GroupCode,

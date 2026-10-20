@@ -17,6 +17,8 @@ const SchemaVersion = 2
 
 var OrderedNames = []string{"nuclei", "zap", "testssl", "openvas", "trivy", "semgrep", "gitleaks", "vuls", "osv"}
 
+var assessmentOnlyNames = []string{"kube-exposure"}
+
 // NormalizeScanners validates an operator's scanner selection and returns it in
 // pipeline order, deduplicated. An empty selection means the whole pipeline, so
 // it normalizes to nil rather than to every name: a scan saved today keeps
@@ -28,7 +30,7 @@ func NormalizeScanners(names []string) ([]string, error) {
 		if name == "" {
 			continue
 		}
-		if !slices.Contains(OrderedNames, name) {
+		if !slices.Contains(OrderedNames, name) && !slices.Contains(assessmentOnlyNames, name) {
 			return nil, fmt.Errorf("unknown scanner %q (known: %s)", raw, strings.Join(OrderedNames, ", "))
 		}
 		selected[name] = true
@@ -37,7 +39,7 @@ func NormalizeScanners(names []string) ([]string, error) {
 		return nil, nil
 	}
 	out := make([]string, 0, len(selected))
-	for _, name := range OrderedNames {
+	for _, name := range append(append([]string{}, OrderedNames...), assessmentOnlyNames...) {
 		if selected[name] {
 			out = append(out, name)
 		}
