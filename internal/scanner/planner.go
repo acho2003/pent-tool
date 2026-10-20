@@ -81,7 +81,7 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 9: simpler header-auth verification).
-const PlanRegistryVersion = "13"
+const PlanRegistryVersion = "14"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -104,7 +104,12 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	cfg := assessment.Normalize(input.Config)
 	// RegistryVersion also pins scanner and preparation semantics which affect
 	// execution identity (including which imported API operations are seeded).
-	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: input.ToolVersions}
+	toolVersions := make(map[string]string, len(input.ToolVersions)+1)
+	for key, value := range input.ToolVersions {
+		toolVersions[key] = value
+	}
+	toolVersions["kube-exposure-catalog"] = kubeExposureCatalogVersion
+	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: toolVersions}
 	for i := range plan.Capabilities {
 		evidence := &plan.Capabilities[i]
 		if evidence.Capability != assessment.CapAuthWeb && evidence.Capability != assessment.CapSSH {
