@@ -36,6 +36,7 @@ output, and never stored in scan records, logs, artifacts, or reports.
 | **prowler** | AWS security & configuration | Cloud account | Store a **read-only** AWS credential in the vault bound to the cloud target (env vars, e.g. `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, plus `provider=aws`). |
 | **scoutsuite** | AWS / GCP / Azure posture | Cloud account | Store a **read-only** cloud credential in the vault bound to the target; set `provider` to `aws`/`gcp`/`azure`. |
 | **kube-bench** | CIS Kubernetes benchmark | Kubernetes cluster | kube-bench is node-local: run Xalgorix where it can inspect the cluster (on a node) or deploy kube-bench in-cluster. |
+| **kube-exposure** | URL-only Kubernetes exposure checks | Explicit HTTP(S) URL | Optional native read-only checks for externally visible management surfaces; does not inspect cluster configuration. |
 
 Tool paths are overridable via `XALGORIX_PROWLER_PATH`, `XALGORIX_SCOUTSUITE_PATH`,
 and `XALGORIX_KUBEBENCH_PATH`.

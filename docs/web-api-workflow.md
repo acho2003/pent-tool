@@ -99,3 +99,23 @@ configured authorization expectations, information-disclosure checks, response
 content-type or schema validation, or two-identity authorization checks. It also
 does not test GraphQL, SOAP, gRPC, WebSockets, broad fuzzing, or inferred
 business workflows.
+# URL-only Kubernetes exposure checks
+
+Web and API assessments can optionally select the `kube-exposure` scanner when
+the target is an explicit HTTP(S) URL. It performs a small, versioned catalog
+of same-origin, in-scope GET requests for recognizable Kubernetes Dashboard,
+Kubernetes API, Argo CD, Prometheus, and Grafana surfaces. Requests use the
+assessment scope, exclusions, redirect policy, rate limiter, and shared request
+budget; no credentials are guessed and no state-changing method is sent.
+
+The scanner reports confirmed exposure only when a response predicate proves
+unauthenticated access to a sensitive function or data. Product fingerprints
+are reported as probable services, while internal service names or namespace
+and pod identifiers are information-disclosure observations. Generic 200, 401,
+403, ingress error pages, and branding alone are not vulnerabilities.
+
+This is an external black-box observation of a URL. It is not a Kubernetes
+cluster audit and cannot inspect Pods, RBAC, Secrets, NetworkPolicies, service
+accounts, images, or cluster configuration. Use the separate opt-in
+`kube-bench` scanner with operator-supplied cluster access for CIS benchmark
+coverage.
