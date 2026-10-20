@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,7 +52,7 @@ func TestKubeExposureRunnerIsReadOnlyAndScopeBound(t *testing.T) {
 }
 
 func TestKubeExposureCatalogIsDeterministic(t *testing.T) {
-	if kubeExposureCatalogVersion != "kube-exposure-v1" || len(kubeExposureCatalog) != 5 {
+	if kubeExposureCatalogVersion != "kube-exposure-v2" || len(kubeExposureCatalog) != 8 {
 		t.Fatalf("unexpected catalog version or size: %s/%d", kubeExposureCatalogVersion, len(kubeExposureCatalog))
 	}
 	seen := map[string]bool{}
@@ -60,5 +61,19 @@ func TestKubeExposureCatalogIsDeterministic(t *testing.T) {
 			t.Fatalf("catalog contains an invalid or duplicate entry: %+v", check)
 		}
 		seen[check.ID] = true
+	}
+}
+
+func TestKubeRequestErrorKeepsUsefulNetworkCause(t *testing.T) {
+	for _, test := range []struct {
+		input, want string
+	}{
+		{"Get \"https://missing.invalid\": dial tcp: lookup missing.invalid: no such host", "no such host"},
+		{"Get \"https://target.invalid\": x509: certificate signed by unknown authority", "x509: certificate signed by unknown authority"},
+		{"redirect refused: /outside is not approved", "redirect refused"},
+	} {
+		if got := kubeRequestError(fmt.Errorf("%s", test.input)); !strings.Contains(got, test.want) {
+			t.Errorf("kubeRequestError(%q) = %q, want %q", test.input, got, test.want)
+		}
 	}
 }

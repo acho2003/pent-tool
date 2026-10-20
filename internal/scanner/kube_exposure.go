@@ -52,9 +52,19 @@ func (kubeExposureRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	}
 	defer file.Close()
 	run.ArtifactPath = artifact
-	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Timeout: 10 * time.Second}
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("redirect limit exceeded")
+		}
+		if ok, reason := req.AppScope.Allows(next.URL.String()); !ok {
+			return fmt.Errorf("redirect refused: %s", reason)
+		}
+		return nil
+	}
 	checks := append([]kubeExposureCheck{{ID: "supplied-url", Path: base.EscapedPath(), Purpose: "supplied URL response"}}, kubeExposureCatalog...)
-	completed := 0
+	attempted, completed, findings := 0, 0, 0
+	var lastErr string
 	for _, check := range checks {
 		if err := ctx.Err(); err != nil {
 			run.Status, run.GapKind, run.Reason = "failed", GapCancelled, "checks cancelled before catalog completion"
@@ -73,13 +83,16 @@ func (kubeExposureRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			run.Status, run.GapKind, run.Reason = "failed", GapBudgetExhausted, "assessment request budget stopped remaining checks: "+err.Error()
 			break
 		}
+		attempted++
 		resp, err := client.Get(raw)
 		if err != nil {
+			lastErr = kubeRequestError(err)
 			continue
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
 		resp.Body.Close()
 		if readErr != nil {
+			lastErr = "response read failed: " + readErr.Error()
 			continue
 		}
 		completed++
@@ -88,9 +101,21 @@ func (kubeExposureRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		header := strings.ToLower(resp.Header.Get("Server") + " " + resp.Header.Get("Content-Type"))
 		indicator := strings.TrimSpace(strings.Join([]string{resp.Header.Get("Server"), resp.Header.Get("Content-Type")}, "; "))
 		classification, sev, title := "inconclusive", "info", check.Purpose
-		if check.ID == "kubernetes-api" && resp.StatusCode == http.StatusOK && strings.Contains(lower, "gitversion") {
+		if (check.ID == "kubernetes-api" || check.ID == "kubernetes-version") && resp.StatusCode == http.StatusOK && strings.Contains(lower, "gitversion") {
 			classification, title = "confirmed_exposure", "Unauthenticated Kubernetes API version endpoint"
 			sev = "medium"
+		}
+		if (check.ID == "kubernetes-apis" || check.ID == "kubernetes-api") && resp.StatusCode == http.StatusOK && (strings.Contains(lower, "apiversion") || strings.Contains(lower, "kind")) {
+			classification, title = "probable_service", "Kubernetes API discovery response"
+		}
+		if check.ID == "argo-cd" && resp.StatusCode == http.StatusOK && strings.Contains(lower, "version") {
+			classification, title = "probable_service", "Argo CD API response"
+		}
+		if check.ID == "grafana" && resp.StatusCode == http.StatusOK && strings.Contains(lower, "database") {
+			classification, title = "probable_service", "Grafana health response"
+		}
+		if strings.Contains(header, "nginx-ingress") || strings.Contains(lower, "kubernetes ingress") {
+			classification, title = "probable_service", "Kubernetes ingress response fingerprint"
 		}
 		if check.ID == "supplied-url" && (strings.Contains(lower, "kubernetes") || strings.Contains(header, "ingress")) {
 			classification, title = "probable_service", "Kubernetes-related response fingerprint"
@@ -100,17 +125,37 @@ func (kubeExposureRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			sev = "low"
 		}
 		if classification != "inconclusive" {
+			findings++
 			_ = json.NewEncoder(file).Encode(Finding{SourceID: "kube-exposure:" + check.ID, Scanner: "kube-exposure", RuleID: check.ID, Title: title, Severity: sev, Target: req.Target, Endpoint: sanitizeKubeURL(raw), Method: http.MethodGet, Description: check.Purpose, Evidence: fmt.Sprintf("HTTP %d; indicators: %s; classification: %s", resp.StatusCode, indicator, classification), Confidence: classification})
 		}
 	}
 	if run.Status == "running" {
 		if completed == 0 {
-			run.Status, run.GapKind, run.Reason = "failed", GapRequestFailed, "no catalog request completed"
+			run.Status, run.GapKind, run.Reason = "failed", GapRequestFailed, fmt.Sprintf("no catalog request completed (%d attempted; %s)", attempted, firstNonEmptyKube(lastErr, "all requests were refused or failed"))
 		} else {
-			run.Status, run.Reason = "completed", fmt.Sprintf("completed %d bounded read-only Kubernetes exposure checks", completed)
+			run.Status, run.Reason = "completed", fmt.Sprintf("completed %d/%d bounded read-only Kubernetes exposure checks; %d findings", completed, attempted, findings)
 		}
 	}
 	return finish(run.Status, run.Reason)
+}
+
+func firstNonEmptyKube(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func kubeRequestError(err error) string {
+	text := strings.TrimSpace(err.Error())
+	for _, marker := range []string{"x509:", "no such host", "connection refused", "i/o timeout", "context deadline exceeded", "redirect refused", "redirect limit exceeded"} {
+		if i := strings.Index(strings.ToLower(text), strings.ToLower(marker)); i >= 0 {
+			return text[i:]
+		}
+	}
+	return text
 }
 
 func sanitizeKubeURL(raw string) string {
