@@ -104,6 +104,50 @@ func TestParseNmapPorts(t *testing.T) {
 	}
 }
 
+func TestParseNmapVulnScripts(t *testing.T) {
+	xmlBody := `<?xml version="1.0"?><nmaprun><host><address addr="10.0.0.5" addrtype="ipv4"/>` +
+		`<ports>` +
+		`<port protocol="tcp" portid="80"><state state="open"/><service name="http" product="Apache" version="2.4.49"/>` +
+		`<script id="http-vuln-cve2021-41773" output="&#xa;  VULNERABLE:&#xa;  Path traversal&#xa;    State: VULNERABLE&#xa;    IDs:  CVE:CVE-2021-41773&#xa;"/>` +
+		`<script id="http-slowloris-check" output="&#xa;    State: NOT VULNERABLE&#xa;"/>` +
+		`<script id="http-server-header" output="Apache/2.4.49"/>` +
+		`</port>` +
+		`</ports>` +
+		`<hostscript><script id="smb-vuln-ms17-010" output="&#xa;  State: LIKELY VULNERABLE&#xa;  IDs: CVE:CVE-2017-0143&#xa;"/></hostscript>` +
+		`</host></nmaprun>`
+	p := writeFixture(t, "nmap.xml", xmlBody)
+	findings, err := parseNmap(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// open port 80 + one port vuln + one host vuln = 3; the NOT VULNERABLE and
+	// informational scripts must not become findings.
+	if len(findings) != 3 {
+		t.Fatalf("findings = %d, want 3: %+v", len(findings), findings)
+	}
+	var portVuln, hostVuln *Finding
+	for i := range findings {
+		switch findings[i].SourceID {
+		case "nmap:10.0.0.5:80:http-vuln-cve2021-41773":
+			portVuln = &findings[i]
+		case "nmap:10.0.0.5:10.0.0.5:smb-vuln-ms17-010":
+			hostVuln = &findings[i]
+		}
+	}
+	if portVuln == nil {
+		t.Fatalf("missing port vuln finding: %+v", findings)
+	}
+	if portVuln.Severity != "high" || portVuln.CVE != "CVE-2021-41773" || portVuln.Title != "CVE-2021-41773" || portVuln.Endpoint != "80" {
+		t.Fatalf("unexpected port vuln: %+v", *portVuln)
+	}
+	if hostVuln == nil {
+		t.Fatalf("missing host vuln finding: %+v", findings)
+	}
+	if hostVuln.Severity != "medium" || hostVuln.CVE != "CVE-2017-0143" {
+		t.Fatalf("unexpected host vuln: %+v", *hostVuln)
+	}
+}
+
 // TestParseRunsSurfacesNmapFinding proves an nmap-sourced Run flows through
 // the same ParseRuns path the report pipeline uses (internal/web/report_ai.go
 // calls scanner.ParseRuns(rec.ScannerRuns)): the finding survives with its

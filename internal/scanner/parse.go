@@ -684,18 +684,24 @@ type nmapRun struct {
 	Hosts []nmapHost `xml:"host"`
 }
 type nmapHost struct {
-	Addresses []nmapAddr `xml:"address"`
-	Ports     []nmapPort `xml:"ports>port"`
+	Addresses   []nmapAddr   `xml:"address"`
+	Ports       []nmapPort   `xml:"ports>port"`
+	HostScripts []nmapScript `xml:"hostscript>script"`
 }
 type nmapAddr struct {
 	Addr string `xml:"addr,attr"`
 	Type string `xml:"addrtype,attr"`
 }
 type nmapPort struct {
-	Protocol string    `xml:"protocol,attr"`
-	PortID   string    `xml:"portid,attr"`
-	State    nmapState `xml:"state"`
-	Service  nmapSvc   `xml:"service"`
+	Protocol string       `xml:"protocol,attr"`
+	PortID   string       `xml:"portid,attr"`
+	State    nmapState    `xml:"state"`
+	Service  nmapSvc      `xml:"service"`
+	Scripts  []nmapScript `xml:"script"`
+}
+type nmapScript struct {
+	ID     string `xml:"id,attr"`
+	Output string `xml:"output,attr"`
 }
 type nmapState struct {
 	State string `xml:"state,attr"`
@@ -726,21 +732,64 @@ func parseNmap(path string) ([]Finding, error) {
 			}
 		}
 		for _, p := range h.Ports {
-			if p.State.State != "open" {
-				continue
+			if p.State.State == "open" {
+				out = append(out, Finding{
+					SourceID: "nmap:" + host + ":" + p.PortID,
+					Scanner:  "nmap",
+					Title:    firstNonEmpty(p.Service.Name, "open port "+p.PortID),
+					Severity: "info",
+					Target:   host,
+					Endpoint: p.PortID,
+					Evidence: strings.TrimSpace(p.Service.Product + " " + p.Service.Version),
+				})
 			}
-			out = append(out, Finding{
-				SourceID: "nmap:" + host + ":" + p.PortID,
-				Scanner:  "nmap",
-				Title:    firstNonEmpty(p.Service.Name, "open port "+p.PortID),
-				Severity: "info",
-				Target:   host,
-				Endpoint: p.PortID,
-				Evidence: strings.TrimSpace(p.Service.Product + " " + p.Service.Version),
-			})
+			out = append(out, nmapScriptFindings(host, p.PortID, p.Scripts)...)
 		}
+		out = append(out, nmapScriptFindings(host, host, h.HostScripts)...)
 	}
 	return out, nil
+}
+
+// nmapCVE extracts a CVE identifier from NSE script output.
+var nmapCVE = regexp.MustCompile(`CVE-\d{4}-\d{4,7}`)
+
+// nmapScriptFindings turns confirmed-vulnerable NSE "vuln" script output into
+// findings. It keys on the standard vulns-library marker ("State: VULNERABLE"
+// or "State: LIKELY VULNERABLE") so that "NOT VULNERABLE" and informational
+// script output never become findings.
+func nmapScriptFindings(host, endpoint string, scripts []nmapScript) []Finding {
+	var out []Finding
+	for _, s := range scripts {
+		sev, ok := nmapScriptSeverity(s.Output)
+		if !ok {
+			continue
+		}
+		cve := asCVE(nmapCVE.FindString(strings.ToUpper(s.Output)))
+		out = append(out, Finding{
+			SourceID: "nmap:" + host + ":" + endpoint + ":" + s.ID,
+			Scanner:  "nmap",
+			Title:    firstNonEmpty(cve, s.ID, "nmap vulnerability"),
+			Severity: sev,
+			Target:   host,
+			Endpoint: endpoint,
+			Evidence: strings.TrimSpace(s.Output),
+			CVE:      cve,
+		})
+	}
+	return out
+}
+
+// nmapScriptSeverity reports the finding severity for an NSE script's output,
+// and whether it represents a confirmed vulnerability worth reporting.
+func nmapScriptSeverity(output string) (string, bool) {
+	switch l := strings.ToLower(output); {
+	case strings.Contains(l, "state: vulnerable"):
+		return "high", true
+	case strings.Contains(l, "state: likely vulnerable"):
+		return "medium", true
+	default:
+		return "", false
+	}
 }
 
 // parseTestssl reads testssl.sh's flat --jsonfile array and emits one Finding

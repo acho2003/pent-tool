@@ -26,6 +26,12 @@ func TestBuildNmapAcceptsNetworkTargetsAndRejectsUnsafeOnes(t *testing.T) {
 		if !hasArg(spec.args, "-sT") || !hasArg(spec.args, "-sV") || !hasArg(spec.args, "-oX") {
 			t.Fatalf("%q missing service-detection/XML args: %v", target, spec.args)
 		}
+		if scripts, _ := argValue(spec.args, "--script"); scripts != nmapVulnScripts {
+			t.Fatalf("%q missing vuln NSE scripts: --script=%q (args=%v)", target, scripts, spec.args)
+		}
+		if !hasArg(spec.args, "--script-timeout") {
+			t.Fatalf("%q missing --script-timeout bound: %v", target, spec.args)
+		}
 	}
 	for _, bad := range []string{
 		"", "http://192.168.1.10", "192.168.1.10:80", "10.0.0.5/24",

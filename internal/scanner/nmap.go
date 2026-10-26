@@ -16,6 +16,14 @@ const (
 	nmapMinIPv4PrefixBits = 24
 	nmapMinIPv6PrefixBits = 120
 	nmapMaxRate           = "100"
+	// nmapVulnScripts is the NSE script selection used for vulnerability
+	// detection. The "vuln" category probes only the approved target (no
+	// third-party lookups) and reports a confirmed "State: VULNERABLE" that
+	// parseNmap turns into findings.
+	nmapVulnScripts = "vuln"
+	// nmapScriptTimeout bounds each individual NSE script so one slow or
+	// hanging check cannot consume the whole job's overall timeout.
+	nmapScriptTimeout = "90s"
 )
 
 // nmapAssessmentRunner is the assessment adapter for nmap: service and version
@@ -26,7 +34,7 @@ type nmapAssessmentRunner struct{}
 
 func (nmapAssessmentRunner) Name() string { return "nmap" }
 func (nmapAssessmentRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "nmap", Summary: "Service and version detection on an approved network target", Phase: PhaseRecon, Weight: WeightLight, Applies: appliesToHost}
+	return Descriptor{Name: "nmap", Summary: "Open-port, service/version, and vulnerability (NSE vuln) detection on an approved network target", Phase: PhaseRecon, Weight: WeightLight, Applies: appliesToHost}
 }
 func (r nmapAssessmentRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
 	return executeSpec(ctx, r.Name(), req, cfg, buildNmap(req, cfg), emit)
@@ -58,11 +66,13 @@ func buildNmap(req Request, cfg Config) commandSpec {
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "nmap", "nmap.xml")
 	// -sT uses TCP connect scanning without raw sockets; -sV detects
 	// service/version on open ports and -oX writes the parsed XML. -n skips
-	// reverse DNS and --max-rate bounds the probe rate.
+	// reverse DNS and --max-rate bounds the probe rate. --script runs the "vuln"
+	// NSE category (version-detection-driven vulnerability checks against the
+	// approved target only) and --script-timeout bounds each check.
 	// "--" stops option parsing so a target can never be read as a flag.
 	return commandSpec{
 		path:     cfg.NmapPath,
-		args:     []string{"-sT", "-sV", "-n", "--max-rate", nmapMaxRate, "-oX", artifact, "--", host},
+		args:     []string{"-sT", "-sV", "-n", "--script", nmapVulnScripts, "--script-timeout", nmapScriptTimeout, "--max-rate", nmapMaxRate, "-oX", artifact, "--", host},
 		artifact: artifact,
 		timeout:  cfg.NmapTimeout,
 		prepare:  func() error { return os.MkdirAll(filepath.Dir(artifact), 0o700) },
