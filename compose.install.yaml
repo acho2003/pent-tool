@@ -1,0 +1,111 @@
+# Local install compose for Pent Tool (Xalgorix) on this Mac.
+# Untracked, operational file. Run it with the explicit project name so it
+# reattaches the existing xalgorix_* volumes (data, postgres store, Greenbone
+# feeds):
+#
+#   docker compose -p xalgorix -f compose.install.yaml up -d
+#
+# The dashboard is published on host port 9138 (container 9137) to avoid the
+# pent21-dev container that holds 9137. Reads login/store settings from .env.
+
+include:
+  - compose.greenbone.yaml
+
+services:
+  xalgorix:
+    # Reuse the already-built, validated local image. Does not rebuild.
+    image: xalgorix:local
+    pull_policy: never
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "127.0.0.1:9138:9137"
+    volumes:
+      - xalgorix-data:/data
+      - gvmd_socket_vol:/run/gvmd:ro
+    secrets:
+      - xalgorix_credential_key
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      XALGORIX_UNIFIED_WORKFLOW: ${XALGORIX_UNIFIED_WORKFLOW:-0}
+      XALGORIX_SCANNER_GATEWAY_HOST: xalgorix
+      XALGORIX_ZAP_URL: http://zap:8080
+      XALGORIX_ZAP_API_KEY: ${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
+      XALGORIX_ZAP_DEDICATED: "true"
+      XALGORIX_GVM_SOCKET: /run/gvmd/gvmd.sock
+      XALGORIX_GVM_USERNAME: ${XALGORIX_GVM_USERNAME:-admin}
+      XALGORIX_GVM_PASSWORD: ${XALGORIX_GVM_PASSWORD:-admin}
+      XALGORIX_CREDENTIAL_KEY_FILE: /run/secrets/xalgorix_credential_key
+      XALGORIX_STORE: ${XALGORIX_STORE:-}
+      XALGORIX_POSTGRES_DSN: ${XALGORIX_POSTGRES_DSN:-}
+      XALGORIX_USERNAME: ${XALGORIX_USERNAME:-admin}
+      XALGORIX_PASSWORD_HASH: ${XALGORIX_PASSWORD_HASH:-}
+      XALGORIX_PASSWORD: ${XALGORIX_PASSWORD:-}
+      XALGORIX_ALLOW_LOCAL_TARGETS: "true"
+    depends_on:
+      zap:
+        condition: service_healthy
+      gvmd:
+        condition: service_started
+      ospd-openvas:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: xalgorix
+      POSTGRES_USER: xalgorix
+      POSTGRES_PASSWORD: ${XALGORIX_PG_PASSWORD:?set XALGORIX_PG_PASSWORD in .env}
+    volumes:
+      - xalgorix-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xalgorix -d xalgorix"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  zap:
+    image: ghcr.io/zaproxy/zaproxy@sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2
+    pull_policy: never
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - zap.sh
+      - -Xmx${XALGORIX_ZAP_MAX_HEAP:-2g}
+      - -silent
+      - -daemon
+      - -host
+      - 0.0.0.0
+      - -port
+      - "8080"
+      - -config
+      - api.addrs.addr.name=.*
+      - -config
+      - api.addrs.addr.regex=true
+      - -config
+      - api.key=${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
+      - -config
+      - api.filexfer=true
+    mem_limit: ${XALGORIX_ZAP_MEM_LIMIT:-3g}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/JSON/core/view/version/?apikey=${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  xalgorix-data:
+  xalgorix-postgres:
+
+secrets:
+  xalgorix_credential_key:
+    file: ./secrets/xalgorix-credential.key
