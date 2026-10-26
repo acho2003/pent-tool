@@ -34,7 +34,7 @@ type ScanSchedule struct {
 	LastSkippedAt time.Time `json:"last_skipped_at,omitzero"`
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
-	Interval      string    `json:"interval"` // "hourly", "daily", "weekly", "monthly"
+	Interval      string    `json:"interval"` // "once", "hourly", "daily", "weekly", "monthly"
 	// RunAt anchors the schedule to a wall-clock time of day, "HH:MM" in 24h
 	// form. Empty keeps the legacy behavior of firing one interval after the
 	// schedule was created or last ran. For "hourly" only the minutes apply.
@@ -44,7 +44,12 @@ type ScanSchedule struct {
 	// the last day of shorter months). Ignored for the other intervals. No
 	// omitempty: 0 is a meaningful weekly value (Sunday).
 	RunDay int `json:"run_day"`
-	// Timezone is the IANA name RunAt/RunDay are interpreted in, e.g.
+	// RunDate is the calendar date "YYYY-MM-DD" for a one-time "once" schedule,
+	// interpreted in Timezone together with RunAt (RunAt empty means midnight).
+	// Ignored for recurring intervals. After a "once" schedule fires it is
+	// disabled rather than rescheduled, so it runs exactly one time.
+	RunDate string `json:"run_date,omitempty"`
+	// Timezone is the IANA name RunAt/RunDay/RunDate are interpreted in, e.g.
 	// "America/Argentina/Buenos_Aires". Empty means server local time.
 	Timezone       string    `json:"timezone,omitempty"`
 	NextRun        time.Time `json:"next_run"`
@@ -140,12 +145,16 @@ func (s *Server) refreshScheduleReviews() {
 // runAtPattern validates ScanSchedule.RunAt as a 24h "HH:MM" time of day.
 var runAtPattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):([0-5][0-9])$`)
 
+// runDatePattern validates ScanSchedule.RunDate as a "YYYY-MM-DD" calendar date.
+var runDatePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
 // scheduleTiming is the comparable subset of a schedule that determines when it
 // fires. On update, a change here means NextRun has to be recomputed.
 type scheduleTiming struct {
 	Interval string
 	RunAt    string
 	RunDay   int
+	RunDate  string
 	Timezone string
 }
 
@@ -156,6 +165,7 @@ func (sch *ScanSchedule) timing() scheduleTiming {
 		Interval: sch.Interval,
 		RunAt:    sch.RunAt,
 		RunDay:   sch.RunDay,
+		RunDate:  sch.RunDate,
 		Timezone: sch.Timezone,
 	}
 }
@@ -168,6 +178,7 @@ func normalizeScheduleTiming(sch *ScanSchedule) error {
 		return nil
 	}
 	sch.RunAt = strings.TrimSpace(sch.RunAt)
+	sch.RunDate = strings.TrimSpace(sch.RunDate)
 	sch.Timezone = strings.TrimSpace(sch.Timezone)
 
 	if sch.RunAt != "" && !runAtPattern.MatchString(sch.RunAt) {
@@ -180,6 +191,16 @@ func normalizeScheduleTiming(sch *ScanSchedule) error {
 	}
 
 	switch strings.ToLower(sch.Interval) {
+	case "once":
+		// A one-time schedule needs a concrete calendar date; the day component
+		// (RunDay) has no meaning for it.
+		if !runDatePattern.MatchString(sch.RunDate) {
+			return fmt.Errorf("run_date must be a calendar date such as 2026-11-15 for one-time schedules, got %q", sch.RunDate)
+		}
+		if _, err := time.Parse("2006-01-02", sch.RunDate); err != nil {
+			return fmt.Errorf("run_date %q is not a valid calendar date", sch.RunDate)
+		}
+		sch.RunDay = 0
 	case "weekly":
 		if sch.RunDay < 0 || sch.RunDay > 6 {
 			return fmt.Errorf("run_day must be 0 (Sunday) through 6 (Saturday) for weekly schedules, got %d", sch.RunDay)
@@ -194,6 +215,11 @@ func normalizeScheduleTiming(sch *ScanSchedule) error {
 	default:
 		// Hourly and daily have no day component.
 		sch.RunDay = 0
+	}
+	// RunDate only applies to one-time schedules; drop any stale value so a
+	// recurring schedule never carries a misleading date.
+	if !strings.EqualFold(sch.Interval, "once") {
+		sch.RunDate = ""
 	}
 	return nil
 }
@@ -217,6 +243,23 @@ func scheduleLocation(name string) *time.Location {
 // RunDay for weekly/monthly); otherwise it simply adds one interval to from.
 func calculateNextRun(sch *ScanSchedule, from time.Time) time.Time {
 	interval := strings.ToLower(sch.Interval)
+	if interval == "once" {
+		// One-time run at RunDate (+ optional RunAt time) in the schedule's
+		// timezone. There is no "next" afterwards — checkAndRunSchedules disables
+		// the schedule once it fires. A malformed/missing date is parked far in
+		// the future so a bad one-time schedule never fires.
+		loc := scheduleLocation(sch.Timezone)
+		day, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(sch.RunDate), loc)
+		if err != nil {
+			return from.AddDate(100, 0, 0)
+		}
+		hour, minute := 0, 0
+		if p := runAtPattern.FindStringSubmatch(sch.RunAt); p != nil {
+			hour, _ = strconv.Atoi(p[1])
+			minute, _ = strconv.Atoi(p[2])
+		}
+		return time.Date(day.Year(), day.Month(), day.Day(), hour, minute, 0, 0, loc)
+	}
 	parts := runAtPattern.FindStringSubmatch(sch.RunAt)
 	if parts == nil {
 		return addInterval(interval, from)
@@ -431,7 +474,14 @@ func (s *Server) checkAndRunSchedules() {
 						log.Printf("[SCHEDULER] Typed assessment %s was not queued and needs review: %s", sch.Name, reason)
 						sch.setReview(reason)
 						sch.LastSkippedAt = now
-						sch.NextRun = calculateNextRun(sch, now)
+						if strings.EqualFold(sch.Interval, "once") {
+							// A one-time slot is consumed even when skipped; disable
+							// it so it does not re-skip every tick. Re-saving the
+							// schedule with a future date reschedules it.
+							sch.Enabled = false
+						} else {
+							sch.NextRun = calculateNextRun(sch, now)
+						}
 						if err := s.saveScheduleToDisk(sch); err != nil {
 							log.Printf("[SCHEDULER] Error saving skipped schedule %s: %v", sch.ID, err)
 						}
@@ -467,7 +517,13 @@ func (s *Server) checkAndRunSchedules() {
 				go s.runMultiScan(req, &scanCfg, instanceID)
 
 				sch.LastRun = now
-				sch.NextRun = calculateNextRun(sch, now)
+				if strings.EqualFold(sch.Interval, "once") {
+					// One-time schedules run exactly once, then disable themselves
+					// rather than rescheduling into a loop on a past date.
+					sch.Enabled = false
+				} else {
+					sch.NextRun = calculateNextRun(sch, now)
+				}
 
 				if err := s.saveScheduleToDisk(sch); err != nil {
 					log.Printf("[SCHEDULER] Error saving triggered schedule %s: %v", sch.ID, err)

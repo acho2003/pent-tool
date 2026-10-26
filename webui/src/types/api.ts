@@ -550,7 +550,11 @@ export interface ScanSchedule {
   // day of month for "monthly" (1-31, clamped to the last day of shorter
   // months). Ignored for "hourly" and "daily".
   run_day?: number;
-  // IANA timezone name `run_at`/`run_day` are read in, e.g.
+  // Calendar date "YYYY-MM-DD" for a one-time ("once") schedule, read in
+  // `timezone` with `run_at`. Ignored for recurring intervals; after a once
+  // schedule fires it is disabled so it runs exactly one time.
+  run_date?: string;
+  // IANA timezone name `run_at`/`run_day`/`run_date` are read in, e.g.
   // "America/Argentina/Buenos_Aires". Empty means the server's local time.
   timezone?: string;
   next_run: string;

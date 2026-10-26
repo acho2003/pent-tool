@@ -159,6 +159,76 @@ func TestCalculateNextRunAnchored(t *testing.T) {
 	}
 }
 
+func TestCalculateNextRunOnce(t *testing.T) {
+	from := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	// A concrete date + time resolves to that exact instant.
+	got := calculateNextRun(&ScanSchedule{Interval: "once", RunDate: "2026-11-15", RunAt: "09:30", Timezone: "UTC"}, from)
+	want := time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("once with time = %v, want %v", got, want)
+	}
+	// No RunAt means midnight of the date.
+	got = calculateNextRun(&ScanSchedule{Interval: "once", RunDate: "2026-11-15", Timezone: "UTC"}, from)
+	want = time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("once without time = %v, want %v", got, want)
+	}
+	// A malformed/missing date is parked far in the future so it never fires.
+	got = calculateNextRun(&ScanSchedule{Interval: "once", RunDate: ""}, from)
+	if !got.After(from.AddDate(50, 0, 0)) {
+		t.Fatalf("malformed once date should be parked far in the future, got %v", got)
+	}
+}
+
+func TestOnceScheduleFiresThenDisables(t *testing.T) {
+	s := newTestServer(t, nil)
+	// The fire path launches an async scan that writes under dataDir and can
+	// outlive the test. Use a manually-removed dir so a still-writing scan
+	// cannot fail t.TempDir's "directory not empty" cleanup.
+	dataDir, err := os.MkdirTemp("", "once-sched")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dataDir)
+	s.dataDir = dataDir
+	once := &ScanSchedule{
+		ID:       "once-1",
+		Name:     "One-time scan",
+		Interval: "once",
+		RunDate:  "2020-01-01", // in the past, so it is due now
+		Enabled:  true,
+		NextRun:  time.Now().Add(-time.Minute),
+		Targets:  []string{"localhost"},
+	}
+	s.schedulesMu.Lock()
+	s.schedules[once.ID] = once
+	s.schedulesMu.Unlock()
+	s.instancesMu.Lock()
+	s.instances = make(map[string]*ScanInstance)
+	s.instancesMu.Unlock()
+
+	s.checkAndRunSchedules()
+
+	s.schedulesMu.RLock()
+	firstRun, enabled := once.LastRun, once.Enabled
+	s.schedulesMu.RUnlock()
+	if firstRun.IsZero() {
+		t.Fatalf("one-time schedule did not fire (LastRun is zero)")
+	}
+	if enabled {
+		t.Fatalf("one-time schedule should be disabled after firing")
+	}
+
+	// A second tick must not fire it again.
+	s.checkAndRunSchedules()
+	s.schedulesMu.RLock()
+	secondRun := once.LastRun
+	s.schedulesMu.RUnlock()
+	if !secondRun.Equal(firstRun) {
+		t.Fatalf("disabled one-time schedule fired again: LastRun %v -> %v", firstRun, secondRun)
+	}
+}
+
 func TestNormalizeScheduleTiming(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -179,6 +249,11 @@ func TestNormalizeScheduleTiming(t *testing.T) {
 		{name: "monthly defaults to the first", sch: ScanSchedule{Interval: "monthly", RunDay: 0}, wantRunDay: 1},
 		{name: "monthly rejects day 32", sch: ScanSchedule{Interval: "monthly", RunDay: 32}, wantErr: true},
 		{name: "daily drops the day component", sch: ScanSchedule{Interval: "daily", RunDay: 4}},
+		{name: "once accepts a calendar date", sch: ScanSchedule{Interval: "once", RunDate: "2026-11-15", RunAt: "09:00"}},
+		{name: "once requires a date", sch: ScanSchedule{Interval: "once"}, wantErr: true},
+		{name: "once rejects a malformed date", sch: ScanSchedule{Interval: "once", RunDate: "15-11-2026"}, wantErr: true},
+		{name: "once rejects an impossible date", sch: ScanSchedule{Interval: "once", RunDate: "2026-02-30"}, wantErr: true},
+		{name: "recurring drops a stray date", sch: ScanSchedule{Interval: "daily", RunDate: "2026-11-15"}},
 	}
 
 	for _, tc := range cases {
@@ -198,6 +273,13 @@ func TestNormalizeScheduleTiming(t *testing.T) {
 			}
 			if strings.TrimSpace(tc.sch.RunAt) != tc.sch.RunAt {
 				t.Errorf("RunAt was not trimmed: %q", tc.sch.RunAt)
+			}
+			if strings.EqualFold(tc.sch.Interval, "once") {
+				if tc.sch.RunDate == "" {
+					t.Errorf("once schedule lost its RunDate")
+				}
+			} else if tc.sch.RunDate != "" {
+				t.Errorf("recurring schedule kept a RunDate: %q", tc.sch.RunDate)
 			}
 		})
 	}

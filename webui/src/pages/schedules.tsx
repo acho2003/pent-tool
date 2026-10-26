@@ -22,6 +22,7 @@ export default function SchedulesPage() {
   const [mode, setMode] = useState("single");
   const [runAt, setRunAt] = useState("");
   const [runDay, setRunDay] = useState("0");
+  const [runDate, setRunDate] = useState("");
   const [timezone, setTimezone] = useState("");
   const [artifactKind, setArtifactKind] = useState("none");
   const [artifactRef, setArtifactRef] = useState("");
@@ -67,6 +68,7 @@ export default function SchedulesPage() {
     const targetList = targets.split(/[\n,]/).map((v) => v.trim()).filter(Boolean);
     if (typedAssessment && (!plan || plan.errors?.some((item) => item.blocking) || plan.config.assessment_targets[0]?.value !== targets.trim())) { setError("Preview the current assessment plan before saving this schedule."); return; }
     if (!targetList.length && (artifactKind === "none" || !artifactRef.trim())) { setError("Add a target or a source artifact."); return; }
+    if (interval === "once" && !runDate) { setError("Pick the date for a one-time schedule."); return; }
     try {
       await create.mutateAsync({
         name: name.trim() || "Scheduled scan", interval, enabled: true, targets: targetList,
@@ -76,6 +78,7 @@ export default function SchedulesPage() {
         scan_mode: mode,
         run_at: runAt.trim() || undefined,
         run_day: showRunDay ? Number(runDay) : undefined,
+        run_date: interval === "once" ? runDate || undefined : undefined,
         timezone: timezone.trim() || undefined,
         company_name: companyName.trim() || undefined,
         logo_path: logoPath.trim() || undefined,
@@ -83,7 +86,7 @@ export default function SchedulesPage() {
         vuls_ssh_host: vulsHost.trim() || undefined,
       });
       setName(""); setTargets(""); setArtifactRef(""); setVulsHost(""); setPlan(null);
-      setRunAt(""); setRunDay("0"); setTimezone(""); setCompanyName(""); setLogoPath("");
+      setRunAt(""); setRunDay("0"); setRunDate(""); setTimezone(""); setCompanyName(""); setLogoPath("");
     } catch (e) { setError(e instanceof Error ? e.message : "Failed to create schedule"); }
   }
 
@@ -96,8 +99,9 @@ export default function SchedulesPage() {
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="space-y-2"><Label>{typedAssessment ? "Application URL or domain" : "Targets"}</Label><Input value={targets} onChange={(e) => { setTargets(e.target.value); setPlan(null); }} placeholder={typedAssessment ? "https://example.com/app/" : "https://example.com, api.example.com"} /></div></div>
       {typedAssessment && <div className="space-y-2"><Label>Web profile</Label><Select value={profile} onValueChange={(value) => { setProfile(value as typeof profile); setPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="web-gentle">Gentle · production</SelectItem><SelectItem value="web-thorough">Thorough · lab or staging</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Thorough uses Nuclei's default rate (up to 150 requests/sec) with no Nikto pause or overall web scan time limit. It may test up to 2,000 endpoints.</p></div>}
       {typedAssessment && <div className="space-y-3 rounded-md border p-3"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Assessment mode</Label><Select value={assessmentMode} onValueChange={(value) => { setAssessmentMode(value as AssessmentMode); setPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="BLACK_BOX">Black Box</SelectItem><SelectItem value="GRAY_BOX">Gray Box</SelectItem><SelectItem value="WHITE_BOX">White Box</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Coverage</Label><div className="flex gap-3 pt-2 text-xs">{(["WEB_APPLICATION", "API"] as AssessmentType[]).map((type) => <label key={type} className="flex items-center gap-1"><input type="checkbox" checked={assessmentTypes.includes(type)} onChange={() => { setAssessmentTypes((old) => old.includes(type) ? old.filter((item) => item !== type) : [...old, type]); setPlan(null); }} />{type.replaceAll("_", " ")}</label>)}</div></div></div><Button type="button" variant="outline" onClick={() => void previewAssessment()} disabled={planning || assessmentTypes.length === 0}>{planning ? "Planning…" : "Preview schedule plan"}</Button>{plan && <div className="space-y-2 text-xs"><p className="font-mono">Plan {plan.fingerprint} · {plan.jobs.length} job(s)</p>{plan.coverage.map((item) => <p key={item.type} className="text-muted-foreground">{item.type}: {item.state} — {item.reason}</p>)}{plan.decisions.filter((item) => item.state !== "selected" && item.state !== "conditional").map((item, i) => <p key={`${item.scanner}-${item.target_id}-${i}`} className="text-muted-foreground">{item.scanner}: {item.state} — {item.reason}</p>)}</div>}</div>}
-      <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Interval</Label><Select value={interval} onValueChange={setInterval}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hourly">Hourly</SelectItem><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single</SelectItem><SelectItem value="wildcard">Wildcard</SelectItem></SelectContent></Select></div></div>
+      <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Interval</Label><Select value={interval} onValueChange={setInterval}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="once">Once (specific date)</SelectItem><SelectItem value="hourly">Hourly</SelectItem><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Mode</Label><Select value={mode} onValueChange={setMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single</SelectItem><SelectItem value="wildcard">Wildcard</SelectItem></SelectContent></Select></div></div>
       <div className="grid gap-3 sm:grid-cols-3">
+        {interval === "once" && <div className="space-y-2"><Label>Run on (date)</Label><Input type="date" value={runDate} onChange={(e) => setRunDate(e.target.value)} /></div>}
         {showRunAt && <div className="space-y-2"><Label>Run at {interval === "hourly" ? "(minute)" : "(time)"}</Label><Input type="time" value={runAt} onChange={(e) => setRunAt(e.target.value)} /></div>}
         {showRunDay && interval === "weekly" && <div className="space-y-2"><Label>Weekday</Label><Select value={runDay} onValueChange={setRunDay}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{WEEKDAYS.map((d, i) => <SelectItem key={d} value={String(i)}>{d}</SelectItem>)}</SelectContent></Select></div>}
         {showRunDay && interval === "monthly" && <div className="space-y-2"><Label>Day of month</Label><Input type="number" min={1} max={31} value={runDay} onChange={(e) => setRunDay(e.target.value)} /></div>}
