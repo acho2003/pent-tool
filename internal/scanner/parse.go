@@ -186,6 +186,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseAPIChecks(run.ArtifactPath)
 	case "kube-exposure":
 		return parseKubeExposure(run.ArtifactPath)
+	case "nextjs-assets":
+		return parseNextjsAssets(run.ArtifactPath)
 	case "apiwrites":
 		// The write adapter artifact records operation and cleanup status, not
 		// scanner findings. Findings are reported only by verification adapters.

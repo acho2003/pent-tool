@@ -148,6 +148,8 @@ func stageForScanner(id string) string {
 		return StageValidation
 	case "apiwrites":
 		return StageWrite
+	case "nextjs-assets":
+		return StagePassive
 	default:
 		return StageDAST
 	}

@@ -119,3 +119,27 @@ cluster audit and cannot inspect Pods, RBAC, Secrets, NetworkPolicies, service
 accounts, images, or cluster configuration. Use the separate opt-in
 `kube-bench` scanner with operator-supplied cluster access for CIS benchmark
 coverage.
+
+# Next.js asset checks
+
+Web and API assessments can optionally select the `nextjs-assets` scanner. It
+runs in the passive stage, after the crawl, and reads only JavaScript the
+application already serves: script URLs the crawl recorded in the inventory and
+`/_next/static/` scripts referenced by the target page. It sends GET requests to
+in-scope URLs only, never follows redirects, pins the resolved address of each
+origin, uses the shared rate limiter and request budget, and never forwards
+credentials. At most 40 scripts are examined; more are recorded as a
+`script_limit` limitation.
+
+It reports two things. A Next.js fingerprint (informational) records the
+signals seen, the build ID and, when the client runtime exposes it, the
+framework version, so the version can be checked against Next.js advisories.
+A public source map (low, CWE-540) is reported only when the referenced map
+answers HTTP 200 with source-map JSON; inline `data:` maps and HTML fallback
+pages are not findings. Only the first 4 KiB of a map is read and its content
+is not retained.
+
+Assets are fetched anonymously, recorded as the `anonymous_assets_only`
+limitation, so bundles served only to signed-in users are not examined. A
+missing version means the served assets did not reveal it, not that the
+application is unaffected by an advisory.
