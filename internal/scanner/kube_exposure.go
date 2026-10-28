@@ -52,15 +52,58 @@ func (kubeExposureRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	}
 	defer file.Close()
 	run.ArtifactPath = artifact
-	client := &http.Client{Timeout: 10 * time.Second}
-	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
-		if len(via) >= 3 {
-			return fmt.Errorf("redirect limit exceeded")
+	// Each origin gets a client pinned to the addresses the scope guard judged;
+	// redirects are followed here so every hop is checked against the approved
+	// scope and exclusions before it is requested.
+	clients := map[string]*http.Client{}
+	refused := map[string]error{}
+	get := func(raw string) (*http.Response, error) {
+		for hop := 0; ; hop++ {
+			parsed, err := url.Parse(raw)
+			if err != nil {
+				return nil, err
+			}
+			origin := parsed.Scheme + "://" + parsed.Host
+			if err := refused[origin]; err != nil {
+				return nil, err
+			}
+			client := clients[origin]
+			if client == nil {
+				if client, err = guardedOriginClient(ctx, cfg, raw); err != nil {
+					refused[origin] = err
+					return nil, err
+				}
+				clients[origin] = client
+			}
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+			if err != nil {
+				return nil, err
+			}
+			resp, err := client.Do(request)
+			if err != nil {
+				return nil, err
+			}
+			location := resp.Header.Get("Location")
+			if resp.StatusCode < 300 || resp.StatusCode > 399 || location == "" {
+				return resp, nil
+			}
+			resp.Body.Close()
+			next, err := parsed.Parse(location)
+			if err != nil {
+				return nil, fmt.Errorf("redirect refused: invalid location")
+			}
+			if hop >= 2 {
+				return nil, fmt.Errorf("redirect limit exceeded")
+			}
+			next.Fragment = ""
+			if ok, reason := req.AppScope.Allows(next.String()); !ok {
+				return nil, fmt.Errorf("redirect refused: %s", reason)
+			}
+			if excluded, _ := req.AppScope.Excluded(http.MethodGet, next.String()); excluded {
+				return nil, fmt.Errorf("redirect refused: the redirect target is excluded")
+			}
+			raw = next.String()
 		}
-		if ok, reason := req.AppScope.Allows(next.URL.String()); !ok {
-			return fmt.Errorf("redirect refused: %s", reason)
-		}
-		return nil
 	}
 	checks := append([]kubeExposureCheck{{ID: "supplied-url", Path: base.EscapedPath(), Purpose: "supplied URL response"}}, kubeExposureCatalog...)
 	attempted, completed, findings := 0, 0, 0
@@ -74,9 +117,15 @@ func (kubeExposureRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		candidate.RawQuery, candidate.Fragment = "", ""
 		if check.ID != "supplied-url" {
 			candidate.Path = path.Join(strings.TrimSuffix(base.Path, "/"), check.Path)
+			if strings.HasSuffix(check.Path, "/") {
+				candidate.Path += "/"
+			}
 		}
 		raw := candidate.String()
 		if ok, _ := req.AppScope.Allows(raw); !ok {
+			continue
+		}
+		if excluded, _ := req.AppScope.Excluded(http.MethodGet, raw); excluded {
 			continue
 		}
 		if err := cfg.Budget.Wait(ctx); err != nil {
@@ -84,7 +133,7 @@ func (kubeExposureRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			break
 		}
 		attempted++
-		resp, err := client.Get(raw)
+		resp, err := get(raw)
 		if err != nil {
 			lastErr = kubeRequestError(err)
 			continue

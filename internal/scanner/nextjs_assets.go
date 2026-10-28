@@ -134,13 +134,13 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		origin := parsed.Scheme + "://" + parsed.Host
 		client := clients[origin]
 		if client == nil {
-			addresses, err := resolveAPICheckAddresses(ctx, parsed.Hostname())
+			guarded, err := guardedOriginClient(ctx, cfg, rawURL)
 			if err != nil {
 				attempted++
 				lastErr = err.Error()
 				return nextjsFetch{}, false
 			}
-			client = apiCheckClientFor(parsed, addresses)
+			client = guarded
 			clients[origin] = client
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
