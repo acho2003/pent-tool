@@ -2,8 +2,10 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -204,5 +206,141 @@ func TestNextjsAssetsPlannedOnlyWhenSelected(t *testing.T) {
 	}
 	if plan.ToolVersions["nextjs-assets-catalog"] != nextjsAssetsCatalogVersion {
 		t.Fatalf("catalog version not fingerprinted: %v", plan.ToolVersions)
+	}
+}
+
+const nextjsFixtureManifest = `self.__BUILD_MANIFEST=function(a){return{__rewrites:{afterFiles:[],beforeFiles:[],fallback:[]},"/":[a],"/about":[a],"/blog/[slug]":[a],"/account/logout":[a],"/admin":[a],"/gone":[a],sortedPages:["/","/_app","/_error","/about","/account/logout","/admin","/blog/[slug]","/gone"]}}("static/chunks/x.js");self.__BUILD_MANIFEST_CB&&self.__BUILD_MANIFEST_CB();`
+
+func TestNextjsAssetsRecordsBuildManifestRoutes(t *testing.T) {
+	fixture := &nextjsFixture{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/":
+			fixture.mu.Lock()
+			fixture.requests = append(fixture.requests, r.Method+" "+r.URL.Path)
+			fixture.mu.Unlock()
+			_, _ = w.Write([]byte(`<html><script src="/app/_next/static/BuildX1/_buildManifest.js"></script></html>`))
+		case "/app/_next/static/BuildX1/_buildManifest.js":
+			fixture.mu.Lock()
+			fixture.requests = append(fixture.requests, r.Method+" "+r.URL.Path)
+			fixture.mu.Unlock()
+			_, _ = w.Write([]byte(nextjsFixtureManifest))
+		default:
+			fixture.handler(w, r)
+		}
+	}))
+	defer server.Close()
+
+	target := server.URL + "/app/"
+	cfg := assessment.AssessmentConfig{
+		Targets:    []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}},
+		Exclusions: []assessment.Exclusion{{PathPattern: "/app/admin"}},
+	}
+	scope := assessment.AppScopeForTarget(cfg, "app")
+	req := Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}
+	run := (nextjsAssetsRunner{}).Run(context.Background(), req, Config{Budget: NewAssessmentBudget(0, 50, 0)}, nil)
+	if run.Status != "completed" {
+		t.Fatalf("status=%q reason=%q", run.Status, run.Reason)
+	}
+
+	byPath := map[string]HistoricalCandidate{}
+	for _, c := range run.HistoricalCandidates {
+		if c.Provider != "nextjs-assets" || c.Source != "build_manifest" {
+			t.Fatalf("candidate provenance = %+v", c)
+		}
+		key, _ := url.PathUnescape(strings.TrimPrefix(c.URL, server.URL))
+		byPath[key] = c
+	}
+	want := map[string]string{
+		"/app/":               EndpointStateInScope,
+		"/app/about":          EndpointStateInScope,
+		"/app/gone":           EndpointStateInScope,
+		"/app/blog/[slug]":    EndpointStateUnmaterialized,
+		"/app/account/logout": EndpointStateHistoricalUnverified,
+		"/app/admin":          EndpointStateExcluded,
+	}
+	if len(byPath) != len(want) {
+		t.Fatalf("candidates = %+v", byPath)
+	}
+	for p, state := range want {
+		if c, ok := byPath[p]; !ok || c.State != state {
+			t.Fatalf("%s: got %+v, want state %s", p, c, state)
+		}
+	}
+	if byPath["/app/about"].Status != http.StatusNotFound || byPath["/app/gone"].Status != http.StatusNotFound {
+		t.Fatalf("confirmation status not recorded: %+v", byPath)
+	}
+	for _, got := range fixture.requests {
+		for _, forbidden := range []string{"/app/admin", "/app/account/logout", "[slug]", "/app/_app", "/app/_error"} {
+			if strings.Contains(got, forbidden) {
+				t.Fatalf("forbidden route requested: %s", got)
+			}
+		}
+	}
+
+	// Merged into the inventory, only routes with a recorded response count as observed.
+	surface := &AttackSurface{Scope: "assessment:app", Target: target}
+	MergeHistoricalCandidates(surface, run.HistoricalCandidates)
+	observed := 0
+	for _, ep := range surface.Endpoints {
+		if ep.ObservationKind == "observed" {
+			observed++
+			if ep.State != EndpointStateInScope {
+				t.Fatalf("observed endpoint with state %q", ep.State)
+			}
+		}
+		if len(ep.Provenance) != 1 || ep.Provenance[0].Source != "build_manifest" {
+			t.Fatalf("provenance = %+v", ep.Provenance)
+		}
+	}
+	if observed != 3 {
+		t.Fatalf("observed = %d, want 3", observed)
+	}
+}
+
+func TestNextjsManifestRoutesFallsBackToRouteKeys(t *testing.T) {
+	got := nextjsManifestRoutes([]byte(`self.__BUILD_MANIFEST={"/":["a.js"],"/_app":["b.js"],"/docs/[[...slug]]":["c.js"],"/":["a.js"]};`))
+	if strings.Join(got, ",") != "/,/docs/[[...slug]]" {
+		t.Fatalf("routes = %v", got)
+	}
+}
+
+func TestNextjsAssetsRouteChecksAreCapped(t *testing.T) {
+	var manifest strings.Builder
+	manifest.WriteString("self.__BUILD_MANIFEST={sortedPages:[")
+	for i := range nextjsMaxRouteChecks + 7 {
+		fmt.Fprintf(&manifest, `"/p%d",`, i)
+	}
+	manifest.WriteString(`"/last"]};`)
+	requests := 0
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte(`<script src="/_next/static/B/_buildManifest.js"></script>`))
+		case "/_next/static/B/_buildManifest.js":
+			_, _ = w.Write([]byte(manifest.String()))
+		}
+	}))
+	defer server.Close()
+	run := (nextjsAssetsRunner{}).Run(context.Background(), nextjsTestRequest(t, server.URL+"/"), Config{}, nil)
+	if !hasLimitation(run, LimitationRouteCheckLimit) {
+		t.Fatalf("route limit not recorded: %+v", run.Limitations)
+	}
+	// Page + manifest + capped confirmations.
+	if requests != 2+nextjsMaxRouteChecks {
+		t.Fatalf("requests = %d", requests)
+	}
+	unverified := 0
+	for _, c := range run.HistoricalCandidates {
+		if c.State == EndpointStateHistoricalUnverified {
+			unverified++
+		}
+	}
+	if unverified != 8 {
+		t.Fatalf("unverified = %d", unverified)
 	}
 }

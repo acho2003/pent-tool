@@ -20,7 +20,7 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v1"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v2"
 
 const (
 	nextjsMaxScripts      = 40
@@ -30,11 +30,18 @@ const (
 	// content itself is never retained.
 	nextjsMapProbeLimit = 4 << 10
 
+	// Build-manifest routes are confirmed with one anonymous GET each, up to
+	// this many; the rest stay unverified inventory entries.
+	nextjsMaxRouteChecks = 100
+	nextjsMaxRoutes      = 500
+
 	// LimitationScriptLimit: more in-scope scripts existed than the adapter examines.
 	LimitationScriptLimit = "script_limit"
 	// LimitationAnonymousAssets: assets are fetched without credentials, so
 	// bundles served only to signed-in users are not examined.
 	LimitationAnonymousAssets = "anonymous_assets_only"
+	// LimitationRouteCheckLimit: more manifest routes existed than were confirmed.
+	LimitationRouteCheckLimit = "route_check_limit"
 )
 
 var (
@@ -43,6 +50,11 @@ var (
 	nextjsManifestPattern  = regexp.MustCompile(`/_next/static/([A-Za-z0-9_-]{1,64})/_(?:build|ssg)Manifest\.js$`)
 	nextjsScriptSrcPattern = regexp.MustCompile(`<script[^>]+src="([^"]*/_next/static/[^"]+\.js)"`)
 	nextjsSourceMapPattern = regexp.MustCompile(`(?m)^[ \t]*//[#@][ \t]*sourceMappingURL=([^\s'"]+)[ \t]*$`)
+	nextjsSortedPages      = regexp.MustCompile(`sortedPages\s*:\s*\[((?:\s*"[^"]*"\s*,?)*)\]`)
+	nextjsManifestRouteKey = regexp.MustCompile(`"(/[^"\s]{0,512})"\s*:\s*\[`)
+	nextjsQuoted           = regexp.MustCompile(`"([^"\s]{1,512})"`)
+	// Route names that suggest a GET may change state are recorded, not requested.
+	nextjsUnsafeRouteName = regexp.MustCompile(`(?i)(^|[/_.-])(log-?out|sign-?out|delete|remove|destroy|unsubscribe|deactivate|revoke)([/_.-]|$)`)
 )
 
 // nextjsAssetsRunner examines the JavaScript a Next.js application already
@@ -100,7 +112,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		if stopped {
 			return nextjsFetch{}, false
 		}
-		if ok, _ := req.AppScope.Allows(rawURL); !ok {
+		if !nextjsAllows(req, rawURL) || nextjsExcluded(req, rawURL) {
 			return nextjsFetch{}, false
 		}
 		parsed, err := url.Parse(rawURL)
@@ -186,6 +198,8 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	}
 
 	var findings []Finding
+	var routes []string
+	var routeBase *url.URL
 	probedMaps := map[string]bool{}
 	for _, script := range scripts {
 		if stopped {
@@ -201,6 +215,13 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		res, ok := fetch(script, nextjsScriptReadLimit)
 		if !ok || res.status != http.StatusOK {
 			continue
+		}
+		if strings.HasSuffix(scriptURL.Path, "/_buildManifest.js") && routes == nil {
+			routes = nextjsManifestRoutes(res.body)
+			// Manifest routes are relative to the application's base path.
+			base := *scriptURL
+			base.Path, base.RawPath, base.RawQuery = scriptURL.Path[:strings.Index(scriptURL.Path, "/_next/")], "", ""
+			routeBase = &base
 		}
 		if m := nextjsVersionPattern.FindSubmatch(res.body); m != nil && version == "" {
 			version = string(m[1])
@@ -235,6 +256,32 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			Remediation: "Do not deploy source maps publicly (Next.js: productionBrowserSourceMaps false), or restrict them to authorized users.",
 			CWE:         "CWE-540", Confidence: "confirmed",
 		})
+	}
+	if routeBase != nil {
+		checked, unconfirmed := 0, 0
+		for _, route := range routes {
+			candidate := nextjsRouteCandidate(req, routeBase, route)
+			if candidate.URL == "" {
+				continue
+			}
+			if candidate.State == EndpointStateInScope {
+				if checked >= nextjsMaxRouteChecks || stopped {
+					unconfirmed++
+					candidate.State, candidate.Reason = EndpointStateHistoricalUnverified, "referenced by the Next.js build manifest; not confirmed (route check limit or budget)"
+				} else if res, ok := fetch(candidate.URL, 0); ok {
+					checked++
+					candidate.Status = res.status
+					candidate.Reason = fmt.Sprintf("referenced by the Next.js build manifest; anonymous GET answered HTTP %d", res.status)
+				} else {
+					checked++
+					candidate.State, candidate.Reason = EndpointStateHistoricalUnverified, "referenced by the Next.js build manifest; confirmation request did not complete"
+				}
+			}
+			run.HistoricalCandidates = append(run.HistoricalCandidates, candidate)
+		}
+		if unconfirmed > 0 {
+			run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationRouteCheckLimit, Reason: fmt.Sprintf("confirmed %d manifest routes; %d more are recorded unverified", checked, unconfirmed)})
+		}
 	}
 	if len(signals) > 0 {
 		detail := "version not determined from served assets"
@@ -271,7 +318,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	case len(signals) == 0:
 		return finish("completed", fmt.Sprintf("no Next.js signals in %d responses", completed))
 	}
-	return finish("completed", fmt.Sprintf("completed %d bounded read-only requests over %d scripts; %d source maps probed; %d findings", completed, len(scripts), len(probedMaps), len(findings)))
+	return finish("completed", fmt.Sprintf("completed %d bounded read-only requests over %d scripts; %d source maps probed; %d manifest routes recorded; %d findings", completed, len(scripts), len(probedMaps), len(run.HistoricalCandidates), len(findings)))
 }
 
 // nextjsInventoryScripts returns the script URLs the crawl already recorded.
@@ -326,6 +373,68 @@ func nextjsInScopeScripts(req Request, scripts []string) []string {
 		return strings.Compare(a, b)
 	})
 	return out
+}
+
+// nextjsManifestRoutes reads the Pages Router route list from a build
+// manifest: sortedPages when present, otherwise the manifest's route keys.
+// Internal pages (/_app, /_error, ...) are dropped.
+func nextjsManifestRoutes(body []byte) []string {
+	var raw []string
+	if m := nextjsSortedPages.FindSubmatch(body); m != nil {
+		for _, q := range nextjsQuoted.FindAllSubmatch(m[1], -1) {
+			raw = append(raw, string(q[1]))
+		}
+	} else {
+		for _, k := range nextjsManifestRouteKey.FindAllSubmatch(body, -1) {
+			raw = append(raw, string(k[1]))
+		}
+	}
+	seen := map[string]bool{}
+	routes := []string{}
+	for _, route := range raw {
+		if !strings.HasPrefix(route, "/") || strings.HasPrefix(route, "/_") || seen[route] {
+			continue
+		}
+		seen[route] = true
+		routes = append(routes, route)
+		if len(routes) >= nextjsMaxRoutes {
+			break
+		}
+	}
+	return routes
+}
+
+// nextjsRouteCandidate places one manifest route in the inventory model. Only
+// a static, in-scope, non-excluded route with a harmless name is eligible for
+// a confirmation request; every other route is recorded with its reason.
+func nextjsRouteCandidate(req Request, base *url.URL, route string) HistoricalCandidate {
+	u := *base
+	u.Path = strings.TrimSuffix(base.Path, "/") + route
+	u.RawPath = ""
+	c := HistoricalCandidate{URL: u.String(), Provider: "nextjs-assets", Source: "build_manifest", State: EndpointStateInScope}
+	switch {
+	case strings.Contains(route, "["):
+		c.State, c.Reason = EndpointStateUnmaterialized, "dynamic Next.js route segment needs a supplied value"
+	case !nextjsAllows(req, c.URL):
+		_, reason := req.AppScope.Allows(c.URL)
+		c.State, c.Reason = EndpointStateOutOfScope, reason
+	case nextjsExcluded(req, c.URL):
+		_, reason := req.AppScope.Excluded(http.MethodGet, c.URL)
+		c.State, c.Reason = EndpointStateExcluded, reason
+	case nextjsUnsafeRouteName.MatchString(route):
+		c.State, c.Reason = EndpointStateHistoricalUnverified, "not requested: the route name suggests a GET may change state"
+	}
+	return c
+}
+
+func nextjsAllows(req Request, rawURL string) bool {
+	ok, _ := req.AppScope.Allows(rawURL)
+	return ok
+}
+
+func nextjsExcluded(req Request, rawURL string) bool {
+	excluded, _ := req.AppScope.Excluded(http.MethodGet, rawURL)
+	return excluded
 }
 
 // looksLikeSourceMap confirms a source-map document from its opening bytes:

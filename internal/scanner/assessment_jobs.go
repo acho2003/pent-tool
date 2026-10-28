@@ -822,7 +822,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		run.AssessmentTypes = jobAssessmentTypes(job)
 		run.PlanFingerprint = plan.Fingerprint
 		run.AttemptID = attemptID
-		if (job.Scanner == "gau" || job.Scanner == "waybackurls") && run.Status == "completed" {
+		// Next.js manifest routes found before a budget stop are still recorded.
+		if ((job.Scanner == "gau" || job.Scanner == "waybackurls") && run.Status == "completed") || (job.Scanner == "nextjs-assets" && len(run.HistoricalCandidates) > 0) {
 			if surface == nil {
 				pendingHistory[job.TargetID] = append(pendingHistory[job.TargetID], run.HistoricalCandidates...)
 			} else {

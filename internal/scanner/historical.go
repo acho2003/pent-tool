@@ -27,6 +27,8 @@ type HistoricalCandidate struct {
 	State     string   `json:"state"`
 	Status    int      `json:"status,omitempty"`
 	Reason    string   `json:"reason,omitempty"`
+	// Source is the provenance source; empty means an archive observation.
+	Source string `json:"source,omitempty"`
 }
 
 type historicalRunner struct{ provider string }

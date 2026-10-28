@@ -139,6 +139,15 @@ answers HTTP 200 with source-map JSON; inline `data:` maps and HTML fallback
 pages are not findings. Only the first 4 KiB of a map is read and its content
 is not retained.
 
+When a Pages Router `_buildManifest.js` is served, its routes are added to the
+inventory with `build_manifest` provenance. A static, in-scope route gets one
+anonymous GET (at most 100 per run, more are recorded as `route_check_limit`);
+only a recorded response makes it an observed endpoint. Dynamic routes such as
+`/blog/[slug]` are recorded as unmaterialized until a value is supplied.
+Excluded and out-of-scope routes, and routes whose names suggest a state change
+(logout, delete, unsubscribe, ...), are recorded with their reason and never
+requested. App Router route lists are not public and are not read.
+
 Assets are fetched anonymously, recorded as the `anonymous_assets_only`
 limitation, so bundles served only to signed-in users are not examined. A
 missing version means the served assets did not reveal it, not that the
