@@ -104,12 +104,13 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	cfg := assessment.Normalize(input.Config)
 	// RegistryVersion also pins scanner and preparation semantics which affect
 	// execution identity (including which imported API operations are seeded).
-	toolVersions := make(map[string]string, len(input.ToolVersions)+2)
+	toolVersions := make(map[string]string, len(input.ToolVersions)+3)
 	for key, value := range input.ToolVersions {
 		toolVersions[key] = value
 	}
 	toolVersions["kube-exposure-catalog"] = kubeExposureCatalogVersion
 	toolVersions["nextjs-assets-catalog"] = nextjsAssetsCatalogVersion
+	toolVersions["nextjs-advisories"] = nextjsAdvisoriesVersion
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: toolVersions}
 	for i := range plan.Capabilities {
 		evidence := &plan.Capabilities[i]

@@ -20,7 +20,7 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v2"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v3"
 
 const (
 	nextjsMaxScripts      = 40
@@ -40,6 +40,9 @@ const (
 	// LimitationAnonymousAssets: assets are fetched without credentials, so
 	// bundles served only to signed-in users are not examined.
 	LimitationAnonymousAssets = "anonymous_assets_only"
+	// LimitationVersionUnknown: Next.js was detected but its version was not,
+	// so no advisory could be matched.
+	LimitationVersionUnknown = "version_unknown"
 	// LimitationRouteCheckLimit: more manifest routes existed than were confirmed.
 	LimitationRouteCheckLimit = "route_check_limit"
 )
@@ -302,6 +305,15 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			fingerprint.Confidence = "confirmed"
 		}
 		findings = append([]Finding{fingerprint}, findings...)
+		if version != "" {
+			advisories, err := nextjsAdvisoryFindings(req, base, page.String(), version)
+			if err != nil {
+				return finish("failed", "load Next.js advisory snapshot: "+err.Error())
+			}
+			findings = append(findings, advisories...)
+		} else {
+			run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationVersionUnknown, Reason: "the served assets did not reveal the Next.js version, so advisories were not matched"})
+		}
 	}
 	enc := json.NewEncoder(file)
 	for _, finding := range findings {
@@ -373,6 +385,37 @@ func nextjsInScopeScripts(req Request, scripts []string) []string {
 		return strings.Compare(a, b)
 	})
 	return out
+}
+
+// nextjsAdvisoryFindings reports each advisory in the embedded snapshot whose
+// affected range contains the detected version. A match is a version match,
+// not a tested exploit: applicability depends on the features and hosting the
+// advisory describes.
+func nextjsAdvisoryFindings(req Request, base *url.URL, endpoint, version string) ([]Finding, error) {
+	snapshot, err := loadNextjsAdvisories()
+	if err != nil {
+		return nil, err
+	}
+	var out []Finding
+	for _, match := range matchNextjsAdvisories(snapshot, version) {
+		advisory := match.Advisory
+		remediation := "Upgrade next to a patched release; see " + advisory.URL
+		if match.Range.Patched != "" {
+			remediation = "Upgrade next to " + match.Range.Patched + " or later; see " + advisory.URL
+		}
+		cwe := ""
+		if len(advisory.CWEs) > 0 {
+			cwe = advisory.CWEs[0]
+		}
+		out = append(out, Finding{
+			SourceID: nextjsSourceID("nextjs-advisory", advisory.GHSAID+"\x00"+base.Scheme+"://"+base.Host), Scanner: "nextjs-assets", RuleID: advisory.GHSAID,
+			Title: "Next.js " + version + ": " + advisory.Summary, Severity: advisory.Severity, Target: req.Target, Endpoint: sanitizeKubeURL(endpoint), Method: http.MethodGet,
+			Description: advisory.Summary + ". The served Next.js version is in the advisory's affected range. Whether it is exploitable depends on the features and hosting described in the advisory; it was not tested.",
+			Evidence:    fmt.Sprintf("detected version %s from the served client runtime; affected range %s; %s (snapshot %s)", version, match.Range.Range, advisory.GHSAID, snapshot.Retrieved),
+			Remediation: remediation, CVE: advisory.CVEID, CWE: cwe, Package: "next", PackageVersion: version, Confidence: "version_match",
+		})
+	}
+	return out, nil
 }
 
 // nextjsManifestRoutes reads the Pages Router route list from a build

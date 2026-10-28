@@ -19,6 +19,7 @@ build/
 !webui/package-lock.json
 !runtime/ui-acceptance/package-lock.json
 !internal/web/static/.eslintrc.json
+!internal/scanner/nextjs_advisories.json
 xalgorix-data/
 *_assessment/
 

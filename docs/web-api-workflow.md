@@ -139,6 +139,16 @@ answers HTTP 200 with source-map JSON; inline `data:` maps and HTML fallback
 pages are not findings. Only the first 4 KiB of a map is read and its content
 is not retained.
 
+When the version is known, it is matched against an embedded snapshot of
+GitHub's advisory database for the npm package `next`
+(`internal/scanner/nextjs_advisories.json`, refreshed with
+`runtime/update-nextjs-advisories.py`; no lookup happens during a scan). Each
+advisory whose affected range contains the version becomes a finding with the
+advisory's severity, CVE, CWE and first patched release, marked
+`version_match`: applicability depends on the features and hosting the
+advisory describes and is not tested. An unknown version is recorded as the
+`version_unknown` limitation instead of a clean result.
+
 When a Pages Router `_buildManifest.js` is served, its routes are added to the
 inventory with `build_manifest` provenance. A static, in-scope route gets one
 anonymous GET (at most 100 per run, more are recorded as `route_check_limit`);

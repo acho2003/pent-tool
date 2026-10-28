@@ -93,7 +93,7 @@ func TestNextjsAssetsFingerprintsAndFindsPublicSourceMaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fingerprint, maps []Finding
+	var fingerprint, maps, advisories []Finding
 	for _, f := range findings {
 		switch f.RuleID {
 		case "nextjs-fingerprint":
@@ -101,7 +101,18 @@ func TestNextjsAssetsFingerprintsAndFindsPublicSourceMaps(t *testing.T) {
 		case "nextjs-source-map":
 			maps = append(maps, f)
 		default:
-			t.Fatalf("unexpected rule %q", f.RuleID)
+			if !strings.HasPrefix(f.RuleID, "GHSA-") {
+				t.Fatalf("unexpected rule %q", f.RuleID)
+			}
+			advisories = append(advisories, f)
+		}
+	}
+	if len(advisories) == 0 {
+		t.Fatal("detected version 14.1.0 matched no advisories")
+	}
+	for _, a := range advisories {
+		if a.PackageVersion != "14.1.0" || a.Confidence != "version_match" || !strings.Contains(a.Evidence, "affected range") || !strings.Contains(a.Description, "not tested") {
+			t.Fatalf("advisory finding = %+v", a)
 		}
 	}
 	if len(fingerprint) != 1 || fingerprint[0].PackageVersion != "14.1.0" || !strings.Contains(fingerprint[0].Evidence, "build ID BuildX1") || fingerprint[0].Package != "next" {
