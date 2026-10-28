@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
@@ -43,6 +44,33 @@ func TestBuildNmapAcceptsNetworkTargetsAndRejectsUnsafeOnes(t *testing.T) {
 	}
 	if spec := buildNmap(Request{Target: "192.168.1.10", ScanDir: t.TempDir()}, Config{NmapTimeout: 1}); spec.notApp == "" {
 		t.Fatal("nmap with no configured path should be not-applicable")
+	}
+}
+
+func TestBuildNmapVulnSelectionExcludesDisruptiveAndOffBoxScripts(t *testing.T) {
+	cfg := Config{NmapPath: "nmap", NmapTimeout: 60000000000}
+	spec := buildNmap(Request{Target: "192.168.1.10", ScanDir: t.TempDir()}, cfg)
+	scripts, ok := argValue(spec.args, "--script")
+	if !ok {
+		t.Fatalf("no --script selection: %v", spec.args)
+	}
+	// The vuln category must still drive detection.
+	if !strings.HasPrefix(scripts, "vuln and not") {
+		t.Fatalf("selection must keep vuln and exclude unsafe tags: %q", scripts)
+	}
+	// Everything inside the parentheses is excluded. The DoS, broadcast,
+	// external-lookup and exploit scripts must all be there; running them would
+	// break the tool's non-destructive, no-off-box contract.
+	open := strings.Index(scripts, "(")
+	close := strings.Index(scripts, ")")
+	if open < 0 || close < open {
+		t.Fatalf("exclusion clause not parenthesised: %q", scripts)
+	}
+	excluded := scripts[open+1 : close]
+	for _, tag := range []string{"dos", "broadcast", "external", "exploit"} {
+		if !strings.Contains(excluded, tag) {
+			t.Fatalf("%q not excluded from selection %q", tag, scripts)
+		}
 	}
 }
 

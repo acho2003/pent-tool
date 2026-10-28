@@ -17,10 +17,14 @@ const (
 	nmapMinIPv6PrefixBits = 120
 	nmapMaxRate           = "100"
 	// nmapVulnScripts is the NSE script selection used for vulnerability
-	// detection. The "vuln" category probes only the approved target (no
-	// third-party lookups) and reports a confirmed "State: VULNERABLE" that
-	// parseNmap turns into findings.
-	nmapVulnScripts = "vuln"
+	// detection. The bare "vuln" category is not safe for this tool's contract:
+	// it includes scripts tagged "dos" and "broadcast" (which can disrupt or
+	// reach beyond the approved target) and "external" (which send target
+	// service data to third-party databases). The selection keeps the vuln
+	// category but excludes those tags and "exploit" so only passive,
+	// version-detection-driven checks against the approved target run and
+	// report a confirmed "State: VULNERABLE" that parseNmap turns into findings.
+	nmapVulnScripts = "vuln and not (dos or broadcast or external or exploit)"
 	// nmapScriptTimeout bounds each individual NSE script so one slow or
 	// hanging check cannot consume the whole job's overall timeout.
 	nmapScriptTimeout = "90s"
@@ -67,8 +71,9 @@ func buildNmap(req Request, cfg Config) commandSpec {
 	// -sT uses TCP connect scanning without raw sockets; -sV detects
 	// service/version on open ports and -oX writes the parsed XML. -n skips
 	// reverse DNS and --max-rate bounds the probe rate. --script runs the "vuln"
-	// NSE category (version-detection-driven vulnerability checks against the
-	// approved target only) and --script-timeout bounds each check.
+	// NSE category minus its disruptive (dos, broadcast), off-box (external) and
+	// exploit scripts, so only version-detection-driven vulnerability checks run
+	// against the approved target; --script-timeout bounds each check.
 	// "--" stops option parsing so a target can never be read as a flag.
 	return commandSpec{
 		path:     cfg.NmapPath,
