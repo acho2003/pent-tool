@@ -73,6 +73,15 @@ func buildMasscan(req Request, cfg Config) commandSpec {
 	if rate > 1000 {
 		return commandSpec{notApp: "Masscan packet rate exceeds the adapter maximum of 1000 packets per second", timeout: cfg.MasscanTimeout}
 	}
+	// The planner checks targets up front, but re-run the self/dashboard-listener
+	// check here as a backstop, like nmap. Masscan takes only literal addresses,
+	// so the representative address (a bare IP, or a CIDR's network address) is
+	// exact; there is no DNS to change between preview and execution.
+	if cfg.ScopeGuard != nil {
+		if blocked, reason := cfg.ScopeGuard(guardURL(target), []string{addr.String()}); blocked {
+			return commandSpec{notApp: reason, timeout: cfg.MasscanTimeout}
+		}
+	}
 	artifact := filepath.Join(req.ScanDir, "scanner-output", "masscan", "results.json")
 	return commandSpec{
 		path:     cfg.MasscanPath,

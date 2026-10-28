@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,4 +47,32 @@ func TestMasscanLeaseSerializesExecutionsAndHonorsCancellation(t *testing.T) {
 		t.Fatalf("lease was not released: %v", err)
 	}
 	releaseAgain()
+}
+
+func TestBuildMasscanConsultsTheScopeGuard(t *testing.T) {
+	var seen []string
+	cfg := Config{MasscanPath: "masscan", MasscanRate: 100, MasscanTimeout: time.Minute,
+		ScopeGuard: func(_ string, resolved []string) (bool, string) {
+			seen = resolved
+			for _, a := range resolved {
+				if a == "127.0.0.1" {
+					return true, "scope guard: resolved address 127.0.0.1 is the scanner host"
+				}
+			}
+			return false, ""
+		}}
+	spec := buildMasscan(Request{Target: "127.0.0.1", ScanDir: t.TempDir()}, cfg)
+	if spec.notApp == "" || !strings.Contains(spec.notApp, "scanner host") {
+		t.Fatalf("masscan must refuse a guarded address: %q (seen=%v)", spec.notApp, seen)
+	}
+	if len(seen) == 0 {
+		t.Fatalf("the scope guard was not consulted")
+	}
+	if spec := buildMasscan(Request{Target: "192.0.2.10", ScanDir: t.TempDir()}, cfg); spec.notApp != "" {
+		t.Fatalf("an allowed address was refused: %q", spec.notApp)
+	}
+	// A CIDR is judged by its network address, like nmap.
+	if spec := buildMasscan(Request{Target: "192.0.2.0/24", ScanDir: t.TempDir()}, cfg); spec.notApp != "" {
+		t.Fatalf("an allowed network was refused: %q", spec.notApp)
+	}
 }
