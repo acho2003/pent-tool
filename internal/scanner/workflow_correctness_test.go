@@ -99,3 +99,28 @@ func TestInvalidNativeRecordsCannotBeCleanResults(t *testing.T) {
 		}
 	}
 }
+
+func TestDalfoxMissingArtifactIsCleanZeroFindings(t *testing.T) {
+	// A completed dalfox run whose jsonl file was never created (no findings)
+	// must be a clean zero-finding result, not PARSER_FAILED. The missing file
+	// would otherwise cascade into skipping dependent jobs (the approved POST
+	// campaign).
+	r := Run{Scanner: "dalfox", Status: "completed", ArtifactPath: filepath.Join(t.TempDir(), "results.jsonl")}
+	validateWebResult(&r)
+	if r.Status != "completed" || r.Outcome != "SUCCESS_NO_FINDINGS" || r.ExecutionOutcome != "SUCCESS" {
+		t.Fatalf("got status=%q outcome=%q exec=%q", r.Status, r.Outcome, r.ExecutionOutcome)
+	}
+	// A zap run that lost its always-written report is still a failure.
+	z := Run{Scanner: "zap", Status: "completed", ArtifactPath: filepath.Join(t.TempDir(), "zap.json")}
+	validateWebResult(&z)
+	if z.Outcome != "PARSER_FAILED" {
+		t.Fatalf("zap missing report should fail: %+v", z)
+	}
+}
+
+func TestParseDalfoxMissingArtifactReturnsNoFindings(t *testing.T) {
+	findings, err := parseDalfox(filepath.Join(t.TempDir(), "results.jsonl"))
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("missing dalfox artifact = findings %v err %v", findings, err)
+	}
+}

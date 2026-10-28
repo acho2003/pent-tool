@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -38,6 +40,16 @@ func validateWebResult(run *Run) {
 		return
 	}
 	data, err := os.ReadFile(run.ArtifactPath)
+	if errors.Is(err, fs.ErrNotExist) && run.Scanner == "dalfox" {
+		// Dalfox only writes its jsonl file when it finds something; a completed
+		// run with no file is a clean zero-finding result. Scanners that always
+		// write a report fall through and fail on a missing file below.
+		run.ParserOutcome, run.Completeness, run.Outcome = "SUCCESS", "complete", "SUCCESS_NO_FINDINGS"
+		if run.Truncated || len(run.Limitations) > 0 {
+			run.Outcome, run.Completeness = "PARTIAL", "partial"
+		}
+		return
+	}
 	if err == nil && (run.Scanner == "zap" || run.Scanner == "wapiti") {
 		var root map[string]json.RawMessage
 		err = json.Unmarshal(data, &root)

@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -174,6 +176,11 @@ type dalfoxPoC struct {
 func parseDalfox(artifact string) ([]Finding, error) {
 	file, err := os.Open(artifact)
 	if err != nil {
+		// Dalfox writes no output file when it finds nothing, so a missing file
+		// is a clean zero-finding result, not a parse error.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	defer file.Close()

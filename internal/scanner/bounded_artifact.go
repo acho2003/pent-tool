@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"sort"
 
@@ -21,6 +23,14 @@ func boundWebArtifact(path, scanner string, limit int64) (bool, error) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
+		// Dalfox writes its jsonl output file only when it has findings, so a
+		// completed run with none leaves no file. That is a clean zero-finding
+		// result with nothing to bound, not a retention failure. Scanners that
+		// always write a report (zap, wapiti, nuclei) keep reporting a missing
+		// file as an error.
+		if errors.Is(err, fs.ErrNotExist) && scanner == "dalfox" {
+			return false, nil
+		}
 		return false, err
 	}
 	if info.Size() <= limit {

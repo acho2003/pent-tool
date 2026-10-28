@@ -132,3 +132,18 @@ func TestArtifactRedactionIsAtomicAndFailureIsNotUsableSuccess(t *testing.T) {
 		t.Fatalf("artifact failure replaced timeout: %+v", timeout)
 	}
 }
+
+func TestBoundDalfoxMissingArtifactIsCleanNotError(t *testing.T) {
+	// Dalfox writes its jsonl file only when it finds something; a completed
+	// run with no findings leaves no file. That is nothing to bound, not a
+	// retention failure.
+	missing := filepath.Join(t.TempDir(), "results.jsonl")
+	bounded, err := boundWebArtifact(missing, "dalfox", 1024)
+	if bounded || err != nil {
+		t.Fatalf("dalfox missing artifact = bounded %v err %v, want false/nil", bounded, err)
+	}
+	// Other scanners that always write a report keep reporting a missing file.
+	if _, err := boundWebArtifact(missing, "zap", 1024); err == nil {
+		t.Fatal("a missing zap artifact must still be an error")
+	}
+}
