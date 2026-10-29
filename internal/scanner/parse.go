@@ -190,6 +190,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseNextjsAssets(run.ArtifactPath)
 	case "actuator":
 		return parseExposureFindings(run.ArtifactPath)
+	case "vcs-exposure":
+		return parseExposureFindings(run.ArtifactPath)
 	case "apiwrites":
 		// The write adapter artifact records operation and cleanup status, not
 		// scanner findings. Findings are reported only by verification adapters.
