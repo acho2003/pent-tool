@@ -112,6 +112,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	toolVersions["nextjs-assets-catalog"] = nextjsAssetsCatalogVersion
 	toolVersions["actuator-catalog"] = actuatorCatalogVersion
 	toolVersions["vcs-exposure-catalog"] = vcsCatalogVersion
+	toolVersions["exposed-files-catalog"] = exposedFilesCatalogVersion
 	toolVersions["nextjs-advisories"] = nextjsAdvisoriesVersion
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: toolVersions}
 	for i := range plan.Capabilities {
