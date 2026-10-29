@@ -110,6 +110,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	}
 	toolVersions["kube-exposure-catalog"] = kubeExposureCatalogVersion
 	toolVersions["nextjs-assets-catalog"] = nextjsAssetsCatalogVersion
+	toolVersions["actuator-catalog"] = actuatorCatalogVersion
 	toolVersions["nextjs-advisories"] = nextjsAdvisoriesVersion
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: toolVersions}
 	for i := range plan.Capabilities {
