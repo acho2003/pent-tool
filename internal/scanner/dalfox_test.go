@@ -217,3 +217,27 @@ func TestParseDalfox_EmptyArtifact(t *testing.T) {
 		t.Errorf("empty artifact should yield no findings, got %v err=%v", findings, err)
 	}
 }
+
+func TestBuildDalfoxMinesParametersUnderThoroughProfile(t *testing.T) {
+	cfg := Config{DalfoxPath: "dalfox", DalfoxTimeout: time.Minute}
+	endpoints := []string{"https://app.test/s?q=1"}
+	// Default / gentle profiles keep mining off: only approved parameters.
+	for _, profile := range []string{"", ProfileGentle} {
+		spec := buildDalfox(Request{Target: "https://app.test/", ScanDir: t.TempDir(), WebEndpoints: endpoints, Profile: profile}, cfg)
+		if !hasArg(spec.args, "--skip-mining-all") {
+			t.Fatalf("profile %q should skip parameter mining: %v", profile, spec.args)
+		}
+	}
+	// Thorough enables mining: --skip-mining-all is dropped so Dalfox discovers
+	// hidden parameters on each in-scope URL.
+	spec := buildDalfox(Request{Target: "https://app.test/", ScanDir: t.TempDir(), WebEndpoints: endpoints, Profile: ProfileThorough}, cfg)
+	if hasArg(spec.args, "--skip-mining-all") {
+		t.Fatalf("web-thorough should mine parameters (no --skip-mining-all): %v", spec.args)
+	}
+	// Mining must not relax the other safety flags.
+	for _, flag := range []string{"--skip-headless", "--skip-bav", "--worker", "--format"} {
+		if !hasArg(spec.args, flag) {
+			t.Fatalf("thorough run dropped a safety flag %s: %v", flag, spec.args)
+		}
+	}
+}

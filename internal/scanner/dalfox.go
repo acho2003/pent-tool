@@ -103,7 +103,10 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 	//   --silence --no-color : quiet, parseable stdout
 	//   --skip-bav    : skip basic-another-vuln probing (stay focused on XSS)
 	//   --skip-mining-all : no DOM/dictionary parameter mining; only the
-	//                   dispatcher-approved parameters are tested
+	//                   dispatcher-approved parameters are tested. Dropped under
+	//                   the web-thorough profile, where Dalfox also mines hidden
+	//                   parameters on each in-scope URL (more aggressive, still
+	//                   read-only and bounded by the same per-tool timeout).
 	//   --skip-headless : the headless DOM verifier runs beside the workers,
 	//                   outside the --delay limiter, and its browser requests
 	//                   cannot be scope-checked
@@ -116,10 +119,13 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 		"--silence",
 		"--no-color",
 		"--skip-bav",
-		"--skip-mining-all",
 		"--skip-headless",
 		"--worker", "1",
 		"--timeout", "10",
+	}
+	if req.Profile != ProfileThorough {
+		// Default (and web-gentle): only test the dispatcher-approved parameters.
+		args = append(args, "--skip-mining-all")
 	}
 	if cfg.RateRPS > 0 {
 		// With a single worker, a per-request delay (ms) rounded up from the
