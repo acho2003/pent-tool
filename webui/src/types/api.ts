@@ -104,6 +104,8 @@ export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
 export interface AssessmentTarget { id: string; type: string; value: string; }
 export interface AssessmentConfig {
+  nextjs_boundary_approvals?: Array<{ id: string; target_id: string; kind: "cache" | "redirect" | "proxy"; fixture_ref: string; owner_identity?: string; identity: string }>;
+  approved_origins?: Array<{ target_id: string; scheme: string; host: string; port?: number; path_prefix?: string }>;
   nextjs_action_approvals?: Array<{ id: string; target_id: string; fixture_ref: string; owner_identity: string; cases: Array<{ id: string; identity: string; expect: "allow" | "deny"; cross_origin?: boolean }> }>;
   nextjs?: { max_pages?: number; max_scripts?: number; max_route_checks?: number; max_requests?: number; max_response_bytes?: number };
   test_environment?: boolean;
@@ -613,7 +615,7 @@ export interface CoverageEvent {
   phase: string; kind: string; at: string; response_code?: number; reason?: string;
 }
 export interface AuthorizationResult {
- case_id?: string; cleanup_status?: string; representation?: string;
+ case_id?: string; cleanup_status?: string; representation?: string; cache_attribution?: string; correlation_digest?: string;
  endpoint_id?: string; auth_context_id?: string; identity: string; role?: string; operation_id: string; fixture_ref: string; url?: string; method?: string; expected: string; observed?: string; status: string; response_code?: number; marker_confirmed: boolean; reason?: string; evidence_reference?: string;
 }
 export interface CoverageProof {

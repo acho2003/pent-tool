@@ -111,6 +111,7 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 	}
 	if len(plan.Errors) == 0 {
 		s.validateNextjsActionFixtures(&plan)
+		s.validateNextjsBoundaryFixtures(&plan)
 		normalized := plan.Config
 		fixtureStore := apifixture.Store{Dir: filepath.Join(s.dataDir, "_api_fixtures")}
 		checkFixture := func(ref, field string) {
