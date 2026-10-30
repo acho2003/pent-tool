@@ -258,9 +258,20 @@ type AuthorizationExpectation struct {
 	ResourceFixtureRef string `json:"resource_fixture_ref"`
 }
 
+// NextjsScanOptions bounds native Next.js discovery. Zero selects profile defaults.
+// Limits are included in the accepted assessment fingerprint.
+type NextjsScanOptions struct {
+	MaxPages         int   `json:"max_pages,omitempty"`
+	MaxScripts       int   `json:"max_scripts,omitempty"`
+	MaxRouteChecks   int   `json:"max_route_checks,omitempty"`
+	MaxRequests      int   `json:"max_requests,omitempty"`
+	MaxResponseBytes int64 `json:"max_response_bytes,omitempty"`
+}
+
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
+	Nextjs                     NextjsScanOptions          `json:"nextjs,omitempty"`
 	WorkflowVersion            string                     `json:"workflow_version,omitempty"`
 	ParentAssessmentID         string                     `json:"parent_assessment_id,omitempty"`
 	ParentPlanFingerprint      string                     `json:"parent_plan_fingerprint,omitempty"`

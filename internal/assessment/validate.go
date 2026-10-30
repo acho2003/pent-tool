@@ -239,6 +239,20 @@ func Validate(cfg AssessmentConfig) []Problem {
 		return []Problem{blocking("workflow.version.invalid", "unknown assessment workflow version")}
 	}
 	var probs []Problem
+	for _, limit := range []struct {
+		name       string
+		value, max int64
+	}{
+		{"max_pages", int64(cfg.Nextjs.MaxPages), 250},
+		{"max_scripts", int64(cfg.Nextjs.MaxScripts), 500},
+		{"max_route_checks", int64(cfg.Nextjs.MaxRouteChecks), 500},
+		{"max_requests", int64(cfg.Nextjs.MaxRequests), 5000},
+		{"max_response_bytes", cfg.Nextjs.MaxResponseBytes, 256 << 20},
+	} {
+		if limit.value < 0 || limit.value > limit.max {
+			probs = append(probs, blocking("nextjs.limit.invalid", fmt.Sprintf("nextjs.%s must be between 0 and %d", limit.name, limit.max)))
+		}
+	}
 
 	if !cfg.Mode.Valid() {
 		probs = append(probs, blocking("mode.invalid",

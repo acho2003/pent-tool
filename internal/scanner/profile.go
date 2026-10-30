@@ -3,8 +3,9 @@ package scanner
 import "time"
 
 const (
-	ProfileGentle   = "web-gentle"
-	ProfileThorough = "web-thorough"
+	ProfileNextjsDeep = "nextjs-deep"
+	ProfileGentle     = "web-gentle"
+	ProfileThorough   = "web-thorough"
 )
 
 type WebProfile struct {

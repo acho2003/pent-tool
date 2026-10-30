@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,7 +21,7 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v3"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v4"
 
 const (
 	nextjsMaxScripts      = 40
@@ -51,7 +52,6 @@ var (
 	nextjsVersionPattern   = regexp.MustCompile(`window\.next\s*=\s*\{\s*version\s*:\s*"(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)"`)
 	nextjsBuildIDPattern   = regexp.MustCompile(`"buildId"\s*:\s*"([A-Za-z0-9_-]{1,64})"`)
 	nextjsManifestPattern  = regexp.MustCompile(`/_next/static/([A-Za-z0-9_-]{1,64})/_(?:build|ssg)Manifest\.js$`)
-	nextjsScriptSrcPattern = regexp.MustCompile(`<script[^>]+src="([^"]*/_next/static/[^"]+\.js)"`)
 	nextjsSourceMapPattern = regexp.MustCompile(`(?m)^[ \t]*//[#@][ \t]*sourceMappingURL=([^\s'"]+)[ \t]*$`)
 	nextjsSortedPages      = regexp.MustCompile(`sortedPages\s*:\s*\[((?:\s*"[^"]*"\s*,?)*)\]`)
 	nextjsManifestRouteKey = regexp.MustCompile(`"(/[^"\s]{0,512})"\s*:\s*\[`)
@@ -104,18 +104,41 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		return finish("failed", "create artifact: "+err.Error())
 	}
 	defer file.Close()
+	eventsPath := filepath.Join(dir, "coverage-events.jsonl")
+	events, err := os.OpenFile(eventsPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return finish("failed", "create discovery evidence: "+err.Error())
+	}
+	defer events.Close()
+	run.CoverageEventsPath = eventsPath
+	record := func(raw, kind, reason string, status int) bool {
+		event := CoverageEvent{Scanner: "nextjs-assets", AttemptID: req.AttemptID, Method: http.MethodGet, URL: SafeTelemetryURL(raw), Phase: "discovery", Kind: kind, At: time.Now().UTC().Format(time.RFC3339Nano), Reason: reason, ResponseCode: status}
+		if err := json.NewEncoder(events).Encode(event); err != nil {
+			run.GapKind, run.Reason = GapInterruptedWrite, "write discovery evidence failed"
+			return false
+		}
+		return true
+	}
 	run.ArtifactPath = artifact
 	run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationAnonymousAssets, Reason: "assets are requested without credentials; bundles served only to signed-in users are not examined"})
 
-	clients := map[string]*http.Client{}
+	limits := nextjsLimits(req)
 	attempted, completed := 0, 0
+	totalBytes := int64(0)
+	requestFailures := 0
 	var lastErr string
 	var stopped bool
 	fetch := func(rawURL string, limit int64) (nextjsFetch, bool) {
 		if stopped {
 			return nextjsFetch{}, false
 		}
-		if !nextjsAllows(req, rawURL) || nextjsExcluded(req, rawURL) {
+		if !nextjsAllows(req, rawURL) || nextjsExcluded(req, rawURL) || browserRequestAllowed(req, Config{}, http.MethodGet, rawURL) != nil {
+			return nextjsFetch{}, false
+		}
+
+		if attempted >= limits.MaxRequests || totalBytes >= limits.MaxResponseBytes {
+			stopped = true
+			run.GapKind, run.Reason = GapBudgetExhausted, "Next.js request or response-byte budget exhausted"
 			return nextjsFetch{}, false
 		}
 		parsed, err := url.Parse(rawURL)
@@ -131,35 +154,57 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			}
 			return nextjsFetch{}, false
 		}
-		origin := parsed.Scheme + "://" + parsed.Host
-		client := clients[origin]
-		if client == nil {
-			guarded, err := guardedOriginClient(ctx, cfg, rawURL)
-			if err != nil {
-				attempted++
-				lastErr = err.Error()
-				return nextjsFetch{}, false
-			}
-			client = guarded
-			clients[origin] = client
+
+		client, err := guardedOriginClient(ctx, cfg, rawURL)
+		if err != nil {
+			attempted++
+			lastErr = err.Error()
+			requestFailures++
+			return nextjsFetch{}, false
 		}
+
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
 			return nextjsFetch{}, false
 		}
 		attempted++
+		if !record(rawURL, "submitted", "", 0) {
+			stopped = true
+			return nextjsFetch{}, false
+		}
 		resp, err := client.Do(request)
 		if err != nil {
 			lastErr = safeAPIError(err)
+			requestFailures++
+			if !record(rawURL, "failed", "request failed", 0) {
+				stopped = true
+			}
 			return nextjsFetch{}, false
 		}
 		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+		readLimit := min(limit+1, limits.MaxResponseBytes-totalBytes)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, readLimit))
 		if err != nil {
 			lastErr = "response read failed: " + err.Error()
+			requestFailures++
+			if !record(rawURL, "failed", "response read failed", resp.StatusCode) {
+				stopped = true
+			}
 			return nextjsFetch{}, false
 		}
+
+		totalBytes += int64(len(body))
+		if int64(len(body)) > limit {
+			body = body[:limit]
+			if limit > 0 && !hasNextjsLimitation(run, "nextjs_response_limit") {
+				run.Limitations = append(run.Limitations, RunLimitation{Kind: "nextjs_response_limit", Reason: "one or more responses exceeded their parsing limit"})
+			}
+		}
 		completed++
+		if !record(rawURL, "observed", "discovery response; not active security testing", resp.StatusCode) {
+			stopped = true
+			return nextjsFetch{}, false
+		}
 		return nextjsFetch{status: resp.StatusCode, header: resp.Header, body: body}, true
 	}
 
@@ -173,7 +218,8 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	scripts := nextjsInventoryScripts(req)
 	page := *base
 	page.Fragment = ""
-	if res, ok := fetch(page.String(), nextjsPageReadLimit); ok {
+	landing, landingOK := fetch(page.String(), nextjsPageReadLimit)
+	if res, ok := landing, landingOK; ok {
 		if strings.Contains(strings.ToLower(res.header.Get("X-Powered-By")), "next.js") {
 			addSignal("X-Powered-By header")
 		}
@@ -187,24 +233,69 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		if m := nextjsBuildIDPattern.FindStringSubmatch(html); m != nil {
 			buildID = m[1]
 		}
-		for _, m := range nextjsScriptSrcPattern.FindAllStringSubmatch(html, -1) {
-			if ref, err := page.Parse(m[1]); err == nil {
-				ref.Fragment = ""
-				scripts = append(scripts, ref.String())
+		refs := nextjsHTMLReferences(&page, res.body)
+		scripts = append(scripts, refs.Scripts...)
+	}
+	if req.Profile == ProfileNextjsDeep && (len(signals) > 0 || len(scripts) > 0) {
+		queue := []string{page.String()}
+		seenPages := map[string]bool{page.String(): true}
+		seenCandidates := map[string]bool{}
+		recordCandidate := func(raw, source string) {
+			if seenCandidates[raw] || len(seenCandidates) >= nextjsMaxRoutes {
+				return
+			}
+			seenCandidates[raw] = true
+			run.HistoricalCandidates = append(run.HistoricalCandidates, nextjsURLCandidate(req, raw, source))
+		}
+		// Reuse the landing response, then crawl only explicit harmless page links.
+		for i := 0; i < len(queue) && i < limits.MaxPages && !stopped; i++ {
+			current, _ := url.Parse(queue[i])
+			res, ok := landing, landingOK
+			if i != 0 {
+				res, ok = fetch(current.String(), nextjsPageReadLimit)
+			}
+			if !ok || res.status != http.StatusOK {
+				continue
+			}
+			for j := range run.HistoricalCandidates {
+				if run.HistoricalCandidates[j].URL == current.String() {
+					run.HistoricalCandidates[j].Status = res.status
+					run.HistoricalCandidates[j].State = EndpointStateInScope
+					run.HistoricalCandidates[j].Reason = "page discovery GET completed; not an active security check"
+				}
+			}
+			refs := nextjsHTMLReferences(current, res.body)
+			scripts = append(scripts, refs.Scripts...)
+			for _, raw := range refs.Links {
+				recordCandidate(raw, "html_link")
+				if !seenPages[raw] && len(queue) < nextjsMaxRoutes && nextjsPageEligible(req, cfg, raw) {
+					seenPages[raw] = true
+					queue = append(queue, raw)
+				}
+			}
+			for _, match := range nextjsAPIReference.FindAllSubmatch(res.body, nextjsMaxRoutes) {
+				if u, err := current.Parse(string(match[1])); err == nil {
+					recordCandidate(u.String(), "inline_api_reference")
+				}
 			}
 		}
+		if len(queue) > limits.MaxPages {
+			run.Limitations = append(run.Limitations, RunLimitation{Kind: "nextjs_page_limit", Reason: fmt.Sprintf("page discovery reached its %d-page limit", limits.MaxPages)})
+		}
 	}
+
 	scripts = nextjsInScopeScripts(req, scripts)
-	if len(scripts) > nextjsMaxScripts {
-		run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationScriptLimit, Reason: fmt.Sprintf("examined %d of %d in-scope scripts", nextjsMaxScripts, len(scripts))})
-		scripts = scripts[:nextjsMaxScripts]
+	if len(scripts) > limits.MaxScripts {
+		run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationScriptLimit, Reason: fmt.Sprintf("examined %d of %d in-scope scripts", limits.MaxScripts, len(scripts))})
+		scripts = scripts[:limits.MaxScripts]
 	}
 
 	var findings []Finding
 	var routes []string
 	var routeBase *url.URL
 	probedMaps := map[string]bool{}
-	for _, script := range scripts {
+	for scriptIndex := 0; scriptIndex < len(scripts); scriptIndex++ {
+		script := scripts[scriptIndex]
 		if stopped {
 			break
 		}
@@ -226,14 +317,45 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			base.Path, base.RawPath, base.RawQuery = scriptURL.Path[:strings.Index(scriptURL.Path, "/_next/")], "", ""
 			routeBase = &base
 		}
+		if req.Profile == ProfileNextjsDeep {
+			for _, match := range nextjsAssetReference.FindAllSubmatch(res.body, nextjsMaxRoutes) {
+				child, err := scriptURL.Parse(string(match[1]))
+				if err != nil {
+					continue
+				}
+				child.Fragment = ""
+				if nextjsAllows(req, child.String()) && !nextjsExcluded(req, child.String()) && !slices.Contains(scripts, child.String()) {
+					if len(scripts) < limits.MaxScripts {
+						scripts = append(scripts, child.String())
+					} else if !hasNextjsLimitation(run, LimitationScriptLimit) {
+						run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationScriptLimit, Reason: "additional referenced chunks exceeded the script limit"})
+					}
+				}
+			}
+			for _, match := range nextjsAPIReference.FindAllSubmatch(res.body, nextjsMaxRoutes) {
+				if u, err := base.Parse(string(match[1])); err == nil && len(run.HistoricalCandidates) < nextjsMaxRoutes {
+					candidate := nextjsURLCandidate(req, u.String(), "javascript_api_reference")
+					if !slices.ContainsFunc(run.HistoricalCandidates, func(c HistoricalCandidate) bool { return c.URL == candidate.URL }) {
+						run.HistoricalCandidates = append(run.HistoricalCandidates, candidate)
+					}
+				}
+			}
+		}
+
 		if m := nextjsVersionPattern.FindSubmatch(res.body); m != nil && version == "" {
 			version = string(m[1])
 		}
 		ref := firstNonEmptyKube(res.header.Get("SourceMap"), res.header.Get("X-SourceMap"))
 		if ref == "" {
-			if m := nextjsSourceMapPattern.FindAllSubmatch(res.body, -1); len(m) > 0 {
+			if m := nextjsSourceMapPattern.FindAllSubmatch(res.body, nextjsMaxRoutes); len(m) > 0 {
 				ref = string(m[len(m)-1][1])
 			}
+		}
+		if ref == "" && req.Profile == ProfileNextjsDeep {
+			adjacent := *scriptURL
+			adjacent.Path += ".map"
+			adjacent.RawPath = ""
+			ref = adjacent.String()
 		}
 		if ref == "" || strings.HasPrefix(strings.ToLower(ref), "data:") {
 			continue
@@ -255,9 +377,9 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			SourceID: nextjsSourceID("nextjs-source-map", mapURL.String()), Scanner: "nextjs-assets", RuleID: "nextjs-source-map",
 			Title: "Public JavaScript source map", Severity: "low", Target: req.Target, Endpoint: sanitizeKubeURL(mapURL.String()), Method: http.MethodGet,
 			Description: "A production source map is publicly retrievable. It can disclose original source code, internal file paths and comments.",
-			Evidence:    fmt.Sprintf("HTTP %d; referenced by %s; source map structure confirmed from the first %d bytes; content not retained", probe.status, sanitizeKubeURL(script), nextjsMapProbeLimit),
+			Evidence:    fmt.Sprintf("HTTP %d; associated script %s; source map structure confirmed from the first %d bytes; content not retained", probe.status, sanitizeKubeURL(script), nextjsMapProbeLimit),
 			Remediation: "Do not deploy source maps publicly (Next.js: productionBrowserSourceMaps false), or restrict them to authorized users.",
-			CWE:         "CWE-540", Confidence: "confirmed",
+			CWE:         "CWE-540", Confidence: "confirmed", EvidenceRef: eventsPath,
 		})
 	}
 	if routeBase != nil {
@@ -268,7 +390,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 				continue
 			}
 			if candidate.State == EndpointStateInScope {
-				if checked >= nextjsMaxRouteChecks || stopped {
+				if checked >= limits.MaxRouteChecks || stopped {
 					unconfirmed++
 					candidate.State, candidate.Reason = EndpointStateHistoricalUnverified, "referenced by the Next.js build manifest; not confirmed (route check limit or budget)"
 				} else if res, ok := fetch(candidate.URL, 0); ok {
@@ -314,6 +436,12 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		} else {
 			run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationVersionUnknown, Reason: "the served assets did not reveal the Next.js version, so advisories were not matched"})
 		}
+	}
+	if requestFailures > 0 {
+		run.Limitations = append(run.Limitations, RunLimitation{Kind: "nextjs_request_failed", Reason: fmt.Sprintf("%d discovery requests failed or were refused by the execution guard", requestFailures)})
+	}
+	if err := events.Sync(); err != nil {
+		return finish("failed", "persist discovery evidence: "+err.Error())
 	}
 	enc := json.NewEncoder(file)
 	for _, finding := range findings {
@@ -428,7 +556,7 @@ func nextjsManifestRoutes(body []byte) []string {
 			raw = append(raw, string(q[1]))
 		}
 	} else {
-		for _, k := range nextjsManifestRouteKey.FindAllSubmatch(body, -1) {
+		for _, k := range nextjsManifestRouteKey.FindAllSubmatch(body, nextjsMaxRoutes) {
 			raw = append(raw, string(k[1]))
 		}
 	}
@@ -483,9 +611,57 @@ func nextjsExcluded(req Request, rawURL string) bool {
 // looksLikeSourceMap confirms a source-map document from its opening bytes:
 // a JSON object carrying the version and a sources or mappings member.
 func looksLikeSourceMap(body []byte) bool {
-	text := strings.TrimSpace(strings.TrimPrefix(string(body), ")]}'"))
-	return strings.HasPrefix(text, "{") && strings.Contains(text, `"version"`) &&
-		(strings.Contains(text, `"sources"`) || strings.Contains(text, `"mappings"`))
+	text := bytes.TrimSpace(bytes.TrimPrefix(body, []byte(")]}'")))
+	decoder := json.NewDecoder(bytes.NewReader(text))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return false
+	}
+	version, structure := false, false
+	for decoder.More() {
+		token, err = decoder.Token()
+		if err != nil {
+			return false
+		}
+		key, ok := token.(string)
+		if !ok {
+			return false
+		}
+		value, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		switch key {
+		case "version":
+			version = value == float64(3)
+		case "sources":
+			structure = value == json.Delim('[')
+		case "mappings":
+			_, structure = value.(string)
+		}
+		if version && structure {
+			return true
+		}
+		// Skip a compound value before looking for the next top-level member.
+		if delimiter, ok := value.(json.Delim); ok && (delimiter == '[' || delimiter == '{') {
+			depth := 1
+			for depth > 0 {
+				next, err := decoder.Token()
+				if err != nil {
+					return false
+				}
+				if d, ok := next.(json.Delim); ok {
+					switch d {
+					case '[', '{':
+						depth++
+					case ']', '}':
+						depth--
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func nextjsSourceID(ruleID, key string) string {
@@ -498,3 +674,12 @@ func parseNextjsAssets(path string) ([]Finding, error) {
 }
 
 var _ Runner = nextjsAssetsRunner{}
+
+func hasNextjsLimitation(run Run, kind string) bool {
+	for _, limitation := range run.Limitations {
+		if limitation.Kind == kind {
+			return true
+		}
+	}
+	return false
+}

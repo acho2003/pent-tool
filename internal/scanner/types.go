@@ -53,6 +53,7 @@ type Artifact struct {
 }
 
 type Request struct {
+	Nextjs                    assessment.NextjsScanOptions            `json:"-"`
 	WapitiPostApproval        *assessment.FuzzApproval                `json:"-"`
 	WapitiPostURL             string                                  `json:"-"`
 	WapitiPostBody            string                                  `json:"-"`

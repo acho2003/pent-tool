@@ -229,7 +229,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		crawlReq := Request{
 			BrowserEmit: emit, BrowserAttemptControl: p.AttemptControl, ReplayStore: replayStore, ReplayScope: inventoryScope, Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion, PlanFingerprint: plan.Fingerprint,
 			ScanDir: filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
-			Profile: plan.Config.Profile, TypedAssessment: true,
+			Profile: plan.Config.Profile, Nextjs: plan.Config.Nextjs, TypedAssessment: true,
 			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),
 			AppScope:   appScopes[target.ID],
 		}
@@ -414,7 +414,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			Scope: scope,
 			ScanDir: filepath.Join(scanDir, "jobs", stableJobPath(job.TargetID), stableJobPath(plan.Fingerprint),
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
-			Profile: plan.Config.Profile, TypedAssessment: true,
+			Profile: plan.Config.Profile, Nextjs: plan.Config.Nextjs, TypedAssessment: true,
 			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment, WapitiMode: plan.Config.WapitiMode,
 		}
 		if checkpointErr != nil {
