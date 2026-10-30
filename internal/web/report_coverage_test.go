@@ -82,3 +82,13 @@ func TestAuthorizationReportUsesSavedComparisonEvidence(t *testing.T) {
 		t.Fatal("report leaked sensitive URL value")
 	}
 }
+
+func TestServerActionReportPreservesCaseAndCleanupEvidence(t *testing.T) {
+	proof := scanner.BuildCoverageProof(nil, []scanner.Run{{AuthorizationResults: []scanner.AuthorizationResult{{CaseID: "foreign-origin", Identity: "owner", Method: "POST", Representation: "server-action-cross-origin", CleanupStatus: "verified", Status: "mismatch", Expected: "deny", Observed: "allow"}}}})
+	lines := strings.Join(assessmentCoverageLines(assessmentCoverageResponse{Proof: &proof}), "\n")
+	for _, required := range []string{"Action case: foreign-origin", "server-action-cross-origin", "cleanup: verified"} {
+		if !strings.Contains(lines, required) {
+			t.Fatalf("report omitted action evidence: %s", lines)
+		}
+	}
+}

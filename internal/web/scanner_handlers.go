@@ -110,6 +110,7 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 		plan.Errors = append(plan.Errors, assessment.Problem{Code: "workflow.disabled", Message: "The accepted expanded workflow is disabled; enable it to execute this plan", Blocking: true})
 	}
 	if len(plan.Errors) == 0 {
+		s.validateNextjsActionFixtures(&plan)
 		normalized := plan.Config
 		fixtureStore := apifixture.Store{Dir: filepath.Join(s.dataDir, "_api_fixtures")}
 		checkFixture := func(ref, field string) {

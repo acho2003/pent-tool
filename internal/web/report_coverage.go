@@ -154,6 +154,9 @@ func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
 		for _, result := range proof.AuthorizationResults {
 			lines = append(lines, fmt.Sprintf("Authorization %s (%s), %s %s: expected %s, observed %s, %s; HTTP %d. %s", result.Identity, result.Role, result.Method, result.URL, result.Expected, result.Observed, result.Status, result.ResponseCode, result.Reason))
 			lines = append(lines, fmt.Sprintf("Context: %s; request: %s; operation: %s; resource fixture: %s; evidence: %s", result.AuthContextID, result.EndpointID, result.OperationID, result.FixtureRef, result.EvidenceRef))
+			if result.CaseID != "" {
+				lines = append(lines, fmt.Sprintf("Action case: %s; representation: %s; cleanup: %s", result.CaseID, result.Representation, result.CleanupStatus))
+			}
 		}
 		for _, metric := range proof.NotTracked {
 			lines = append(lines, metric+": NOT TRACKED")
