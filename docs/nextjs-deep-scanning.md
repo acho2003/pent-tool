@@ -1,6 +1,6 @@
 # Next.js deep assessments
 
-Choose **Next.js deep** as the web profile in a typed Web Application or API assessment. Preview the generated plan before starting it. The profile is also available for typed schedules. Existing saved plans need a fresh preview because registry version 17 changes planning semantics.
+Choose **Next.js deep** as the web profile in a typed Web Application or API assessment. Preview the generated plan before starting it. The profile is also available for typed schedules. Existing saved plans need a fresh preview because registry version 18 changes planning semantics.
 
 The profile selects the native `nextjs-assets` adapter and native resource checks alongside the ordinary applicable scanners. Explicit custom scanner selections take precedence. Optional scanners still need to be selected, and unavailable external tools remain visible gaps. Selecting the profile does not change scope or enable the opt-in unified workflow.
 
@@ -126,17 +126,110 @@ For a body-bearing cleanup, also supply `cleanup_body_ref` and `cleanup_content_
 
 Findings and reports retain case IDs, identity contexts, response digests, controlled-state confirmation, cleanup status, and request evidence. They do not retain action arguments, credential values, state markers, or response bodies. Each action case has its own request identity and active-test receipt; state and cleanup requests are not counted as extra active action tests.
 
+## Controlled cache, redirect, and URL-fetch boundaries
+
+The **Controlled cache and URL boundaries** card adds three explicit fixture-based probes. They require a Gray/White Box typed URL assessment, `XALGORIX_UNIFIED_WORKFLOW=1`, a declared test environment, and a reviewed `nextjs_boundary_approvals` entry. The deep profile alone selects none of these probes. At most 20 boundary probes may be approved per assessment.
+
+### Cache identity isolation
+
+Use an isolated synthetic resource, an allowed named owner, and a different denied identity or anonymous access. Supply the owner and consumer response formats independently (HTML, page JSON, or RSC), non-overlapping private/denied markers, an uncached control URL using the same resource path with a different supplied query, and an exact DELETE/PUT/PATCH reset. PUT/PATCH require a private body fixture; bodies are bounded to 64 KiB.
+
+The probe first confirms denial on both the cold resource and uncached control. It journals a one-shot intent before the owner fills the cache, confirms the owner's private marker, then repeats the consumer request and uncached control. Reset is attempted after an answered fill, including an inconclusive comparison. A successful reset status is insufficient: the consumer must again be denied on the original resource. Failed or ineffective reset stops remaining probes; confirmed disclosure findings are retained with partial results.
+
+A private marker crossing the identity boundary is a confirmed disclosure even if its cache cause remains unverified. Cache attribution is marked **confirmed** only when the post-fill uncached control still denies access and the leaking response also has an explicit cache-hit indicator (`X-Nextjs-Cache`, `X-Vercel-Cache`, `CF-Cache-Status`, or `X-Cache` equal to `HIT`, or a positive `Age`). Header differences alone do not produce findings. Cross-representation private leakage is tested even if the leaking response has the wrong media type for the consumer request.
+
+The scanner does not invent a bypass query or assume the supplied query bypasses your CDN. If both the original and control disclose private data, disclosure can be confirmed while cache attribution remains unverified. A cold response that already permits the denied identity stops the fill; use the ordinary controlled access comparisons to investigate that boundary.
+
+Cache intents persist across attempts and plan revisions. Any previously journaled cache probe refuses automatic replay. Unknown fill outcomes leave unresolved intents, send no automatic reset, and report that manual cleanup may be required.
+
+### Paired redirect policy
+
+Supply an observed GET URL with exactly one selected query parameter, its exact local control value, and an explicitly disallowed controlled external destination. The original request must first redirect to the expected local destination. Only then is the selected parameter replaced with the external URL. A finding requires a redirect to that exact external origin/path/query. Neither response is followed, including redirects back into the approved application.
+
+The external destination must already be explicitly in the reviewed application scope. The form adds the original application prefix and the exact controlled destination path to `approved_origins` when you approve the probe. It does not approve an entire external host by default.
+
+### Image/proxy URL-fetch policy
+
+Supply an observed GET URL with exactly one URL-valued query parameter, a controlled callback URL expected to be denied by the application, and a distinct anonymous event-feed URL on the same callback origin. Both external paths must be explicitly approved in scope. This authorizes the scanner to observe the controlled service; it does not change the application's intended destination policy. The form includes these paths in the reviewed scope after explicit approval.
+
+The scanner generates a fresh 128-bit random correlation value and reads the event feed first. The feed must report zero matching events before any target probe. The scanner then substitutes the callback URL with a `scan_token` query into the observed parameter and makes one target request. It never requests the callback URL itself or follows a target redirect. It reads the anonymous feed up to three more times, with 200 ms between later reads, under the shared request/time budget.
+
+The controlled service must:
+
+- Record requests to the callback path by the exact `scan_token` query value, without redirecting them elsewhere. Serve a small benign response.
+- Provide a read-only event-feed GET accepting the same query. Reading the feed must not create callback events.
+- Return a bounded JSON object such as `{"token":"<exact scan_token>","count":0,"method":"GET"}` before a hit and a positive count with `GET` or `HEAD` afterward.
+- Be operated by the tester and accept anonymous correlation reads for this isolated test data. Collector credentials, arbitrary event APIs, and third-party callback services are not inferred or auto-configured.
+
+A finding requires a matching fresh-token GET/HEAD event after the target request. A generic target HTTP 200, reflected URL, stale event, wrong token, or missing callback cannot prove an outbound fetch. Missing events remain **inconclusive**, including when the target returned an error; asynchronous fetches can occur after the bounded observation window. Findings describe a violation of the supplied denied-destination expectation at medium severity. They do not claim internal-network access, credential theft, or a complete SSRF exploitation chain.
+
+No cloud metadata, private-network address range, redirect chain, or callback destination is generated automatically. Only the supplied controlled service is used. App/collector scope, method exclusions, DNS-aware execution guards, credential origin binding, and no-redirect clients apply. Target, primary, and global credentials are never sent to the event feed. The execution guard also vets the callback/sink destination before any probe traffic.
+
+Next.js image deployments should review [remotePatterns, redirect limits, and local-IP restrictions](https://nextjs.org/docs/app/api-reference/components/image). These probes exercise observed inputs and the supplied policy; they do not infer framework defaults from headers.
+
+### Boundary fixture/API configuration
+
+Approval metadata is separate from private manifest contents:
+
+```json
+{
+  "nextjs_boundary_approvals": [{
+    "id": "controlled-private-cache",
+    "target_id": "app",
+    "kind": "cache",
+    "owner_identity": "owner",
+    "identity": "anonymous",
+    "fixture_ref": "<SHA-256 reference to uploaded boundary manifest>"
+  }]
+}
+```
+
+A cache manifest:
+
+```json
+{
+  "kind": "cache",
+  "url": "https://app.example.test/account",
+  "representation": "pages-json",
+  "consumer_representation": "rsc",
+  "private_marker": "PRIVATE_CONTROLLED_42",
+  "denied_marker": "DENIED_CONTROLLED_42",
+  "bypass_url": "https://app.example.test/account?controlled_bypass=1",
+  "isolated": true,
+  "cleanup_url": "https://app.example.test/test-fixtures/reset-cache",
+  "cleanup_method": "DELETE"
+}
+```
+
+A proxy manifest (use approval kind `proxy`, omit `owner_identity`, and select the acting `identity`):
+
+```json
+{
+  "kind": "proxy",
+  "url": "https://app.example.test/_next/image?url=%2Fcontrolled.png&w=64&q=75",
+  "parameter": "url",
+  "callback_url": "https://collector.example.test/hit",
+  "events_url": "https://collector.example.test/events"
+}
+```
+
+For redirects, use kind `redirect`, `url` such as `https://app.example.test/login?next=%2Faccount`, `parameter: "next"`, `control_value: "/account"`, and `destination_url` for the controlled external sink. Callback/sink URLs have no embedded credentials, fragments, or existing query parameters. Cache-only and URL-probe-only fields cannot be mixed.
+
+For API configurations, include the original target prefix and explicitly approved callback paths in `approved_origins`, with `target_id`, `scheme`, `host`, `port` if non-default, and `path_prefix`. Explicit origins replace the target's derived default scope, so omitting the original target prefix is invalid. Manifests and reset bodies are validated by checksum, kind, bounds, scope, exclusions, and supported format at preview and again at runtime. Probe metadata, scope, fixtures, and adapter catalog versions participate in the accepted plan fingerprint.
+
+Reports show controlled probe results, cache attribution, reset status, callback correlation digests, and per-request evidence. Synthetic marker values, credentials, reset bodies, and response bodies are not retained in findings or reports. Generated callback URLs contain nonsecret random correlation values in the selected URL parameter. Each materialized URL input is recorded in its own selected request identity; baseline, bypass, reset, and event-feed controls do not inflate active-test counts. Every response is read up to 64 KiB. A cache probe uses at most seven application requests, redirect probes two, and proxy probes one target request plus up to four event-feed reads, excluding existing authentication checkpoints.
+
 ## Deliberate remaining gaps
 
 This release implements deeper read discovery, exposure checks, and controlled access comparisons. It does not complete every phase of the broader roadmap:
 
 - Server Action tests use only explicit finite campaigns and exact observed bodies. Multipart action bodies, automatic action-ID discovery, argument mutation, and arbitrary action invocation remain unsupported. Existing API write/fuzz jobs retain their independent approvals.
-- No shared-cache contamination or image/proxy SSRF probes. Unauthorized controlled-resource access may reveal a cache-related problem, but the scanner does not infer the root cause from a response difference.
+- Cache and URL probes are limited to explicit controlled fixtures. Arbitrary cache poisoning headers, automatic cache invalidation, private-network enumeration, unreviewed callback services, and SSRF exploitation chains are not implemented.
 - No complete App Router flight decoder, invented dynamic route values, full source-map download/analysis, or authenticated asset fetches.
 - Source-code, dependency, and general DAST checks continue through the existing applicable adapters. No new Next.js-specific SAST rules are bundled here.
 
 ## Validation
 
-Go HTTP fixtures exercise one-shot action authorization/origin violations, allowed-state baselines, ineffective and failed cleanup, interrupted writes, replay refusal, manifest tampering, native executor routing without an OpenAPI schema, and discovery, exclusions, per-URL DNS-aware guards, cancellation, request/endpoint/byte caps (including interrupted transfers), adjacent maps, source-map negative controls, real and invalid private-key material, anonymous isolation, HTML/JSON/RSC allow/deny behavior, wrong content types, missing baselines, session expiry, and executor integration. Planning tests cover profile selection, custom-selection precedence, and limit fingerprints; HTTP handler tests cover profile persistence and typed-assessment requirements.
+Go HTTP fixtures also exercise cold/fill/warm/bypass cache controls, failed/ineffective resets, cross-representation disclosure, cache attribution limits, paired redirects without following them, fresh/stale/wrong callback events, missing callbacks, collector credential isolation, native boundary executor routing, scope/exclusion/guard failures, and manifest tampering. They exercise one-shot action authorization/origin violations, allowed-state baselines, ineffective and failed cleanup, interrupted writes, replay refusal, manifest tampering, native executor routing without an OpenAPI schema, and discovery, exclusions, per-URL DNS-aware guards, cancellation, request/endpoint/byte caps (including interrupted transfers), adjacent maps, source-map negative controls, real and invalid private-key material, anonymous isolation, HTML/JSON/RSC allow/deny behavior, wrong content types, missing baselines, session expiry, and executor integration. Planning tests cover profile selection, custom-selection precedence, and limit fingerprints; HTTP handler tests cover profile persistence and typed-assessment requirements.
 
 These are deterministic protocol fixtures, not a claim that every current Next.js version or deployment has been tested. Pinned real-framework browser/container benchmarks remain a roadmap item. No external application scan is part of implementation validation.
