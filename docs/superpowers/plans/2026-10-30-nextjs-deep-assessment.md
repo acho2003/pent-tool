@@ -1,7 +1,7 @@
 # Next.js deep assessment plan
 
 Date: 2026-10-30
-Status: Initial read-only release implemented; remaining roadmap items are listed in [Next.js deep assessments](../../nextjs-deep-scanning.md). No target scan was performed.
+Status: Read discovery, controlled resource comparisons, and finite Server Action campaigns implemented; remaining roadmap items are listed in [Next.js deep assessments](../../nextjs-deep-scanning.md). No target scan was performed.
 
 ## Objective
 

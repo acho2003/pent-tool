@@ -13,7 +13,7 @@ Repository: <https://github.com/acho2003/pent-tool>
 - Infrastructure checks with OpenVAS, Vuls, Masscan, and Lynis.
 - Code and supply-chain checks with Trivy, Semgrep, Gitleaks, and OSV tooling.
 - Bounded Kubernetes exposure checks against an explicitly supplied URL.
-- [Next.js deep assessments](docs/nextjs-deep-scanning.md) with framework discovery, public exposure checks, and controlled access comparisons.
+- [Next.js deep assessments](docs/nextjs-deep-scanning.md) with framework discovery, public exposure checks, controlled access comparisons, and approved Server Action campaigns.
 - Persistent plans, findings, logs, reports, and raw scanner artifacts.
 
 ## Requirements
