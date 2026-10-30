@@ -396,3 +396,25 @@ func TestAssessmentExecutorRoutesControlledWebComparisons(t *testing.T) {
 	}
 	t.Fatal("missing native comparison job")
 }
+
+func TestWebAuthorizationEmptyPostRequestCheckpointCannotProveAccess(t *testing.T) {
+	lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/x-component")
+		w.Write([]byte("CONTROLLED_RESOURCE_1"))
+	}))
+	defer lab.Close()
+	req, cfg := webComparisonFixture(t, lab.URL, "rsc", true)
+	calls := 0
+	req.AuthContexts[0].Refresh = func(_ context.Context, headers []string) ([]string, error) {
+		calls++
+		if calls > 1 {
+			return nil, nil
+		}
+		return headers, nil
+	}
+	run := Run{Scanner: "apichecks"}
+	checked, gaps, err := runAuthorizationComparisons(t.Context(), req, cfg, &run, func(Finding) error { t.Fatal("expired allow identity confirmed access"); return nil })
+	if err != nil || checked != 0 || gaps != 2 {
+		t.Fatalf("checked=%d gaps=%d err=%v results=%+v", checked, gaps, err, run.AuthorizationResults)
+	}
+}

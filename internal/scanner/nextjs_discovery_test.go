@@ -177,3 +177,23 @@ func TestNextjsDiscoveryEnforcesGlobalEndpointAndByteBudgets(t *testing.T) {
 		})
 	}
 }
+
+func TestNextjsFailedResponseBytesStillConsumeBudget(t *testing.T) {
+	hits := 0
+	lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Length", "100")
+		w.Write([]byte(strings.Repeat("x", 20))) // Deliberately truncated transfer.
+	}))
+	defer lab.Close()
+	req := nextjsTestRequest(t, lab.URL+"/")
+	req.Profile, req.Nextjs.MaxResponseBytes = ProfileNextjsDeep, 30
+	req.Inventory = &AttackSurface{Endpoints: []AttackSurfaceEndpoint{
+		{URL: lab.URL + "/_next/static/a.js", Path: "/_next/static/a.js", Method: "GET"},
+		{URL: lab.URL + "/_next/static/b.js", Path: "/_next/static/b.js", Method: "GET"},
+	}}
+	run := (nextjsAssetsRunner{}).Run(t.Context(), req, Config{}, nil)
+	if hits != 2 || run.GapKind != GapBudgetExhausted {
+		t.Fatalf("failed reads bypassed byte budget: hits=%d run=%+v", hits, run)
+	}
+}

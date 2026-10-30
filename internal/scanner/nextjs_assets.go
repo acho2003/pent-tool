@@ -193,6 +193,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		defer resp.Body.Close()
 		readLimit := min(limit+1, limits.MaxResponseBytes-totalBytes+1)
 		body, err := io.ReadAll(io.LimitReader(resp.Body, readLimit))
+		totalBytes += int64(len(body))
 		if err != nil {
 			lastErr = "response read failed: " + err.Error()
 			requestFailures++
@@ -202,7 +203,6 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			return nextjsFetch{}, false
 		}
 
-		totalBytes += int64(len(body))
 		if totalBytes > limits.MaxResponseBytes {
 			stopped = true
 			run.GapKind, run.Reason = GapBudgetExhausted, "Next.js response-byte budget exhausted"
@@ -272,7 +272,13 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		seenPages := map[string]bool{page.String(): true}
 		seenCandidates := map[string]bool{}
 		recordCandidate := func(raw, source string) {
-			if seenCandidates[raw] || len(seenCandidates) >= nextjsMaxRoutes {
+			if seenCandidates[raw] {
+				return
+			}
+			if len(seenCandidates) >= nextjsMaxRoutes {
+				if !hasNextjsLimitation(run, "nextjs_candidate_limit") {
+					run.Limitations = append(run.Limitations, RunLimitation{Kind: "nextjs_candidate_limit", Reason: "route candidate inventory reached its limit"})
+				}
 				return
 			}
 			seenCandidates[raw] = true
@@ -418,6 +424,12 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	if routeBase != nil {
 		checked, unconfirmed := 0, 0
 		for _, route := range routes {
+			if len(run.HistoricalCandidates) >= nextjsMaxRoutes {
+				if !hasNextjsLimitation(run, "nextjs_candidate_limit") {
+					run.Limitations = append(run.Limitations, RunLimitation{Kind: "nextjs_candidate_limit", Reason: "route candidate inventory reached its limit"})
+				}
+				break
+			}
 			candidate := nextjsRouteCandidate(req, routeBase, route)
 			if candidate.URL == "" {
 				continue

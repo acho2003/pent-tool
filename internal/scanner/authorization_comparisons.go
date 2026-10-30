@@ -221,7 +221,7 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 			return checked, gaps, err
 		}
 		if auth.Identity != "anonymous" {
-			if _, err := auth.Refresh(ctx, slices.Clone(current)); err != nil {
+			if verified, err := auth.Refresh(ctx, slices.Clone(current)); err != nil || len(verified) == 0 {
 				result.Status, result.Reason = "unknown", "identity authentication checkpoint expired after the resource request"
 				results = append(results, result)
 				continue
