@@ -142,7 +142,16 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			return nextjsFetch{}, false
 		}
 		parsed, err := url.Parse(rawURL)
-		if err != nil || parsed.Host == "" {
+		if err != nil || parsed.Host == "" || parsed.User != nil {
+			return nextjsFetch{}, false
+		}
+		endpoint, normalized := normalizeAttackSurfaceEndpoint(rawURL, http.MethodGet, "nextjs-assets", "", 0, "", endpointParameters(rawURL), false, false)
+		if !normalized {
+			return nextjsFetch{}, false
+		}
+		if len(cfg.Budget.ReserveEndpoints([]string{endpoint.ID})) == 0 {
+			stopped = true
+			run.GapKind, run.Reason = GapBudgetExhausted, "assessment endpoint budget stopped Next.js discovery"
 			return nextjsFetch{}, false
 		}
 		if err := cfg.Budget.Wait(ctx); err != nil {
@@ -182,7 +191,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			return nextjsFetch{}, false
 		}
 		defer resp.Body.Close()
-		readLimit := min(limit+1, limits.MaxResponseBytes-totalBytes)
+		readLimit := min(limit+1, limits.MaxResponseBytes-totalBytes+1)
 		body, err := io.ReadAll(io.LimitReader(resp.Body, readLimit))
 		if err != nil {
 			lastErr = "response read failed: " + err.Error()
@@ -194,6 +203,14 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		}
 
 		totalBytes += int64(len(body))
+		if totalBytes > limits.MaxResponseBytes {
+			stopped = true
+			run.GapKind, run.Reason = GapBudgetExhausted, "Next.js response-byte budget exhausted"
+			if !record(rawURL, "failed", "response-byte budget exhausted", resp.StatusCode) {
+				run.GapKind = GapInterruptedWrite
+			}
+			return nextjsFetch{}, false
+		}
 		if int64(len(body)) > limit {
 			body = body[:limit]
 			if limit > 0 && !hasNextjsLimitation(run, "nextjs_response_limit") {
@@ -215,11 +232,25 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			signals = append(signals, signal)
 		}
 	}
+	var findings []Finding
+	exposedKeys := map[string]bool{}
+	inspectExposure := func(raw string, body []byte) {
+		if req.Profile != ProfileNextjsDeep || exposedKeys[raw] {
+			return
+		}
+		if finding := nextjsPrivateKeyFinding(req, raw, body, eventsPath); finding != nil {
+			findings = append(findings, *finding)
+			exposedKeys[raw] = true
+		}
+	}
 	scripts := nextjsInventoryScripts(req)
 	page := *base
 	page.Fragment = ""
 	landing, landingOK := fetch(page.String(), nextjsPageReadLimit)
 	if res, ok := landing, landingOK; ok {
+		if res.status == http.StatusOK {
+			inspectExposure(page.String(), res.body)
+		}
 		if strings.Contains(strings.ToLower(res.header.Get("X-Powered-By")), "next.js") {
 			addSignal("X-Powered-By header")
 		}
@@ -264,6 +295,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 					run.HistoricalCandidates[j].Reason = "page discovery GET completed; not an active security check"
 				}
 			}
+			inspectExposure(current.String(), res.body)
 			refs := nextjsHTMLReferences(current, res.body)
 			scripts = append(scripts, refs.Scripts...)
 			for _, raw := range refs.Links {
@@ -290,7 +322,6 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		scripts = scripts[:limits.MaxScripts]
 	}
 
-	var findings []Finding
 	var routes []string
 	var routeBase *url.URL
 	probedMaps := map[string]bool{}
@@ -310,6 +341,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		if !ok || res.status != http.StatusOK {
 			continue
 		}
+		inspectExposure(script, res.body)
 		if strings.HasSuffix(scriptURL.Path, "/_buildManifest.js") && routes == nil {
 			routes = nextjsManifestRoutes(res.body)
 			// Manifest routes are relative to the application's base path.
@@ -373,6 +405,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		if !ok || probe.status != http.StatusOK || !looksLikeSourceMap(probe.body) {
 			continue
 		}
+		inspectExposure(mapURL.String(), probe.body)
 		findings = append(findings, Finding{
 			SourceID: nextjsSourceID("nextjs-source-map", mapURL.String()), Scanner: "nextjs-assets", RuleID: "nextjs-source-map",
 			Title: "Public JavaScript source map", Severity: "low", Target: req.Target, Endpoint: sanitizeKubeURL(mapURL.String()), Method: http.MethodGet,

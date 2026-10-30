@@ -45,16 +45,18 @@ func nextjsHTMLReferences(base *url.URL, body []byte) nextjsPageReferences {
 				attrs[a.Key] = a.Val
 			}
 			switch n.Data {
-			case "script":
-				if u := resolve(attrs["src"]); attrs["src"] != "" && u != "" {
+
+			case "script", "link":
+				raw := attrs["src"]
+				if n.Data == "link" {
+					if attrs["rel"] != "modulepreload" && !(attrs["rel"] == "preload" && attrs["as"] == "script") {
+						break
+					}
+					raw = attrs["href"]
+				}
+				if u := resolve(raw); raw != "" && u != "" {
 					parsed, _ := url.Parse(u)
 					if strings.Contains(parsed.Path, "/_next/static/") && (path.Ext(parsed.Path) == ".js" || path.Ext(parsed.Path) == ".mjs") {
-						refs.Scripts = append(refs.Scripts, u)
-					}
-				}
-			case "link":
-				if attrs["rel"] == "modulepreload" || (attrs["rel"] == "preload" && attrs["as"] == "script") {
-					if u := resolve(attrs["href"]); attrs["href"] != "" && u != "" {
 						refs.Scripts = append(refs.Scripts, u)
 					}
 				}
@@ -70,7 +72,7 @@ func nextjsHTMLReferences(base *url.URL, body []byte) nextjsPageReferences {
 	}
 	walk(document)
 	// Literal asset URLs also occur in App Router inline bootstrap/flight data.
-	for _, match := range nextjsAssetReference.FindAllSubmatch(body, -1) {
+	for _, match := range nextjsAssetReference.FindAllSubmatch(body, nextjsMaxRoutes) {
 		if u := resolve(string(match[1])); u != "" {
 			refs.Scripts = append(refs.Scripts, u)
 		}

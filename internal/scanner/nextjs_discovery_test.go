@@ -152,3 +152,28 @@ func TestNextjsDeepAdjacentMapAndDiscoveryReceipts(t *testing.T) {
 		}
 	}
 }
+
+func TestNextjsDiscoveryEnforcesGlobalEndpointAndByteBudgets(t *testing.T) {
+	for _, mode := range []string{"endpoints", "bytes"} {
+		t.Run(mode, func(t *testing.T) {
+			hits := 0
+			lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				w.Write([]byte(`<script>self.__next_f=[]</script><script src='/_next/static/main.js'></script>`))
+			}))
+			defer lab.Close()
+			req := nextjsTestRequest(t, lab.URL+"/")
+			req.Profile = ProfileNextjsDeep
+			cfg := Config{}
+			if mode == "endpoints" {
+				cfg.Budget = NewAssessmentBudget(0, 1, 0)
+			} else {
+				req.Nextjs.MaxResponseBytes = 10
+			}
+			run := (nextjsAssetsRunner{}).Run(t.Context(), req, cfg, nil)
+			if hits != 1 || run.GapKind != GapBudgetExhausted {
+				t.Fatalf("hits=%d run=%+v", hits, run)
+			}
+		})
+	}
+}
