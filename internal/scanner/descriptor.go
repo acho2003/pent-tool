@@ -146,7 +146,7 @@ func stageForScanner(id string) string {
 		return StageValidation
 	case "apichecks":
 		return StageValidation
-	case "apiwrites":
+	case "apiwrites", "nextjs-actions":
 		return StageWrite
 	case "nextjs-assets":
 		return StagePassive

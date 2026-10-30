@@ -23,7 +23,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "kube-exposure" || id == "nextjs-assets" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "kube-exposure" || id == "nextjs-assets" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -141,6 +141,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["vcs-exposure"] = vcsExposureRunner{}
 	byName["exposed-files"] = exposedFilesRunner{}
 	byName["apiwrites"] = apiWritesRunner{}
+	byName["nextjs-actions"] = nextjsActionsRunner{}
 	completed := make(map[string]Run)
 	for _, run := range existing {
 		if run.Terminal() {
@@ -437,6 +438,19 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				}
 			}
 		}
+		if job.Scanner == "nextjs-actions" {
+			req.WriteJournalDir, req.APIFixtureDir = scanDir, p.Config.APIFixtureDir
+			for _, approval := range plan.Config.NextjsActionApprovals {
+				if approval.TargetID == job.TargetID {
+					req.NextjsActionApprovals = append(req.NextjsActionApprovals, approval)
+				}
+			}
+			for _, auth := range p.Config.AssessmentAuthContexts {
+				if auth.TargetID == job.TargetID {
+					req.AuthContexts = append(req.AuthContexts, auth)
+				}
+			}
+		}
 		if job.Scanner == "apiwrites" {
 			if expanded {
 				req.WriteJournalDir = scanDir
@@ -667,7 +681,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "planned scanner has no execution adapter", emit))
 			continue
 		}
-		if job.FuzzApprovalID != "" {
+		if job.Scanner == "nextjs-actions" {
+			if err := prepareNextjsActionsRequest(&req, surface); err != nil {
+				appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, err.Error(), emit))
+				continue
+			}
+		} else if job.FuzzApprovalID != "" {
 			if err := prepareWapitiPostRequest(&req, surface); err != nil {
 				appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, err.Error(), emit))
 				continue
@@ -700,7 +719,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, fmt.Sprintf("create job artifact directory: %v", err), emit))
 			continue
 		}
-		if req.WapitiPostApproval == nil {
+		if req.WapitiPostApproval == nil && job.Scanner != "nextjs-actions" {
 			req.InputRequests = BuildScannerInputs(surface, req, job.Scanner)
 		}
 		manifestPath, manifestErr := SaveScannerInputs(req, job.Scanner)

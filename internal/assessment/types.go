@@ -271,6 +271,7 @@ type NextjsScanOptions struct {
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
+	NextjsActionApprovals      []NextjsActionApproval     `json:"nextjs_action_approvals,omitempty"`
 	Nextjs                     NextjsScanOptions          `json:"nextjs,omitzero"`
 	WorkflowVersion            string                     `json:"workflow_version,omitempty"`
 	ParentAssessmentID         string                     `json:"parent_assessment_id,omitempty"`

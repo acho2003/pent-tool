@@ -186,6 +186,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseAPIChecks(run.ArtifactPath)
 	case "kube-exposure":
 		return parseKubeExposure(run.ArtifactPath)
+	case "nextjs-actions":
+		return parseKubeExposure(run.ArtifactPath)
 	case "nextjs-assets":
 		return parseNextjsAssets(run.ArtifactPath)
 	case "actuator":

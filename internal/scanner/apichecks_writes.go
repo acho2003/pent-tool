@@ -19,8 +19,8 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
-// apiWritesRunner is the only component that executes state-changing API
-// requests. Every write is journaled before network I/O and is never replayed.
+// apiWritesRunner executes approved generic API writes. Each write is
+// journaled before network I/O and is never replayed.
 type apiWritesRunner struct{}
 
 func (apiWritesRunner) Name() string { return "apiwrites" }

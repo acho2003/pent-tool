@@ -97,6 +97,7 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		a, b := out.APIOperationInputs[i], out.APIOperationInputs[j]
 		return a.DefinitionID+"\x00"+a.OperationID < b.DefinitionID+"\x00"+b.OperationID
 	})
+	out.NextjsActionApprovals = normalizeNextjsActionApprovals(cfg.NextjsActionApprovals)
 	out.WriteApprovals = append([]WriteApproval(nil), cfg.WriteApprovals...)
 	for i := range out.WriteApprovals {
 		a := &out.WriteApprovals[i]
@@ -240,6 +241,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 		return []Problem{blocking("workflow.version.invalid", "unknown assessment workflow version")}
 	}
 	var probs []Problem
+	probs = append(probs, ValidateNextjsActionApprovals(cfg)...)
 	for _, limit := range []struct {
 		name       string
 		value, max int64

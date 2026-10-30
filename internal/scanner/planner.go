@@ -80,8 +80,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 9: simpler header-auth verification).
-const PlanRegistryVersion = "16"
+// schedules (version 17: explicit journaled Server Action campaigns).
+const PlanRegistryVersion = "17"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -110,6 +110,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	}
 	toolVersions["kube-exposure-catalog"] = kubeExposureCatalogVersion
 	toolVersions["nextjs-assets-catalog"] = nextjsAssetsCatalogVersion
+	toolVersions["nextjs-actions-catalog"] = nextjsActionsVersion
 	toolVersions["actuator-catalog"] = actuatorCatalogVersion
 	toolVersions["vcs-exposure-catalog"] = vcsCatalogVersion
 	toolVersions["exposed-files-catalog"] = exposedFilesCatalogVersion
@@ -167,7 +168,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 
 	// Katana is promoted separately below as the crawl stage. HTTPX and
 	// Subfinder are ordinary evidence jobs so failures are visible in coverage.
-	discoveryTools := map[string]bool{"katana": true}
+	discoveryTools := map[string]bool{"katana": true, "nextjs-actions": true}
 	// Discovery provider choices select a registry ID directly (in auto mode
 	// too, so custom-mode demotion never applies) and skip its alternative.
 	providerChosen, providerReplaced := providerSelections(cfg.DiscoveryProviders)
@@ -280,6 +281,24 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			}
 			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: "apiwrites", TargetID: target.ID, Types: []assessment.Type{assessment.TypeAPI}, State: PlanSelected, ReasonCode: "api_write.explicit_approval", Reason: "State-changing requests are limited to explicitly approved operations in the declared test environment."})
 			plan.Jobs = append(plan.Jobs, PlanJob{ID: "apiwrites:" + target.ID + ":apiwrites", State: PlanSelected, Scanner: "apiwrites", TargetID: target.ID, Target: target.Value, AssessmentType: assessment.TypeAPI, AssessmentTypes: []assessment.Type{assessment.TypeAPI}, Variant: "apiwrites", Stage: StageWrite})
+		}
+	}
+	actionTargets := map[string]bool{}
+	for _, approval := range cfg.NextjsActionApprovals {
+		if actionTargets[approval.TargetID] {
+			continue
+		}
+		actionTargets[approval.TargetID] = true
+		for _, target := range cfg.Targets {
+			if target.ID != approval.TargetID {
+				continue
+			}
+			state := PlanSelected
+			if available, known := input.Availability["nextjs-actions"]; known && !available {
+				state = PlanUnavailable
+			}
+			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: "nextjs-actions", TargetID: target.ID, Types: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, State: state, ReasonCode: "nextjs_action.explicit_approval", Reason: "Only enumerated one-shot action cases and their declared cleanup are approved; controlled state verification is required."})
+			plan.Jobs = append(plan.Jobs, PlanJob{ID: "nextjs-actions:" + target.ID, Scanner: "nextjs-actions", TargetID: target.ID, Target: target.Value, Variant: "nextjs-actions", State: state, AssessmentType: assessment.TypeWebApplication, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication}, Stage: StageWrite})
 		}
 	}
 	plan.Decisions = append(plan.Decisions, unregisteredProviderDecisions(cfg)...)

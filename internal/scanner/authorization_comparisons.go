@@ -28,6 +28,8 @@ type AuthorizationResourceFixture struct {
 }
 
 type AuthorizationResult struct {
+	CaseID          string `json:"case_id,omitempty"`
+	CleanupStatus   string `json:"cleanup_status,omitempty"`
 	Representation  string `json:"representation,omitempty"`
 	EndpointID      string `json:"endpoint_id,omitempty"`
 	AuthContextID   string `json:"auth_context_id,omitempty"`
