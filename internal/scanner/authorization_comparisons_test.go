@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -243,4 +244,155 @@ func TestAssessmentExecutorRoutesAuthorizationContextsOnFirstAttempt(t *testing.
 		}
 	}
 	t.Fatalf("no API run: %+v", runs)
+}
+
+func webComparisonFixture(t *testing.T, labURL, representation string, anonymous bool) (Request, Config) {
+	t.Helper()
+	req, cfg := comparisonFixture(t, labURL)
+	req.TargetID = "app"
+	req.APIEndpoints = nil // Web representations do not require an invented OpenAPI operation.
+	raw, _ := json.Marshal(AuthorizationResourceFixture{URL: labURL + "/account", ResponseMarker: "CONTROLLED_RESOURCE_1", Representation: representation})
+	hash := sha256.Sum256(raw)
+	ref := hex.EncodeToString(hash[:])
+	if err := os.WriteFile(filepath.Join(req.APIFixtureDir, ref+".body"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for i := range req.AuthorizationExpectations {
+		req.AuthorizationExpectations[i].ResourceFixtureRef = ref
+	}
+	if anonymous {
+		req.AuthorizationExpectations[1].Identity = "anonymous"
+	}
+	req.Inventory = NewSeedAttackSurface(req.Scope, req.Target)
+	addAuthorizationRequestVariants(req.Inventory, req)
+	req.EndpointTargets = DispatchTargets(req.Inventory, "apichecks", 100)
+	req.InputRequests = BuildScannerInputs(req.Inventory, req, "apichecks")
+	return req, cfg
+}
+
+func TestWebAuthorizationRepresentationsAndAnonymousIsolation(t *testing.T) {
+	for _, representation := range []string{"html", "pages-json", "rsc"} {
+		for _, vulnerable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/vulnerable=%v", representation, vulnerable), func(t *testing.T) {
+				var identities []string
+				lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					identities = append(identities, r.Header.Get("Authorization"))
+					if r.Method != "GET" || r.URL.Path != "/account" {
+						t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					}
+					wantType := map[string]string{"html": "text/html", "pages-json": "application/json", "rsc": "text/x-component"}[representation]
+					if r.Header.Get("Accept") != wantType {
+						t.Errorf("accept=%s", r.Header.Get("Accept"))
+					}
+					if representation == "rsc" && r.Header.Get("RSC") != "1" {
+						t.Error("missing RSC representation header")
+					}
+					if !vulnerable && r.Header.Get("Authorization") == "" {
+						http.Error(w, "denied", 403)
+						return
+					}
+					w.Header().Set("Content-Type", wantType)
+					w.Write([]byte(`{"resource":"CONTROLLED_RESOURCE_1"}`))
+				}))
+				defer lab.Close()
+				req, cfg := webComparisonFixture(t, lab.URL, representation, true)
+				req.TargetAuth = "Authorization: DO_NOT_USE_PRIMARY_CREDENTIAL"
+				cfg.ScanHeaders = []string{"Cookie: DO_NOT_USE_GLOBAL_CREDENTIAL"}
+				run := Run{Scanner: "apichecks"}
+				var findings []Finding
+				checked, gaps, err := runAuthorizationComparisons(t.Context(), req, cfg, &run, func(f Finding) error { findings = append(findings, f); return nil })
+				if err != nil || checked != 2 || gaps != 0 || len(identities) != 2 || identities[0] != "Bearer owner-secret" || identities[1] != "" {
+					t.Fatalf("checked=%d gaps=%d identities=%v err=%v results=%+v", checked, gaps, identities, err, run.AuthorizationResults)
+				}
+				want := 0
+				if vulnerable {
+					want = 1
+				}
+				if len(findings) != want {
+					t.Fatalf("findings: %+v", findings)
+				}
+				if vulnerable && (findings[0].RuleID != "web-resource-access-not-enforced" || run.AuthorizationResults[1].Representation != representation) {
+					t.Fatalf("lost representation: %+v %+v", findings, run.AuthorizationResults)
+				}
+			})
+		}
+	}
+}
+
+func TestWebAuthorizationRejectsWrongRepresentationAndMissingBaseline(t *testing.T) {
+	for _, mode := range []string{"wrong-content-type", "missing-baseline", "redirect", "unsupported", "wrong-target", "unselected"} {
+		t.Run(mode, func(t *testing.T) {
+			hits := 0
+			lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits++
+				if mode == "redirect" {
+					http.Redirect(w, r, "/login", 302)
+					return
+				}
+				w.Header().Set("Content-Type", "text/x-component")
+				if mode == "wrong-content-type" {
+					w.Header().Set("Content-Type", "text/html")
+				}
+				if mode == "missing-baseline" && r.Header.Get("Authorization") != "" {
+					w.Write([]byte("login page"))
+					return
+				}
+				w.Write([]byte("CONTROLLED_RESOURCE_1"))
+			}))
+			defer lab.Close()
+			representation := "rsc"
+			if mode == "unsupported" {
+				representation = "action"
+			}
+			req, cfg := webComparisonFixture(t, lab.URL, representation, true)
+			if mode == "wrong-target" {
+				req.TargetID = "different-target"
+			}
+			if mode == "unselected" {
+				req.InputRequests = nil
+			}
+			run := Run{Scanner: "apichecks"}
+			_, gaps, err := runAuthorizationComparisons(t.Context(), req, cfg, &run, func(Finding) error { t.Fatal("invented authorization finding"); return nil })
+			if err != nil || gaps == 0 {
+				t.Fatalf("gaps=%d err=%v", gaps, err)
+			}
+			if (mode == "wrong-target" || mode == "unsupported" || mode == "unselected") && hits != 0 {
+				t.Fatalf("gate leaked requests: %d", hits)
+			}
+		})
+	}
+}
+
+func TestWebAuthorizationRepresentationsHaveDistinctRequestIDs(t *testing.T) {
+	auth := AuthContext{ID: "user"}
+	html := authorizationEndpoint(AuthorizationResourceFixture{URL: "https://app.test/account", Representation: "html"}, auth)
+	rsc := authorizationEndpoint(AuthorizationResourceFixture{URL: "https://app.test/account", Representation: "rsc"}, auth)
+	if html.ID == rsc.ID {
+		t.Fatal("HTML and RSC coverage collapsed")
+	}
+}
+
+func TestAssessmentExecutorRoutesControlledWebComparisons(t *testing.T) {
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/x-component")
+		w.Write([]byte("CONTROLLED_RESOURCE_1"))
+	}))
+	defer lab.Close()
+	req, cfg := webComparisonFixture(t, lab.URL, "rsc", true)
+	cfg.KatanaPath, cfg.WebBrowser = "/nonexistent/katana", false
+	cfg.AssessmentAuthContexts, cfg.APIFixtureDir, cfg.WebMaxEndpoints = req.AuthContexts, req.APIFixtureDir, 100
+	target := assessment.Target{ID: "app", Kind: assessment.KindURL, Value: req.Target}
+	plan := AssessmentPlan{Fingerprint: "controlled-web", Config: assessment.AssessmentConfig{WorkflowVersion: "unified-v1", Targets: []assessment.Target{target}, Types: []assessment.Type{assessment.TypeWebApplication}, AuthorizationExpectations: req.AuthorizationExpectations}, Jobs: []PlanJob{{ID: "katana-app", Scanner: "katana", TargetID: "app", Target: req.Target, State: PlanSelected}, {ID: "apichecks-app", Scanner: "apichecks", TargetID: "app", Target: req.Target, State: PlanSelected}}}
+	pipeline := Pipeline{Config: cfg}
+	for _, run := range pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil) {
+		if run.Scanner != "apichecks" {
+			continue
+		}
+		if len(run.AuthorizationResults) != 2 || run.AuthorizationResults[1].Status != "mismatch" || run.AuthorizationResults[1].Representation != "rsc" {
+			t.Fatalf("web execution lost configuration: %+v", run)
+		}
+		return
+	}
+	t.Fatal("missing native comparison job")
 }

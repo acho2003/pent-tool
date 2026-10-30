@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -503,6 +504,9 @@ func Validate(cfg AssessmentConfig) []Problem {
 	}
 	boundIdentities := map[string]bool{}
 	for _, binding := range cfg.Access {
+		if binding.Identity == "anonymous" {
+			probs = append(probs, blocking("access.identity.reserved", "anonymous is reserved for credential-free authorization comparisons"))
+		}
 		if binding.Identity != "" {
 			boundIdentities[binding.Identity] = true
 		}
@@ -512,15 +516,15 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if expectation.OperationID == "" || expectation.Identity == "" || (expectation.Expect != "allow" && expectation.Expect != "deny") || !validFixtureRef(expectation.ResourceFixtureRef) {
 			probs = append(probs, blocking("api_authorization_expectation.invalid", "authorization expectations require an operation ID, identity, allow/deny outcome, and resource fixture reference"))
 		}
-		if !boundIdentities[expectation.Identity] {
+		if expectation.Identity != "anonymous" && !boundIdentities[expectation.Identity] {
 			probs = append(probs, blocking("api_authorization_expectation.identity_unknown", fmt.Sprintf("authorization expectation identity %q has no credential binding", expectation.Identity)))
 		}
 		if expectationIdentities[expectation.OperationID] == nil {
 			expectationIdentities[expectation.OperationID] = map[string]bool{}
 		}
 		expectationIdentities[expectation.OperationID][expectation.Identity] = true
-		if !apiType {
-			probs = append(probs, blocking("api_authorization_expectation.type_required", "authorization expectations require the API assessment type"))
+		if !apiType && !slices.Contains(cfg.Types, TypeWebApplication) {
+			probs = append(probs, blocking("api_authorization_expectation.type_required", "authorization expectations require the API or web application assessment type"))
 		}
 	}
 	for operationID, identities := range expectationIdentities {

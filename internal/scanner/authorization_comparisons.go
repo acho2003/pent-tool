@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,11 +22,13 @@ import (
 // AuthorizationResourceFixture identifies one supplied controlled read resource.
 // A success marker prevents a login page or generic HTTP 200 from proving access.
 type AuthorizationResourceFixture struct {
+	Representation string `json:"representation,omitempty"`
 	URL            string `json:"url"`
 	ResponseMarker string `json:"response_marker"`
 }
 
 type AuthorizationResult struct {
+	Representation  string `json:"representation,omitempty"`
 	EndpointID      string `json:"endpoint_id,omitempty"`
 	AuthContextID   string `json:"auth_context_id,omitempty"`
 	Identity        string `json:"identity"`
@@ -52,7 +55,10 @@ func authorizationInput(req Request, expectation assessment.AuthorizationExpecta
 			break
 		}
 	}
-	if auth.ID == "" || auth.State != assessment.StateVerified || auth.Refresh == nil || len(auth.Headers) == 0 {
+	if expectation.Identity == "anonymous" && req.TargetID != "" {
+		auth = AuthContext{ID: AuthenticationContextID(req.TargetID, "anonymous"), TargetID: req.TargetID, Identity: "anonymous", State: assessment.StateVerified}
+	}
+	if auth.ID == "" || auth.State != assessment.StateVerified || (auth.Identity != "anonymous" && (auth.Refresh == nil || len(auth.Headers) == 0)) {
 		return auth, APIEndpoint{}, AuthorizationResourceFixture{}, fmt.Errorf("identity has no verified target-bound authentication context")
 	}
 	data, err := readAPIFixture(req.APIFixtureDir, expectation.ResourceFixtureRef)
@@ -71,6 +77,19 @@ func authorizationInput(req Request, expectation assessment.AuthorizationExpecta
 	if excluded, why := req.AppScope.Excluded(http.MethodGet, fixture.URL); excluded {
 		return auth, APIEndpoint{}, fixture, fmt.Errorf("resource fixture is excluded: %s", why)
 	}
+	if fixture.Representation != "" {
+		if fixture.Representation != "html" && fixture.Representation != "pages-json" && fixture.Representation != "rsc" {
+			return auth, APIEndpoint{}, fixture, fmt.Errorf("unsupported controlled resource representation")
+		}
+		if req.TargetID == "" || auth.TargetID != req.TargetID {
+			return auth, APIEndpoint{}, fixture, fmt.Errorf("controlled web resource requires its own target-bound identity")
+		}
+		if nextjsUnsafeRouteName.MatchString(destination.PathPrefix) {
+			return auth, APIEndpoint{}, fixture, fmt.Errorf("controlled resource path suggests a state-changing GET")
+		}
+		parsed, _ := url.Parse(fixture.URL)
+		return auth, APIEndpoint{TargetID: req.TargetID, OperationID: expectation.OperationID, Method: http.MethodGet, RequestURL: fixture.URL, Path: parsed.EscapedPath(), Origin: parsed.Scheme + "://" + parsed.Host, Resolved: true, Eligible: true}, fixture, nil
+	}
 	for _, endpoint := range req.APIEndpoints {
 		if endpoint.TargetID != auth.TargetID || endpoint.OperationID != expectation.OperationID || endpoint.Method != http.MethodGet || !endpoint.Resolved || !endpoint.Eligible {
 			continue
@@ -87,6 +106,9 @@ func authorizationEndpoint(fixture AuthorizationResourceFixture, auth AuthContex
 	endpoint, _ := normalizeAttackSurfaceEndpoint(fixture.URL, http.MethodGet, "authorization-fixture", "", 0, "", endpointParameters(fixture.URL), false, false)
 	endpoint.AuthContextID = auth.ID
 	endpoint.ID = inventoryID(endpoint.ID, auth.ID)
+	if fixture.Representation != "" {
+		endpoint.ID = inventoryID(endpoint.ID, fixture.Representation)
+	}
 	endpoint.Kind, endpoint.ObservationKind = "api", "seed"
 	endpoint.State, endpoint.StateReason = EndpointStateInScope, "supplied controlled-resource request for a named identity"
 	return endpoint
@@ -135,7 +157,7 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 	for _, expectation := range req.AuthorizationExpectations {
 		result := AuthorizationResult{Identity: expectation.Identity, OperationID: expectation.OperationID, FixtureRef: expectation.ResourceFixtureRef, Expected: expectation.Expect, Status: "skipped", Method: http.MethodGet, EvidenceRef: eventsPath}
 		auth, endpoint, fixture, inputErr := authorizationInput(req, expectation)
-		result.AuthContextID, result.Role = auth.ID, auth.Role
+		result.AuthContextID, result.Role, result.Representation = auth.ID, auth.Role, fixture.Representation
 		result.URL = SafeTelemetryURL(fixture.URL)
 		if inputErr != nil {
 			result.Reason = inputErr.Error()
@@ -160,8 +182,12 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 			gaps++
 			continue
 		}
-		current, refreshErr := auth.Refresh(ctx, slices.Clone(auth.Headers))
-		if refreshErr != nil || len(current) == 0 {
+		current := []string(nil)
+		var refreshErr error
+		if auth.Identity != "anonymous" {
+			current, refreshErr = auth.Refresh(ctx, slices.Clone(auth.Headers))
+		}
+		if refreshErr != nil || (auth.Identity != "anonymous" && len(current) == 0) {
 			result.Reason = "identity authentication checkpoint expired"
 			results = append(results, result)
 			gaps++
@@ -176,7 +202,7 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 		if err := record(result, "submitted"); err != nil {
 			return checked, gaps, err
 		}
-		response, requestErr := sendScopedAPIRequest(ctx, cfg, fixture.URL, endpoint.Method, nil, "", strings.Join(current, "\n"))
+		response, requestErr := sendScopedAPIRequestWithHeaders(ctx, cfg, fixture.URL, endpoint.Method, nil, "", strings.Join(current, "\n"), authorizationRepresentationHeaders(fixture.Representation))
 		if requestErr != nil {
 			result.Status, result.Reason = "failed", "resource request failed"
 			if err := record(result, "failed"); err != nil {
@@ -194,13 +220,20 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 		if err := record(result, "observed"); err != nil {
 			return checked, gaps, err
 		}
+		if auth.Identity != "anonymous" {
+			if _, err := auth.Refresh(ctx, slices.Clone(current)); err != nil {
+				result.Status, result.Reason = "unknown", "identity authentication checkpoint expired after the resource request"
+				results = append(results, result)
+				continue
+			}
+		}
 		result.Status = "unknown"
 		switch {
 		case readErr != nil || len(body) > 64<<10:
 			result.Reason = "resource response unavailable or beyond the comparison limit"
 		case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
 			result.Observed = "deny"
-		case response.StatusCode >= 200 && response.StatusCode < 300 && strings.Contains(string(body), fixture.ResponseMarker):
+		case response.StatusCode >= 200 && response.StatusCode < 300 && authorizationRepresentationMatches(fixture.Representation, response.Header.Get("Content-Type"), body) && strings.Contains(string(body), fixture.ResponseMarker):
 			result.Observed, result.MarkerConfirmed = "allow", true
 		default:
 			result.Reason = "response does not prove controlled resource access or explicit denial"
@@ -219,19 +252,25 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 	allowBaselines := map[string]bool{}
 	for _, result := range results {
 		if result.Expected == "allow" && result.Observed == "allow" {
-			allowBaselines[result.OperationID+"\x00"+result.FixtureRef] = true
+			allowBaselines[result.OperationID+"\x00"+result.FixtureRef+"\x00"+result.Representation] = true
 		}
 	}
 	checked, gaps = 0, 0
 	for i := range results {
 		result := &results[i]
 		if result.Status == "mismatch" && result.Expected == "deny" && result.Observed == "allow" {
-			if !allowBaselines[result.OperationID+"\x00"+result.FixtureRef] {
+			if !allowBaselines[result.OperationID+"\x00"+result.FixtureRef+"\x00"+result.Representation] {
 				result.Status, result.Reason = "unknown", "expected allow identity did not confirm the controlled resource"
 			} else {
 				parsed, _ := url.Parse(result.URL)
 				finding := newAPICheckFinding(req, APIEndpoint{Method: http.MethodGet, Path: parsed.EscapedPath(), Origin: parsed.Scheme + "://" + parsed.Host}, result.URL, "api-role-access-not-enforced", "API resource access violates supplied role expectation", "high", fmt.Sprintf("Identity %q was expected to be denied access, but HTTP %d returned the configured controlled-resource marker. The expected allow identity confirmed the same fixture.", result.Identity, result.ResponseCode), "CWE-863")
-				finding.SourceID += ":" + result.AuthContextID + ":" + result.FixtureRef[:12]
+				if result.Representation != "" {
+					finding.RuleID = "web-resource-access-not-enforced"
+					finding.Title = "Controlled " + result.Representation + " resource violates supplied access expectation"
+					finding.SourceID = nextjsSourceID(finding.RuleID, result.URL+"\x00"+result.AuthContextID+"\x00"+result.FixtureRef+"\x00"+result.Representation)
+				} else {
+					finding.SourceID += ":" + result.AuthContextID + ":" + result.FixtureRef[:12]
+				}
 				finding.EvidenceRef = eventsPath
 				finding.EvidenceCompleteness = "status_and_controlled_resource_marker"
 				if err := writeFinding(finding); err != nil {
@@ -275,4 +314,30 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 	}
 	run.AuthorizationResults = append(run.AuthorizationResults, results...)
 	return checked, gaps, nil
+}
+
+func authorizationRepresentationHeaders(representation string) http.Header {
+	switch representation {
+	case "html":
+		return http.Header{"Accept": {"text/html"}}
+	case "pages-json":
+		return http.Header{"Accept": {"application/json"}}
+	case "rsc":
+		return http.Header{"Accept": {"text/x-component"}, "Rsc": {"1"}}
+	}
+	return nil
+}
+
+func authorizationRepresentationMatches(representation, contentType string, body []byte) bool {
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	switch representation {
+	case "html":
+		return mediaType == "text/html"
+	case "pages-json":
+		return mediaType == "application/json" && json.Valid(body)
+	case "rsc":
+		return mediaType == "text/x-component"
+	default:
+		return true
+	}
 }

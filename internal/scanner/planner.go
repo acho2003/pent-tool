@@ -81,7 +81,7 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 9: simpler header-auth verification).
-const PlanRegistryVersion = "15"
+const PlanRegistryVersion = "16"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -194,6 +194,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		}
 		for _, target := range matchedTargets {
 			for _, typ := range cfg.Types {
+				if def.ID == "apichecks" && typ == assessment.TypeWebApplication && cfg.Profile != ProfileNextjsDeep && len(cfg.AuthorizationExpectations) == 0 && !custom[def.ID] {
+					continue
+				}
 				if !slices.Contains(def.AssessmentTypes, typ) {
 					continue
 				}

@@ -409,7 +409,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		scope := assessmentJobScope(job)
 		key := assessmentJobRunKey(scope, job.Scanner, job.Variant, plan.Fingerprint)
 		req := Request{
-			Target: job.Target, WorkflowVersion: plan.Config.WorkflowVersion,
+			Target: job.Target, TargetID: job.TargetID, WorkflowVersion: plan.Config.WorkflowVersion,
 			ReplayStore: replayStore, ReplayScope: scope,
 			Scope: scope,
 			ScanDir: filepath.Join(scanDir, "jobs", stableJobPath(job.TargetID), stableJobPath(plan.Fingerprint),
