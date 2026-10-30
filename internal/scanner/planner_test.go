@@ -454,7 +454,7 @@ func TestPlanFingerprintStableWithinRegistryWhenNewFieldsEmpty(t *testing.T) {
 	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}}}
 	nilMaps := PlanAssessment(PlanInput{Config: cfg})
 	emptyMaps := PlanAssessment(PlanInput{Config: cfg, ToolVersions: map[string]string{}, CredentialRevisions: map[string]string{}})
-	if nilMaps.RegistryVersion != "17" || nilMaps.Fingerprint != emptyMaps.Fingerprint {
+	if nilMaps.RegistryVersion != "18" || nilMaps.Fingerprint != emptyMaps.Fingerprint {
 		t.Fatalf("empty fingerprint inputs changed the fingerprint: %q vs %q (registry %q)", nilMaps.Fingerprint, emptyMaps.Fingerprint, nilMaps.RegistryVersion)
 	}
 	if got := planFingerprint(nilMaps, nil, nil); got != nilMaps.Fingerprint {
@@ -462,12 +462,12 @@ func TestPlanFingerprintStableWithinRegistryWhenNewFieldsEmpty(t *testing.T) {
 	}
 }
 
-func TestRegistryVersionIsSeventeen(t *testing.T) {
-	if PlanRegistryVersion != "17" {
-		t.Fatalf("PlanRegistryVersion = %q, want 17", PlanRegistryVersion)
+func TestRegistryVersionIsEighteen(t *testing.T) {
+	if PlanRegistryVersion != "18" {
+		t.Fatalf("PlanRegistryVersion = %q, want 18", PlanRegistryVersion)
 	}
 	plan := PlanAssessment(PlanInput{Config: assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "h", Kind: assessment.KindIP, Value: "192.0.2.1"}}}})
-	if plan.RegistryVersion != "17" {
+	if plan.RegistryVersion != "18" {
 		t.Fatalf("plan registry version = %q", plan.RegistryVersion)
 	}
 }

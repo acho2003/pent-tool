@@ -53,6 +53,8 @@ type Artifact struct {
 }
 
 type Request struct {
+	NextjsBoundaryApprovals   []assessment.NextjsBoundaryApproval     `json:"-"`
+	NextjsBoundaryTokens      map[string]string                       `json:"-"`
 	NextjsActionApprovals     []assessment.NextjsActionApproval       `json:"-"`
 	TargetID                  string                                  `json:"-"`
 	Nextjs                    assessment.NextjsScanOptions            `json:"-"`

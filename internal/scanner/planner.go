@@ -80,8 +80,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 17: explicit journaled Server Action campaigns).
-const PlanRegistryVersion = "17"
+// schedules (version 18: controlled cache and callback boundary probes).
+const PlanRegistryVersion = "18"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -111,6 +111,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	toolVersions["kube-exposure-catalog"] = kubeExposureCatalogVersion
 	toolVersions["nextjs-assets-catalog"] = nextjsAssetsCatalogVersion
 	toolVersions["nextjs-actions-catalog"] = nextjsActionsVersion
+	toolVersions["nextjs-boundaries-catalog"] = nextjsBoundariesVersion
 	toolVersions["actuator-catalog"] = actuatorCatalogVersion
 	toolVersions["vcs-exposure-catalog"] = vcsCatalogVersion
 	toolVersions["exposed-files-catalog"] = exposedFilesCatalogVersion
@@ -168,7 +169,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 
 	// Katana is promoted separately below as the crawl stage. HTTPX and
 	// Subfinder are ordinary evidence jobs so failures are visible in coverage.
-	discoveryTools := map[string]bool{"katana": true, "nextjs-actions": true}
+	discoveryTools := map[string]bool{"katana": true, "nextjs-actions": true, "nextjs-boundaries": true}
 	// Discovery provider choices select a registry ID directly (in auto mode
 	// too, so custom-mode demotion never applies) and skip its alternative.
 	providerChosen, providerReplaced := providerSelections(cfg.DiscoveryProviders)
@@ -299,6 +300,24 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			}
 			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: "nextjs-actions", TargetID: target.ID, Types: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, State: state, ReasonCode: "nextjs_action.explicit_approval", Reason: "Only enumerated one-shot action cases and their declared cleanup are approved; controlled state verification is required."})
 			plan.Jobs = append(plan.Jobs, PlanJob{ID: "nextjs-actions:" + target.ID, Scanner: "nextjs-actions", TargetID: target.ID, Target: target.Value, Variant: "nextjs-actions", State: state, AssessmentType: assessment.TypeWebApplication, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication}, Stage: StageWrite})
+		}
+	}
+	boundaryTargets := map[string]bool{}
+	for _, approval := range cfg.NextjsBoundaryApprovals {
+		if boundaryTargets[approval.TargetID] {
+			continue
+		}
+		boundaryTargets[approval.TargetID] = true
+		for _, target := range cfg.Targets {
+			if target.ID != approval.TargetID {
+				continue
+			}
+			state := PlanSelected
+			if available, known := input.Availability["nextjs-boundaries"]; known && !available {
+				state = PlanUnavailable
+			}
+			plan.Decisions = append(plan.Decisions, PlanDecision{Scanner: "nextjs-boundaries", TargetID: target.ID, Types: []assessment.Type{assessment.TypeWebApplication, assessment.TypeAPI}, State: state, ReasonCode: "nextjs_boundary.explicit_approval", Reason: "Only supplied controlled cache/URL probes and their scoped cleanup or callback observations are approved."})
+			plan.Jobs = append(plan.Jobs, PlanJob{ID: "nextjs-boundaries:" + target.ID, Scanner: "nextjs-boundaries", TargetID: target.ID, Target: target.Value, Variant: "nextjs-boundaries", State: state, AssessmentType: assessment.TypeWebApplication, AssessmentTypes: []assessment.Type{assessment.TypeWebApplication}, Stage: StageWrite})
 		}
 	}
 	plan.Decisions = append(plan.Decisions, unregisteredProviderDecisions(cfg)...)

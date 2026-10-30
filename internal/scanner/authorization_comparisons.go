@@ -28,25 +28,27 @@ type AuthorizationResourceFixture struct {
 }
 
 type AuthorizationResult struct {
-	CaseID          string `json:"case_id,omitempty"`
-	CleanupStatus   string `json:"cleanup_status,omitempty"`
-	Representation  string `json:"representation,omitempty"`
-	EndpointID      string `json:"endpoint_id,omitempty"`
-	AuthContextID   string `json:"auth_context_id,omitempty"`
-	Identity        string `json:"identity"`
-	Role            string `json:"role,omitempty"`
-	OperationID     string `json:"operation_id"`
-	FixtureRef      string `json:"fixture_ref"`
-	URL             string `json:"url,omitempty"`
-	Method          string `json:"method,omitempty"`
-	Expected        string `json:"expected"`
-	Observed        string `json:"observed,omitempty"`
-	Status          string `json:"status"`
-	ResponseCode    int    `json:"response_code,omitempty"`
-	ResponseDigest  string `json:"response_digest,omitempty"`
-	MarkerConfirmed bool   `json:"marker_confirmed"`
-	Reason          string `json:"reason,omitempty"`
-	EvidenceRef     string `json:"evidence_reference,omitempty"`
+	CacheAttribution  string `json:"cache_attribution,omitempty"`
+	CorrelationDigest string `json:"correlation_digest,omitempty"`
+	CaseID            string `json:"case_id,omitempty"`
+	CleanupStatus     string `json:"cleanup_status,omitempty"`
+	Representation    string `json:"representation,omitempty"`
+	EndpointID        string `json:"endpoint_id,omitempty"`
+	AuthContextID     string `json:"auth_context_id,omitempty"`
+	Identity          string `json:"identity"`
+	Role              string `json:"role,omitempty"`
+	OperationID       string `json:"operation_id"`
+	FixtureRef        string `json:"fixture_ref"`
+	URL               string `json:"url,omitempty"`
+	Method            string `json:"method,omitempty"`
+	Expected          string `json:"expected"`
+	Observed          string `json:"observed,omitempty"`
+	Status            string `json:"status"`
+	ResponseCode      int    `json:"response_code,omitempty"`
+	ResponseDigest    string `json:"response_digest,omitempty"`
+	MarkerConfirmed   bool   `json:"marker_confirmed"`
+	Reason            string `json:"reason,omitempty"`
+	EvidenceRef       string `json:"evidence_reference,omitempty"`
 }
 
 func authorizationInput(req Request, expectation assessment.AuthorizationExpectation) (AuthContext, APIEndpoint, AuthorizationResourceFixture, error) {

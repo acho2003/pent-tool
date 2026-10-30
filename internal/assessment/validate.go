@@ -97,6 +97,7 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		a, b := out.APIOperationInputs[i], out.APIOperationInputs[j]
 		return a.DefinitionID+"\x00"+a.OperationID < b.DefinitionID+"\x00"+b.OperationID
 	})
+	out.NextjsBoundaryApprovals = normalizeNextjsBoundaryApprovals(cfg.NextjsBoundaryApprovals)
 	out.NextjsActionApprovals = normalizeNextjsActionApprovals(cfg.NextjsActionApprovals)
 	out.WriteApprovals = append([]WriteApproval(nil), cfg.WriteApprovals...)
 	for i := range out.WriteApprovals {
@@ -242,6 +243,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 	}
 	var probs []Problem
 	probs = append(probs, ValidateNextjsActionApprovals(cfg)...)
+	probs = append(probs, ValidateNextjsBoundaryApprovals(cfg)...)
 	for _, limit := range []struct {
 		name       string
 		value, max int64
