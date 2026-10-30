@@ -104,6 +104,7 @@ export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
 export interface AssessmentTarget { id: string; type: string; value: string; }
 export interface AssessmentConfig {
+  nextjs?: { max_pages?: number; max_scripts?: number; max_route_checks?: number; max_requests?: number; max_response_bytes?: number };
   test_environment?: boolean;
   wapiti_mode?: "" | "safe" | "full";
   fuzz_approvals?: Array<{target_id: string; method: "POST"; path: string; operation_id: string; fixture_ref: string; content_type: "application/x-www-form-urlencoded"; cleanup_method: "DELETE"; cleanup_path: string; scanner: "wapiti"; request_limit: number; repeat_testing_approved: boolean}>;

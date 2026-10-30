@@ -355,3 +355,31 @@ func TestNextjsAssetsRouteChecksAreCapped(t *testing.T) {
 		t.Fatalf("unverified = %d", unverified)
 	}
 }
+
+func TestNextjsDeepPlanSelectsNativeChecksAndFingerprintsLimits(t *testing.T) {
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.test/"}}, Profile: ProfileNextjsDeep}
+	plan := PlanAssessment(PlanInput{Config: cfg})
+	for _, scanner := range []string{"nextjs-assets", "apichecks"} {
+		found := false
+		for _, job := range plan.Jobs {
+			if job.Scanner == scanner && job.State == PlanSelected {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("profile omitted %s: %+v", scanner, plan)
+		}
+	}
+	cfg.Nextjs.MaxScripts = 150
+	changed := PlanAssessment(PlanInput{Config: cfg})
+	if changed.Fingerprint == plan.Fingerprint {
+		t.Fatal("Next.js request limits not fingerprinted")
+	}
+	cfg.ScannerSelection = assessment.ScannerSelection{Mode: "custom", Variants: []string{"apichecks"}}
+	custom := PlanAssessment(PlanInput{Config: cfg})
+	for _, job := range custom.Jobs {
+		if job.Scanner == "nextjs-assets" {
+			t.Fatal("profile overrode custom scanner selection")
+		}
+	}
+}

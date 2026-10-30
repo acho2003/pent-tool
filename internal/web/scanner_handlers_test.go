@@ -983,3 +983,26 @@ func TestStartupRemovesRawArtifactsOfRunsThatNeverFinished(t *testing.T) {
 		t.Fatalf("a terminal run's artifact must be kept: %v %q", err, data)
 	}
 }
+
+func TestNextjsDeepRequiresTypedAssessmentAndRetainsLimits(t *testing.T) {
+	s := newTestServer(t, nil)
+	legacy := httptest.NewRecorder()
+	s.handleScan(legacy, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(`{"targets":["https://app.example.test/"],"profile":"nextjs-deep","save_only":true}`)))
+	if legacy.Code != http.StatusBadRequest || !strings.Contains(legacy.Body.String(), "typed") {
+		t.Fatalf("legacy profile silently accepted: %d %s", legacy.Code, legacy.Body.String())
+	}
+	body := `{"assessment":{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://app.example.test/"}],"profile":"nextjs-deep","nextjs":{"max_scripts":150}},"targets":["https://app.example.test/"],"save_only":true}`
+	response := httptest.NewRecorder()
+	s.handleScan(response, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("typed deep profile refused: %d %s", response.Code, response.Body.String())
+	}
+	var result map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	instance := s.instances[result["instance_id"]]
+	if instance == nil || instance.Assessment == nil || instance.Profile != "nextjs-deep" || instance.Assessment.Nextjs.MaxScripts != 150 {
+		t.Fatalf("deep profile or limits lost: %+v", instance)
+	}
+}

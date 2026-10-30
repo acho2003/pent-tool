@@ -1402,8 +1402,12 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	if req.Profile == "" {
 		req.Profile = scanner.ProfileGentle
 	}
+	if req.Profile == scanner.ProfileNextjsDeep && req.Assessment == nil {
+		http.Error(w, "nextjs-deep requires a typed web/API assessment", http.StatusBadRequest)
+		return
+	}
 	if _, ok := scanner.ResolveWebProfile(req.Profile); !ok {
-		http.Error(w, "profile must be web-gentle or web-thorough", http.StatusBadRequest)
+		http.Error(w, "profile must be web-gentle, web-thorough, or nextjs-deep", http.StatusBadRequest)
 		return
 	}
 	if req.Assessment != nil {
@@ -2569,7 +2573,7 @@ type scanSession struct {
 	resetState         bool
 	instanceID         string // parent instance ID for multi-instance tracking
 	scanMode           string // single, wildcard — persisted so dashboard shows correct mode
-	profile            string // web-gentle or web-thorough
+	profile            string // web-gentle, web-thorough, or nextjs-deep
 	assessment         *assessment.AssessmentConfig
 	assessmentPlan     *scanner.AssessmentPlan
 	planFingerprint    string

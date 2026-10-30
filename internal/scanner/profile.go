@@ -18,6 +18,9 @@ type WebProfile struct {
 }
 
 func DefaultWebProfile(name string) WebProfile {
+	if name == ProfileNextjsDeep {
+		return WebProfile{Name: ProfileNextjsDeep, RateRPS: 10, MaxEndpoints: 3000, Budget: 90 * time.Minute, Browser: true, AllowStateChanging: false}
+	}
 	if name == ProfileThorough {
 		return WebProfile{Name: ProfileThorough, RateRPS: 150, MaxEndpoints: 2000, Budget: 0, Browser: true, AllowStateChanging: false}
 	}
@@ -28,7 +31,7 @@ func ResolveWebProfile(name string) (WebProfile, bool) {
 	if name == "" {
 		name = ProfileGentle
 	}
-	if name != ProfileGentle && name != ProfileThorough {
+	if name != ProfileGentle && name != ProfileThorough && name != ProfileNextjsDeep {
 		return WebProfile{}, false
 	}
 	return DefaultWebProfile(name), true

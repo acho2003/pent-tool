@@ -123,7 +123,7 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 		"--worker", "1",
 		"--timeout", "10",
 	}
-	if req.Profile != ProfileThorough {
+	if req.Profile != ProfileThorough && req.Profile != ProfileNextjsDeep {
 		// Default (and web-gentle): only test the dispatcher-approved parameters.
 		args = append(args, "--skip-mining-all")
 	}

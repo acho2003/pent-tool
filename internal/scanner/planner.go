@@ -186,6 +186,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			continue
 		}
 		selected := def.DefaultSelection == "automatic" || def.DefaultSelection == "conditional"
+		if cfg.Profile == ProfileNextjsDeep && def.ID == "nextjs-assets" {
+			selected = true
+		}
 		if requestedCustom {
 			selected = custom[def.ID]
 		}
@@ -210,6 +213,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					} else {
 						state, code, reason = PlanOptional, "discovery.subdomain_opt_in_required", "Subdomain discovery is off by default; enable it to authorize enumeration under this domain."
 					}
+				}
+				if cfg.Profile == ProfileNextjsDeep && def.ID == "nextjs-assets" && !requestedCustom && state == PlanOptional {
+					state, code, reason = PlanSelected, "profile.nextjs_deep", "The Next.js deep profile selects bounded framework discovery and exposure checks."
 				}
 				if requestedCustom && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
 					state, code, reason = PlanSelected, "scanner.explicitly_selected", "This optional scanner was explicitly selected by the operator."

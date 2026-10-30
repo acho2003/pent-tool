@@ -307,6 +307,9 @@ func normalizeDeterministicSchedule(sch *ScanSchedule) error {
 }
 
 func (s *Server) normalizeScheduleForExecution(sch *ScanSchedule) error {
+	if sch.Profile == scanner.ProfileNextjsDeep && sch.Assessment == nil {
+		return fmt.Errorf("nextjs-deep requires a typed web/API assessment")
+	}
 	if sch.Assessment == nil {
 		return normalizeDeterministicSchedule(sch)
 	}
@@ -321,7 +324,7 @@ func (s *Server) normalizeScheduleForExecution(sch *ScanSchedule) error {
 		sch.Profile = scanner.ProfileGentle
 	}
 	if _, ok := scanner.ResolveWebProfile(sch.Profile); !ok {
-		return fmt.Errorf("profile must be web-gentle or web-thorough")
+		return fmt.Errorf("profile must be web-gentle, web-thorough, or nextjs-deep")
 	}
 	config.Profile = sch.Profile
 	for _, problem := range assessment.Validate(config) {

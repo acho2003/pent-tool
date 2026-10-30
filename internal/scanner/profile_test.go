@@ -40,3 +40,10 @@ func TestProfileThoroughNeverAllowsStateChanging(t *testing.T) {
 		t.Fatal("thorough profile must not enable writes automatically")
 	}
 }
+
+func TestNextjsDeepProfileHasFiniteBudgetsAndNeverApprovesWrites(t *testing.T) {
+	p, ok := ResolveWebProfile(ProfileNextjsDeep)
+	if !ok || p.Name != ProfileNextjsDeep || p.RateRPS != 10 || p.MaxEndpoints != 3000 || p.Budget != 90*time.Minute || !p.Browser || p.AllowStateChanging {
+		t.Fatalf("profile=%+v ok=%v", p, ok)
+	}
+}
