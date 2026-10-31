@@ -29,6 +29,22 @@
     },
     {
       "variant": "vulnerable",
+      "check": "rsc-anonymous-access",
+      "findings": 1,
+      "recorded_requests": 2,
+      "passed": true,
+      "outcome": "SUCCESS_WITH_FINDINGS"
+    },
+    {
+      "variant": "vulnerable",
+      "check": "rsc-reader-access",
+      "findings": 1,
+      "recorded_requests": 2,
+      "passed": true,
+      "outcome": "SUCCESS_WITH_FINDINGS"
+    },
+    {
+      "variant": "vulnerable",
       "check": "server-action-authorization",
       "findings": 2,
       "recorded_requests": 20,
@@ -84,6 +100,22 @@
     {
       "variant": "patched",
       "check": "pages-json-access",
+      "findings": 0,
+      "recorded_requests": 2,
+      "passed": true,
+      "outcome": "SUCCESS_NO_FINDINGS"
+    },
+    {
+      "variant": "patched",
+      "check": "rsc-anonymous-access",
+      "findings": 0,
+      "recorded_requests": 2,
+      "passed": true,
+      "outcome": "SUCCESS_NO_FINDINGS"
+    },
+    {
+      "variant": "patched",
+      "check": "rsc-reader-access",
       "findings": 0,
       "recorded_requests": 2,
       "passed": true,

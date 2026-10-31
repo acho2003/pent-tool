@@ -63,6 +63,39 @@ func frameworkGet(t *testing.T, raw, cookie string) []byte {
 	}
 	return body
 }
+
+// frameworkRSCResource observes the framework's canonical RSC URL without
+// following redirects. Only the owned path and its _rsc query may be returned.
+func frameworkRSCResource(t *testing.T, base string) string {
+	t.Helper()
+	endpoint := base + "/resource"
+	request, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header = authorizationRepresentationHeaders("rsc")
+	request.Header.Set("Cookie", "lab-role=owner")
+	client := http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("expected the pinned framework's canonical RSC redirect, got HTTP %d", response.StatusCode)
+	}
+	location, err := response.Location()
+	approved, _ := url.Parse(base)
+	if err != nil || location.Scheme != approved.Scheme || location.Host != approved.Host || location.User != nil || location.Path != "/resource" || location.Fragment != "" {
+		t.Fatal("RSC canonical URL left the owned resource")
+	}
+	query, err := url.ParseQuery(location.RawQuery)
+	if err != nil || len(query) != 1 || len(query["_rsc"]) != 1 {
+		t.Fatal("RSC canonical URL did not supply exactly one _rsc query")
+	}
+	return location.String()
+}
+
 func frameworkIdentities(req *Request, base string) {
 	for i := range req.AuthContexts {
 		identity := req.AuthContexts[i].Identity
@@ -191,12 +224,25 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 		if build == nil {
 			t.Fatal("Pages Router build ID not observed")
 		}
-		for _, representation := range []string{"html", "pages-json"} {
-			access, cfg := webComparisonFixture(t, base, representation, true)
+		rscResource := frameworkRSCResource(t, base)
+		for _, comparison := range []struct {
+			representation string
+			anonymous      bool
+			name           string
+		}{
+			{"html", true, "html-access"},
+			{"pages-json", true, "pages-json-access"},
+			{"rsc", true, "rsc-anonymous-access"},
+			{"rsc", false, "rsc-reader-access"},
+		} {
+			representation := comparison.representation
+			access, cfg := webComparisonFixture(t, base, representation, comparison.anonymous)
 			frameworkIdentities(&access, base)
 			endpoint := base + "/legacy"
 			if representation == "pages-json" {
 				endpoint = base + "/_next/data/" + string(build[1]) + "/legacy.json"
+			} else if representation == "rsc" {
+				endpoint = rscResource
 			}
 			ref := replaceFrameworkFixture(t, &access, AuthorizationResourceFixture{URL: endpoint, ResponseMarker: "PRIVATE_CONTROLLED_42", Representation: representation})
 			for i := range access.AuthorizationExpectations {
@@ -220,7 +266,7 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 				run.Status, run.Outcome = "failed", "PARTIAL"
 				t.Errorf("framework access comparison incomplete: checked=%d gaps=%d", checked, gaps)
 			}
-			record(variant, representation+"-access", len(found), want, run)
+			record(variant, comparison.name, len(found), want, run)
 		}
 		account := frameworkGet(t, base+"/account", "")
 		actionID := regexp.MustCompile(`name="\$ACTION_ID_([a-fA-F0-9]{40,64})"`).FindSubmatch(account)
@@ -271,7 +317,7 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 			}
 		}
 	}
-	if len(rows) != 16 {
-		t.Errorf("framework matrix incomplete: %d of 16 rows", len(rows))
+	if len(rows) != 20 {
+		t.Errorf("framework matrix incomplete: %d of 20 rows", len(rows))
 	}
 }
