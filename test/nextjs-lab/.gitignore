@@ -1,0 +1,6 @@
+node_modules/
+.next*/
+*.log
+lab-results.json
+
+__pycache__/
