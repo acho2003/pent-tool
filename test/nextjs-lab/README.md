@@ -20,11 +20,12 @@ Rebuild after changing fixture source or configuration. The real-framework test 
 
 ## Matrix and measured baseline
 
-The matrix gates eight checks on each counterpart:
+The matrix gates ten checks on each counterpart:
 
 - Production browser source-map exposure.
 - Controlled HTML access.
 - Pages Router `/_next/data/<observed-build-id>/...` access.
+- Real App Router RSC access for anonymous and reader identities, each with an owner baseline.
 - Server Action identity authorization, using an action reference observed in the actual rendered form and the real Next.js action dispatcher.
 - Built-in Server Action origin rejection.
 - Controlled application-cache identity isolation and verified reset.
@@ -33,9 +34,11 @@ The matrix gates eight checks on each counterpart:
 
 The vulnerable variant deliberately exposes the selected source maps, private page props, missing action authorization, controlled cache leakage, redirect policy failure, and an outbound fetch to the owned collector. The patched variant enforces the intended policies. Both retain Next.js's built-in action-origin guard. The proxy is confined even in vulnerable mode to its owned callback origin and `/hit` path; this lab is not an unrestricted network proxy.
 
+The RSC resource is a rendered App Router page, not a route handler returning a synthetic flight-like string. The driver first makes an owner RSC request without following redirects, then captures the framework-supplied canonical resource URL. It accepts only the same origin/path with exactly one `_rsc` query; native comparisons use that exact URL with `RSC: 1` and `Accept: text/x-component`. No router-state tree or cache-busting hash is invented. The patched fixture's `proxy.js` authorizes before rendering and returns an explicit 403 for nonowners. A streamed error with HTTP 200 and no private marker remains inconclusive to the native scanner; absence of the marker alone is not proof of denial. This remains HTTP-level RSC acceptance, not a browser navigation or flight-decoder test.
+
 The cache is a deliberately controlled application cache inside a real Next.js route handler, not a measurement of Vercel or an external CDN. The proxy is a controlled route handler, not a claim that the Next.js image optimizer is vulnerable. Missing callback events remain an inconclusive native outcome, even for the patched fixture whose source rejects the fetch. The negative control gate checks for no false finding and retains that `PARTIAL` outcome.
 
-The checked-in `baseline.v1.json` records the measured 16/16 passing matrix on 2026-10-31. `recorded_requests` counts native request receipts, excluding authentication checkpoints and driver readiness requests. The action-origin row reuses the action campaign, identifies `shared_with`, and records zero additional requests to avoid counting that campaign twice. Source-map exposure is counted as one class even when multiple map URLs are confirmed. These gates are fixture-level detection checks, not general precision/recall guarantees across arbitrary deployments.
+The checked-in `baseline.v1.json` records the measured 20/20 passing matrix on 2026-10-31. `recorded_requests` counts native request receipts, excluding authentication checkpoints and driver readiness requests. The action-origin row reuses the action campaign, identifies `shared_with`, and records zero additional requests to avoid counting that campaign twice. Source-map exposure is counted as one class even when multiple map URLs are confirmed. These gates are fixture-level detection checks, not general precision/recall guarantees across arbitrary deployments.
 
 The driver writes a fresh `lab-results.json` (ignored by Git), including failure status if the test matrix is incomplete or a gate fails. The GitHub Actions workflow in `.github/workflows/nextjs-acceptance.yml` repeats this matrix for relevant changes and publishes that scorecard.
 
