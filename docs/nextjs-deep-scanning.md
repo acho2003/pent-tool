@@ -1,6 +1,6 @@
 # Next.js deep assessments
 
-Choose **Next.js deep** as the web profile in a typed Web Application or API assessment. Preview the generated plan before starting it. The profile is also available for typed schedules. Existing saved plans need a fresh preview because registry version 18 changes planning semantics.
+Choose **Next.js deep** as the web profile in a typed Web Application or API assessment. Preview the generated plan before starting it. The profile is also available for typed schedules. Existing saved plans need a fresh preview because registry version 19 changes planning semantics.
 
 The profile selects the native `nextjs-assets` adapter and native resource checks alongside the ordinary applicable scanners. Explicit custom scanner selections take precedence. Optional scanners still need to be selected, and unavailable external tools remain visible gaps. Selecting the profile does not change scope or enable the opt-in unified workflow.
 
@@ -219,6 +219,41 @@ For API configurations, include the original target prefix and explicitly approv
 
 Reports show controlled probe results, cache attribution, reset status, callback correlation digests, and per-request evidence. Synthetic marker values, credentials, reset bodies, and response bodies are not retained in findings or reports. Generated callback URLs contain nonsecret random correlation values in the selected URL parameter. Each materialized URL input is recorded in its own selected request identity; baseline, bypass, reset, and event-feed controls do not inflate active-test counts. Every response is read up to 64 KiB. A cache probe uses at most seven application requests, redirect probes two, and proxy probes one target request plus up to four event-feed reads, excluding existing authentication checkpoints.
 
+## Offline Next.js source checks
+
+The optional **Next.js source checks** adapter (`nextjs-sast`) uses the configured Semgrep binary with a bundled, fingerprinted rule pack instead of `--config auto` or registry rules. Select it explicitly for a White Box source/repository target, or use `nextjs-deep`, which selects it for applicable source targets. Availability is tied to Semgrep, and repository checkout retains the existing target-bound credential flow. The generic Semgrep adapter remains independent and can have its own availability/network outcome.
+
+Six rule IDs cover:
+
+| Rule | Observation | Severity |
+| --- | --- | --- |
+| `nextjs-config-private-env-inline` | Potential private key/value configured through Next.js `env` | Medium review finding |
+| `nextjs-config-local-image-fetch` | Explicitly enabled local-IP image optimization | Low configuration review |
+| `nextjs-config-wildcard-action-origins` | Global wildcard Server Action origin configuration | Medium review finding |
+| `nextjs-route-query-redirect` | Local query-input flow into a redirect | Medium review finding |
+| `nextjs-route-query-fetch` | Local query-input flow into server-side fetch | Medium review finding |
+| `nextjs-route-private-env-response` | Potential private environment value flowing into JSON response serialization | Medium review finding |
+
+These are static configuration/local-dataflow observations, not confirmed exploits or proof that a deployed value is secret. They never infer missing authorization merely from the absence of a familiar authentication helper. Reading a non-public environment variable inside a Client Component is not automatically reported as a leak: framework handling matters. Public configuration, fixed fetch destinations, and constant redirect mappings have negative controls.
+
+Next.js documents that values in [next.config env are included in the JavaScript bundle](https://nextjs.org/docs/pages/api-reference/config/next-config-js/env); the pack flags potentially private names for review rather than copying their values into evidence. Redirect/fetch sources support direct NextRequest search-parameter access, Pages API query access, direct `new URL(request.url).searchParams.get`, destructured `searchParams`, and local parsed-URL aliases. Whole-program/interprocedural validation, arbitrary aliases, dynamic config evaluation, Server Action authorization proof, and all client/server serialization paths are outside this pack's static scope.
+
+Source scanning does not run Next.js configuration, imports, npm hooks, package scripts, or application code. The native adapter opens the supplied directory with a rooted filesystem handle and copies regular eligible configuration/API-handler files into a private temporary snapshot. It never follows project symlinks. Node modules, VCS metadata, generated `.next*` output, build/dist/out, coverage, and vendor directories are excluded. Select the intended application root; unrelated checked-in fixture/example applications are not assumed to be production or automatically suppressed.
+
+Bounds are 20,000 walked entries, 5,000 selected files, 1 MiB per file, and 32 MiB total source. Eligibility covers `next.config.js/mjs/cjs/ts`, App Router `route.js/ts`, and JavaScript/TypeScript Pages API handlers. A dependency/config marker is required for Next.js applicability. The engine uses one worker, a five-second per-rule timeout, a 512 MiB engine memory setting, and the scanner/assessment deadline (five-minute adapter fallback). Only local embedded rules are loaded; metrics/version checks are disabled. Project ignore files and `nosem` comments cannot silently suppress this dedicated pack's selected targets.
+
+The report retains only known rule IDs, fixed review descriptions, relative source locations, severities/CWEs, and snapshot metadata. Matched values, raw Semgrep results, source excerpts, and raw tool stdout/stderr are not retained. A sealed `source-manifest.json` records copied relative paths, sizes, SHA-256 file/rule digests, acknowledged scanned count, and diagnostic/skip counts. Raw output and the copied source are removed with the private workspace; a cleanup failure is reported explicitly rather than silently claiming success. Treat source paths/digests and assessment artifacts as sensitive metadata.
+
+Incomplete inventory, skipped/unacknowledged files, engine errors, nonzero exit, cancellation, malformed reports, and zero acknowledged targets cannot produce a clean result. Valid normalized findings survive a failed engine as sealed partial evidence. Tests reject unknown rule IDs, source paths outside the selected snapshot, malformed result schemas, and source-manifest tampering.
+
+## Pinned framework acceptance
+
+The [production Next.js lab](../test/nextjs-lab/README.md) now builds vulnerable and patched counterparts with lockfile-pinned Next.js 16.4.3 and React 19.3.1. Its measured 2026-10-31 baseline passes all 16 framework checks: production source maps, HTML/Pages JSON access, real rendered Server Action references and dispatch, built-in origin rejection, controlled cache reset, paired redirects, and fresh callback correlation. The cache/proxy fixtures exercise controlled application behavior within Next.js; they do not claim an external CDN or built-in image-optimizer vulnerability.
+
+The source rule pack was exercised with the runtime-pinned Semgrep 1.178.0 in a network-disabled, read-only container against eight intended matches spanning all six rule IDs and separate negative controls. A targeted GitHub Actions workflow repeats the real source-engine and production-framework gates for relevant changes. The lab driver binds only owned subprocesses to loopback and shuts down those subprocesses after the run. It does not modify the running dashboard or existing containers.
+
+These are a reproducible version-pinned fixture baseline, not a universal recall/precision claim. They do not cover every framework version, production reverse proxy, browser workflow, or deployment platform. No production application scan was performed.
+
 ## Deliberate remaining gaps
 
 This release implements deeper read discovery, exposure checks, and controlled access comparisons. It does not complete every phase of the broader roadmap:
@@ -226,10 +261,10 @@ This release implements deeper read discovery, exposure checks, and controlled a
 - Server Action tests use only explicit finite campaigns and exact observed bodies. Multipart action bodies, automatic action-ID discovery, argument mutation, and arbitrary action invocation remain unsupported. Existing API write/fuzz jobs retain their independent approvals.
 - Cache and URL probes are limited to explicit controlled fixtures. Arbitrary cache poisoning headers, automatic cache invalidation, private-network enumeration, unreviewed callback services, and SSRF exploitation chains are not implemented.
 - No complete App Router flight decoder, invented dynamic route values, full source-map download/analysis, or authenticated asset fetches.
-- Source-code, dependency, and general DAST checks continue through the existing applicable adapters. No new Next.js-specific SAST rules are bundled here.
+- Source checks use the bounded bundled pack and existing generic adapters. Complete program analysis, automatic dependency/version reconciliation across source and deployment, dynamic config evaluation, and full client/server-boundary analysis remain outside the native pack.
 
 ## Validation
 
 Go HTTP fixtures also exercise cold/fill/warm/bypass cache controls, failed/ineffective resets, cross-representation disclosure, cache attribution limits, paired redirects without following them, fresh/stale/wrong callback events, missing callbacks, collector credential isolation, native boundary executor routing, scope/exclusion/guard failures, and manifest tampering. They exercise one-shot action authorization/origin violations, allowed-state baselines, ineffective and failed cleanup, interrupted writes, replay refusal, manifest tampering, native executor routing without an OpenAPI schema, and discovery, exclusions, per-URL DNS-aware guards, cancellation, request/endpoint/byte caps (including interrupted transfers), adjacent maps, source-map negative controls, real and invalid private-key material, anonymous isolation, HTML/JSON/RSC allow/deny behavior, wrong content types, missing baselines, session expiry, and executor integration. Planning tests cover profile selection, custom-selection precedence, and limit fingerprints; HTTP handler tests cover profile persistence and typed-assessment requirements.
 
-These are deterministic protocol fixtures, not a claim that every current Next.js version or deployment has been tested. Pinned real-framework browser/container benchmarks remain a roadmap item. No external application scan is part of implementation validation.
+The deterministic protocol fixtures and pinned production-framework acceptance complement each other. Full browser-driven coverage, representative external CDN/proxy deployment matrices, and broader version coverage remain roadmap items. No external application scan is part of implementation validation.
