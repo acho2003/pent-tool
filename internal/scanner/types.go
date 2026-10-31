@@ -17,7 +17,7 @@ const SchemaVersion = 2
 
 var OrderedNames = []string{"nuclei", "zap", "testssl", "openvas", "trivy", "semgrep", "gitleaks", "vuls", "osv"}
 
-var assessmentOnlyNames = []string{"kube-exposure", "nextjs-assets", "actuator", "vcs-exposure", "exposed-files"}
+var assessmentOnlyNames = []string{"nextjs-sast", "kube-exposure", "nextjs-assets", "actuator", "vcs-exposure", "exposed-files"}
 
 // NormalizeScanners validates an operator's scanner selection and returns it in
 // pipeline order, deduplicated. An empty selection means the whole pipeline, so
@@ -194,6 +194,7 @@ type RunLimitation struct {
 }
 
 type Run struct {
+	SourceManifestPath    string                `json:"source_manifest_path,omitempty"`
 	AuthContextID         string                `json:"auth_context_id,omitempty"`
 	AuthIdentity          string                `json:"auth_identity,omitempty"`
 	AuthRole              string                `json:"auth_role,omitempty"`

@@ -24,7 +24,7 @@ func (s *Server) scannerAvailability() map[string]bool {
 	paths := map[string]string{
 		"subfinder": s.cfg.SubfinderPath, "amass": s.cfg.AmassPath, "dnsx": s.cfg.DNSXPath, "httpx": s.cfg.HttpxPath, "nmap": s.cfg.NmapPath, "masscan": s.cfg.MasscanPath, "nikto": s.cfg.NiktoPath,
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "sslyze": s.cfg.SSLyzePath, "vuls": s.cfg.VulsPath,
-		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
+		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "nextjs-sast": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 		"lynis": s.cfg.SSHPath,
 		// Staged web-pipeline adapters: availability is genuine binary presence.
 		"katana": s.cfg.KatanaPath, "dalfox": s.cfg.DalfoxPath, "wapiti": s.cfg.WapitiPath,
@@ -290,7 +290,7 @@ func (s *Server) handleScannerStatus(w http.ResponseWriter, r *http.Request) {
 	paths := map[string]string{
 		"subfinder": s.cfg.SubfinderPath, "httpx": s.cfg.HttpxPath, "nmap": s.cfg.NmapPath,
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "vuls": s.cfg.VulsPath,
-		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
+		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "nextjs-sast": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 	}
 	entries := make([]map[string]any, 0, len(scanner.Catalog()))
 	for _, tool := range scanner.Catalog() {

@@ -83,7 +83,7 @@ export interface ScannerRun {
   target: string;
   status: "completed" | "failed" | "cancelled" | "not_applicable" | "skipped" | "running";
   started_at?: string; finished_at?: string; exit_code?: number; reason?: string;
-  stdout_path?: string; stderr_path?: string; transcript_path?: string; artifact_path?: string; checksum?: string; truncated?: boolean;
+  stdout_path?: string; stderr_path?: string; transcript_path?: string; artifact_path?: string; source_manifest_path?: string; checksum?: string; truncated?: boolean;
   variant?: string;
   // Scanner-reported 0–100 completion of progress_stage while running (OpenVAS, ZAP).
   progress?: number; progress_stage?: string;

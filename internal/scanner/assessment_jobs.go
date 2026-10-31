@@ -23,7 +23,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "nextjs-boundaries" || id == "kube-exposure" || id == "nextjs-assets" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "nextjs-boundaries" || id == "kube-exposure" || id == "nextjs-assets" || id == "nextjs-sast" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -137,6 +137,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["apichecks"] = apiChecksRunner{}
 	byName["kube-exposure"] = kubeExposureRunner{}
 	byName["nextjs-assets"] = nextjsAssetsRunner{}
+	byName["nextjs-sast"] = nextjsSASTRunner{}
 	byName["actuator"] = actuatorExposureRunner{}
 	byName["vcs-exposure"] = vcsExposureRunner{}
 	byName["exposed-files"] = exposedFilesRunner{}

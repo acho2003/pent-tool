@@ -1,0 +1,124 @@
+rules:
+  - id: nextjs-config-private-env-inline
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Potential private configuration value is exported through Next.js env. Review the build-time value; source matching alone does not prove a deployed secret.
+    paths:
+      include: ["**/next.config.js", "**/next.config.mjs", "**/next.config.cjs", "**/next.config.ts"]
+    patterns:
+      - pattern: "{ env: { $KEY: $VALUE, ... }, ... }"
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i).*(secret|password|private_key|access_token|database_url).*
+    metadata:
+      cwe: CWE-200
+  - id: nextjs-config-local-image-fetch
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Local-IP image optimization is enabled. Review whether private-network fetching is intended and constrained; this setting alone is not a demonstrated SSRF.
+    paths:
+      include: ["**/next.config.js", "**/next.config.mjs", "**/next.config.cjs", "**/next.config.ts"]
+    pattern: "{ images: { dangerouslyAllowLocalIP: true, ... }, ... }"
+    metadata:
+      cwe: CWE-918
+  - id: nextjs-config-wildcard-action-origins
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: A global wildcard is configured for Server Action origins. Review its interpretation in the deployed framework and use explicit intended origins.
+    paths:
+      include: ["**/next.config.js", "**/next.config.mjs", "**/next.config.cjs", "**/next.config.ts"]
+    pattern-either:
+      - pattern: '{ serverActions: { allowedOrigins: [..., "*", ...], ... }, ... }'
+      - pattern: '{ serverActions: { allowedOrigins: [..., "**", ...], ... }, ... }'
+    metadata:
+      cwe: CWE-346
+  - id: nextjs-route-query-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    mode: taint
+    message: Request-derived input reaches a redirect destination in a Next.js handler. Review destination normalization and allowlisting; this is a local dataflow observation.
+    paths:
+      include: ["**/app/**/route.js", "**/app/**/route.ts", "**/pages/api/**"]
+    pattern-sources:
+      - pattern: $REQ.nextUrl.searchParams.get(...)
+        exact: true
+      - pattern: $REQ.query.$PARAM
+        exact: true
+      - pattern: new URL($REQ.url).searchParams.get(...)
+        exact: true
+      - patterns:
+          - pattern-inside: |
+              const { searchParams: $PARAMS } = new URL($REQ.url);
+              ...
+          - pattern: $PARAMS.get(...)
+        exact: true
+      - patterns:
+          - pattern-inside: |
+              const $URL = new URL($REQ.url);
+              ...
+          - pattern: $URL.searchParams.get(...)
+        exact: true
+    pattern-sinks:
+      - patterns:
+          - pattern: NextResponse.redirect($VALUE, ...)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: redirect($VALUE, ...)
+          - focus-metavariable: $VALUE
+    metadata:
+      cwe: CWE-601
+  - id: nextjs-route-query-fetch
+    languages: [javascript, typescript]
+    severity: WARNING
+    mode: taint
+    message: Request-derived input reaches server-side fetch in a Next.js handler. Check the intended destination policy and redirects; an observed source-to-sink path alone does not prove SSRF.
+    paths:
+      include: ["**/app/**/route.js", "**/app/**/route.ts", "**/pages/api/**"]
+    pattern-sources:
+      - pattern: $REQ.nextUrl.searchParams.get(...)
+        exact: true
+      - pattern: $REQ.query.$PARAM
+        exact: true
+      - pattern: new URL($REQ.url).searchParams.get(...)
+        exact: true
+      - patterns:
+          - pattern-inside: |
+              const { searchParams: $PARAMS } = new URL($REQ.url);
+              ...
+          - pattern: $PARAMS.get(...)
+        exact: true
+      - patterns:
+          - pattern-inside: |
+              const $URL = new URL($REQ.url);
+              ...
+          - pattern: $URL.searchParams.get(...)
+        exact: true
+    pattern-sinks:
+      - patterns:
+          - pattern: fetch($VALUE, ...)
+          - focus-metavariable: $VALUE
+    metadata:
+      cwe: CWE-918
+  - id: nextjs-route-private-env-response
+    languages: [javascript, typescript]
+    severity: WARNING
+    mode: taint
+    message: A potentially private environment value reaches JSON response serialization in a Next.js handler. Verify whether the value is sensitive and intended for this identity before escalating.
+    paths:
+      include: ["**/app/**/route.js", "**/app/**/route.ts", "**/pages/api/**"]
+    pattern-sources:
+      - patterns:
+          - pattern: process.env.$NAME
+          - metavariable-regex:
+              metavariable: $NAME
+              regex: (?i).*(secret|password|private_key|access_token|database_url).*
+        exact: true
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: NextResponse.json($VALUE, ...)
+              - pattern: Response.json($VALUE, ...)
+              - pattern: $RES.json($VALUE, ...)
+          - focus-metavariable: $VALUE
+    metadata:
+      cwe: CWE-200

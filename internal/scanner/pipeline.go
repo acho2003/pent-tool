@@ -1017,7 +1017,7 @@ func finalizeRun(run Run) Run {
 // a scanner run into one stable digest.
 func CalculateChecksum(run Run) string {
 	h := sha256.New()
-	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath, run.TranscriptPath, run.InputManifestPath, run.CoverageEventsPath, run.TemplateInventoryPath} {
+	for _, path := range []string{run.StdoutPath, run.StderrPath, run.ArtifactPath, run.TranscriptPath, run.InputManifestPath, run.CoverageEventsPath, run.TemplateInventoryPath, run.SourceManifestPath} {
 		if path == "" {
 			continue
 		}
