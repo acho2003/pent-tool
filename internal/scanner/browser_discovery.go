@@ -382,7 +382,11 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		if err == nil {
 			err = page.WaitLoad()
 			if err == nil {
-				page.WaitRequestIdle(300*time.Millisecond, nil, nil, nil)()
+				// Keep a full second of network quiet after load so delayed
+				// hydration and lazy chunks can begin. The page/assessment
+				// deadlines still bound pages that never become idle.
+				page.WaitRequestIdle(time.Second, nil, nil, nil)()
+				err = pageCtx.Err()
 			}
 		}
 		if err == nil && req.BrowserAccessTest {

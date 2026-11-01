@@ -80,8 +80,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 19: bounded offline Next.js source rule packs).
-const PlanRegistryVersion = "19"
+// schedules (version 20: browser hydration settling and idle failure coverage).
+const PlanRegistryVersion = "20"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`

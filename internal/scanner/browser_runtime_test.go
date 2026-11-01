@@ -30,7 +30,7 @@ func TestBrowserRuntimeAuthenticatedXHRAndExclusions(t *testing.T) {
 		}
 		if r.URL.Path == "/" {
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(`<html><body><a href="/next/">next</a><a href="/logout">logout</a><script>fetch('/xhr?x=1&x=2').then(r=>r.text());fetch('/write',{method:'POST',body:'x=1'});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'query Read($secret: String){viewer}',variables:{secret:'fixture-browser-secret'}})});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'mutation {deleteUser}'})});</script><form method="post" action="/write"><input name="x"></form><form method="get" action="/form-read?token=fixture-form-secret"><input name="token"></form></body></html>`))
+			w.Write([]byte(`<html><body><a href="/next/">next</a><a href="/logout">logout</a><script>setTimeout(()=>fetch('/xhr?x=1&x=2').then(r=>r.text()),650);fetch('/write',{method:'POST',body:'x=1'});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'query Read($secret: String){viewer}',variables:{secret:'fixture-browser-secret'}})});fetch('/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'mutation {deleteUser}'})});</script><form method="post" action="/write"><input name="x"></form><form method="get" action="/form-read?token=fixture-form-secret"><input name="token"></form></body></html>`))
 			return
 		}
 		if r.URL.Path == "/graphql" {
