@@ -20,7 +20,7 @@ Rebuild after changing fixture source or configuration. The real-framework test 
 
 ## Matrix and measured baseline
 
-The matrix gates ten checks on each counterpart:
+The HTTP matrix gates ten checks on each counterpart:
 
 - Production browser source-map exposure.
 - Controlled HTML access.
@@ -39,6 +39,20 @@ The RSC resource is a rendered App Router page, not a route handler returning a 
 The cache is a deliberately controlled application cache inside a real Next.js route handler, not a measurement of Vercel or an external CDN. The proxy is a controlled route handler, not a claim that the Next.js image optimizer is vulnerable. Missing callback events remain an inconclusive native outcome, even for the patched fixture whose source rejects the fetch. The negative control gate checks for no false finding and retains that `PARTIAL` outcome.
 
 The checked-in `baseline.v1.json` records the measured 20/20 passing matrix on 2026-10-31. `recorded_requests` counts native request receipts, excluding authentication checkpoints and driver readiness requests. The action-origin row reuses the action campaign, identifies `shared_with`, and records zero additional requests to avoid counting that campaign twice. Source-map exposure is counted as one class even when multiple map URLs are confirmed. These gates are fixture-level detection checks, not general precision/recall guarantees across arbitrary deployments.
+
+## Authenticated Chromium discovery
+
+Add the production browser recorder with an explicit Chromium/Chrome executable:
+
+```sh
+python3 test/nextjs-lab/run.py --browser /path/to/chromium
+```
+
+This adds six gates (owner, reader, and anonymous against each counterpart), giving 26 total. The real Next.js Client Component waits 650 ms after hydration, imports a separate lazy module, and issues a read request. The same callback attempts a synthetic POST, which must be blocked before it reaches Next.js. The gates require an observed successful lazy read, JavaScript chunk observations, identity-specific encrypted replay with the expected cookie, no credential value in public artifacts, a nondispatchable POST form, and zero server-side writes. Each run uses a fresh browser profile and replay store. The browser version is recorded in the scorecard; it is not pinned by the npm framework lockfile.
+
+The browser recorder now waits for a full second of network quiet after page load, within its existing 20-second page deadline and shared limits. Delayed work beyond that settling window is not guaranteed to be discovered. Idle deadline failures are reported as partial navigation coverage. Expected blocked writes also retain a `PARTIAL` outcome; a passing fixture gate does not turn excluded operations into complete coverage. This acceptance covers hydrated reads and identity isolation, not arbitrary button interactions, login flows, or client-side router navigation.
+
+`baseline.browser.v1.json` records the measured 26/26 passing matrix on 2026-11-01, including the local browser version. Browser request counts include recorded successful HTTP responses, exclude DOM-only inventory and blocked requests, and exclude prerequisite/session-check requests as with the native HTTP matrix. The CI workflow enables the browser gates with the runner's installed Google Chrome; a missing browser fails the gate rather than skipping it.
 
 The driver writes a fresh `lab-results.json` (ignored by Git), including failure status if the test matrix is incomplete or a gate fails. The GitHub Actions workflow in `.github/workflows/nextjs-acceptance.yml` repeats this matrix for relevant changes and publishes that scorecard.
 
