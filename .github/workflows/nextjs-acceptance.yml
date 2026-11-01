@@ -46,7 +46,7 @@ jobs:
           XALGORIX_TEST_SEMGREP: semgrep
         run: go test ./internal/scanner -run '^TestNextjsSAST' -count=1
       - name: Build owned loopback-only framework counterparts and gate the matrix
-        run: python test/nextjs-lab/run.py
+        run: python test/nextjs-lab/run.py --browser "$(command -v google-chrome)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

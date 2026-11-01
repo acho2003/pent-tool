@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-build", action="store_true", help="use already-built pinned variants")
     parser.add_argument("--results", type=Path, default=LAB / "lab-results.json")
+    parser.add_argument("--browser", type=Path, help="run the real Chromium discovery matrix with this executable")
     args = parser.parse_args()
     if not args.skip_build:
         subprocess.run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=LAB, check=True)
@@ -66,6 +67,10 @@ def main():
                 processes.append(process)
                 wait_ready(origins[name] + ("/health" if name == "collector" else "/api/lab-info"), process)
             environment = {**os.environ, "CGO_ENABLED": "0", "XALGORIX_NEXTJS_LAB_RESULTS": str(args.results.resolve())}
+            if args.browser:
+                browser = str(args.browser.resolve(strict=True))
+                environment["XALGORIX_TEST_CHROMIUM"] = browser
+                environment["XALGORIX_NEXTJS_LAB_BROWSER_VERSION"] = subprocess.run([browser, "--version"], check=True, capture_output=True, text=True, timeout=10).stdout.strip()
             for name, origin in origins.items():
                 environment[f"XALGORIX_NEXTJS_LAB_{name.upper()}_URL"] = origin
             args.results.parent.mkdir(parents=True, exist_ok=True)

@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/xalgord/xalgorix/v4/internal/apifixture"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
+	"path/filepath"
 )
 
 type frameworkLabRow struct {
@@ -150,6 +152,86 @@ func frameworkRecordedRequests(run Run) int {
 	return count
 }
 
+// Exercise the production browser recorder, not a separate browser test client.
+func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string) []frameworkLabRow {
+	t.Helper()
+	var rows []frameworkLabRow
+	for _, identity := range []string{"owner", "reader", "anonymous"} {
+		req, _ := webComparisonFixture(t, base, "html", false)
+		frameworkIdentities(&req, base)
+		req.Target = base + "/browser"
+		req.AuthIdentity = identity
+		req.ReplayScope = "app:app"
+		var err error
+		req.ReplayStore, err = credentials.NewReplayStore(filepath.Join(t.TempDir(), "replay"), bytes.Repeat([]byte{9}, credentials.KeySize))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, auth := range req.AuthContexts {
+			if auth.Identity == identity {
+				req.AuthContextID, req.AuthRole = auth.ID, auth.Role
+				req.TargetAuth, req.AuthRefresh = strings.Join(auth.Headers, "\n"), auth.Refresh
+			}
+		}
+		run := DiscoverBrowser(t.Context(), req, Config{KatanaChromePath: chrome, KatanaTimeout: 30 * time.Second, WebMaxEndpoints: 100})
+		raw, err := os.ReadFile(run.ArtifactPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		surface, err := ParseKatanaAttackSurfaceScoped(run.ArtifactPath, req.ReplayScope, req.Target, identity != "anonymous", req.AppScope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hydrateRequestReplay(surface, req.ReplayStore, req.ReplayScope)
+		found, forms, chunks := false, false, 0
+		for _, ep := range surface.Endpoints {
+			parsed, _ := url.Parse(ep.URL)
+			if parsed == nil {
+				continue
+			}
+			if strings.HasPrefix(parsed.Path, "/_next/static/chunks/") {
+				chunks++
+			}
+			if ep.HasForm && ep.Method == "POST" {
+				forms = true
+				if ep.ReplayRef != "" || endpointStateDispatchable(ep.State) {
+					t.Error("browser form became dispatchable")
+				}
+			}
+			if parsed.Path == "/api/browser-read" && parsed.Query().Get("stage") == "lazy" {
+				expectedCookie := ""
+				if identity != "anonymous" {
+					expectedCookie = "lab-role=" + identity
+				}
+				found = ep.Method == "GET" && ep.StatusCode == 200 && ep.ReplayHeaders["Cookie"] == expectedCookie && ep.ObservedWithAuth == (identity != "anonymous")
+				if identity != "anonymous" && ep.AuthContextID != req.AuthContextID {
+					t.Error("browser identity lost")
+				}
+			}
+		}
+		var counters struct {
+			Writes int            `json:"writes"`
+			Reads  map[string]int `json:"reads"`
+		}
+		if json.Unmarshal(frameworkGet(t, base+"/api/browser-write", "lab-role=owner"), &counters) != nil {
+			t.Fatal("invalid browser counters")
+		}
+		passed := run.Status == "completed" && found && forms && chunks > 0 && counters.Writes == 0 && counters.Reads[identity] > 0 && run.Completeness == "partial" && strings.Contains(run.Reason, "browser POST requires an explicit read-only GraphQL JSON operation")
+		if identity != "anonymous" {
+			passed = passed && run.Authenticated && run.AuthState == "verified"
+		}
+		if strings.Contains(string(raw), "lab-role=") {
+			t.Error("browser credential persisted in public observations")
+			passed = false
+		}
+		rows = append(rows, frameworkLabRow{Variant: variant, Check: "browser-" + identity + "-discovery", Requests: bytes.Count(raw, []byte(`"timestamp"`)), Passed: passed, Outcome: run.Outcome})
+		if !passed {
+			t.Errorf("%s browser %s: lazy=%v forms=%v chunks=%d writes=%d reads=%d run=%+v", variant, identity, found, forms, chunks, counters.Writes, counters.Reads[identity], run)
+		}
+	}
+	return rows
+}
+
 func TestNextjsFrameworkAcceptance(t *testing.T) {
 	if os.Getenv("XALGORIX_NEXTJS_LAB_VULNERABLE_URL") == "" && os.Getenv("XALGORIX_NEXTJS_LAB_PATCHED_URL") == "" {
 		t.Skip("run test/nextjs-lab/run.py for pinned production Next.js acceptance")
@@ -160,12 +242,13 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 	t.Cleanup(func() {
 		if output := os.Getenv("XALGORIX_NEXTJS_LAB_RESULTS"); output != "" {
 			body, err := json.MarshalIndent(struct {
-				Schema int               `json:"schema_version"`
-				Nextjs string            `json:"nextjs"`
-				React  string            `json:"react"`
-				Passed bool              `json:"passed"`
-				Cases  []frameworkLabRow `json:"cases"`
-			}{1, "16.4.3", "19.3.1", !t.Failed(), rows}, "", "  ")
+				Schema  int               `json:"schema_version"`
+				Nextjs  string            `json:"nextjs"`
+				React   string            `json:"react"`
+				Passed  bool              `json:"passed"`
+				Cases   []frameworkLabRow `json:"cases"`
+				Browser string            `json:"browser,omitempty"`
+			}{1, "16.4.3", "19.3.1", !t.Failed(), rows, os.Getenv("XALGORIX_NEXTJS_LAB_BROWSER_VERSION")}, "", "  ")
 			if err != nil {
 				t.Error(err)
 				return
@@ -197,6 +280,9 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 		}
 		if json.Unmarshal(frameworkGet(t, base+"/api/lab-info", ""), &info) != nil || info.Fixture != "xalgorix-nextjs-lab-v1" || info.Variant != variant || info.Callback != collector {
 			t.Fatal("URL is not the owned matching lab fixture")
+		}
+		if chrome := os.Getenv("XALGORIX_TEST_CHROMIUM"); chrome != "" {
+			rows = append(rows, frameworkBrowserDiscovery(t, base, variant, chrome)...)
 		}
 		want := 0
 		if variant == "vulnerable" {
@@ -317,7 +403,11 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 			}
 		}
 	}
-	if len(rows) != 20 {
-		t.Errorf("framework matrix incomplete: %d of 20 rows", len(rows))
+	expectedRows := 20
+	if os.Getenv("XALGORIX_TEST_CHROMIUM") != "" {
+		expectedRows = 26
+	}
+	if len(rows) != expectedRows {
+		t.Errorf("framework matrix incomplete: %d of %d rows", len(rows), expectedRows)
 	}
 }
