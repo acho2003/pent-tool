@@ -21,14 +21,14 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v4"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v5"
 
 const (
 	nextjsMaxScripts      = 40
 	nextjsPageReadLimit   = 512 << 10
 	nextjsScriptReadLimit = 2 << 20
-	// A source-map probe reads only enough to confirm the structure; the map
-	// content itself is never retained.
+	// Ordinary probes confirm structure only. The deep profile separately
+	// bounds in-memory embedded-source analysis; map content is never retained.
 	nextjsMapProbeLimit = 4 << 10
 
 	// Build-manifest routes are confirmed with one anonymous GET each, up to
@@ -68,13 +68,14 @@ type nextjsAssetsRunner struct{}
 
 func (nextjsAssetsRunner) Name() string { return "nextjs-assets" }
 func (nextjsAssetsRunner) Descriptor() Descriptor {
-	return Descriptor{Name: "nextjs-assets", Summary: "Read-only Next.js fingerprint and source-map exposure checks", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}
+	return Descriptor{Name: "nextjs-assets", Summary: "Read-only Next.js fingerprint, source-map exposure, and bounded embedded-source checks", Phase: PhaseWeb, Tracks: []Track{TrackWeb}, Weight: WeightLight}
 }
 
 type nextjsFetch struct {
-	status int
-	header http.Header
-	body   []byte
+	status    int
+	truncated bool
+	header    http.Header
+	body      []byte
 }
 
 func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
@@ -82,6 +83,9 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	run := Run{Scanner: "nextjs-assets", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: now, Variant: nextjsAssetsCatalogVersion}
 	finish := func(status, reason string) Run {
 		run.Status, run.Reason, run.FinishedAt = status, reason, time.Now().UTC().Format(time.RFC3339Nano)
+		if status == "completed" && (hasNextjsLimitation(run, "source_map_analysis_limit") || hasNextjsLimitation(run, "source_map_analysis_incomplete")) {
+			run.Outcome, run.Completeness = "PARTIAL", "partial"
+		}
 		return finalizeRun(run)
 	}
 	if !req.TypedAssessment || req.AppScope == nil {
@@ -211,7 +215,8 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			}
 			return nextjsFetch{}, false
 		}
-		if int64(len(body)) > limit {
+		truncated := int64(len(body)) > limit
+		if truncated {
 			body = body[:limit]
 			if limit > 0 && !hasNextjsLimitation(run, "nextjs_response_limit") {
 				run.Limitations = append(run.Limitations, RunLimitation{Kind: "nextjs_response_limit", Reason: "one or more responses exceeded their parsing limit"})
@@ -222,7 +227,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			stopped = true
 			return nextjsFetch{}, false
 		}
-		return nextjsFetch{status: resp.StatusCode, header: resp.Header, body: body}, true
+		return nextjsFetch{status: resp.StatusCode, header: resp.Header, body: body, truncated: truncated}, true
 	}
 
 	var version, buildID string
@@ -331,6 +336,7 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 	var routes []string
 	var routeBase *url.URL
 	probedMaps := map[string]bool{}
+	analyzedMaps := 0
 	for scriptIndex := 0; scriptIndex < len(scripts); scriptIndex++ {
 		script := scripts[scriptIndex]
 		if stopped {
@@ -407,16 +413,72 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 			continue
 		}
 		probedMaps[mapURL.String()] = true
-		probe, ok := fetch(mapURL.String(), nextjsMapProbeLimit)
+		mapLimit := int64(nextjsMapProbeLimit)
+		analyzeMap := req.Profile == ProfileNextjsDeep && analyzedMaps < nextjsMaxMapAnalyses
+		if analyzeMap {
+			mapLimit = nextjsMapAnalysisLimit
+		}
+		probe, ok := fetch(mapURL.String(), mapLimit)
 		if !ok || probe.status != http.StatusOK || !looksLikeSourceMap(probe.body) {
 			continue
+		}
+		analysisEvidence := ""
+		if req.Profile == ProfileNextjsDeep {
+			switch {
+			case !analyzeMap:
+				if !hasNextjsLimitation(run, "source_map_analysis_limit") {
+					run.Limitations = append(run.Limitations, RunLimitation{Kind: "source_map_analysis_limit", Reason: "additional source maps were probed without embedded-source analysis after the eight-map limit"})
+				}
+			case probe.truncated:
+				analyzedMaps++
+				if !hasNextjsLimitation(run, "source_map_analysis_incomplete") {
+					run.Limitations = append(run.Limitations, RunLimitation{Kind: "source_map_analysis_incomplete", Reason: "truncated source maps were not decoded for embedded-source analysis"})
+				}
+			default:
+				analyzedMaps++
+				contents, err := nextjsSourceMapContents(probe.body)
+				if err != nil {
+					if !hasNextjsLimitation(run, "source_map_analysis_incomplete") {
+						run.Limitations = append(run.Limitations, RunLimitation{Kind: "source_map_analysis_incomplete", Reason: err.Error()})
+					}
+				} else {
+					analysisEvidence = fmt.Sprintf("; decoded %d sourcesContent entries in memory", len(contents))
+					for index, content := range contents {
+						if content == nil {
+							continue
+						}
+						if !exposedKeys[mapURL.String()] {
+							if finding := nextjsPrivateKeyFinding(req, mapURL.String(), []byte(*content), eventsPath); finding != nil {
+								finding.Evidence = fmt.Sprintf("A PEM private key was parsed locally from decoded source-map sourcesContent[%d]; key bytes, filenames, and source excerpts were not retained.", index)
+								findings = append(findings, *finding)
+								exposedKeys[mapURL.String()] = true
+							}
+						}
+						for _, match := range nextjsAPIReference.FindAllStringSubmatch(*content, nextjsMaxRoutes) {
+							if len(run.HistoricalCandidates) >= nextjsMaxRoutes {
+								if !hasNextjsLimitation(run, "source_map_analysis_incomplete") {
+									run.Limitations = append(run.Limitations, RunLimitation{Kind: "source_map_analysis_incomplete", Reason: "source-map API candidates exceeded the shared candidate limit"})
+								}
+								break
+							}
+							if u, err := base.Parse(match[1]); err == nil {
+								candidate := nextjsURLCandidate(req, u.String(), "source_map_api_reference")
+								candidate.URL = SafeTelemetryURL(candidate.URL)
+								if !slices.ContainsFunc(run.HistoricalCandidates, func(c HistoricalCandidate) bool { return c.URL == candidate.URL }) {
+									run.HistoricalCandidates = append(run.HistoricalCandidates, candidate)
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 		inspectExposure(mapURL.String(), probe.body)
 		findings = append(findings, Finding{
 			SourceID: nextjsSourceID("nextjs-source-map", mapURL.String()), Scanner: "nextjs-assets", RuleID: "nextjs-source-map",
 			Title: "Public JavaScript source map", Severity: "low", Target: req.Target, Endpoint: sanitizeKubeURL(mapURL.String()), Method: http.MethodGet,
 			Description: "A production source map is publicly retrievable. It can disclose original source code, internal file paths and comments.",
-			Evidence:    fmt.Sprintf("HTTP %d; associated script %s; source map structure confirmed from the first %d bytes; content not retained", probe.status, sanitizeKubeURL(script), nextjsMapProbeLimit),
+			Evidence:    fmt.Sprintf("HTTP %d; associated script %s; source map structure confirmed within a %d-byte response read limit; content not retained", probe.status, sanitizeKubeURL(script), mapLimit) + analysisEvidence,
 			Remediation: "Do not deploy source maps publicly (Next.js: productionBrowserSourceMaps false), or restrict them to authorized users.",
 			CWE:         "CWE-540", Confidence: "confirmed", EvidenceRef: eventsPath,
 		})
@@ -654,9 +716,9 @@ func nextjsExcluded(req Request, rawURL string) bool {
 }
 
 // looksLikeSourceMap confirms a source-map document from its opening bytes:
-// a JSON object carrying the version and a sources or mappings member.
+// a JSON object carrying the version and a sources, mappings, or indexed sections member.
 func looksLikeSourceMap(body []byte) bool {
-	text := bytes.TrimSpace(bytes.TrimPrefix(body, []byte(")]}'")))
+	text := nextjsSourceMapJSON(body)
 	decoder := json.NewDecoder(bytes.NewReader(text))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {
@@ -679,7 +741,7 @@ func looksLikeSourceMap(body []byte) bool {
 		switch key {
 		case "version":
 			version = value == float64(3)
-		case "sources":
+		case "sources", "sections":
 			structure = value == json.Delim('[')
 		case "mappings":
 			_, structure = value.(string)
