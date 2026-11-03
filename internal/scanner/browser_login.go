@@ -70,6 +70,14 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	if ok, _ := p.AppScope.Allows(p.LoginURL); !ok {
 		return BrowserLoginResult{}, fmt.Errorf("login URL is outside the approved application scope")
 	}
+	if p.VerifyURL != "" {
+		if !sameBrowserOrigin(p.VerifyURL, bound) {
+			return BrowserLoginResult{}, fmt.Errorf("verification URL must use the login origin")
+		}
+		if ok, _ := p.AppScope.Allows(p.VerifyURL); !ok {
+			return BrowserLoginResult{}, fmt.Errorf("verification URL is outside the approved application scope")
+		}
+	}
 	usernameField := strings.TrimSpace(p.UsernameField)
 	if usernameField == "" {
 		usernameField = "username"
@@ -135,7 +143,6 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	if err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("browser login cookie store unavailable")
 	}
-	boundURL, _ := url.Parse(bound.Origin() + "/")
 	client := &http.Client{Jar: jar, Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	if err := router.Add("*", "", func(h *rod.Hijack) {
 		origin, _ := assessment.ParseApprovedOrigin("", h.Request.URL().String())
@@ -216,7 +223,17 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		landingURL = info.URL
 	}
 
-	cookieHeader, cookieNames, err := captureCookieHeader(jar, boundURL)
+	// Select cookies for the protected application path, rather than "/".
+	// A session scoped to a mounted application must not disappear here.
+	sessionURL := p.VerifyURL
+	if sessionURL == "" {
+		sessionURL = landingURL
+	}
+	if !sameBrowserOrigin(sessionURL, bound) {
+		sessionURL = p.LoginURL
+	}
+	cookieURL, _ := url.Parse(sessionURL)
+	_, cookieNames, err := captureCookieHeader(jar, cookieURL)
 	if err != nil {
 		if crossOrigin {
 			return BrowserLoginResult{}, fmt.Errorf("login did not establish a session (a cross-origin step was blocked by the credential boundary; login requests: %s)", loginSummary())
@@ -225,8 +242,6 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	}
 	// The session is captured; let cross-origin data calls render the dashboard.
 	loginDone.Store(true)
-
-	storage := captureStorage(page, bound)
 
 	// When a marker is supplied, confirm it on the protected page. The anonymous
 	// negative control is the caller's responsibility, as with every credential.
@@ -292,7 +307,21 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		}
 	}
 
-	return BrowserLoginResult{CookieHeader: cookieHeader, Storage: storage}, nil
+	// Verification can rotate the session or populate storage. Capture the
+	// final verified state, with cookie path filtering for that actual page.
+	info, err := page.Info()
+	if err != nil || !sameBrowserOrigin(info.URL, bound) {
+		return BrowserLoginResult{}, fmt.Errorf("verified session left the login origin")
+	}
+	if ok, _ := p.AppScope.Allows(info.URL); !ok {
+		return BrowserLoginResult{}, fmt.Errorf("verified session page is outside the approved application scope")
+	}
+	cookieURL, _ = url.Parse(info.URL)
+	cookieHeader, _, err := captureCookieHeader(jar, cookieURL)
+	if err != nil {
+		return BrowserLoginResult{}, err
+	}
+	return BrowserLoginResult{CookieHeader: cookieHeader, Storage: captureStorage(page, bound)}, nil
 }
 
 // browserLandingProbe returns the page's current URL and visible text, polling
@@ -493,14 +522,14 @@ func fieldSelectors(field string, fallbacks []string) []string {
 }
 
 // captureCookieHeader builds a Cookie header from the session cookies the
-// browser holds for the bound host. Cookies with unsafe names/values are
-// dropped rather than forwarded.
-func captureCookieHeader(jar http.CookieJar, boundURL *url.URL) (string, []string, error) {
-	if jar == nil || boundURL == nil {
+// browser holds for the selected protected URL, including its path. Cookies
+// with unsafe names/values are dropped rather than forwarded.
+func captureCookieHeader(jar http.CookieJar, targetURL *url.URL) (string, []string, error) {
+	if jar == nil || targetURL == nil {
 		return "", nil, fmt.Errorf("the browser session cookies could not be read after login")
 	}
 	var parts, names []string
-	for _, cookie := range jar.Cookies(boundURL) {
+	for _, cookie := range jar.Cookies(targetURL) {
 		if cookie == nil || cookie.Name == "" {
 			continue
 		}

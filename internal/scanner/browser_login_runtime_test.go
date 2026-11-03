@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -202,5 +203,61 @@ func TestCaptureBrowserLoginHandlesFetchSetCookieSessions(t *testing.T) {
 	}
 	if !strings.Contains(result.CookieHeader, "__Secure-authjs.session-token=sess-123") {
 		t.Fatalf("session cookie not captured from the fetch login: %q", result.CookieHeader)
+	}
+}
+
+func TestCaptureBrowserLoginPreservesPathScopedRefreshedSession(t *testing.T) {
+	chrome := os.Getenv("XALGORIX_TEST_CHROMIUM")
+	if chrome == "" {
+		t.Skip("requires Chromium")
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/workspace/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "initial", Path: "/workspace", HttpOnly: true})
+			http.Redirect(w, r, "/workspace/welcome", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `<html><form method="post"><input name="username"><input name="password" type="password"><button type="submit">Sign in</button></form></html>`)
+	})
+	mux.HandleFunc("/workspace/welcome", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, "<html><p>The protected verification page has not been opened yet.</p></html>")
+	})
+	mux.HandleFunc("/workspace/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("session"); err != nil || (c.Value != "initial" && c.Value != "refreshed") {
+			http.Error(w, "denied", 401)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "refreshed", Path: "/workspace", HttpOnly: true})
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `<html><script>localStorage.setItem('session-state','refreshed')</script><p>`+strings.Repeat("Verified workspace session. ", 20)+`</p></html>`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", server.URL)
+	origin.PathPrefix = "/workspace"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	result, err := CaptureBrowserLogin(t.Context(), Config{KatanaChromePath: chrome}, t.TempDir(), BrowserLoginParams{AppScope: &scope, LoginURL: server.URL + "/workspace/login", VerifyURL: server.URL + "/workspace/dashboard", Username: "synthetic", Password: "synthetic-password"})
+	if err != nil {
+		t.Fatalf("path-scoped login failed: %v", err)
+	}
+	if result.CookieHeader != "Cookie: session=refreshed" || result.Storage == nil || result.Storage.Local["session-state"] != "refreshed" {
+		t.Fatal("verified session was not captured with its refreshed state")
+	}
+}
+
+func TestCaptureBrowserLoginRejectsVerificationScopeBeforeLaunch(t *testing.T) {
+	app, _ := assessment.ParseApprovedOrigin("app", "https://app.example.test")
+	app.PathPrefix = "/workspace"
+	alias, _ := assessment.ParseApprovedOrigin("app", "https://alias.example.test")
+	alias.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{app, alias})
+	for _, verify := range []string{"https://alias.example.test/workspace", "https://app.example.test/outside"} {
+		_, err := CaptureBrowserLogin(t.Context(), Config{KatanaChromePath: "/must-not-launch"}, t.TempDir(), BrowserLoginParams{AppScope: &scope, LoginURL: "https://app.example.test/workspace/login", VerifyURL: verify, Username: "synthetic", Password: "synthetic"})
+		if err == nil || !(strings.Contains(err.Error(), "verification URL must use the login origin") || strings.Contains(err.Error(), "verification URL is outside")) {
+			t.Fatalf("verification scope did not fail before launch: %v", err)
+		}
 	}
 }
