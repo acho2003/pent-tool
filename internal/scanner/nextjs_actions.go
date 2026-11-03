@@ -83,6 +83,9 @@ func prepareNextjsActionCampaigns(req Request) ([]preparedNextjsAction, error) {
 		if err != nil || len(body) > 64<<10 {
 			return nil, fmt.Errorf("action request body is missing, corrupt, or larger than 64 KiB")
 		}
+		if err := ValidateNextjsActionBody(fixture.ContentType, body); err != nil {
+			return nil, err
+		}
 		var cleanup []byte
 		if fixture.CleanupBodyRef != "" {
 			cleanup, err = readAPIFixture(req.APIFixtureDir, fixture.CleanupBodyRef)

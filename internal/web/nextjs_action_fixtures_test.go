@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,7 @@ import (
 )
 
 func TestNextjsActionPreviewValidatesManifestAndNestedBodyChecksums(t *testing.T) {
-	for _, mode := range []string{"valid", "missing-body", "corrupt-body", "foreign-cleanup", "excluded", "unsupported-field"} {
+	for _, mode := range []string{"valid", "valid-multipart", "invalid-multipart", "missing-body", "corrupt-body", "foreign-cleanup", "excluded", "unsupported-field"} {
 		t.Run(mode, func(t *testing.T) {
 			s := newTestServer(t, nil)
 			store := apifixture.Store{Dir: filepath.Join(s.dataDir, "_api_fixtures")}
@@ -23,6 +24,24 @@ func TestNextjsActionPreviewValidatesManifestAndNestedBodyChecksums(t *testing.T
 				t.Fatal(err)
 			}
 			manifest := scanner.NextjsActionFixture{URL: "https://app.test/action", ActionID: strings.Repeat("a", 40), ContentType: "text/plain", BodyRef: body.Ref, VerificationURL: "https://app.test/state", ReadyMarker: "CONTROLLED_READY", ChangedMarker: "CONTROLLED_CHANGED", CleanupURL: "https://app.test/reset", CleanupMethod: "DELETE"}
+			if mode == "valid-multipart" {
+				var data bytes.Buffer
+				writer := multipart.NewWriter(&data)
+				if err := writer.WriteField("0", `["controlled"]`); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				meta, err := store.Put(bytes.NewReader(data.Bytes()), writer.FormDataContentType())
+				if err != nil {
+					t.Fatal(err)
+				}
+				manifest.BodyRef, manifest.ContentType = meta.Ref, writer.FormDataContentType()
+			}
+			if mode == "invalid-multipart" {
+				manifest.ContentType = "multipart/form-data; boundary=observed"
+			}
 			if mode == "missing-body" {
 				manifest.BodyRef = strings.Repeat("b", 64)
 			}
@@ -47,7 +66,7 @@ func TestNextjsActionPreviewValidatesManifestAndNestedBodyChecksums(t *testing.T
 				plan.Config.Exclusions = []assessment.Exclusion{{Method: "POST", PathPattern: "/action"}}
 			}
 			s.validateNextjsActionFixtures(&plan)
-			if (mode == "valid") != (len(plan.Errors) == 0) {
+			if (mode == "valid" || mode == "valid-multipart") != (len(plan.Errors) == 0) {
 				t.Fatalf("preview errors for %s: %+v", mode, plan.Errors)
 			}
 		})

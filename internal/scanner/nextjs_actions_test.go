@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +20,7 @@ import (
 )
 
 type nextjsActionLab struct {
+	expectedBody           []byte
 	mu                     sync.Mutex
 	changed                bool
 	identityBug, originBug bool
@@ -51,7 +54,11 @@ func (lab *nextjsActionLab) handler(t *testing.T, w http.ResponseWriter, r *http
 	case r.Method == "POST" && r.URL.Path == "/account":
 		lab.posts++
 		body, _ := io.ReadAll(r.Body)
-		if string(body) != `["CONTROLLED_INPUT_42"]` || r.Header.Get("Next-Action") != strings.Repeat("a", 40) || r.Header.Get("Accept") != "text/x-component" {
+		expected := lab.expectedBody
+		if expected == nil {
+			expected = []byte(`["CONTROLLED_INPUT_42"]`)
+		}
+		if !bytes.Equal(body, expected) || r.Header.Get("Next-Action") != strings.Repeat("a", 40) || r.Header.Get("Accept") != "text/x-component" {
 			t.Errorf("wrong observed action request: %s %v", body, r.Header)
 		}
 		if lab.mode == "redirect" {
@@ -231,7 +238,7 @@ func TestNextjsActionStopsOnMissingBaselineAndUnverifiedCleanup(t *testing.T) {
 
 func TestNextjsActionRefusesInvalidApprovalsBeforeNetwork(t *testing.T) {
 	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
-	for _, mode := range []string{"not-typed", "not-test", "not-expanded", "wrong-target", "wrong-owner-target", "missing-cleanup-fixture", "missing-manifest", "excluded-cleanup", "disabled"} {
+	for _, mode := range []string{"not-typed", "not-test", "not-expanded", "wrong-target", "wrong-owner-target", "missing-cleanup-fixture", "missing-manifest", "invalid-multipart", "excluded-cleanup", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			hits := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; t.Error("invalid campaign reached network") }))
@@ -261,6 +268,12 @@ func TestNextjsActionRefusesInvalidApprovalsBeforeNetwork(t *testing.T) {
 					t.Fatal(err)
 				}
 				req.NextjsActionApprovals[0].FixtureRef = meta.Ref
+			case "invalid-multipart":
+				raw, _ := readAPIFixture(req.APIFixtureDir, req.NextjsActionApprovals[0].FixtureRef)
+				var fixture NextjsActionFixture
+				json.Unmarshal(raw, &fixture)
+				fixture.ContentType = "multipart/form-data; boundary=observed"
+				req.NextjsActionApprovals[0].FixtureRef = replaceFrameworkFixture(t, &req, fixture)
 			case "excluded-cleanup":
 				scope := assessment.NewAppScope(req.AppScope.Origins(), assessment.Exclusion{Method: "DELETE", PathPattern: "/fixture-reset"})
 				req.AppScope = &scope
@@ -449,5 +462,84 @@ func TestNextjsActionBudgetOrCancellationStopsRemainingCases(t *testing.T) {
 				t.Fatalf("action escaped gate: %+v lab=%+v", run, lab)
 			}
 		})
+	}
+}
+
+func multipartActionBody(t *testing.T, parts int) ([]byte, string) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for index := 0; index < parts; index++ {
+		if err := writer.WriteField(fmt.Sprintf("%d", index), "CONTROLLED_MULTIPART_42"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := writer.CreateFormFile("attachment", "synthetic.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.Write([]byte{0, 255, 42, 13, 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body.Bytes(), writer.FormDataContentType()
+}
+
+func TestNextjsActionMultipartPreservesExactBodyAndCleanup(t *testing.T) {
+	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
+	body, contentType := multipartActionBody(t, 1)
+	lab := &nextjsActionLab{identityBug: true, expectedBody: body}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { lab.handler(t, w, r) }))
+	defer server.Close()
+	req, cfg := actionFixture(t, server.URL)
+	raw, _ := readAPIFixture(req.APIFixtureDir, req.NextjsActionApprovals[0].FixtureRef)
+	var fixture NextjsActionFixture
+	json.Unmarshal(raw, &fixture)
+	meta, err := (apifixture.Store{Dir: req.APIFixtureDir}).Put(bytes.NewReader(body), contentType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.BodyRef, fixture.ContentType = meta.Ref, contentType
+	req.NextjsActionApprovals[0].FixtureRef = replaceFrameworkFixture(t, &req, fixture)
+	run := (nextjsActionsRunner{}).Run(t.Context(), req, cfg, nil)
+	lab.wait()
+	findings, err := ParseRun(run)
+	if err != nil || len(findings) != 2 || run.Status != "completed" || lab.changed || lab.posts != 4 || lab.cleanups != 4 {
+		t.Fatalf("multipart campaign failed: run=%+v findings=%d err=%v", run, len(findings), err)
+	}
+	artifact, _ := os.ReadFile(run.ArtifactPath)
+	events, _ := os.ReadFile(run.CoverageEventsPath)
+	metadata, _ := json.Marshal(run)
+	if bytes.Contains(append(append(artifact, events...), metadata...), []byte("CONTROLLED_MULTIPART_42")) {
+		t.Fatal("multipart body leaked into public evidence")
+	}
+}
+
+func TestNextjsActionMultipartFramingAndBounds(t *testing.T) {
+	body, contentType := multipartActionBody(t, 1)
+	for _, tc := range []struct {
+		name, contentType string
+		body              []byte
+		valid             bool
+	}{
+		{"valid", contentType, body, true},
+		{"missing-boundary", "multipart/form-data", body, false},
+		{"wrong-boundary", "multipart/form-data; boundary=wrong", body, false},
+		{"incomplete", contentType, body[:len(body)-20], false},
+		{"empty", contentType, nil, false},
+		{"large", contentType, bytes.Repeat([]byte("x"), 65537), false},
+		{"unnamed", "multipart/form-data; boundary=x", []byte("--x\r\nContent-Disposition: form-data\r\n\r\nvalue\r\n--x--\r\n"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateNextjsActionBody(tc.contentType, tc.body); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+	many, manyType := multipartActionBody(t, 64)
+	if ValidateNextjsActionBody(manyType, many) == nil {
+		t.Fatal("more than 64 multipart parts accepted")
 	}
 }

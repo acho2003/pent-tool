@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -13,7 +15,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
-const nextjsActionsVersion = "nextjs-actions-v1"
+const nextjsActionsVersion = "nextjs-actions-v2"
 const nextjsForeignOrigin = "https://xalgorix.invalid"
 
 // NextjsActionFixture describes an exact observed header-based action call and
@@ -46,9 +48,15 @@ func ValidateNextjsActionManifest(raw []byte, target string, scope assessment.Ap
 	if err := decoder.Decode(&f); err != nil {
 		return f, fmt.Errorf("action manifest contains invalid or unsupported fields")
 	}
-	mediaType, _, err := mime.ParseMediaType(f.ContentType)
-	if err != nil || (mediaType != "text/plain" && mediaType != "application/x-www-form-urlencoded") || !nextjsActionIDPattern.MatchString(f.ActionID) || !validNextjsBodyRef(f.BodyRef) {
+	mediaType, params, err := mime.ParseMediaType(f.ContentType)
+	if err != nil || (mediaType != "text/plain" && mediaType != "application/x-www-form-urlencoded" && mediaType != "multipart/form-data") || !nextjsActionIDPattern.MatchString(f.ActionID) || !validNextjsBodyRef(f.BodyRef) {
 		return f, fmt.Errorf("action manifest requires a supported content type, observed hexadecimal action ID, and request body reference")
+	}
+	if mediaType == "multipart/form-data" {
+		writer := multipart.NewWriter(io.Discard)
+		if params["boundary"] == "" || writer.SetBoundary(params["boundary"]) != nil {
+			return f, fmt.Errorf("multipart action content type requires a valid observed boundary")
+		}
 	}
 	if len(f.ReadyMarker) < 8 || len(f.ReadyMarker) > 2000 || len(f.ChangedMarker) < 8 || len(f.ChangedMarker) > 2000 || strings.Contains(f.ReadyMarker, f.ChangedMarker) || strings.Contains(f.ChangedMarker, f.ReadyMarker) {
 		return f, fmt.Errorf("action verification requires distinct non-overlapping controlled state markers of 8 to 2000 bytes")
@@ -109,3 +117,50 @@ func validNextjsBodyRef(ref string) bool {
 }
 
 var regexpNextjsFixtureRef = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// ValidateNextjsActionBody checks framing without decoding/re-encoding the
+// request. Binary file parts remain immutable fixture bytes.
+func ValidateNextjsActionBody(contentType string, body []byte) error {
+	if len(body) == 0 || len(body) > 64<<10 {
+		return fmt.Errorf("action request body must contain 1 to 65536 bytes")
+	}
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return fmt.Errorf("action request content type is invalid")
+	}
+	if mediaType == "text/plain" || mediaType == "application/x-www-form-urlencoded" {
+		return nil
+	}
+	if mediaType != "multipart/form-data" {
+		return fmt.Errorf("action request content type is unsupported")
+	}
+	writer := multipart.NewWriter(io.Discard)
+	if params["boundary"] == "" || writer.SetBoundary(params["boundary"]) != nil {
+		return fmt.Errorf("multipart action requires a valid observed boundary")
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	parts := 0
+	for {
+		part, err := reader.NextRawPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("multipart action framing is invalid or incomplete")
+		}
+		parts++
+		if parts > 64 || part.FormName() == "" || len(part.FormName()) > 256 {
+			part.Close()
+			return fmt.Errorf("multipart action requires at most 64 named form parts")
+		}
+		_, err = io.Copy(io.Discard, part)
+		part.Close()
+		if err != nil {
+			return fmt.Errorf("multipart action part is incomplete")
+		}
+	}
+	if parts == 0 {
+		return fmt.Errorf("multipart action body has no form parts")
+	}
+	return nil
+}

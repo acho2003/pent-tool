@@ -59,6 +59,12 @@ func (s *Server) validateNextjsActionFixtures(plan *scanner.AssessmentPlan) {
 			body, err := read(ref)
 			if err != nil || len(body) == 0 || len(body) > 64<<10 {
 				add("Server Action body or cleanup fixture is missing, corrupt, or larger than 64 KiB")
+				continue
+			}
+			if ref == fixture.BodyRef {
+				if err := scanner.ValidateNextjsActionBody(fixture.ContentType, body); err != nil {
+					add(err.Error())
+				}
 			}
 		}
 	}
