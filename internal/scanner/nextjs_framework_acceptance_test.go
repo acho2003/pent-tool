@@ -153,13 +153,16 @@ func frameworkRecordedRequests(run Run) int {
 }
 
 // Exercise the production browser recorder, not a separate browser test client.
-func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string) []frameworkLabRow {
+func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string, navigation bool) []frameworkLabRow {
 	t.Helper()
 	var rows []frameworkLabRow
 	for _, identity := range []string{"owner", "reader", "anonymous"} {
 		req, _ := webComparisonFixture(t, base, "html", false)
 		frameworkIdentities(&req, base)
 		req.Target = base + "/browser"
+		if navigation {
+			req.Target = base + "/browser-navigation"
+		}
 		req.AuthIdentity = identity
 		req.ReplayScope = "app:app"
 		var err error
@@ -184,10 +187,41 @@ func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string) []fra
 		}
 		hydrateRequestReplay(surface, req.ReplayStore, req.ReplayScope)
 		found, forms, chunks := false, false, 0
+		flight, destinationDOM := false, false
+		if navigation {
+			for _, line := range bytes.Split(raw, []byte("\n")) {
+				var row struct {
+					Request struct {
+						Endpoint string `json:"endpoint"`
+						Source   string `json:"source"`
+					} `json:"request"`
+					Forms []json.RawMessage `json:"forms"`
+				}
+				if json.Unmarshal(line, &row) == nil && row.Request.Source == "browser-dom" && len(row.Forms) > 0 {
+					destinationDOM = row.Request.Endpoint == base+"/browser-arrived"
+				}
+			}
+		}
 		for _, ep := range surface.Endpoints {
 			parsed, _ := url.Parse(ep.URL)
 			if parsed == nil {
 				continue
+			}
+			if navigation && parsed.Path == "/browser-arrived" && ep.StatusCode == 200 && strings.HasPrefix(ep.ContentType, "text/x-component") {
+				var rsc, tree string
+				for name, value := range ep.ReplayHeaders {
+					if strings.EqualFold(name, "RSC") {
+						rsc = value
+					}
+					if strings.EqualFold(name, "Next-Router-State-Tree") {
+						tree = value
+					}
+				}
+				expectedCookie := ""
+				if identity != "anonymous" {
+					expectedCookie = "lab-role=" + identity
+				}
+				flight = rsc == "1" && tree != "" && ep.ReplayHeaders["Cookie"] == expectedCookie && ep.AuthContextID == req.AuthContextID
 			}
 			if strings.HasPrefix(parsed.Path, "/_next/static/chunks/") {
 				chunks++
@@ -217,6 +251,9 @@ func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string) []fra
 			t.Fatal("invalid browser counters")
 		}
 		passed := run.Status == "completed" && found && forms && chunks > 0 && counters.Writes == 0 && counters.Reads[identity] > 0 && run.Completeness == "partial" && strings.Contains(run.Reason, "browser POST requires an explicit read-only GraphQL JSON operation")
+		if navigation {
+			passed = passed && flight && destinationDOM
+		}
 		if identity != "anonymous" {
 			passed = passed && run.Authenticated && run.AuthState == "verified"
 		}
@@ -224,9 +261,13 @@ func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string) []fra
 			t.Error("browser credential persisted in public observations")
 			passed = false
 		}
-		rows = append(rows, frameworkLabRow{Variant: variant, Check: "browser-" + identity + "-discovery", Requests: bytes.Count(raw, []byte(`"timestamp"`)), Passed: passed, Outcome: run.Outcome})
+		check := "browser-" + identity + "-discovery"
+		if navigation {
+			check = "browser-" + identity + "-navigation"
+		}
+		rows = append(rows, frameworkLabRow{Variant: variant, Check: check, Requests: bytes.Count(raw, []byte(`"timestamp"`)), Passed: passed, Outcome: run.Outcome})
 		if !passed {
-			t.Errorf("%s browser %s: lazy=%v forms=%v chunks=%d writes=%d reads=%d run=%+v", variant, identity, found, forms, chunks, counters.Writes, counters.Reads[identity], run)
+			t.Errorf("%s browser %s: lazy=%v forms=%v chunks=%d writes=%d reads=%d flight=%v destinationDOM=%v run=%+v", variant, identity, found, forms, chunks, counters.Writes, counters.Reads[identity], flight, destinationDOM, run)
 		}
 	}
 	return rows
@@ -282,7 +323,8 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 			t.Fatal("URL is not the owned matching lab fixture")
 		}
 		if chrome := os.Getenv("XALGORIX_TEST_CHROMIUM"); chrome != "" {
-			rows = append(rows, frameworkBrowserDiscovery(t, base, variant, chrome)...)
+			rows = append(rows, frameworkBrowserDiscovery(t, base, variant, chrome, false)...)
+			rows = append(rows, frameworkBrowserDiscovery(t, base, variant, chrome, true)...)
 		}
 		want := 0
 		if variant == "vulnerable" {
@@ -405,7 +447,7 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 	}
 	expectedRows := 20
 	if os.Getenv("XALGORIX_TEST_CHROMIUM") != "" {
-		expectedRows = 26
+		expectedRows = 32
 	}
 	if len(rows) != expectedRows {
 		t.Errorf("framework matrix incomplete: %d of %d rows", len(rows), expectedRows)

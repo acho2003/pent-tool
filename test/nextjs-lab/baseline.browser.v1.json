@@ -30,6 +30,30 @@
     },
     {
       "variant": "vulnerable",
+      "check": "browser-owner-navigation",
+      "findings": 0,
+      "recorded_requests": 11,
+      "passed": true,
+      "outcome": "PARTIAL"
+    },
+    {
+      "variant": "vulnerable",
+      "check": "browser-reader-navigation",
+      "findings": 0,
+      "recorded_requests": 11,
+      "passed": true,
+      "outcome": "PARTIAL"
+    },
+    {
+      "variant": "vulnerable",
+      "check": "browser-anonymous-navigation",
+      "findings": 0,
+      "recorded_requests": 11,
+      "passed": true,
+      "outcome": "PARTIAL"
+    },
+    {
+      "variant": "vulnerable",
       "check": "production-source-map",
       "findings": 1,
       "recorded_requests": 29,
@@ -132,6 +156,30 @@
     },
     {
       "variant": "patched",
+      "check": "browser-owner-navigation",
+      "findings": 0,
+      "recorded_requests": 11,
+      "passed": true,
+      "outcome": "PARTIAL"
+    },
+    {
+      "variant": "patched",
+      "check": "browser-reader-navigation",
+      "findings": 0,
+      "recorded_requests": 11,
+      "passed": true,
+      "outcome": "PARTIAL"
+    },
+    {
+      "variant": "patched",
+      "check": "browser-anonymous-navigation",
+      "findings": 0,
+      "recorded_requests": 11,
+      "passed": true,
+      "outcome": "PARTIAL"
+    },
+    {
+      "variant": "patched",
       "check": "production-source-map",
       "findings": 0,
       "recorded_requests": 27,
@@ -210,5 +258,5 @@
     }
   ],
   "browser": "Google Chrome 156.0.8078.47",
-  "measured_on": "2026-11-01"
+  "measured_on": "2026-11-03"
 }
