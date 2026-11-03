@@ -101,7 +101,12 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	if err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("launch Chromium for login: %w", err)
 	}
-	defer launch.Cleanup()
+	defer func() {
+		// Browser.Close can return before Chromium exits. Cleanup waits on the
+		// process without a deadline, so terminate this owned launcher first.
+		launch.Kill()
+		launch.Cleanup()
+	}()
 	browser := rod.New().Context(ctx).ControlURL(control)
 	if err := browser.Connect(); err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("connect to Chromium for login")
