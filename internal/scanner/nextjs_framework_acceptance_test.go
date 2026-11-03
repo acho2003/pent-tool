@@ -348,6 +348,10 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 		shared := ""
 		if name == "built-in-action-origin-control" {
 			shared = "server-action-authorization"
+		} else if name == "production-source-map-embedded-analysis" {
+			shared = "production-source-map"
+		}
+		if shared != "" {
 			requests = 0
 		}
 		rows = append(rows, frameworkLabRow{Variant: variant, Check: name, Findings: count, Requests: requests, Passed: passed, Outcome: run.Outcome, SharedWith: shared})
@@ -391,6 +395,14 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 			maps = 1
 		}
 		record(variant, "production-source-map", maps, want, assets)
+		embedded := 0
+		for _, finding := range findings {
+			if finding.RuleID == "nextjs-source-map" && regexp.MustCompile(`; decoded [1-9][0-9]* sourcesContent entries`).MatchString(finding.Evidence) {
+				embedded = 1
+				break
+			}
+		}
+		record(variant, "production-source-map-embedded-analysis", embedded, want, assets)
 		html := frameworkGet(t, base+"/legacy", "lab-role=owner")
 		build := nextjsBuildIDPattern.FindSubmatch(html)
 		if build == nil {
@@ -489,9 +501,9 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 			}
 		}
 	}
-	expectedRows := 20
+	expectedRows := 22
 	if os.Getenv("XALGORIX_TEST_CHROMIUM") != "" {
-		expectedRows = 40
+		expectedRows = 42
 	}
 	if len(rows) != expectedRows {
 		t.Errorf("framework matrix incomplete: %d of %d rows", len(rows), expectedRows)

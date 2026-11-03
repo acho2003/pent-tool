@@ -89,7 +89,17 @@
       "check": "production-source-map",
       "findings": 1,
       "recorded_requests": 29,
-      "passed": true
+      "passed": true,
+      "outcome": "PARTIAL"
+    },
+    {
+      "shared_with": "production-source-map",
+      "variant": "vulnerable",
+      "check": "production-source-map-embedded-analysis",
+      "findings": 1,
+      "recorded_requests": 0,
+      "passed": true,
+      "outcome": "PARTIAL"
     },
     {
       "variant": "vulnerable",
@@ -247,6 +257,14 @@
       "check": "production-source-map",
       "findings": 0,
       "recorded_requests": 27,
+      "passed": true
+    },
+    {
+      "shared_with": "production-source-map",
+      "variant": "patched",
+      "check": "production-source-map-embedded-analysis",
+      "findings": 0,
+      "recorded_requests": 0,
       "passed": true
     },
     {
