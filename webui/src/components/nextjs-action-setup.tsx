@@ -19,7 +19,11 @@ export function NextjsActionSetup({ targets, identities, value, onChange, testEn
   const [url, setURL] = useState("");
   const [actionID, setActionID] = useState("");
   const [contentType, setContentType] = useState("text/plain;charset=UTF-8");
+  const [bodyFormat, setBodyFormat] = useState("text/plain;charset=UTF-8");
   const [body, setBody] = useState("");
+  const [bodyFile, setBodyFile] = useState<File | null>(null);
+  const [bodyFileKey, setBodyFileKey] = useState(0);
+  const multipart = bodyFormat === "multipart/form-data";
   const [verificationURL, setVerificationURL] = useState("");
   const [readyMarker, setReadyMarker] = useState("");
   const [changedMarker, setChangedMarker] = useState("");
@@ -49,7 +53,7 @@ export function NextjsActionSetup({ targets, identities, value, onChange, testEn
       setError("Use distinct, non-overlapping ready and changed markers of at least eight characters."); return;
     }
     const bytes = (value: string) => new TextEncoder().encode(value).length;
-    if (!body || bytes(body) > 65536 || bytes(cleanupBody) > 65536 || (cleanupMethod !== "DELETE" && !cleanupBody)) {
+    if ((multipart ? !bodyFile || bodyFile.size === 0 || bodyFile.size > 65536 : !body || bytes(body) > 65536) || bytes(cleanupBody) > 65536 || (cleanupMethod !== "DELETE" && !cleanupBody)) {
       setError("Supply the exact action body and any required cleanup body, each no larger than 64 KiB."); return;
     }
     try {
@@ -59,7 +63,7 @@ export function NextjsActionSetup({ targets, identities, value, onChange, testEn
         if (destination.origin !== origin || destination.username || destination.password || destination.hash) throw new Error("Action, state verification, and cleanup URLs must belong to the original target origin without embedded credentials or fragments.");
       }
       setSaving(true);
-      const request = await api.uploadAPIFixture(body, contentType);
+      const request = await api.uploadAPIFixture(multipart ? bodyFile! : body, contentType);
       const cleanup = cleanupBody ? await api.uploadAPIFixture(cleanupBody, cleanupType) : undefined;
       const manifest = await api.uploadAPIFixture(JSON.stringify({
         url: url.trim(), action_id: actionID.trim(), body_ref: request.ref, content_type: contentType,
@@ -74,7 +78,7 @@ export function NextjsActionSetup({ targets, identities, value, onChange, testEn
       if (crossOrigin) cases.push({ id: "foreign-origin", identity: owner, expect: "deny", cross_origin: true });
       const campaign: Approvals[number] = { id: id.trim(), target_id: target.id, owner_identity: owner, fixture_ref: manifest.ref, cases };
       onChange([...value.filter(item => item.id !== campaign.id || item.target_id !== campaign.target_id), campaign]);
-      setBody(""); setCleanupBody(""); setReadyMarker(""); setChangedMarker(""); setApproved(false);
+      setBody(""); setBodyFile(null); setBodyFileKey(current => current + 1); setCleanupBody(""); setReadyMarker(""); setChangedMarker(""); setApproved(false);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not save the controlled action campaign"); }
     finally { setSaving(false); }
   }
@@ -86,8 +90,11 @@ export function NextjsActionSetup({ targets, identities, value, onChange, testEn
       <Label htmlFor="action-campaign-id">Campaign ID</Label><Input id="action-campaign-id" value={id} maxLength={64} onChange={event => setID(event.target.value)} placeholder="controlled-profile-update" />
       <Label htmlFor="action-url">Exact action URL</Label><Input id="action-url" value={url} onChange={event => setURL(event.target.value)} placeholder="https://app.example.test/account" />
       <Label htmlFor="action-header-id">Observed Next-Action header</Label><Input id="action-header-id" value={actionID} maxLength={64} onChange={event => setActionID(event.target.value)} placeholder="Copy the exact ID from an observed action request" />
-      <Label htmlFor="action-content-type">Observed request format</Label><select id="action-content-type" className="w-full rounded border bg-background p-2" value={contentType} onChange={event => setContentType(event.target.value)}><option value="text/plain;charset=UTF-8">Text action arguments</option><option value="application/x-www-form-urlencoded">URL-encoded action arguments</option></select>
-      <Label htmlFor="action-body">Exact controlled action body</Label><Textarea id="action-body" value={body} maxLength={65536} onChange={event => setBody(event.target.value)} placeholder='["controlled-test-record"]' />
+      <Label htmlFor="action-content-type">Observed request format</Label><select id="action-content-type" className="w-full rounded border bg-background p-2" value={bodyFormat} onChange={event => { setBodyFormat(event.target.value); setContentType(event.target.value); setBodyFile(null); setBodyFileKey(current => current + 1); }}><option value="text/plain;charset=UTF-8">Text action arguments</option><option value="application/x-www-form-urlencoded">URL-encoded action arguments</option><option value="multipart/form-data">Exact multipart body file</option></select>
+      {multipart ? <>
+        <Label htmlFor="action-multipart-type">Observed multipart Content-Type, including boundary</Label><Input id="action-multipart-type" value={contentType} onChange={event => setContentType(event.target.value)} placeholder="multipart/form-data; boundary=exact-observed-boundary" />
+        <Label htmlFor="action-body-file">Exact observed request body file (up to 64 KiB)</Label><Input key={bodyFileKey} id="action-body-file" type="file" onChange={event => setBodyFile(event.target.files?.[0] ?? null)} /><p className="text-xs text-muted-foreground">Upload the raw body, including its original multipart boundaries. Binary file parts are preserved. The scanner does not build FormData or alter arguments.</p>
+      </> : <><Label htmlFor="action-body">Exact controlled action body</Label><Textarea id="action-body" value={body} maxLength={65536} onChange={event => setBody(event.target.value)} placeholder='["controlled-test-record"]' /></>}
       <Label htmlFor="action-owner">Allowed owner</Label><select id="action-owner" className="w-full rounded border bg-background p-2" value={owner} onChange={event => setOwner(event.target.value)}><option value="">Choose a named identity</option>{named.map(identity => <option key={identity.identity} value={identity.identity}>{identity.identity} · {identity.role || "role not specified"}</option>)}</select>
       <Label htmlFor="action-denied">Denied identity</Label><select id="action-denied" className="w-full rounded border bg-background p-2" value={denied} onChange={event => setDenied(event.target.value)}><option value="anonymous">Anonymous · no credentials</option>{named.filter(identity => identity.identity !== owner).map(identity => <option key={identity.identity} value={identity.identity}>{identity.identity}</option>)}</select>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={crossOrigin} onChange={event => setCrossOrigin(event.target.checked)} /><span>Also test the owner with the disallowed Origin https://xalgorix.invalid. This changes a request header; it does not contact that origin.</span></label>
