@@ -53,6 +53,38 @@
       "outcome": "PARTIAL"
     },
     {
+      "requests_untracked": true,
+      "variant": "vulnerable",
+      "check": "browser-login-owner",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "requests_untracked": true,
+      "variant": "vulnerable",
+      "check": "browser-login-reader",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "requests_untracked": true,
+      "variant": "vulnerable",
+      "check": "browser-login-wrong-password",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "variant": "vulnerable",
+      "check": "browser-login-anonymous-isolation",
+      "findings": 0,
+      "recorded_requests": 8,
+      "passed": true,
+      "outcome": "AUTH_FAILED"
+    },
+    {
       "variant": "vulnerable",
       "check": "production-source-map",
       "findings": 1,
@@ -177,6 +209,38 @@
       "recorded_requests": 11,
       "passed": true,
       "outcome": "PARTIAL"
+    },
+    {
+      "requests_untracked": true,
+      "variant": "patched",
+      "check": "browser-login-owner",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "requests_untracked": true,
+      "variant": "patched",
+      "check": "browser-login-reader",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "requests_untracked": true,
+      "variant": "patched",
+      "check": "browser-login-wrong-password",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "variant": "patched",
+      "check": "browser-login-anonymous-isolation",
+      "findings": 0,
+      "recorded_requests": 8,
+      "passed": true,
+      "outcome": "AUTH_FAILED"
     },
     {
       "variant": "patched",

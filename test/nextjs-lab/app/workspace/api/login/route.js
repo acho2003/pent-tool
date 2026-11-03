@@ -1,0 +1,2 @@
+import { NextResponse } from 'next/server';
+export async function POST(request) { const body = await request.json(); const role = body.email === 'owner@example.test' ? 'owner' : body.email === 'reader@example.test' ? 'reader' : null; if (!role || body.password !== 'synthetic-login-password') return NextResponse.json({ denied: true }, { status: 401 }); const response = NextResponse.json({ ok: true }); response.cookies.set('lab-session', role+'-fixture-session', { path: '/workspace', httpOnly: true, sameSite: 'strict' }); return response; }

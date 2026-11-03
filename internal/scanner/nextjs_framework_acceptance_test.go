@@ -22,13 +22,14 @@ import (
 )
 
 type frameworkLabRow struct {
-	SharedWith string `json:"shared_with,omitempty"`
-	Variant    string `json:"variant"`
-	Check      string `json:"check"`
-	Findings   int    `json:"findings"`
-	Requests   int    `json:"recorded_requests"`
-	Passed     bool   `json:"passed"`
-	Outcome    string `json:"outcome,omitempty"`
+	RequestsUntracked bool   `json:"requests_untracked,omitempty"`
+	SharedWith        string `json:"shared_with,omitempty"`
+	Variant           string `json:"variant"`
+	Check             string `json:"check"`
+	Findings          int    `json:"findings"`
+	Requests          int    `json:"recorded_requests"`
+	Passed            bool   `json:"passed"`
+	Outcome           string `json:"outcome,omitempty"`
 }
 
 func frameworkLabURL(t *testing.T, variable string) string {
@@ -273,6 +274,48 @@ func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string, navig
 	return rows
 }
 
+func frameworkBrowserLogin(t *testing.T, base, variant, chrome string) []frameworkLabRow {
+	t.Helper()
+	request, _ := webComparisonFixture(t, base, "html", false)
+	cfg := Config{KatanaChromePath: chrome}
+	var rows []frameworkLabRow
+	for _, identity := range []string{"owner", "reader", "wrong-password"} {
+		username, password := identity+"@example.test", "synthetic-login-password"
+		if identity == "wrong-password" {
+			username, password = "owner@example.test", "synthetic-wrong-password"
+		}
+		directory := t.TempDir()
+		result, err := CaptureBrowserLogin(t.Context(), cfg, directory, BrowserLoginParams{AppScope: request.AppScope, LoginURL: base + "/workspace/login", VerifyURL: base + "/workspace/dashboard", Marker: "LOGIN_CONTROLLED_42", Username: username, Password: password, UsernameField: "email", PasswordField: "password"})
+		passed := false
+		if identity == "wrong-password" {
+			passed = err != nil && result.CookieHeader == "" && result.Storage == nil
+		} else if err == nil && result.CookieHeader == "Cookie: lab-session="+identity+"-fixture-session" {
+			var session struct {
+				Role string `json:"role"`
+			}
+			cookie := strings.TrimPrefix(result.CookieHeader, "Cookie: ")
+			passed = json.Unmarshal(frameworkGet(t, base+"/workspace/api/session", cookie), &session) == nil && session.Role == identity
+		}
+		files, readErr := os.ReadDir(directory)
+		passed = passed && readErr == nil && len(files) == 0
+		rows = append(rows, frameworkLabRow{Variant: variant, Check: "browser-login-" + identity, Passed: passed, RequestsUntracked: true})
+		if !passed {
+			t.Errorf("%s browser login %s failed; capture error=%v; workspace clean=%v", variant, identity, err, len(files) == 0)
+		}
+	}
+	// A fresh browser must not inherit either successful login session.
+	anonymous := Request{Target: base + "/workspace/dashboard", ScanDir: t.TempDir(), AppScope: request.AppScope, BrowserAccessTest: true, BrowserCheckpointMarker: "LOGIN_CONTROLLED_42"}
+	cfg.KatanaTimeout, cfg.WebMaxEndpoints = 20*time.Second, 100
+	run := DiscoverBrowser(t.Context(), anonymous, cfg)
+	raw, err := os.ReadFile(run.ArtifactPath)
+	passed := err == nil && run.Status == "failed" && !run.Authenticated && run.AuthState != "verified" && run.Reason == "browser protected-route marker was not confirmed"
+	rows = append(rows, frameworkLabRow{Variant: variant, Check: "browser-login-anonymous-isolation", Passed: passed, Requests: bytes.Count(raw, []byte(`"timestamp"`)), Outcome: run.Outcome})
+	if !passed {
+		t.Errorf("%s anonymous login control failed: %+v", variant, run)
+	}
+	return rows
+}
+
 func TestNextjsFrameworkAcceptance(t *testing.T) {
 	if os.Getenv("XALGORIX_NEXTJS_LAB_VULNERABLE_URL") == "" && os.Getenv("XALGORIX_NEXTJS_LAB_PATCHED_URL") == "" {
 		t.Skip("run test/nextjs-lab/run.py for pinned production Next.js acceptance")
@@ -325,6 +368,7 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 		if chrome := os.Getenv("XALGORIX_TEST_CHROMIUM"); chrome != "" {
 			rows = append(rows, frameworkBrowserDiscovery(t, base, variant, chrome, false)...)
 			rows = append(rows, frameworkBrowserDiscovery(t, base, variant, chrome, true)...)
+			rows = append(rows, frameworkBrowserLogin(t, base, variant, chrome)...)
 		}
 		want := 0
 		if variant == "vulnerable" {
@@ -447,7 +491,7 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 	}
 	expectedRows := 20
 	if os.Getenv("XALGORIX_TEST_CHROMIUM") != "" {
-		expectedRows = 32
+		expectedRows = 40
 	}
 	if len(rows) != expectedRows {
 		t.Errorf("framework matrix incomplete: %d of %d rows", len(rows), expectedRows)
