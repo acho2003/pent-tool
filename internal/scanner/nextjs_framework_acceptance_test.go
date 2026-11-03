@@ -346,7 +346,9 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 		requests := frameworkRecordedRequests(run)
 		passed := count == expected && run.Status == "completed" && requests > 0
 		shared := ""
-		if name == "built-in-action-origin-control" {
+		if name == "multipart-action-origin-control" {
+			shared = "multipart-action-authorization"
+		} else if name == "built-in-action-origin-control" {
 			shared = "server-action-authorization"
 		} else if name == "production-source-map-embedded-analysis" {
 			shared = "production-source-map"
@@ -485,6 +487,22 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 			}
 		}
 		record(variant, "built-in-action-origin-control", originFindings, 0, actionRun)
+		if chrome := os.Getenv("XALGORIX_TEST_CHROMIUM"); chrome != "" {
+			multipartRun, multipartFound := frameworkMultipartCampaign(t, base, chrome)
+			record(variant, "multipart-action-authorization", len(multipartFound), actionWant, multipartRun)
+			origin := 0
+			for _, finding := range multipartFound {
+				if finding.RuleID == "nextjs-action-origin" {
+					origin++
+				}
+			}
+			record(variant, "multipart-action-origin-control", origin, 0, multipartRun)
+			for _, result := range multipartRun.AuthorizationResults {
+				if result.CleanupStatus != "verified" {
+					t.Error("multipart campaign reset was not verified")
+				}
+			}
+		}
 		cache := cacheBoundaryManifest(base)
 		cache.URL, cache.BypassURL, cache.CleanupURL = base+"/api/cache", base+"/api/cache?uncached=1", base+"/api/reset"
 		for _, fixture := range []NextjsBoundaryFixture{cache, {Kind: "redirect", URL: base + "/api/redirect?next=%2Faccount", Parameter: "next", ControlValue: "/account", DestinationURL: collector + "/sink"}, {Kind: "proxy", URL: base + "/api/proxy?url=%2Fcontrolled", Parameter: "url", CallbackURL: collector + "/hit", EventsURL: collector + "/events"}} {
@@ -503,7 +521,7 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 	}
 	expectedRows := 22
 	if os.Getenv("XALGORIX_TEST_CHROMIUM") != "" {
-		expectedRows = 42
+		expectedRows = 46
 	}
 	if len(rows) != expectedRows {
 		t.Errorf("framework matrix incomplete: %d of %d rows", len(rows), expectedRows)

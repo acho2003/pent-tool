@@ -150,6 +150,21 @@
     },
     {
       "variant": "vulnerable",
+      "check": "multipart-action-authorization",
+      "findings": 2,
+      "recorded_requests": 20,
+      "passed": true
+    },
+    {
+      "shared_with": "multipart-action-authorization",
+      "variant": "vulnerable",
+      "check": "multipart-action-origin-control",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "variant": "vulnerable",
       "check": "cache-boundary",
       "findings": 1,
       "recorded_requests": 7,
@@ -310,6 +325,21 @@
       "shared_with": "server-action-authorization",
       "variant": "patched",
       "check": "built-in-action-origin-control",
+      "findings": 0,
+      "recorded_requests": 0,
+      "passed": true
+    },
+    {
+      "variant": "patched",
+      "check": "multipart-action-authorization",
+      "findings": 0,
+      "recorded_requests": 20,
+      "passed": true
+    },
+    {
+      "shared_with": "multipart-action-authorization",
+      "variant": "patched",
+      "check": "multipart-action-origin-control",
       "findings": 0,
       "recorded_requests": 0,
       "passed": true
