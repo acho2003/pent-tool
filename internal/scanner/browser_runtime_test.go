@@ -3,6 +3,7 @@ package scanner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/credentials"
@@ -263,5 +264,55 @@ func TestBrowserRuntimeAttemptStopPublishesCancellation(t *testing.T) {
 	}
 	if len(events) < 2 || events[0].Type != "scanner_started" || events[len(events)-1].Type != "scanner_failed" || events[len(events)-1].Run.AttemptID != events[0].Run.AttemptID || events[len(events)-1].Run.Status != "cancelled" {
 		t.Fatalf("wrong lifecycle events: %+v", events)
+	}
+}
+
+func TestBrowserRuntimeRenderedDocumentProvenance(t *testing.T) {
+	chrome := os.Getenv("XALGORIX_TEST_CHROMIUM")
+	if chrome == "" {
+		t.Skip("native Chromium fixture opt-in")
+	}
+	for _, excluded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("excluded=%v", excluded), func(t *testing.T) {
+			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				io.WriteString(w, `<html><script>history.replaceState({},'', '/settled')</script><form method="post" action="/write"><input name="value"></form></html>`)
+			}))
+			defer fixture.Close()
+			origin, _ := assessment.ParseApprovedOrigin("app", fixture.URL)
+			origin.PathPrefix = "/"
+			var exclusions []assessment.Exclusion
+			if excluded {
+				exclusions = append(exclusions, assessment.Exclusion{Method: "GET", PathPattern: "/settled"})
+			}
+			scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin}, exclusions...)
+			run := DiscoverBrowser(t.Context(), Request{Target: fixture.URL + "/", ScanDir: t.TempDir(), AppScope: &scope}, Config{KatanaChromePath: chrome, KatanaTimeout: 10 * time.Second, WebMaxEndpoints: 20})
+			raw, err := os.ReadFile(run.ArtifactPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			documents := 0
+			for _, line := range bytes.Split(raw, []byte("\n")) {
+				var row struct {
+					Request struct {
+						Endpoint string `json:"endpoint"`
+						Source   string `json:"source"`
+					} `json:"request"`
+				}
+				if json.Unmarshal(line, &row) == nil && row.Request.Source == "browser-dom" {
+					documents++
+					if row.Request.Endpoint != fixture.URL+"/settled" {
+						t.Error("DOM inventory attributed to the pre-navigation URL")
+					}
+				}
+			}
+			if excluded {
+				if documents != 0 || run.Completeness != "partial" || !strings.Contains(run.Reason, "rendered document excluded") {
+					t.Fatalf("excluded DOM retained: documents=%d run=%+v", documents, run)
+				}
+			} else if documents != 1 || run.Status != "completed" {
+				t.Fatalf("rendered document missing: documents=%d run=%+v", documents, run)
+			}
+		})
 	}
 }

@@ -80,8 +80,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 20: browser hydration settling and idle failure coverage).
-const PlanRegistryVersion = "20"
+// schedules (version 21: rendered browser document provenance and scope checks).
+const PlanRegistryVersion = "21"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`

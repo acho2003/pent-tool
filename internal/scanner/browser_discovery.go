@@ -415,35 +415,48 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 			}
 		}
 		if err == nil && !req.BrowserAccessTest {
-			result, e := page.Eval(`() => JSON.stringify({links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),forms:Array.from(document.forms).map(f=>({action:f.action,method:f.method,fields:Array.from(f.elements).filter(e=>e.name).map(e=>({name:e.name}))}))})`)
+			result, e := page.Eval(`() => JSON.stringify({url:location.href,links:Array.from(document.querySelectorAll('a[href]')).map(a=>a.href),forms:Array.from(document.forms).map(f=>({action:f.action,method:f.method,fields:Array.from(f.elements).filter(e=>e.name).map(e=>({name:e.name}))}))})`)
 			if e == nil {
 				var extracted struct {
+					URL   string           `json:"url"`
 					Links []string         `json:"links"`
 					Forms []map[string]any `json:"forms"`
 				}
 				if json.Unmarshal([]byte(result.Value.Str()), &extracted) == nil {
-					for _, form := range extracted.Forms {
-						if action, ok := form["action"].(string); ok {
-							form["action"] = SafeTelemetryURL(action)
+					if policyErr := browserRequestAllowed(req, cfg, "GET", extracted.URL); policyErr != nil {
+						markLimit("browser rendered document excluded by approved policy: " + policyErr.Error())
+					} else {
+						visited[extracted.URL] = true
+						for _, form := range extracted.Forms {
+							if action, ok := form["action"].(string); ok {
+								form["action"] = SafeTelemetryURL(action)
+							}
 						}
-					}
-					authMu.Lock()
-					navigationAuth := req.TargetAuth != ""
-					authMu.Unlock()
-					record(map[string]any{"request": map[string]any{"endpoint": SafeTelemetryURL(next.url), "method": "GET", "source": "browser-dom", "auth_context_id": req.AuthContextID, "authenticated": navigationAuth && func() bool { o, _ := assessment.ParseApprovedOrigin("", next.url); return o.Origin() == bound.Origin() }()}, "forms": extracted.Forms})
-					if next.depth >= katanaDefaultDepth && len(extracted.Links) > 0 {
-						markLimit(fmt.Sprintf("browser crawl depth limit reached (%d)", katanaDefaultDepth))
-					}
-					if next.depth < katanaDefaultDepth {
-						for _, link := range extracted.Links {
-							if len(queue)+len(visited) < max {
-								queue = append(queue, entry{link, next.depth + 1})
-							} else {
-								markLimit(fmt.Sprintf("browser navigation queue limit reached (%d)", max))
+						authMu.Lock()
+						navigationAuth := req.TargetAuth != ""
+						authMu.Unlock()
+						record(map[string]any{"request": map[string]any{"endpoint": SafeTelemetryURL(extracted.URL), "method": "GET", "source": "browser-dom", "auth_context_id": req.AuthContextID, "authenticated": navigationAuth && func() bool {
+							o, _ := assessment.ParseApprovedOrigin("", extracted.URL)
+							return o.Origin() == bound.Origin()
+						}()}, "forms": extracted.Forms})
+						if next.depth >= katanaDefaultDepth && len(extracted.Links) > 0 {
+							markLimit(fmt.Sprintf("browser crawl depth limit reached (%d)", katanaDefaultDepth))
+						}
+						if next.depth < katanaDefaultDepth {
+							for _, link := range extracted.Links {
+								if len(queue)+len(visited) < max {
+									queue = append(queue, entry{link, next.depth + 1})
+								} else {
+									markLimit(fmt.Sprintf("browser navigation queue limit reached (%d)", max))
+								}
 							}
 						}
 					}
+				} else {
+					markLimit("browser rendered document inventory could not be decoded")
 				}
+			} else {
+				markLimit("browser rendered document inventory could not be read")
 			}
 		} else if err != nil {
 			markLimit("browser navigation or page loading failed (20-second navigation deadline)")
