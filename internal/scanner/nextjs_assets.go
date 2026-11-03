@@ -21,7 +21,7 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v5"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v6"
 
 const (
 	nextjsMaxScripts      = 40
@@ -441,32 +441,31 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 					if !hasNextjsLimitation(run, "source_map_analysis_incomplete") {
 						run.Limitations = append(run.Limitations, RunLimitation{Kind: "source_map_analysis_incomplete", Reason: err.Error()})
 					}
-				} else {
-					analysisEvidence = fmt.Sprintf("; decoded %d sourcesContent entries in memory", len(contents))
-					for index, content := range contents {
-						if content == nil {
-							continue
+				}
+				analysisEvidence = fmt.Sprintf("; decoded %d sourcesContent entries in memory", len(contents))
+				if err != nil {
+					analysisEvidence += "; embedded analysis partial"
+				}
+				for _, content := range contents {
+					if !exposedKeys[mapURL.String()] {
+						if finding := nextjsPrivateKeyFinding(req, mapURL.String(), []byte(content.Content), eventsPath); finding != nil {
+							finding.Evidence = fmt.Sprintf("A PEM private key was parsed locally from decoded source-map %s; key bytes, filenames, and source excerpts were not retained.", content.Location)
+							findings = append(findings, *finding)
+							exposedKeys[mapURL.String()] = true
 						}
-						if !exposedKeys[mapURL.String()] {
-							if finding := nextjsPrivateKeyFinding(req, mapURL.String(), []byte(*content), eventsPath); finding != nil {
-								finding.Evidence = fmt.Sprintf("A PEM private key was parsed locally from decoded source-map sourcesContent[%d]; key bytes, filenames, and source excerpts were not retained.", index)
-								findings = append(findings, *finding)
-								exposedKeys[mapURL.String()] = true
+					}
+					for _, match := range nextjsAPIReference.FindAllStringSubmatch(content.Content, nextjsMaxRoutes) {
+						if len(run.HistoricalCandidates) >= nextjsMaxRoutes {
+							if !hasNextjsLimitation(run, "source_map_analysis_incomplete") {
+								run.Limitations = append(run.Limitations, RunLimitation{Kind: "source_map_analysis_incomplete", Reason: "source-map API candidates exceeded the shared candidate limit"})
 							}
+							break
 						}
-						for _, match := range nextjsAPIReference.FindAllStringSubmatch(*content, nextjsMaxRoutes) {
-							if len(run.HistoricalCandidates) >= nextjsMaxRoutes {
-								if !hasNextjsLimitation(run, "source_map_analysis_incomplete") {
-									run.Limitations = append(run.Limitations, RunLimitation{Kind: "source_map_analysis_incomplete", Reason: "source-map API candidates exceeded the shared candidate limit"})
-								}
-								break
-							}
-							if u, err := base.Parse(match[1]); err == nil {
-								candidate := nextjsURLCandidate(req, u.String(), "source_map_api_reference")
-								candidate.URL = SafeTelemetryURL(candidate.URL)
-								if !slices.ContainsFunc(run.HistoricalCandidates, func(c HistoricalCandidate) bool { return c.URL == candidate.URL }) {
-									run.HistoricalCandidates = append(run.HistoricalCandidates, candidate)
-								}
+						if u, err := base.Parse(match[1]); err == nil {
+							candidate := nextjsURLCandidate(req, u.String(), "source_map_api_reference")
+							candidate.URL = SafeTelemetryURL(candidate.URL)
+							if !slices.ContainsFunc(run.HistoricalCandidates, func(c HistoricalCandidate) bool { return c.URL == candidate.URL }) {
+								run.HistoricalCandidates = append(run.HistoricalCandidates, candidate)
 							}
 						}
 					}

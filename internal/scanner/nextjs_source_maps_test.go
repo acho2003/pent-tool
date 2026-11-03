@@ -55,9 +55,10 @@ func TestNextjsSourceMapDecodesPrivateKeyAndKeepsCandidatesUnrequested(t *testin
 	}
 	encoded := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 	for _, tc := range []struct {
-		name          string
-		deep, private bool
-	}{{"ordinary", false, true}, {"deep-private", true, true}, {"deep-public", true, false}} {
+		name             string
+		deep, private    bool
+		indexed, partial bool
+	}{{"ordinary", false, true, false, false}, {"deep-private", true, true, false, false}, {"deep-public", true, false, false, false}, {"deep-indexed", true, true, true, false}, {"deep-indexed-partial", true, true, true, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			content := strings.Repeat("/* padding */", 500) + `const url='/api/from-map?token=source-only-secret';` + `const NEXT_PUBLIC_API_URL='https://public.test';`
 			if tc.private {
@@ -66,6 +67,13 @@ func TestNextjsSourceMapDecodesPrivateKeyAndKeepsCandidatesUnrequested(t *testin
 				content += "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----"
 			}
 			body, _ := json.Marshal(map[string]any{"version": 3, "sources": []string{"https://source.test/private-file.ts"}, "sourceRoot": "https://source.test/", "sourcesContent": []string{content}, "mappings": ""})
+			if tc.indexed {
+				sections := []any{map[string]any{"offset": map[string]int{"line": 0, "column": 0}, "map": json.RawMessage(body)}}
+				if tc.partial {
+					sections = append(sections, map[string]any{"offset": map[string]int{"line": 10, "column": 0}, "url": "https://source.test/must-not-fetch.map"})
+				}
+				body, _ = json.Marshal(map[string]any{"version": 3, "sections": sections})
+			}
 			// A complete JSON decode is required: the raw response has no PEM dashes.
 			body = []byte(strings.ReplaceAll(string(body), "-", `\u002d`))
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,11 +103,14 @@ func TestNextjsSourceMapDecodesPrivateKeyAndKeepsCandidatesUnrequested(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
+			if tc.partial && (run.Outcome != "PARTIAL" || run.Completeness != "partial") {
+				t.Fatal("external sibling gap was not reported")
+			}
 			keys := 0
 			for _, f := range findings {
 				if f.RuleID == "nextjs-public-private-key" {
 					keys++
-					if !strings.Contains(f.Evidence, "sourcesContent[0]") {
+					if !strings.Contains(f.Evidence, "sourcesContent[0]") || tc.indexed && !strings.Contains(f.Evidence, "sections[0].map.sourcesContent[0]") {
 						t.Fatal("missing decoded-source evidence")
 					}
 				}
@@ -244,5 +255,65 @@ func TestNextjsSourceMapFindingsSurviveLaterBudgetFailureWithChecksum(t *testing
 	findings, errs = ParseRuns([]Run{run})
 	if len(findings) != 0 || len(errs) == 0 {
 		t.Fatal("tampered partial evidence was accepted")
+	}
+}
+
+func TestNextjsIndexedMapsKeepValidSiblingsWithinSharedLimits(t *testing.T) {
+	flat := func(count int) any {
+		sources, contents := make([]string, count), make([]string, count)
+		for index := range sources {
+			sources[index] = "private-name.ts"
+			contents[index] = "public source"
+		}
+		return map[string]any{"version": 3, "sources": sources, "sourcesContent": contents, "mappings": ""}
+	}
+	section := func(child any, line int) any {
+		return map[string]any{"offset": map[string]int{"line": line, "column": 0}, "map": child}
+	}
+	indexed := func(sections ...any) any { return map[string]any{"version": 3, "sections": sections} }
+	nested := indexed(section(indexed(section(flat(1), 0)), 0))
+	deep := flat(1)
+	for level := 0; level < nextjsMaxMapDepth+1; level++ {
+		deep = indexed(section(deep, 0))
+	}
+	branches := func() any {
+		var children []any
+		for index := 0; index < nextjsMaxMapSections/2; index++ {
+			children = append(children, section(flat(1), index))
+		}
+		return indexed(children...)
+	}
+	for _, tc := range []struct {
+		name     string
+		document any
+		count    int
+		partial  bool
+		location string
+	}{
+		{"nested", nested, 1, false, "sections[0].map.sections[0].map.sourcesContent[0]"},
+		{"external-sibling", indexed(section(flat(1), 0), map[string]any{"offset": map[string]int{"line": 1, "column": 0}, "url": "https://external.test/private"}), 1, true, "sections[0].map.sourcesContent[0]"},
+		{"invalid-sibling", indexed(map[string]any{"map": flat(1)}, section(flat(1), 1)), 1, true, "sections[1].map.sourcesContent[0]"},
+		{"depth", indexed(section(flat(1), 0), section(deep, 1)), 1, true, "sections[0].map.sourcesContent[0]"},
+		{"total-sections", indexed(section(branches(), 0), section(branches(), 100)), nextjsMaxMapSections - 2, true, ""},
+		{"total-sources", indexed(section(flat(600), 0), section(flat(600), 1)), nextjsMaxMapSources, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(tc.document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			contents, err := nextjsSourceMapContents(body)
+			if (err != nil) != tc.partial || len(contents) != tc.count {
+				t.Fatalf("entries=%d expected=%d partial=%v err=%v", len(contents), tc.count, tc.partial, err)
+			}
+			if tc.location != "" && contents[0].Location != tc.location {
+				t.Fatalf("wrong section provenance: %s", contents[0].Location)
+			}
+			for _, content := range contents {
+				if strings.Contains(content.Location, "private-name") {
+					t.Fatal("source filename retained as provenance")
+				}
+			}
+		})
 	}
 }
