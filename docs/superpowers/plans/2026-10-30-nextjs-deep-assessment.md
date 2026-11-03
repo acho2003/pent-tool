@@ -1,7 +1,7 @@
 # Next.js deep assessment plan
 
 Date: 2026-10-30
-Status: Read discovery, controlled resource comparisons, finite Server Action campaigns, controlled cache/redirect/callback probes, bundled offline source checks, and pinned production-framework acceptance, and authenticated browser hydration, client-side navigation discovery, and same-origin path-scoped login acceptance, and bounded embedded source-map analysis implemented; remaining roadmap items are listed in [Next.js deep assessments](../../nextjs-deep-scanning.md). No target scan was performed.
+Status: Read discovery, controlled resource comparisons, finite Server Action campaigns, controlled cache/redirect/callback probes, bundled offline source checks, and pinned production-framework acceptance, and authenticated browser hydration, client-side navigation discovery, and same-origin path-scoped login acceptance, and bounded embedded source-map analysis, and exact multipart action replay implemented; remaining roadmap items are listed in [Next.js deep assessments](../../nextjs-deep-scanning.md). No target scan was performed.
 
 ## Objective
 
