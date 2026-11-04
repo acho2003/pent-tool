@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,5 +115,43 @@ func TestBrowserRuntimeAuthenticatedAssetFindings(t *testing.T) {
 	}
 	if err := VerifyChecksum(run); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNextjsAuthenticatedAssetsPreserveOnlySealedVerifiedPartialEvidence(t *testing.T) {
+	for _, mode := range []string{"cancelled", "tampered", "auth-failed", "malformed"} {
+		t.Run(mode, func(t *testing.T) {
+			artifact := filepath.Join(t.TempDir(), "browser.jsonl")
+			row := map[string]any{"finding": Finding{SourceID: "controlled", Scanner: "browser", RuleID: "nextjs-authenticated-private-key", Confidence: "confirmed", Title: "Controlled private key delivery", Severity: "high"}}
+			raw, _ := json.Marshal(row)
+			raw = append(raw, '\n')
+			if mode == "malformed" {
+				raw = []byte("{invalid\n")
+			}
+			if err := os.WriteFile(artifact, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			run := finalizeRun(Run{Scanner: "browser", Status: "cancelled", ArtifactPath: artifact, Authenticated: true, AuthState: "verified", Scope: "app:fixture"})
+			if mode == "auth-failed" {
+				run.AuthState = "expired"
+				run = finalizeRun(run)
+			}
+			if mode == "tampered" {
+				if err := os.WriteFile(artifact, []byte("{}\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			findings, errs := ParseRuns([]Run{run})
+			if mode == "cancelled" {
+				if len(findings) != 1 || len(errs) != 0 || findings[0].EvidenceCompleteness != "partial" {
+					t.Fatalf("verified partial lost: %v %v", findings, errs)
+				}
+			} else if len(findings) != 0 {
+				t.Fatal("invalid or unverified partial evidence accepted")
+			}
+			if (mode == "tampered" || mode == "malformed") && len(errs) == 0 {
+				t.Fatal("invalid artifact was not reported")
+			}
+		})
 	}
 }
