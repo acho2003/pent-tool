@@ -1,6 +1,6 @@
 # Next.js deep assessments
 
-Choose **Next.js deep** as the web profile in a typed Web Application or API assessment. Preview the generated plan before starting it. The profile is also available for typed schedules. Existing saved plans need a fresh preview because registry version 21, asset catalog v6, action catalog v2, and source catalog v2 change execution identity.
+Choose **Next.js deep** as the web profile in a typed Web Application or API assessment. Preview the generated plan before starting it. The profile is also available for typed schedules. Existing saved plans need a fresh preview because registry version 22, asset catalog v6, action catalog v2, source catalog v2, and dependency catalog v1 change execution identity.
 
 The profile selects the native `nextjs-assets` adapter and native resource checks alongside the ordinary applicable scanners. Explicit custom scanner selections take precedence. Optional scanners still need to be selected, and unavailable external tools remain visible gaps. Selecting the profile does not change scope or enable the opt-in unified workflow.
 
@@ -10,6 +10,7 @@ The profile selects the native `nextjs-assets` adapter and native resource check
 - Bounded traversal of explicit page links and literal Next.js chunk references. App Router bootstrap references can supply asset URLs; this is not a complete flight protocol parser.
 - API URL strings from pages, bundles, and decoded embedded map sources as unverified inventory candidates. These strings do not cause speculative API requests. Observed browser requests continue through the existing inventory workflow.
 - Adjacent `.map` probes when a script has no explicit map reference. Source-map findings require top-level version 3 and typed sources/mappings/sections evidence, rather than a successful status alone.
+- Offline resolved Next.js dependency matches from root npm lockfiles, independent of runtime version disclosure or Semgrep availability.
 - Local validation of unencrypted PEM private keys in anonymous pages, scripts, and bounded decoded source-map contents. Values, excerpts, and key-derived fingerprints are not retained or used against other services. Public configuration names alone do not produce secret findings.
 - Controlled resource access comparisons for HTML, Pages Router JSON, and RSC, with distinct representation/identity coverage IDs and content-type validation. These comparisons require the expanded workflow described below.
 - Per-request discovery receipts and explicit request, byte, script, page, and endpoint limit reporting. Discovery receipts are not counted as active security testing.
@@ -219,11 +220,23 @@ For API configurations, include the original target prefix and explicitly approv
 
 Reports show controlled probe results, cache attribution, reset status, callback correlation digests, and per-request evidence. Synthetic marker values, credentials, reset bodies, and response bodies are not retained in findings or reports. Generated callback URLs contain nonsecret random correlation values in the selected URL parameter. Each materialized URL input is recorded in its own selected request identity; baseline, bypass, reset, and event-feed controls do not inflate active-test counts. Every response is read up to 64 KiB. A cache probe uses at most seven application requests, redirect probes two, and proxy probes one target request plus up to four event-feed reads, excluding existing authentication checkpoints.
 
+## Offline locked Next.js dependencies
+
+For typed source-code assessments, **Next.js deep** selects the optional native `nextjs-deps` scanner alongside applicable source checks. Custom scanner selections take precedence. It requires a prepared source directory and works without Semgrep or npm. The adapter reads only root `npm-shrinkwrap.json` or `package-lock.json`; npm's [documented shrinkwrap precedence](https://docs.npmjs.com/cli/v7/configuring-npm/package-lock-json/) applies when both exist. A present but unreadable, symlinked, or unsupported shrinkwrap never falls back to another lockfile.
+
+Supported npm lockfile versions are 2 and 3. Only exact resolved `next` package versions are matched against the bundled reviewed advisory snapshot, currently retrieved on 2026-10-28. Root package declarations and semver ranges are not treated as resolved packages. Separate nested resolutions and explicit npm package aliases retain their own locations. Linked packages, non-exact versions, unsupported records, and legacy formats produce coverage gaps. Yarn/pnpm locks and reconciliation against package.json, installed node_modules, SBOMs, or deployed versions remain outside this native adapter.
+
+The adapter makes no network requests and runs no package manager, package script, project configuration, or application code. Lockfiles must be regular files within the rooted source directory; symlinks are refused. Bounds are 4 MiB for the selected lockfile, 20,000 package records, 128 Next.js resolutions, 256 bytes per supported exact version, and 1,000 advisory findings. Hitting a bound retains known matches with `PARTIAL` coverage. A missing root lockfile is skipped with partial dependency coverage. No package version is guessed from a tarball URL, tag, range, or linked workspace.
+
+Findings use `lockfile_version_match` confidence, cite the advisory and affected range, and preserve development/optional flags. Their source locations are JSON pointers into the selected lockfile. A sealed source manifest records the captured lockfile size/SHA-256, resolved package paths/versions, coverage gaps, and the advisory snapshot date/SHA-256. Registry URLs, registry credentials, and raw lockfile contents are omitted. Source paths and dependency metadata remain sensitive assessment artifacts. Plan fingerprints include the dependency catalog and the advisory snapshot content hash.
+
+These are matches against versions recorded in source metadata. Review installed/deployed versions, relevant framework features, and any backports before deciding applicability. The scanner does not associate an arbitrary source target with a web target automatically.
+
 ## Offline Next.js source checks
 
 The optional **Next.js source checks** adapter (`nextjs-sast`) uses the configured Semgrep binary with a bundled, fingerprinted rule pack instead of `--config auto` or registry rules. Select it explicitly for a White Box source/repository target, or use `nextjs-deep`, which selects it for applicable source targets. Availability is tied to Semgrep, and repository checkout retains the existing target-bound credential flow. The generic Semgrep adapter remains independent and can have its own availability/network outcome.
 
-Six rule IDs cover:
+Eight rule IDs cover:
 
 | Rule | Observation | Severity |
 | --- | --- | --- |
@@ -267,7 +280,7 @@ This release implements deeper read discovery, exposure checks, and controlled a
 - Server Action tests use only explicit finite campaigns and exact observed bodies. Automatic action-ID discovery, multipart body generation, argument mutation, and arbitrary action invocation remain unsupported. Existing API write/fuzz jobs retain their independent approvals.
 - Cache and URL probes are limited to explicit controlled fixtures. Arbitrary cache poisoning headers, automatic cache invalidation, private-network enumeration, unreviewed callback services, and SSRF exploitation chains are not implemented.
 - No complete App Router flight decoder, invented dynamic route values, unbounded source-map analysis or external section retrieval, full mapping-to-original-line decoding, or authenticated asset fetches.
-- Source checks use the bounded bundled pack and existing generic adapters. Complete program analysis, automatic dependency/version reconciliation across source and deployment, dynamic config evaluation, and full client/server-boundary analysis remain outside the native pack.
+- Source checks use the bounded bundled pack and existing generic adapters. Complete program analysis, Yarn/pnpm/legacy lock handling and automatic dependency/version reconciliation across source and deployment, dynamic config evaluation, and full client/server-boundary analysis remain outside the native pack.
 
 ## Validation
 
