@@ -4,3 +4,4 @@ node_modules/
 lab-results.json
 
 __pycache__/
+matrix-results/

@@ -1,4 +1,5 @@
 'use client';
+import { labPath } from '../../../lib/path.js';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 export default function Login() {
@@ -8,7 +9,7 @@ export default function Login() {
   const [status, setStatus] = useState('');
   async function submit(event) {
     event.preventDefault();
-    const response = await fetch('/workspace/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const response = await fetch(labPath('/workspace/api/login'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }) });
     if (response.ok) router.push('/workspace/dashboard');
     else setStatus('Synthetic credentials rejected');
   }

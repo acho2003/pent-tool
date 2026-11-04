@@ -21,7 +21,7 @@ concurrency:
 jobs:
   controlled-nextjs:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,11 +45,13 @@ jobs:
           CGO_ENABLED: '0'
           XALGORIX_TEST_SEMGREP: semgrep
         run: go test ./internal/scanner -run '^TestNextjs(SAST|Dependencies)' -count=1
-      - name: Build owned loopback-only framework counterparts and gate the matrix
-        run: python test/nextjs-lab/run.py --browser "$(command -v google-chrome)"
+      - name: Gate authenticated asset observation
+        run: XALGORIX_TEST_CHROMIUM="$(command -v google-chrome)" CGO_ENABLED=0 go test ./internal/scanner -run '^TestBrowserRuntimeAuthenticatedAssetFindings$' -count=1
+      - name: Build isolated loopback-only framework and base-path counterparts
+        run: python test/nextjs-lab/matrix.py --browser "$(command -v google-chrome)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: nextjs-framework-scorecard
-          path: test/nextjs-lab/lab-results.json
+          path: test/nextjs-lab/matrix-results/*.json
           if-no-files-found: warn

@@ -43,7 +43,14 @@ func frameworkLabURL(t *testing.T, variable string) string {
 	if err != nil || !addr.IsLoopback() {
 		t.Fatalf("%s must use an explicit loopback IP", variable)
 	}
-	return strings.TrimSuffix(u.String(), "/")
+	prefix := os.Getenv("XALGORIX_NEXTJS_LAB_BASE_PATH")
+	if prefix != "" && !regexp.MustCompile(`^(?:/[A-Za-z0-9_-]+)+$`).MatchString(prefix) {
+		t.Fatal("invalid owned fixture base path")
+	}
+	if strings.Contains(variable, "COLLECTOR") {
+		prefix = ""
+	}
+	return strings.TrimSuffix(u.String(), "/") + prefix
 }
 func frameworkGet(t *testing.T, raw, cookie string) []byte {
 	t.Helper()
@@ -84,12 +91,15 @@ func frameworkRSCResource(t *testing.T, base string) string {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == 200 && strings.HasPrefix(response.Header.Get("Content-Type"), "text/x-component") {
+		return endpoint
+	}
 	if response.StatusCode != http.StatusTemporaryRedirect {
 		t.Fatalf("expected the pinned framework's canonical RSC redirect, got HTTP %d", response.StatusCode)
 	}
 	location, err := response.Location()
 	approved, _ := url.Parse(base)
-	if err != nil || location.Scheme != approved.Scheme || location.Host != approved.Host || location.User != nil || location.Path != "/resource" || location.Fragment != "" {
+	if err != nil || location.Scheme != approved.Scheme || location.Host != approved.Host || location.User != nil || location.Path != strings.TrimSuffix(approved.Path, "/")+"/resource" || location.Fragment != "" {
 		t.Fatal("RSC canonical URL left the owned resource")
 	}
 	query, err := url.ParseQuery(location.RawQuery)
@@ -208,7 +218,7 @@ func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string, navig
 			if parsed == nil {
 				continue
 			}
-			if navigation && parsed.Path == "/browser-arrived" && ep.StatusCode == 200 && strings.HasPrefix(ep.ContentType, "text/x-component") {
+			if navigation && parsed.Path == os.Getenv("XALGORIX_NEXTJS_LAB_BASE_PATH")+"/browser-arrived" && ep.StatusCode == 200 && strings.HasPrefix(ep.ContentType, "text/x-component") {
 				var rsc, tree string
 				for name, value := range ep.ReplayHeaders {
 					if strings.EqualFold(name, "RSC") {
@@ -224,7 +234,7 @@ func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string, navig
 				}
 				flight = rsc == "1" && tree != "" && ep.ReplayHeaders["Cookie"] == expectedCookie && ep.AuthContextID == req.AuthContextID
 			}
-			if strings.HasPrefix(parsed.Path, "/_next/static/chunks/") {
+			if strings.HasPrefix(parsed.Path, os.Getenv("XALGORIX_NEXTJS_LAB_BASE_PATH")+"/_next/static/chunks/") {
 				chunks++
 			}
 			if ep.HasForm && ep.Method == "POST" {
@@ -233,7 +243,7 @@ func frameworkBrowserDiscovery(t *testing.T, base, variant, chrome string, navig
 					t.Error("browser form became dispatchable")
 				}
 			}
-			if parsed.Path == "/api/browser-read" && parsed.Query().Get("stage") == "lazy" {
+			if parsed.Path == os.Getenv("XALGORIX_NEXTJS_LAB_BASE_PATH")+"/api/browser-read" && parsed.Query().Get("stage") == "lazy" {
 				expectedCookie := ""
 				if identity != "anonymous" {
 					expectedCookie = "lab-role=" + identity
@@ -326,13 +336,14 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 	t.Cleanup(func() {
 		if output := os.Getenv("XALGORIX_NEXTJS_LAB_RESULTS"); output != "" {
 			body, err := json.MarshalIndent(struct {
-				Schema  int               `json:"schema_version"`
-				Nextjs  string            `json:"nextjs"`
-				React   string            `json:"react"`
-				Passed  bool              `json:"passed"`
-				Cases   []frameworkLabRow `json:"cases"`
-				Browser string            `json:"browser,omitempty"`
-			}{1, "16.4.3", "19.3.1", !t.Failed(), rows, os.Getenv("XALGORIX_NEXTJS_LAB_BROWSER_VERSION")}, "", "  ")
+				Schema   int               `json:"schema_version"`
+				Nextjs   string            `json:"nextjs"`
+				React    string            `json:"react"`
+				Passed   bool              `json:"passed"`
+				Cases    []frameworkLabRow `json:"cases"`
+				Browser  string            `json:"browser,omitempty"`
+				BasePath string            `json:"base_path,omitempty"`
+			}{1, os.Getenv("XALGORIX_NEXTJS_LAB_NEXT_VERSION"), os.Getenv("XALGORIX_NEXTJS_LAB_REACT_VERSION"), !t.Failed(), rows, os.Getenv("XALGORIX_NEXTJS_LAB_BROWSER_VERSION"), os.Getenv("XALGORIX_NEXTJS_LAB_BASE_PATH")}, "", "  ")
 			if err != nil {
 				t.Error(err)
 				return
@@ -380,7 +391,7 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 		if variant == "vulnerable" {
 			want = 1
 		}
-		req := nextjsTestRequest(t, base+"/")
+		req := nextjsTestRequest(t, base)
 		req.Profile = ProfileNextjsDeep
 		assets := (nextjsAssetsRunner{}).Run(t.Context(), req, Config{Budget: NewAssessmentBudget(0, 2000, 0)}, nil)
 		findings, err := ParseRun(assets)
@@ -503,9 +514,13 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 				}
 			}
 		}
+		if variant == "patched" {
+			rows = append(rows, frameworkProxyCacheAcceptance(t, base)...)
+		}
 		cache := cacheBoundaryManifest(base)
 		cache.URL, cache.BypassURL, cache.CleanupURL = base+"/api/cache", base+"/api/cache?uncached=1", base+"/api/reset"
-		for _, fixture := range []NextjsBoundaryFixture{cache, {Kind: "redirect", URL: base + "/api/redirect?next=%2Faccount", Parameter: "next", ControlValue: "/account", DestinationURL: collector + "/sink"}, {Kind: "proxy", URL: base + "/api/proxy?url=%2Fcontrolled", Parameter: "url", CallbackURL: collector + "/hit", EventsURL: collector + "/events"}} {
+		controlPath := os.Getenv("XALGORIX_NEXTJS_LAB_BASE_PATH") + "/account"
+		for _, fixture := range []NextjsBoundaryFixture{cache, {Kind: "redirect", URL: base + "/api/redirect?next=" + url.QueryEscape(controlPath), Parameter: "next", ControlValue: controlPath, DestinationURL: collector + "/sink"}, {Kind: "proxy", URL: base + "/api/proxy?url=%2Fcontrolled", Parameter: "url", CallbackURL: collector + "/hit", EventsURL: collector + "/events"}} {
 			boundary, cfg := boundaryFixture(t, base, fixture, collector)
 			frameworkIdentities(&boundary, base)
 			run := (nextjsBoundariesRunner{}).Run(t.Context(), boundary, cfg, nil)
@@ -519,9 +534,9 @@ func TestNextjsFrameworkAcceptance(t *testing.T) {
 			}
 		}
 	}
-	expectedRows := 22
+	expectedRows := 26
 	if os.Getenv("XALGORIX_TEST_CHROMIUM") != "" {
-		expectedRows = 46
+		expectedRows = 50
 	}
 	if len(rows) != expectedRows {
 		t.Errorf("framework matrix incomplete: %d of %d rows", len(rows), expectedRows)
