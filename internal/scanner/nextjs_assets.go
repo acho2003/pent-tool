@@ -21,7 +21,7 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v6"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v7"
 
 const (
 	nextjsMaxScripts      = 40

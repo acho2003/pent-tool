@@ -114,6 +114,8 @@ func reconcileNextjsEvidence(cfg assessment.AssessmentConfig, runs []Run, scanDi
 				comparison.Reason = "sealed version evidence could not be decoded within its bounds"
 			case len(manifest.Gaps) > 0 || sourceRun.Completeness != "complete":
 				comparison.Reason = "source dependency coverage is incomplete"
+			case runtimeRun.Completeness == "partial" || runtimeRun.Outcome == "PARTIAL" || runtimeRun.Truncated || nextjsRuntimeVersionCoverageIncomplete(runtimeRun):
+				comparison.Reason = "runtime discovery coverage is incomplete"
 			case len(comparison.Locked) == 0:
 				comparison.Reason = "source evidence has no exact Next.js resolution"
 			case len(comparison.Observed) != 1:
@@ -178,4 +180,15 @@ func reconcileNextjsEvidence(cfg assessment.AssessmentConfig, runs []Run, scanDi
 		output = append(output, finalizeRun(run))
 	}
 	return output
+}
+
+// Anonymous asset delivery is the declared observation boundary, not an
+// interrupted scan. Other reported limits can hide conflicting versions.
+func nextjsRuntimeVersionCoverageIncomplete(run Run) bool {
+	for _, limitation := range run.Limitations {
+		if limitation.Kind != LimitationAnonymousAssets && limitation.Kind != LimitationVersionUnknown {
+			return true
+		}
+	}
+	return false
 }

@@ -292,7 +292,11 @@ func TestWebAuthorizationRepresentationsAndAnonymousIsolation(t *testing.T) {
 						return
 					}
 					w.Header().Set("Content-Type", wantType)
-					w.Write([]byte(`{"resource":"CONTROLLED_RESOURCE_1"}`))
+					if representation == "rsc" {
+						w.Write([]byte("0:{\"resource\":\"CONTROLLED_RESOURCE_1\"}\n"))
+					} else {
+						w.Write([]byte(`{"resource":"CONTROLLED_RESOURCE_1"}`))
+					}
 				}))
 				defer lab.Close()
 				req, cfg := webComparisonFixture(t, lab.URL, representation, true)
@@ -337,7 +341,7 @@ func TestWebAuthorizationRejectsWrongRepresentationAndMissingBaseline(t *testing
 					w.Write([]byte("login page"))
 					return
 				}
-				w.Write([]byte("CONTROLLED_RESOURCE_1"))
+				w.Write([]byte("0:\"CONTROLLED_RESOURCE_1\"\n"))
 			}))
 			defer lab.Close()
 			representation := "rsc"
@@ -376,7 +380,7 @@ func TestAssessmentExecutorRoutesControlledWebComparisons(t *testing.T) {
 	t.Setenv("XALGORIX_UNIFIED_WORKFLOW", "1")
 	lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-component")
-		w.Write([]byte("CONTROLLED_RESOURCE_1"))
+		w.Write([]byte("0:\"CONTROLLED_RESOURCE_1\"\n"))
 	}))
 	defer lab.Close()
 	req, cfg := webComparisonFixture(t, lab.URL, "rsc", true)
@@ -400,7 +404,7 @@ func TestAssessmentExecutorRoutesControlledWebComparisons(t *testing.T) {
 func TestWebAuthorizationEmptyPostRequestCheckpointCannotProveAccess(t *testing.T) {
 	lab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-component")
-		w.Write([]byte("CONTROLLED_RESOURCE_1"))
+		w.Write([]byte("0:\"CONTROLLED_RESOURCE_1\"\n"))
 	}))
 	defer lab.Close()
 	req, cfg := webComparisonFixture(t, lab.URL, "rsc", true)

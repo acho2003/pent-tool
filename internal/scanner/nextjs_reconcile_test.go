@@ -14,7 +14,7 @@ import (
 )
 
 func TestNextjsVersionReconciliationRequiresExplicitSealedComparableEvidence(t *testing.T) {
-	for _, mode := range []string{"consistent", "conflict", "unrelated", "unknown-runtime", "partial-source", "tampered", "stale-plan", "ambiguous-runtime"} {
+	for _, mode := range []string{"consistent", "conflict", "unrelated", "unknown-runtime", "partial-source", "partial-runtime", "tampered", "stale-plan", "ambiguous-runtime"} {
 		t.Run(mode, func(t *testing.T) {
 			body := nextjsLockJSON(t, 3, map[string]any{"node_modules/next": map[string]any{"version": "14.1.0"}})
 			req := nextjsDependencyRequest(t, map[string][]byte{"package-lock.json": body})
@@ -60,6 +60,10 @@ func TestNextjsVersionReconciliationRequiresExplicitSealedComparableEvidence(t *
 			runtimeReq.Scope = assessmentJobScope(PlanJob{TargetID: web.ID, Target: web.Value})
 			runtimeRun := (nextjsAssetsRunner{}).Run(t.Context(), runtimeReq, Config{}, nil)
 			runtimeRun.PlanFingerprint = "accepted"
+			if mode == "partial-runtime" {
+				runtimeRun.Completeness = "partial"
+				runtimeRun.Outcome = "PARTIAL"
+			}
 			runtimeRun = finalizeRun(runtimeRun)
 			if mode == "tampered" {
 				file, _ := os.OpenFile(sourceRun.SourceManifestPath, os.O_WRONLY|os.O_APPEND, 0600)

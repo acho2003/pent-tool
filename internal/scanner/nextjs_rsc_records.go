@@ -40,6 +40,7 @@ func nextjsRSCMarker(body []byte, marker string) (bool, error) {
 		return nil
 	}
 	records := 0
+	streams := map[string]bool{}
 	for len(body) > 0 {
 		records++
 		if records > 2048 {
@@ -52,6 +53,7 @@ func nextjsRSCMarker(body []byte, marker string) (bool, error) {
 		if _, err := strconv.ParseUint(string(body[:colon]), 16, 32); err != nil {
 			return false, fmt.Errorf("RSC record identifier invalid")
 		}
+		recordID := string(body[:colon])
 		body = body[colon+1:]
 		if len(body) == 0 {
 			return false, fmt.Errorf("RSC record truncated")
@@ -83,6 +85,18 @@ func nextjsRSCMarker(body []byte, marker string) (bool, error) {
 		switch tag {
 		case 'I', 'H', 'D', 'N': // Module, hint, debug, and timing metadata cannot prove access.
 			continue
+		case 'X', 'x', 'R', 'r':
+			if len(row) != 1 || streams[recordID] {
+				return false, fmt.Errorf("RSC stream start is malformed")
+			}
+			streams[recordID] = true
+			continue
+		case 'C':
+			if !streams[recordID] || len(row) > 1 && !json.Valid(row[1:]) {
+				return false, fmt.Errorf("RSC stream close is malformed")
+			}
+			delete(streams, recordID)
+			continue
 		case 'E':
 			return false, fmt.Errorf("RSC stream contains an error record")
 		}
@@ -98,6 +112,9 @@ func nextjsRSCMarker(body []byte, marker string) (bool, error) {
 		if err := visit(value, 0); err != nil {
 			return false, err
 		}
+	}
+	if len(streams) > 0 {
+		return false, fmt.Errorf("RSC stream ended before its close record")
 	}
 	if records == 0 {
 		return false, fmt.Errorf("RSC records unavailable")
