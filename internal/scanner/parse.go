@@ -190,6 +190,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseKubeExposure(run.ArtifactPath)
 	case "nextjs-sast", "nextjs-deps", "nextjs-reconcile":
 		return parseKubeExposure(run.ArtifactPath)
+	case "browser":
+		return parseBrowserAssetFindings(run.ArtifactPath)
 	case "nextjs-assets":
 		return parseNextjsAssets(run.ArtifactPath)
 	case "actuator":
@@ -222,7 +224,7 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseTestssl(run.ArtifactPath)
 	case "sslyze":
 		return parseSSLyze(run.ArtifactPath)
-	case "masscan", "subfinder", "amass", "dnsx", "gau", "waybackurls", "httpx", "katana", "browser", "auth":
+	case "masscan", "subfinder", "amass", "dnsx", "gau", "waybackurls", "httpx", "katana", "auth":
 		return nil, nil // recon/discovery evidence tools produce no findings
 	case "nikto":
 		return parseNikto(run.ArtifactPath)

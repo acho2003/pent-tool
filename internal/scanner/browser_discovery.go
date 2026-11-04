@@ -166,7 +166,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		run.Status, run.Reason = "failed", "launch Chromium: "+err.Error()
 		return
 	}
-	defer launch.Cleanup()
+	defer func() { launch.Kill(); launch.Cleanup() }()
 	browser := rod.New().Context(ctx).ControlURL(control)
 	if err := browser.Connect(); err != nil {
 		run.Status, run.Reason = "failed", err.Error()
@@ -178,6 +178,8 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	closing := false
 	encoder := json.NewEncoder(f)
 	observed := map[string]bool{}
+	assetObserved := map[string]bool{}
+	assetMaps, assetFindings := 0, 0
 	count := 0
 	partial := false
 	limitReasons := map[string]bool{}
@@ -274,6 +276,47 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 			markLimit("browser response exceeded 2097152 bytes or could not be read")
 			h.Response.Fail(proto.NetworkErrorReasonFailed)
 			return
+		}
+		// Credentials remain bound to the exact origin. Only already observed
+		// asset bytes enter the deep analyzer; no maps or aliases are fetched.
+		mu.Lock()
+		inspectAsset := !assetObserved[rawURL] && req.Profile == ProfileNextjsDeep && sameOrigin && boundHeaders != "" && !req.BrowserAccessTest
+		if inspectAsset {
+			assetObserved[rawURL] = true
+			if strings.HasSuffix(h.Request.URL().Path, ".map") {
+				if assetMaps >= nextjsMaxMapAnalyses {
+					inspectAsset = false
+					partial = true
+					limitReasons["authenticated source map analysis limit reached"] = true
+				} else {
+					assetMaps++
+				}
+			}
+		}
+		mu.Unlock()
+		if inspectAsset {
+			authMu.Lock()
+			assetReq := req
+			authMu.Unlock()
+			assetReq.TargetAuth = boundHeaders
+			finding, analysisErr := nextjsAuthenticatedAsset(assetReq, rawURL, response.StatusCode, response.Header.Get("Content-Type"), body, sameOrigin, run.ArtifactPath)
+			if analysisErr != nil {
+				markLimit(analysisErr.Error())
+			}
+			if finding != nil {
+				mu.Lock()
+				if assetFindings < 500 {
+					if err := encoder.Encode(map[string]any{"finding": finding}); err != nil {
+						partial = true
+						limitReasons["authenticated asset finding could not be persisted"] = true
+					}
+					assetFindings++
+				} else {
+					partial = true
+					limitReasons["authenticated asset finding limit reached"] = true
+				}
+				mu.Unlock()
+			}
 		}
 		h.Response.Payload().ResponseCode = response.StatusCode
 		for name, values := range response.Header {
@@ -485,6 +528,9 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	authMu.Unlock()
 	run.Completeness = "complete"
+	if assetFindings > 0 {
+		run.Outcome = "SUCCESS_WITH_FINDINGS"
+	}
 	if req.BrowserAccessTest {
 		if !checkpointConfirmed {
 			reason := "browser protected-route marker was not confirmed"
