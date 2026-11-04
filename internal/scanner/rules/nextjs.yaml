@@ -65,6 +65,25 @@ rules:
       - patterns:
           - pattern: redirect($VALUE, ...)
           - focus-metavariable: $VALUE
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export default async function $HANDLER($REQ, $RES, ...) { ... }
+              - pattern-inside: |
+                  export default function $HANDLER($REQ, $RES, ...) { ... }
+          - pattern: $RES.redirect($VALUE)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export default async function $HANDLER($REQ, $RES, ...) { ... }
+              - pattern-inside: |
+                  export default function $HANDLER($REQ, $RES, ...) { ... }
+          - pattern: $RES.redirect($STATUS, $VALUE)
+          - metavariable-regex:
+              metavariable: $STATUS
+              regex: ^30[12378]$
+          - focus-metavariable: $VALUE
     metadata:
       cwe: CWE-601
   - id: nextjs-route-query-fetch
@@ -122,3 +141,105 @@ rules:
           - focus-metavariable: $VALUE
     metadata:
       cwe: CWE-200
+  - id: nextjs-route-body-fetch
+    languages: [javascript, typescript]
+    severity: WARNING
+    mode: taint
+    message: Request-body input reaches a fetch destination in a Next.js handler. Review local dataflow and destination policy; exploitability is not confirmed.
+    paths:
+      include: ["**/app/**/route.js", "**/app/**/route.ts", "**/pages/api/**"]
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export async function $METHOD($REQ, ...) { ... }
+              - pattern-inside: |
+                  export function $METHOD($REQ, ...) { ... }
+              - pattern-inside: |
+                  export const $METHOD = async ($REQ, ...) => { ... };
+              - pattern-inside: |
+                  export const $METHOD = ($REQ, ...) => { ... };
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$
+          - pattern-either:
+              - pattern: await $REQ.json()
+              - pattern: await $REQ.text()
+              - pattern: await $REQ.formData()
+        exact: true
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export default async function $HANDLER($REQ, ...) { ... }
+              - pattern-inside: |
+                  export default function $HANDLER($REQ, ...) { ... }
+          - pattern: $REQ.body
+        exact: true
+    pattern-sinks:
+      - patterns:
+          - pattern: fetch($VALUE, ...)
+          - focus-metavariable: $VALUE
+    metadata:
+      cwe: CWE-918
+  - id: nextjs-route-body-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    mode: taint
+    message: Request-body input reaches a redirect destination in a Next.js handler. Review local dataflow and destination policy; exploitability is not confirmed.
+    paths:
+      include: ["**/app/**/route.js", "**/app/**/route.ts", "**/pages/api/**"]
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export async function $METHOD($REQ, ...) { ... }
+              - pattern-inside: |
+                  export function $METHOD($REQ, ...) { ... }
+              - pattern-inside: |
+                  export const $METHOD = async ($REQ, ...) => { ... };
+              - pattern-inside: |
+                  export const $METHOD = ($REQ, ...) => { ... };
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$
+          - pattern-either:
+              - pattern: await $REQ.json()
+              - pattern: await $REQ.text()
+              - pattern: await $REQ.formData()
+        exact: true
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export default async function $HANDLER($REQ, ...) { ... }
+              - pattern-inside: |
+                  export default function $HANDLER($REQ, ...) { ... }
+          - pattern: $REQ.body
+        exact: true
+    pattern-sinks:
+      - patterns:
+          - pattern: NextResponse.redirect($VALUE, ...)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: redirect($VALUE, ...)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export default async function $HANDLER($REQ, $RES, ...) { ... }
+              - pattern-inside: |
+                  export default function $HANDLER($REQ, $RES, ...) { ... }
+          - pattern: $RES.redirect($VALUE)
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  export default async function $HANDLER($REQ, $RES, ...) { ... }
+              - pattern-inside: |
+                  export default function $HANDLER($REQ, $RES, ...) { ... }
+          - pattern: $RES.redirect($STATUS, $VALUE)
+          - metavariable-regex:
+              metavariable: $STATUS
+              regex: ^30[12378]$
+          - focus-metavariable: $VALUE
+    metadata:
+      cwe: CWE-601

@@ -172,17 +172,36 @@ func TestNextjsSASTRealEngine(t *testing.T) {
 	counts := map[string]int{}
 	for _, f := range findings {
 		counts[f.RuleID]++
-		if strings.Contains(f.SourceLocation, "/safe/") || strings.HasPrefix(f.SourceLocation, "safe/") {
+		if strings.Contains(f.SourceLocation, "/body-safe/") || strings.Contains(f.SourceLocation, "/safe/") || strings.HasPrefix(f.SourceLocation, "safe/") {
 			t.Fatalf("negative control flagged: %+v", f)
 		}
 	}
 	for rule := range nextjsSASTCatalog {
 		expected := 1
 		if rule == "nextjs-route-query-fetch" || rule == "nextjs-route-query-redirect" {
-			expected = 2
+			expected = 3
+		}
+		if rule == "nextjs-route-body-fetch" || rule == "nextjs-route-body-redirect" {
+			expected = 6
 		}
 		if counts[rule] != expected {
 			t.Fatalf("rule %s has %d matches; findings=%+v", rule, counts[rule], findings)
+		}
+	}
+	for _, rule := range []string{"nextjs-route-body-fetch", "nextjs-route-body-redirect"} {
+		for path, expected := range map[string]int{"app/api/body/route.ts": 4, "pages/api/body.ts": 1, "pages/api/body-status.ts": 1} {
+			count := 0
+			for _, finding := range findings {
+				if finding.RuleID == rule && strings.HasPrefix(finding.SourceLocation, path+":") {
+					count++
+					if finding.Confidence != "local_dataflow" || finding.Severity != "medium" {
+						t.Fatal("body source finding overstated")
+					}
+				}
+			}
+			if count != expected {
+				t.Fatalf("rule %s in %s: got %d matches, expected %d", rule, path, count, expected)
+			}
 		}
 	}
 	var manifest nextjsSASTManifest

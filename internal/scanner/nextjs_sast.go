@@ -19,7 +19,7 @@ import (
 //go:embed rules/nextjs.yaml
 var nextjsSASTRules []byte
 
-const nextjsSASTVersion = "nextjs-sast-v1"
+const nextjsSASTVersion = "nextjs-sast-v2"
 const nextjsSASTMaxFile = 1 << 20
 const nextjsSASTMaxBytes = 32 << 20
 const nextjsSASTMaxFiles = 5000
@@ -175,6 +175,8 @@ var nextjsSASTCatalog = map[string]nextjsSASTRule{
 	"nextjs-config-local-image-fetch":       {"Local-IP image optimization enabled", "low", "CWE-918", "static_configuration", "Review whether local-IP image optimization is required and constrain fetch destinations and redirects."},
 	"nextjs-config-wildcard-action-origins": {"Global wildcard in Server Action origin configuration", "medium", "CWE-346", "static_configuration", "Use explicit intended Server Action origins and verify the deployed framework's origin behavior."},
 	"nextjs-route-query-redirect":           {"Request-derived redirect destination in a Next.js handler", "medium", "CWE-601", "local_dataflow", "Normalize redirect destinations and enforce an explicit local-path or destination allowlist."},
+	"nextjs-route-body-fetch":               {"Request-body-derived server-side fetch destination in a Next.js handler", "medium", "CWE-918", "local_dataflow", "Map incoming body values to explicit allowed destinations and enforce redirect and network policies before server-side fetching."},
+	"nextjs-route-body-redirect":            {"Request-body-derived redirect destination in a Next.js handler", "medium", "CWE-601", "local_dataflow", "Map incoming body values to explicit allowed local routes or approved redirect destinations."},
 	"nextjs-route-query-fetch":              {"Request-derived server-side fetch destination in a Next.js handler", "medium", "CWE-918", "local_dataflow", "Enforce destination and redirect allowlists before server-side fetching, then verify the policy with a controlled callback."},
 	"nextjs-route-private-env-response":     {"Potential private environment value serialized to a response", "medium", "CWE-200", "local_dataflow", "Return minimal authorized data and keep private environment values out of response serialization."},
 }
