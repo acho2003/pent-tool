@@ -1,13 +1,13 @@
 # Next.js deep assessment plan
 
 Date: 2026-10-30
-Status: Read discovery, controlled resource comparisons, finite Server Action campaigns, controlled cache/redirect/callback probes, bundled offline query/body source-flow checks, and pinned production-framework acceptance, and authenticated browser hydration, client-side navigation discovery, and same-origin path-scoped login acceptance, and bounded regular/indexed embedded source-map analysis, and exact multipart action replay, and offline locked Next.js dependency advisory matching implemented; remaining roadmap items are listed in [Next.js deep assessments](../../nextjs-deep-scanning.md). No target scan was performed.
+Status: Bounded implementation and controlled acceptance are tracked in [the current execution checklist](2026-11-04-nextjs-remaining-execution.md) and [Next.js deep assessments](../../nextjs-deep-scanning.md). This document preserves the original roadmap; deliberate exclusions remain documented. No production target scan was performed.
 
 ## Objective
 
 Increase reproducible, actionable findings on authorized Next.js applications by discovering more application behavior and testing security boundaries across identities and response formats. Measure verified issue recall and coverage, rather than raw alert count or request volume.
 
-## Current foundation
+## Foundation at planning time (2026-10-30)
 
 - `internal/scanner/nextjs_assets.go` detects Next.js, fingerprints a served runtime version, matches an embedded advisory snapshot, probes referenced source maps, and inventories Pages Router build-manifest routes.
 - It fetches assets anonymously, examines at most 40 scripts, records at most 500 manifest routes, and confirms at most 100 routes. App Router flight data is currently a detection signal rather than a discovery parser.
