@@ -232,15 +232,18 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 			}
 		}
 		result.Status = "unknown"
-		var rscErr error
+		var representationErr error
 		if fixture.Representation == "rsc" && response.StatusCode >= 200 && response.StatusCode < 300 {
-			_, rscErr = nextjsRSCMarker(body, fixture.ResponseMarker)
+			_, representationErr = nextjsRSCMarker(body, fixture.ResponseMarker)
+		}
+		if fixture.Representation == "pages-json" && response.StatusCode >= 200 && response.StatusCode < 300 {
+			_, representationErr = nextjsJSONMarker(body, fixture.ResponseMarker)
 		}
 		switch {
 		case readErr != nil || len(body) > 64<<10:
 			result.Reason = "resource response unavailable or beyond the comparison limit"
-		case rscErr != nil:
-			result.Reason = rscErr.Error()
+		case representationErr != nil:
+			result.Reason = representationErr.Error()
 		case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
 			result.Observed = "deny"
 		case response.StatusCode >= 200 && response.StatusCode < 300 && authorizationRepresentationMatches(fixture.Representation, response.Header.Get("Content-Type"), body) && authorizationResponseMarker(fixture.Representation, body, fixture.ResponseMarker):

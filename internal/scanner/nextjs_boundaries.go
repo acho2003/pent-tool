@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -216,7 +217,11 @@ func (c boundaryClient) send(input ScannerRequestInput, raw, method, phase strin
 }
 
 func boundaryMarker(r boundaryResponse, marker string) bool {
-	if authorizationRepresentationMatches("rsc", r.header.Get("Content-Type"), r.body) {
+	mediaType, _, _ := mime.ParseMediaType(r.header.Get("Content-Type"))
+	if mediaType == "application/json" {
+		return authorizationResponseMarker("pages-json", r.body, marker)
+	}
+	if mediaType == "text/x-component" {
 		return authorizationResponseMarker("rsc", r.body, marker)
 	}
 	return strings.Contains(string(r.body), marker)

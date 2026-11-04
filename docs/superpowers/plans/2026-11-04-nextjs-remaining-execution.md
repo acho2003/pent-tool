@@ -23,3 +23,7 @@ Final validation passed: `CGO_ENABLED=0 go test ./...`, `CGO_ENABLED=0 go vet ./
 Implementation commits: `7a3c5da` (lock formats), `ec1bc5f` (explicit reconciliation and setup UI), `0ad4f13` (Flight models/mapping positions), `cd49902` (authenticated observed assets), `dc3ac5c` (closed Flight streams/partial evidence), `b116cdf` (mapping bounds), `9110a0e` (proxy/base-path/version fixtures and CI), `bcd87f3` (pinned compatibility graph and measured ledger), and `9083881` (verified partial browser findings).
 
 No unfinished item remains in this bounded checklist. The deliberate exclusions above and the operational guide's remaining gaps still apply; this is not universal framework/protocol coverage or a production scan.
+
+### Follow-up: encoded JSON markers
+
+Continued with bounded Pages Router JSON value decoding after the original checklist. Unicode-escaped controlled string values now participate in access and cache comparisons; field names alone cannot prove access. Added escaped-value positive controls and key-only, malformed, truncation, encoding, nesting, value-count, and response-size negative controls. Plan registry 25 and boundary catalog v2 invalidate earlier comparison plans. Validation passed: focused JSON/access/cache tests, targeted race checks, `CGO_ENABLED=0 go test ./...`, `CGO_ENABLED=0 go vet ./...`, and the real Chrome/Next.js 16.4.3 production regression (50/50 checks). No external application or CDN was contacted.
