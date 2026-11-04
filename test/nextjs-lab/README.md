@@ -67,7 +67,7 @@ The deep asset adapter examines up to eight recognized public maps, reading at m
 
 ## Real offline source-engine acceptance
 
-The bundled rule pack is also tested against the runtime-pinned Semgrep 1.178.0 engine. The positive fixtures cover six rule IDs and eight intended matches, including common URL/search-parameter aliases. Negative fixtures use public configuration, fixed destinations, and constant allowlisted redirect mappings.
+The bundled rule pack is also tested against the runtime-pinned Semgrep 1.178.0 engine. The positive fixtures cover eight rule IDs and 22 intended matches, including common URL/search-parameter aliases and incoming JSON/text/FormData/Pages body flows into fetch and redirect destinations. Negative fixtures use public configuration, fixed destinations, constant allowlisted redirect mappings, unrelated response JSON, and tainted request data used only in options or an outbound payload to a fixed destination. Body-source matches are scoped to directly exported incoming handler parameters; these remain review findings and do not prove a deployed exploit.
 
 With a native Semgrep binary:
 
