@@ -52,6 +52,10 @@ func nextjsSourceMappings(mapping string, sourceCount, nameCount int, budget *in
 					}
 					shift += 5
 				}
+				// The special signed minimum encoding is outside these position bounds.
+				if value == 1 {
+					return fail()
+				}
 				signed := int64(value >> 1)
 				if value&1 != 0 {
 					signed = -signed

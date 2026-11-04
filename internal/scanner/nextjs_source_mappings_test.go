@@ -17,6 +17,7 @@ func TestNextjsSourceMappingsBoundsAndPositions(t *testing.T) {
 		{"AAAAA", 1, 0, 10, true}, {"g", 1, 0, 10, true}, {"///////A", 1, 0, 10, true},
 		{"AAAA,", 1, 0, 10, true}, {"!", 1, 0, 10, true}, {"AAAA", 1, 0, 0, true},
 		{"AAAA,D", 1, 0, 10, true},
+		{"BAAA", 1, 0, 10, true},
 	} {
 		t.Run(tc.mapping, func(t *testing.T) {
 			budget := tc.budget
