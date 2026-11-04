@@ -88,7 +88,7 @@ func ParseRuns(runs []Run) ([]Finding, []error) {
 		budgetPartial := run.Status == "failed" && (run.Scanner == "nikto" || run.Scanner == "nuclei") &&
 			(strings.Contains(run.Reason, "time budget reached") || strings.Contains(run.Reason, "time budget exhausted"))
 		partialTestssl := run.Scanner == "testssl" && run.Status == "failed"
-		preservedPartial := (run.Status == "failed" || run.Status == "cancelled") && (run.Scanner == "zap" || run.Scanner == "wapiti" || run.Scanner == "dalfox" || run.Scanner == "nuclei" || run.Scanner == "nextjs-sast" || run.Scanner == "nextjs-assets") && run.ArtifactPath != "" && run.ParserOutcome != "FAILED" && run.Checksum != ""
+		preservedPartial := (run.Status == "failed" || run.Status == "cancelled") && (run.Scanner == "zap" || run.Scanner == "wapiti" || run.Scanner == "dalfox" || run.Scanner == "nuclei" || run.Scanner == "nextjs-sast" || run.Scanner == "nextjs-assets" || run.Scanner == "nextjs-deps") && run.ArtifactPath != "" && run.ParserOutcome != "FAILED" && run.Checksum != ""
 		if preservedPartial {
 			if _, err := os.Stat(run.ArtifactPath); err != nil {
 				preservedPartial = false
@@ -188,7 +188,7 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseKubeExposure(run.ArtifactPath)
 	case "nextjs-actions", "nextjs-boundaries":
 		return parseKubeExposure(run.ArtifactPath)
-	case "nextjs-sast":
+	case "nextjs-sast", "nextjs-deps":
 		return parseKubeExposure(run.ArtifactPath)
 	case "nextjs-assets":
 		return parseNextjsAssets(run.ArtifactPath)

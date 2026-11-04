@@ -17,7 +17,7 @@ const SchemaVersion = 2
 
 var OrderedNames = []string{"nuclei", "zap", "testssl", "openvas", "trivy", "semgrep", "gitleaks", "vuls", "osv"}
 
-var assessmentOnlyNames = []string{"nextjs-sast", "kube-exposure", "nextjs-assets", "actuator", "vcs-exposure", "exposed-files"}
+var assessmentOnlyNames = []string{"nextjs-deps", "nextjs-sast", "kube-exposure", "nextjs-assets", "actuator", "vcs-exposure", "exposed-files"}
 
 // NormalizeScanners validates an operator's scanner selection and returns it in
 // pipeline order, deduplicated. An empty selection means the whole pipeline, so

@@ -80,8 +80,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 21: rendered browser document provenance and scope checks).
-const PlanRegistryVersion = "21"
+// schedules (version 22: offline resolved Next.js lockfile advisory checks).
+const PlanRegistryVersion = "22"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -110,13 +110,14 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	}
 	toolVersions["kube-exposure-catalog"] = kubeExposureCatalogVersion
 	toolVersions["nextjs-assets-catalog"] = nextjsAssetsCatalogVersion
+	toolVersions["nextjs-deps-catalog"] = nextjsDepsVersion
 	toolVersions["nextjs-sast-rules"] = fmt.Sprintf("%s:%x", nextjsSASTVersion, sha256.Sum256(nextjsSASTRules))
 	toolVersions["nextjs-actions-catalog"] = nextjsActionsVersion
 	toolVersions["nextjs-boundaries-catalog"] = nextjsBoundariesVersion
 	toolVersions["actuator-catalog"] = actuatorCatalogVersion
 	toolVersions["vcs-exposure-catalog"] = vcsCatalogVersion
 	toolVersions["exposed-files-catalog"] = exposedFilesCatalogVersion
-	toolVersions["nextjs-advisories"] = nextjsAdvisoriesVersion
+	toolVersions["nextjs-advisories"] = fmt.Sprintf("%s:%x", nextjsAdvisoriesVersion, sha256.Sum256(nextjsAdvisoriesJSON))
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: toolVersions}
 	for i := range plan.Capabilities {
 		evidence := &plan.Capabilities[i]
@@ -189,7 +190,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 			continue
 		}
 		selected := def.DefaultSelection == "automatic" || def.DefaultSelection == "conditional"
-		if cfg.Profile == ProfileNextjsDeep && (def.ID == "nextjs-assets" || def.ID == "nextjs-sast") {
+		if cfg.Profile == ProfileNextjsDeep && (def.ID == "nextjs-assets" || def.ID == "nextjs-sast" || def.ID == "nextjs-deps") {
 			selected = true
 		}
 		if requestedCustom {
@@ -217,7 +218,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 						state, code, reason = PlanOptional, "discovery.subdomain_opt_in_required", "Subdomain discovery is off by default; enable it to authorize enumeration under this domain."
 					}
 				}
-				if cfg.Profile == ProfileNextjsDeep && (def.ID == "nextjs-assets" || def.ID == "nextjs-sast") && !requestedCustom && state == PlanOptional {
+				if cfg.Profile == ProfileNextjsDeep && (def.ID == "nextjs-assets" || def.ID == "nextjs-sast" || def.ID == "nextjs-deps") && !requestedCustom && state == PlanOptional {
 					state, code, reason = PlanSelected, "profile.nextjs_deep", "The Next.js deep profile selects applicable bounded framework discovery, exposure, and offline source checks."
 				}
 				if requestedCustom && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
