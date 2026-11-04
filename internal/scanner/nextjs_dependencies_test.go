@@ -122,12 +122,12 @@ func TestNextjsDependenciesShrinkwrapPrecedenceAndNoRangeGuessing(t *testing.T) 
 }
 
 func TestNextjsDependenciesIncompleteInputsAndSymlinksNeverLookClean(t *testing.T) {
-	for _, mode := range []string{"missing", "legacy", "malformed", "linked", "invalid-path", "oversized", "symlink", "cancelled"} {
+	for _, mode := range []string{"missing", "unsupported", "malformed", "linked", "invalid-path", "oversized", "symlink", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			files := map[string][]byte{}
 			switch mode {
-			case "legacy":
-				files["package-lock.json"] = []byte(`{"lockfileVersion":1,"dependencies":{"next":{"version":"14.1.0"}}}`)
+			case "unsupported":
+				files["package-lock.json"] = []byte(`{"lockfileVersion":99,"dependencies":{"next":{"version":"14.1.0"}}}`)
 			case "malformed":
 				files["package-lock.json"] = []byte(`{"lockfileVersion":3,"packages":`)
 			case "linked":
@@ -217,6 +217,18 @@ func TestNextjsDependenciesPlanAndNativeExecutionWithoutExternalTools(t *testing
 	}
 	if !found {
 		t.Fatal("native dependency runner was not routed")
+	}
+	cfg.Types = []assessment.Type{assessment.TypeDependencies}
+	cfg.ScannerSelection = assessment.ScannerSelection{}
+	dependencyPlan := PlanAssessment(PlanInput{Config: cfg})
+	dependencySelected := false
+	for _, job := range dependencyPlan.Jobs {
+		if job.Scanner == "nextjs-deps" {
+			dependencySelected = true
+		}
+	}
+	if !dependencySelected {
+		t.Fatal("dependency assessment did not select the native lockfile adapter")
 	}
 	cfg.ScannerSelection = assessment.ScannerSelection{Mode: "custom", Variants: []string{"semgrep"}}
 	plan = PlanAssessment(PlanInput{Config: cfg})
