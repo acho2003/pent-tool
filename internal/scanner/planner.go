@@ -80,8 +80,8 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 22: offline resolved Next.js lockfile advisory checks).
-const PlanRegistryVersion = "22"
+// schedules (version 23: multiformat dependency and explicit version evidence correlation).
+const PlanRegistryVersion = "23"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -111,6 +111,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	toolVersions["kube-exposure-catalog"] = kubeExposureCatalogVersion
 	toolVersions["nextjs-assets-catalog"] = nextjsAssetsCatalogVersion
 	toolVersions["nextjs-deps-catalog"] = nextjsDepsVersion
+	toolVersions["nextjs-reconcile-catalog"] = nextjsReconcileVersion
 	toolVersions["nextjs-sast-rules"] = fmt.Sprintf("%s:%x", nextjsSASTVersion, sha256.Sum256(nextjsSASTRules))
 	toolVersions["nextjs-actions-catalog"] = nextjsActionsVersion
 	toolVersions["nextjs-boundaries-catalog"] = nextjsBoundariesVersion

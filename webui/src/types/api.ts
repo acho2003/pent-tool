@@ -102,7 +102,7 @@ export interface ToolInfo {
 
 export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
-export interface AssessmentTarget { id: string; type: string; value: string; }
+export interface AssessmentTarget { id: string; type: string; value: string; related_to?: string; }
 export interface AssessmentConfig {
   nextjs_boundary_approvals?: Array<{ id: string; target_id: string; kind: "cache" | "redirect" | "proxy"; fixture_ref: string; owner_identity?: string; identity: string }>;
   approved_origins?: Array<{ target_id: string; scheme: string; host: string; port?: number; path_prefix?: string }>;

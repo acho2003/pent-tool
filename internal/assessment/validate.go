@@ -49,6 +49,7 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		nt.Kind = TargetKind(strings.ToUpper(strings.TrimSpace(string(tgt.Kind))))
 		nt.Value = strings.TrimSpace(tgt.Value)
 		nt.ID = strings.TrimSpace(tgt.ID)
+		nt.RelatedTo = strings.TrimSpace(tgt.RelatedTo)
 		if nt.ID == "" {
 			nt.ID = fmt.Sprintf("t%d", i+1)
 		}
@@ -289,6 +290,11 @@ func Validate(cfg AssessmentConfig) []Problem {
 			probs = append(probs, blocking("target.id.duplicate", fmt.Sprintf("duplicate target id %q", tgt.ID)))
 		}
 		ids[tgt.ID] = true
+	}
+	for _, target := range cfg.Targets {
+		if target.RelatedTo != "" && (!ids[target.RelatedTo] || target.RelatedTo == target.ID) {
+			probs = append(probs, blocking("target.related_to.invalid", "related target must reference a different known target ID"))
+		}
 	}
 
 	// Access bindings must reference known targets and valid kinds.

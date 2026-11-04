@@ -885,6 +885,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		_ = SaveAttackSurface(scanDir, surface)
 		appendOutcome(job, run)
 	}
+	for _, comparison := range reconcileNextjsEvidence(plan.Config, results, scanDir, plan.Fingerprint, "") {
+		results = append(results, comparison)
+		if emit != nil {
+			emit(Event{Type: "scanner_completed", Scanner: comparison.Scanner, Run: comparison, Output: comparison.Reason})
+		}
+	}
 	if err := saveAssessmentWorkflow(scanDir, plan, results); err != nil && len(results) > 0 {
 		last := &results[len(results)-1]
 		last.Status, last.GapKind = "failed", GapInterruptedWrite

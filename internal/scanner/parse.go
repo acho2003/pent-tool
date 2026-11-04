@@ -188,7 +188,7 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseKubeExposure(run.ArtifactPath)
 	case "nextjs-actions", "nextjs-boundaries":
 		return parseKubeExposure(run.ArtifactPath)
-	case "nextjs-sast", "nextjs-deps":
+	case "nextjs-sast", "nextjs-deps", "nextjs-reconcile":
 		return parseKubeExposure(run.ArtifactPath)
 	case "nextjs-assets":
 		return parseNextjsAssets(run.ArtifactPath)
