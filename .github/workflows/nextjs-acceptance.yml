@@ -40,11 +40,11 @@ jobs:
           python-version: '3.12'
       - name: Install the runtime-pinned Semgrep engine
         run: python -m pip install --disable-pip-version-check 'semgrep==1.178.0'
-      - name: Exercise offline source rules and negative controls
+      - name: Exercise offline source and locked dependency controls
         env:
           CGO_ENABLED: '0'
           XALGORIX_TEST_SEMGREP: semgrep
-        run: go test ./internal/scanner -run '^TestNextjsSAST' -count=1
+        run: go test ./internal/scanner -run '^TestNextjs(SAST|Dependencies)' -count=1
       - name: Build owned loopback-only framework counterparts and gate the matrix
         run: python test/nextjs-lab/run.py --browser "$(command -v google-chrome)"
       - uses: actions/upload-artifact@v4
