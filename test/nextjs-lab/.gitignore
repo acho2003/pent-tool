@@ -5,3 +5,5 @@ lab-results.json
 
 __pycache__/
 matrix-results/
+!baseline.compatibility.v1.json
+!locks/next-15.5.24.package-lock.json

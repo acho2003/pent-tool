@@ -1,0 +1,1226 @@
+{
+  "schema_version": 1,
+  "measured_date": "2026-11-04",
+  "node": "24.18.0",
+  "go": "1.26.5",
+  "passed": true,
+  "total_checks": 150,
+  "matrices": [
+    {
+      "schema_version": 1,
+      "nextjs": "16.4.3",
+      "react": "19.3.1",
+      "passed": true,
+      "cases": [
+        {
+          "variant": "vulnerable",
+          "check": "browser-owner-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-reader-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-anonymous-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-owner-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-reader-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-anonymous-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-owner",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-reader",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-wrong-password",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-login-anonymous-isolation",
+          "findings": 0,
+          "recorded_requests": 8,
+          "passed": true,
+          "outcome": "AUTH_FAILED"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "production-source-map",
+          "findings": 1,
+          "recorded_requests": 29,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "shared_with": "production-source-map",
+          "variant": "vulnerable",
+          "check": "production-source-map-embedded-analysis",
+          "findings": 1,
+          "recorded_requests": 0,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "html-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "pages-json-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "rsc-anonymous-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "rsc-reader-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "server-action-authorization",
+          "findings": 2,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "server-action-authorization",
+          "variant": "vulnerable",
+          "check": "built-in-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "multipart-action-authorization",
+          "findings": 2,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "multipart-action-authorization",
+          "variant": "vulnerable",
+          "check": "multipart-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "cache-boundary",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "redirect-boundary",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "proxy-boundary",
+          "findings": 1,
+          "recorded_requests": 3,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-owner-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-reader-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-anonymous-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-owner-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-reader-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-anonymous-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-owner",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-reader",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-wrong-password",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "browser-login-anonymous-isolation",
+          "findings": 0,
+          "recorded_requests": 8,
+          "passed": true,
+          "outcome": "AUTH_FAILED"
+        },
+        {
+          "variant": "patched",
+          "check": "production-source-map",
+          "findings": 0,
+          "recorded_requests": 27,
+          "passed": true
+        },
+        {
+          "shared_with": "production-source-map",
+          "variant": "patched",
+          "check": "production-source-map-embedded-analysis",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "html-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "pages-json-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "rsc-anonymous-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "rsc-reader-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "server-action-authorization",
+          "findings": 0,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "server-action-authorization",
+          "variant": "patched",
+          "check": "built-in-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "multipart-action-authorization",
+          "findings": 0,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "multipart-action-authorization",
+          "variant": "patched",
+          "check": "multipart-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-html-shared-key",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-html-isolated-key",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-rsc-shared-key",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-rsc-isolated-key",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "cache-boundary",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "redirect-boundary",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "proxy-boundary",
+          "findings": 0,
+          "recorded_requests": 5,
+          "passed": true,
+          "outcome": "PARTIAL"
+        }
+      ],
+      "browser": "Google Chrome 156.0.8078.47"
+    },
+    {
+      "schema_version": 1,
+      "nextjs": "16.4.3",
+      "react": "19.3.1",
+      "passed": true,
+      "cases": [
+        {
+          "variant": "vulnerable",
+          "check": "browser-owner-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-reader-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-anonymous-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-owner-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-reader-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-anonymous-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-owner",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-reader",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-wrong-password",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-login-anonymous-isolation",
+          "findings": 0,
+          "recorded_requests": 8,
+          "passed": true,
+          "outcome": "AUTH_FAILED"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "production-source-map",
+          "findings": 1,
+          "recorded_requests": 29,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "shared_with": "production-source-map",
+          "variant": "vulnerable",
+          "check": "production-source-map-embedded-analysis",
+          "findings": 1,
+          "recorded_requests": 0,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "html-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "pages-json-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "rsc-anonymous-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "rsc-reader-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "server-action-authorization",
+          "findings": 2,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "server-action-authorization",
+          "variant": "vulnerable",
+          "check": "built-in-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "multipart-action-authorization",
+          "findings": 2,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "multipart-action-authorization",
+          "variant": "vulnerable",
+          "check": "multipart-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "cache-boundary",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "redirect-boundary",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "proxy-boundary",
+          "findings": 1,
+          "recorded_requests": 3,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-owner-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-reader-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-anonymous-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-owner-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-reader-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-anonymous-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-owner",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-reader",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-wrong-password",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "browser-login-anonymous-isolation",
+          "findings": 0,
+          "recorded_requests": 8,
+          "passed": true,
+          "outcome": "AUTH_FAILED"
+        },
+        {
+          "variant": "patched",
+          "check": "production-source-map",
+          "findings": 0,
+          "recorded_requests": 27,
+          "passed": true
+        },
+        {
+          "shared_with": "production-source-map",
+          "variant": "patched",
+          "check": "production-source-map-embedded-analysis",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "html-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "pages-json-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "rsc-anonymous-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "rsc-reader-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "server-action-authorization",
+          "findings": 0,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "server-action-authorization",
+          "variant": "patched",
+          "check": "built-in-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "multipart-action-authorization",
+          "findings": 0,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "multipart-action-authorization",
+          "variant": "patched",
+          "check": "multipart-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-html-shared-key",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-html-isolated-key",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-rsc-shared-key",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-rsc-isolated-key",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "cache-boundary",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "redirect-boundary",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "proxy-boundary",
+          "findings": 0,
+          "recorded_requests": 5,
+          "passed": true,
+          "outcome": "PARTIAL"
+        }
+      ],
+      "browser": "Google Chrome 156.0.8078.47",
+      "base_path": "/tenant"
+    },
+    {
+      "schema_version": 1,
+      "nextjs": "15.5.24",
+      "react": "19.3.1",
+      "passed": true,
+      "cases": [
+        {
+          "variant": "vulnerable",
+          "check": "browser-owner-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-reader-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-anonymous-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-owner-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-reader-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-anonymous-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-owner",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-reader",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "vulnerable",
+          "check": "browser-login-wrong-password",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "browser-login-anonymous-isolation",
+          "findings": 0,
+          "recorded_requests": 8,
+          "passed": true,
+          "outcome": "AUTH_FAILED"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "production-source-map",
+          "findings": 1,
+          "recorded_requests": 29,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "shared_with": "production-source-map",
+          "variant": "vulnerable",
+          "check": "production-source-map-embedded-analysis",
+          "findings": 1,
+          "recorded_requests": 0,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "html-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "pages-json-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "rsc-anonymous-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "rsc-reader-access",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "server-action-authorization",
+          "findings": 2,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "server-action-authorization",
+          "variant": "vulnerable",
+          "check": "built-in-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "multipart-action-authorization",
+          "findings": 2,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "multipart-action-authorization",
+          "variant": "vulnerable",
+          "check": "multipart-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "vulnerable",
+          "check": "cache-boundary",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "redirect-boundary",
+          "findings": 1,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "vulnerable",
+          "check": "proxy-boundary",
+          "findings": 1,
+          "recorded_requests": 3,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-owner-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-reader-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-anonymous-discovery",
+          "findings": 0,
+          "recorded_requests": 9,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-owner-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-reader-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "variant": "patched",
+          "check": "browser-anonymous-navigation",
+          "findings": 0,
+          "recorded_requests": 11,
+          "passed": true,
+          "outcome": "PARTIAL"
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-owner",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-reader",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "requests_untracked": true,
+          "variant": "patched",
+          "check": "browser-login-wrong-password",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "browser-login-anonymous-isolation",
+          "findings": 0,
+          "recorded_requests": 8,
+          "passed": true,
+          "outcome": "AUTH_FAILED"
+        },
+        {
+          "variant": "patched",
+          "check": "production-source-map",
+          "findings": 0,
+          "recorded_requests": 27,
+          "passed": true
+        },
+        {
+          "shared_with": "production-source-map",
+          "variant": "patched",
+          "check": "production-source-map-embedded-analysis",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "html-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "pages-json-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "rsc-anonymous-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "rsc-reader-access",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "server-action-authorization",
+          "findings": 0,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "server-action-authorization",
+          "variant": "patched",
+          "check": "built-in-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "multipart-action-authorization",
+          "findings": 0,
+          "recorded_requests": 20,
+          "passed": true
+        },
+        {
+          "shared_with": "multipart-action-authorization",
+          "variant": "patched",
+          "check": "multipart-action-origin-control",
+          "findings": 0,
+          "recorded_requests": 0,
+          "passed": true
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-html-shared-key",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-html-isolated-key",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-rsc-shared-key",
+          "findings": 1,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_WITH_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "local-proxy-rsc-isolated-key",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "cache-boundary",
+          "findings": 0,
+          "recorded_requests": 7,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "redirect-boundary",
+          "findings": 0,
+          "recorded_requests": 2,
+          "passed": true,
+          "outcome": "SUCCESS_NO_FINDINGS"
+        },
+        {
+          "variant": "patched",
+          "check": "proxy-boundary",
+          "findings": 0,
+          "recorded_requests": 5,
+          "passed": true,
+          "outcome": "PARTIAL"
+        }
+      ],
+      "browser": "Google Chrome 156.0.8078.47"
+    }
+  ]
+}
