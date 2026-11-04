@@ -215,11 +215,18 @@ func (c boundaryClient) send(input ScannerRequestInput, raw, method, phase strin
 	return result, nil
 }
 
+func boundaryMarker(r boundaryResponse, marker string) bool {
+	if authorizationRepresentationMatches("rsc", r.header.Get("Content-Type"), r.body) {
+		return authorizationResponseMarker("rsc", r.body, marker)
+	}
+	return strings.Contains(string(r.body), marker)
+}
+
 func boundaryDenied(f NextjsBoundaryFixture, r boundaryResponse) bool {
-	return !strings.Contains(string(r.body), f.PrivateMarker) && (r.status == 401 || r.status == 403 || (r.status >= 200 && r.status < 300 && strings.Contains(string(r.body), f.DeniedMarker)))
+	return !boundaryMarker(r, f.PrivateMarker) && (r.status == 401 || r.status == 403 || (r.status >= 200 && r.status < 300 && boundaryMarker(r, f.DeniedMarker)))
 }
 func boundaryPrivate(f NextjsBoundaryFixture, r boundaryResponse) bool {
-	return r.status >= 200 && r.status < 300 && strings.Contains(string(r.body), f.PrivateMarker) && !strings.Contains(string(r.body), f.DeniedMarker)
+	return r.status >= 200 && r.status < 300 && boundaryMarker(r, f.PrivateMarker) && !boundaryMarker(r, f.DeniedMarker)
 }
 func boundaryCacheHit(header http.Header) bool {
 	for _, name := range []string{"X-Nextjs-Cache", "X-Vercel-Cache", "CF-Cache-Status", "X-Cache"} {

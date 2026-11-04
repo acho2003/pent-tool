@@ -291,3 +291,9 @@ The deterministic protocol fixtures and pinned production-framework acceptance c
 ### Explicit source/runtime version comparison
 
 A web target can name a repository or local-source target with `related_to` (also configurable in the white-box setup screen). After native jobs complete, `nextjs-reconcile` reads checksum-verified dependency and asset evidence from the current plan. It emits an informational conflict only when complete exact locked versions disagree with one confirmed runtime version. Missing, stale, ambiguous, tampered, or partial evidence remains unknown. Matching version strings do not establish deployment provenance, and source advisory matches are never transferred to the web target. This derived comparison sends no network requests.
+
+### Bounded Flight records and mapping positions
+
+Controlled RSC marker comparisons decode newline-delimited JSON models and hexadecimal length-prefixed text records (64 KiB, 2,048 records, model depth 32). Module/hint/debug/timing metadata does not prove access. Error, binary, unsupported, malformed, and truncated records leave the comparison unknown. References are not resolved and modules are not executed.
+
+Embedded source-map analysis validates v3 base64 VLQ segments, source/name indices, and nonnegative bounded original positions, with a shared 100,000-segment budget. First mapped original positions are reported as section-local coordinates without retaining source names. Malformed mappings make coverage partial while preserving independently decoded embedded-source evidence. Indexed offsets do not establish global generated-file attribution.

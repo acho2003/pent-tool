@@ -4,8 +4,8 @@ Requested 2026-11-04: finish the practical remaining coverage and keep changes c
 
 - [x] Extend offline dependency checks to npm v1, pnpm, and Yarn with bounded parsing, private registry redaction, and explicit ambiguous-manager coverage.
 - [x] Add explicit source/deployment version evidence reconciliation without guessing target relationships.
-- [ ] Decode bounded supported RSC records for controlled marker comparisons; unsupported/binary/stream-error records must remain visible gaps.
-- [ ] Validate bounded source-map mapping segments and original-source positions while retaining privacy and partial evidence.
+- [x] Decode bounded supported RSC records for controlled marker comparisons; unsupported/binary/stream-error records must remain visible gaps.
+- [x] Validate bounded source-map mapping segments and original-source positions while retaining privacy and partial evidence.
 - [ ] Exercise authenticated asset observations under the existing credential boundary; do not forward credentials to aliases/CDNs.
 - [ ] Add local reverse-proxy/cache acceptance and base-path/framework-version fixture coverage with measured results.
 - [ ] Refresh operational docs and the coverage ledger; run required checks and commit each coherent change.

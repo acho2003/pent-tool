@@ -31,6 +31,7 @@ func nextjsSourceMapContents(body []byte) ([]nextjsMapSource, error) {
 	var entries []nextjsMapSource
 	var gap error
 	sources, sections := 0, 0
+	mappingBudget := nextjsMaxMappingSegments
 	report := func(message string) {
 		if gap == nil {
 			gap = fmt.Errorf("%s", message)
@@ -44,6 +45,7 @@ func nextjsSourceMapContents(body []byte) ([]nextjsMapSource, error) {
 		}
 		var document struct {
 			Version  int               `json:"version"`
+			Names    []string          `json:"names"`
 			Sources  []string          `json:"sources"`
 			Contents []*string         `json:"sourcesContent"`
 			Mappings *string           `json:"mappings"`
@@ -104,6 +106,10 @@ func nextjsSourceMapContents(body []byte) ([]nextjsMapSource, error) {
 			report("source map embedded source count does not match its sources")
 			return
 		}
+		positions, mappingErr := nextjsSourceMappings(*document.Mappings, len(document.Sources), len(document.Names), &mappingBudget)
+		if mappingErr != nil {
+			report(mappingErr.Error())
+		}
 		remaining := nextjsMaxMapSources - sources
 		count := len(document.Sources)
 		if count > remaining {
@@ -113,7 +119,11 @@ func nextjsSourceMapContents(body []byte) ([]nextjsMapSource, error) {
 		sources += count
 		for index := 0; index < count && index < len(document.Contents); index++ {
 			if document.Contents[index] != nil {
-				entries = append(entries, nextjsMapSource{*document.Contents[index], fmt.Sprintf("%ssourcesContent[%d]", location, index)})
+				sourceLocation := fmt.Sprintf("%ssourcesContent[%d]", location, index)
+				if position, ok := positions[index]; ok {
+					sourceLocation += fmt.Sprintf(" (first mapped original position %d:%d; section-local)", position.Line+1, position.Column+1)
+				}
+				entries = append(entries, nextjsMapSource{*document.Contents[index], sourceLocation})
 			}
 		}
 	}
