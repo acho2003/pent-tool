@@ -81,7 +81,7 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 23: multiformat dependency and explicit version evidence correlation).
-const PlanRegistryVersion = "27"
+const PlanRegistryVersion = "28"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`

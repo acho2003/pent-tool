@@ -161,6 +161,8 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	defer os.RemoveAll(profileDir)
 	launch := launcher.New().Context(ctx).Bin(cfg.KatanaChromePath).UserDataDir(profileDir).Headless(true).NoSandbox(true).Leakless(false)
+	localOrigin := trustedBrowserLocalOrigin(cfg.BrowserLocalOrigins, req.Target)
+	configureLocalBrowserLaunch(launch, localOrigin)
 	control, err := launch.Launch()
 	if err != nil {
 		run.Status, run.Reason = "failed", "launch Chromium: "+err.Error()
@@ -173,6 +175,10 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		return
 	}
 	defer browser.Close()
+	if err := configureLocalBrowserPermission(browser, localOrigin); err != nil {
+		run.Status, run.Reason = "failed", err.Error()
+		return
+	}
 	var mu sync.Mutex
 	var workers sync.WaitGroup
 	closing := false
@@ -420,6 +426,9 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 			}
 		}
 		if err == nil {
+			_, err = page.EvalOnNewDocument(browserSocketBoundaryScript(bound.Origin(), browserHMRAllowed(req.AppScope, localOrigin)))
+		}
+		if err == nil {
 			err = page.Navigate(next.url)
 		}
 		if err == nil {
@@ -429,6 +438,9 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 				// hydration and lazy chunks can begin. The page/assessment
 				// deadlines still bound pages that never become idle.
 				page.WaitRequestIdle(time.Second, nil, nil, nil)()
+				if blocked, checkErr := page.Eval(`() => globalThis.__xalgorixBlockedSocket === true`); checkErr == nil && blocked.Value.Bool() {
+					markLimit("unsupported document socket transport was blocked by the approved browser boundary")
+				}
 				err = pageCtx.Err()
 			}
 		}

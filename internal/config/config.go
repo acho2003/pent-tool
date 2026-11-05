@@ -40,6 +40,7 @@ type Config struct {
 	NiktoPath             string
 	KatanaPath            string
 	BrowserPath           string
+	BrowserLocalOrigins   []string
 	DalfoxPath            string
 	WapitiPath            string
 	KubeBenchPath         string
@@ -277,6 +278,7 @@ func load() *Config {
 		NiktoPath:             envOr("XALGORIX_NIKTO_PATH", "nikto"),
 		KatanaPath:            envOr("XALGORIX_KATANA_PATH", "katana"),
 		BrowserPath:           envOr("XALGORIX_BROWSER_PATH", "/usr/bin/chromium"),
+		BrowserLocalOrigins:   strings.Split(os.Getenv("XALGORIX_BROWSER_LOCAL_ORIGINS"), ","),
 		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
 		KubeBenchPath:         envOr("XALGORIX_KUBEBENCH_PATH", "kube-bench"),

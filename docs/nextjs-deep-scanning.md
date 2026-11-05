@@ -328,3 +328,27 @@ The measured 2026-11-04 compatibility ledger is [baseline.compatibility.v1.json]
 Each case includes the original framework/browser/action controls plus four local reverse-proxy cache checks against the real patched backend: shared versus identity-isolated keys for HTML and RSC, with cold/fill/warm/bypass controls and verified resets. Framework and compatibility dependency graphs are checked in and installed with package scripts disabled. Builds run in isolated temporary copies; no external CDN or deployment is contacted. Canonical resource URLs account for framework differences without inventing router-state or cache-busting values. Prefix-aware browser requests and path-scoped sessions exercise the actual Next.js base-path build. CI is configured to repeat the matrix; no remote CI outcome is claimed.
 
 Verified authenticated browser findings survive cancellation only as partial evidence when the sealed artifact checksum and verified identity state remain valid. Tampered, malformed, or unverified partial artifacts cannot produce these findings.
+
+### Local development browser login
+
+A self-hosted operator may set `XALGORIX_BROWSER_LOCAL_ORIGINS` to an explicit
+comma-separated list such as `http://host.docker.internal:3003`. Only exact HTTP
+origins using Docker's host alias, localhost, or loopback IPs qualify. The setting
+is empty by default; it never enables a global browser security-disable flag.
+For the matching origin in an ephemeral browser profile, Chromium receives a
+local-origin secure-context exception and origin-specific local/loopback network
+permissions. The approved application scope and exclusions still apply. See
+[Chrome's local-network permission documentation](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access).
+
+Document WebSockets remain limited to the explicitly configured origin's scoped
+Next development HMR paths; other document sockets and WebTransport are blocked
+and discovery records a coverage gap. Worker transports are outside this support
+contract. This setting does not change the target application's trusted origins:
+Next dev must explicitly allow the Docker hostname, and its mutation guard must
+accept the intended development origin without relaxing production checks.
+
+Browser login waits for a GET-shaped Next form's React submit handler before
+entering credentials. It triggers one submit action and prevents an unhandled GET
+form from putting the password in a URL. Cross-origin public subresources use an
+anonymous client without the login cookie jar, including other ports on the same
+hostname. No credential values are added to these diagnostics.

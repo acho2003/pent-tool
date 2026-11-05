@@ -27,7 +27,7 @@ func (s *Server) verifyBrowserCredential(ctx context.Context, appURL, verifyURL,
 	}
 	defer os.RemoveAll(dir)
 	scope := applicationScope(appURL)
-	cfg := scanner.Config{KatanaChromePath: s.cfg.BrowserPath, KatanaTimeout: 20 * time.Second, WebMaxEndpoints: 40, ScopeGuard: func(raw string, _ []string) (bool, string) {
+	cfg := scanner.Config{KatanaChromePath: s.cfg.BrowserPath, BrowserLocalOrigins: s.cfg.BrowserLocalOrigins, KatanaTimeout: 20 * time.Second, WebMaxEndpoints: 40, ScopeGuard: func(raw string, _ []string) (bool, string) {
 		if s.isBlockedTargetForScan(raw, nil) {
 			return true, "target blocked by application scope guard"
 		}
@@ -76,7 +76,7 @@ func (s *Server) captureBrowserLoginSession(ctx context.Context, appURL, verifyU
 	}
 	defer os.RemoveAll(dir)
 	scope := applicationScope(appURL)
-	cfg := scanner.Config{KatanaChromePath: s.cfg.BrowserPath, ScopeGuard: func(raw string, _ []string) (bool, string) {
+	cfg := scanner.Config{KatanaChromePath: s.cfg.BrowserPath, BrowserLocalOrigins: s.cfg.BrowserLocalOrigins, ScopeGuard: func(raw string, _ []string) (bool, string) {
 		if s.isBlockedTargetForScan(raw, nil) {
 			return true, "target blocked by application scope guard"
 		}

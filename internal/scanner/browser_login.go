@@ -97,6 +97,8 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	defer os.RemoveAll(profileDir)
 
 	launch := launcher.New().Context(ctx).Bin(cfg.KatanaChromePath).UserDataDir(profileDir).Headless(true).NoSandbox(true).Leakless(false)
+	localOrigin := trustedBrowserLocalOrigin(cfg.BrowserLocalOrigins, p.LoginURL)
+	configureLocalBrowserLaunch(launch, localOrigin)
 	control, err := launch.Launch()
 	if err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("launch Chromium for login: %w", err)
@@ -112,11 +114,15 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		return BrowserLoginResult{}, fmt.Errorf("connect to Chromium for login")
 	}
 	defer browser.Close()
+	if err := configureLocalBrowserPermission(browser, localOrigin); err != nil {
+		return BrowserLoginResult{}, err
+	}
 
 	// Pin every browser request to the bound origin. Same-origin requests are
 	// forwarded to the live site (so the server can set its session cookie);
 	// any cross-origin request is failed, which is the credential boundary.
-	crossOrigin := false
+	var crossOrigin atomic.Bool
+	var blockedPasswordGET atomic.Bool
 	var loginDone atomic.Bool
 	var reqMu sync.Mutex
 	var loginRequests []string
@@ -149,7 +155,14 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		return BrowserLoginResult{}, fmt.Errorf("browser login cookie store unavailable")
 	}
 	client := &http.Client{Jar: jar, Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	anonymousClient := *client
+	anonymousClient.Jar = nil
 	if err := router.Add("*", "", func(h *rod.Hijack) {
+		if !loginDone.Load() && h.Request.Method() == http.MethodGet && (h.Request.URL().Query().Get(passwordField) == p.Password || h.Request.URL().Query().Get("password") == p.Password) {
+			blockedPasswordGET.Store(true)
+			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+			return
+		}
 		origin, _ := assessment.ParseApprovedOrigin("", h.Request.URL().String())
 		if origin.Origin() != bound.Origin() {
 			method := h.Request.Method()
@@ -164,13 +177,13 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 			// data calls may proceed (still credential-stripped) to let the
 			// protected page fully render for the marker check.
 			if !loginDone.Load() && method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
-				crossOrigin = true
+				crossOrigin.Store(true)
 				h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 				return
 			}
 			h.Request.Req().Header.Del("Authorization")
 			h.Request.Req().Header.Del("Cookie")
-			if err := h.LoadResponse(client, true); err != nil {
+			if err := h.LoadResponse(&anonymousClient, true); err != nil {
 				h.Response.Fail(proto.NetworkErrorReasonFailed)
 			}
 			return
@@ -190,6 +203,12 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	if err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("open login page")
 	}
+	if _, err := page.EvalOnNewDocument(browserSocketBoundaryScript(bound.Origin(), browserHMRAllowed(p.AppScope, localOrigin))); err != nil {
+		return BrowserLoginResult{}, fmt.Errorf("browser socket boundary could not be installed")
+	}
+	if _, err := page.EvalOnNewDocument(browserLoginGETGuard); err != nil {
+		return BrowserLoginResult{}, fmt.Errorf("browser login form guard could not be installed")
+	}
 	// Give the headless browser a real desktop viewport and user agent so a
 	// responsive SPA renders its full layout (not a near-empty/mobile shell) and
 	// does not serve a bot-stripped page.
@@ -208,6 +227,11 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 		return BrowserLoginResult{}, fmt.Errorf("the login page left the approved origin before credentials were entered")
 	}
 
+	// Next can expose server-rendered inputs before its client submit handler
+	// is attached. Never fill a GET-shaped Next form during that interval.
+	if err := waitBrowserLoginReady(page); err != nil {
+		return BrowserLoginResult{}, fmt.Errorf("the Next.js login form did not finish initializing; credentials were not entered; check development HMR/origin configuration")
+	}
 	if err := inputInto(page, usernameField, []string{"input[type=email]", "input[name=email]", "input[name=username]", "input[name=user]"}, p.Username); err != nil {
 		return BrowserLoginResult{}, fmt.Errorf("the username field could not be found on the login page")
 	}
@@ -240,7 +264,10 @@ func CaptureBrowserLogin(ctx context.Context, cfg Config, scanDir string, p Brow
 	cookieURL, _ := url.Parse(sessionURL)
 	_, cookieNames, err := captureCookieHeader(jar, cookieURL)
 	if err != nil {
-		if crossOrigin {
+		if blocked, checkErr := page.Eval(`() => globalThis.__xalgorixBlockedPasswordGET === true`); blockedPasswordGET.Load() || checkErr == nil && blocked.Value.Bool() {
+			return BrowserLoginResult{}, fmt.Errorf("login form attempted a GET submission before its JavaScript handler was ready; credentials were kept out of the URL; use an initialized production page or configure the approved local development browser origin")
+		}
+		if crossOrigin.Load() {
 			return BrowserLoginResult{}, fmt.Errorf("login did not establish a session (a cross-origin step was blocked by the credential boundary; login requests: %s)", loginSummary())
 		}
 		return BrowserLoginResult{}, fmt.Errorf("%v (login requests: %s)", err, loginSummary())
@@ -476,41 +503,24 @@ func inputInto(page *rod.Page, field string, fallbacks []string, text string) er
 	return fmt.Errorf("field not found")
 }
 
-// submitLogin submits the login form. It first presses Enter in the password
-// field — the most reliable trigger for React/SPA forms whose submit is wired to
-// the form's onSubmit rather than a native button — and also clicks a submit
-// control, so forms that need either path still go through.
+// submitLogin triggers exactly one action. Clicking and then pressing Enter
+// can issue duplicate logins, rotate sessions, or trigger rate limits.
 func submitLogin(page *rod.Page, selector, passwordField string) error {
-	submitted := false
-	// Enter in the password field.
-	for _, candidate := range fieldSelectors(passwordField, []string{"input[type=password]", "input[name=password]"}) {
-		el, err := page.Timeout(2 * time.Second).Element(candidate)
-		if err != nil || el == nil {
-			continue
-		}
-		if el.Focus() == nil && el.Type(input.Enter) == nil {
-			submitted = true
-		}
-		break
-	}
-	// Click an explicit or native submit control.
-	candidates := []string{}
+	candidates := []string{"button[type=submit]", "input[type=submit]", "button"}
 	if strings.TrimSpace(selector) != "" {
-		candidates = append(candidates, selector)
+		candidates = []string{selector}
 	}
-	candidates = append(candidates, "button[type=submit]", "input[type=submit]", "button")
 	for _, candidate := range candidates {
 		el, err := page.Timeout(2 * time.Second).Element(candidate)
-		if err != nil || el == nil {
-			continue
-		}
-		if el.Click(proto.InputMouseButtonLeft, 1) == nil {
-			submitted = true
-			break
+		if err == nil && el != nil && el.Click(proto.InputMouseButtonLeft, 1) == nil {
+			return nil
 		}
 	}
-	if submitted {
-		return nil
+	for _, candidate := range fieldSelectors(passwordField, []string{"input[type=password]", "input[name=password]"}) {
+		el, err := page.Timeout(2 * time.Second).Element(candidate)
+		if err == nil && el != nil && el.Focus() == nil && el.Type(input.Enter) == nil {
+			return nil
+		}
 	}
 	return fmt.Errorf("no submit control")
 }
@@ -573,4 +583,15 @@ func captureStorage(page *rod.Page, bound assessment.ApprovedOrigin) *credential
 		return nil
 	}
 	return storage
+}
+
+func waitBrowserLoginReady(page *rod.Page) error {
+	return page.Timeout(12 * time.Second).Wait(rod.Eval(`() => {
+  const input = document.querySelector('input[type="password"]');
+  const form = input?.form;
+  if (!form || form.method.toLowerCase() !== 'get') return true;
+  const nextPage = Array.from(document.scripts).some(s => s.src.includes('/_next/'));
+  if (!nextPage) return true;
+  return Object.keys(form).filter(k => k.startsWith('__reactProps')).some(k => typeof form[k]?.onSubmit === 'function');
+ }`))
 }

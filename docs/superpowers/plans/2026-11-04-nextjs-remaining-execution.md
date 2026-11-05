@@ -39,3 +39,26 @@ Validation passed: focused JSON/access/cache controls, full Go suite, vet, targe
 Added bounded HTML token comparisons for controlled access and cache responses. Text and attribute values decode character references; comments and names do not establish access. Raw script/style semantics are preserved without executing code or joining separate nodes. Added encoded text/attribute positives and comment, name-only, raw-script entity, split-node, duplicate-attribute, truncation, token/attribute/byte-limit, and encoding controls. Plan registry 27 and boundary catalog v4 invalidate earlier comparison plans.
 
 Validation passed: HTML helper/access/cache controls, full Go tests, vet, targeted race checks, and the real Chrome/Next.js 16.4.3 production regression (50/50). Validation used owned local fixtures; no application scan was started.
+
+### Follow-up 2026-11-05: Docker development browser authentication
+
+The actual portal reproduced a non-hydrated form: its Next dev origin allowlist
+omitted the Docker host alias, and Chromium's local-network permissions prevented
+HMR. The portal now admits that explicit development hostname and validates its
+mutation Origin against matching Host, scheme, and port only in development;
+production and cross-site rejection remain covered by tests. Scanner browser
+trust is an explicit exact local-origin setting. Browser login waits for Next
+form readiness, submits once, guards password GETs, and isolates the cookie jar
+from cross-origin resource requests. Native browser discovery records blocked
+unsupported document sockets as partial coverage. Plan registry is 28.
+
+The real supplied account passed containerized browser capture and an anonymous
+session negative control after the changes. Credentials and tokens were not
+retained in this plan or committed. Portal tests, typecheck, lint, and an isolated
+production build passed; lint retains one existing unrelated unused-catch warning.
+
+Regression validation: full Go suite and vet passed, scoped-origin/socket/GET-guard/
+single-submit/cookie-isolation race checks passed with Chrome, and production
+Next.js/Chrome acceptance passed 50/50. The portal passed 416 tests, typecheck,
+lint (one pre-existing warning), and an isolated production build without
+interrupting the development build directory.
