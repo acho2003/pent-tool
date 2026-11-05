@@ -27,3 +27,9 @@ No unfinished item remains in this bounded checklist. The deliberate exclusions 
 ### Follow-up: encoded JSON markers
 
 Continued with bounded Pages Router JSON value decoding after the original checklist. Unicode-escaped controlled string values now participate in access and cache comparisons; field names alone cannot prove access. Added escaped-value positive controls and key-only, malformed, truncation, encoding, nesting, value-count, and response-size negative controls. Plan registry 25 and boundary catalog v2 invalidate earlier comparison plans. Validation passed: focused JSON/access/cache tests, targeted race checks, `CGO_ENABLED=0 go test ./...`, `CGO_ENABLED=0 go vet ./...`, and the real Chrome/Next.js 16.4.3 production regression (50/50 checks). No external application or CDN was contacted.
+
+### Follow-up 2026-11-05: ambiguous JSON and incremental bounds
+
+Replaced JSON object-tree construction with bounded token parsing. Duplicate decoded object keys (including escaped aliases) leave comparisons unknown regardless of marker order; matching names in separate objects remain valid. JSON numbers stay numeric tokens, allowing valid large exponents alongside controlled string values. Diagnostics contain no keys or response values. Plan registry 26 and boundary catalog v3 invalidate earlier plans. Added duplicate-key access/cache negative controls and large-number positive coverage.
+
+Validation passed: focused JSON/access/cache controls, full Go suite, vet, targeted race checks, and the real Chrome/Next.js 16.4.3 production regression (50/50). Local fixtures only; no external application or CDN traffic.

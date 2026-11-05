@@ -1,49 +1,84 @@
 package scanner
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"unicode/utf8"
 )
 
-// Inspect delivered JSON string values, without treating field names or raw
-// serialized syntax as proof that a controlled resource value was returned.
+// Inspect delivered JSON string values without constructing an object tree.
+// Duplicate keys are ambiguous evidence, including differently escaped spellings
+// of the same decoded key. Diagnostics never include keys or response content.
 func nextjsJSONMarker(body []byte, marker string) (bool, error) {
 	if len(body) > 64<<10 || !utf8.Valid(body) {
 		return false, fmt.Errorf("JSON response exceeds supported text bounds")
 	}
-	var value any
-	if json.Unmarshal(body, &value) != nil {
-		return false, fmt.Errorf("JSON resource response is malformed")
-	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
 	found, nodes := false, 0
-	var visit func(any, int) error
-	visit = func(value any, depth int) error {
+	malformed := func() error { return fmt.Errorf("JSON resource response is malformed") }
+	var visit func(int) error
+	visit = func(depth int) error {
 		nodes++
 		if depth > 32 || nodes > 8192 {
 			return fmt.Errorf("JSON resource nesting or value count exceeds comparison limit")
 		}
-		switch value := value.(type) {
+		token, err := decoder.Token()
+		if err != nil {
+			return malformed()
+		}
+		switch value := token.(type) {
 		case string:
 			found = found || strings.Contains(value, marker)
-		case []any:
-			for _, item := range value {
-				if err := visit(item, depth+1); err != nil {
-					return err
+		case json.Delim:
+			switch value {
+			case '{':
+				keys := map[string]bool{}
+				for decoder.More() {
+					token, err := decoder.Token()
+					if err != nil {
+						return malformed()
+					}
+					key, ok := token.(string)
+					if !ok {
+						return malformed()
+					}
+					if keys[key] {
+						return fmt.Errorf("JSON resource response has ambiguous duplicate object keys")
+					}
+					keys[key] = true
+					if err := visit(depth + 1); err != nil {
+						return err
+					}
 				}
-			}
-		case map[string]any:
-			for _, item := range value {
-				if err := visit(item, depth+1); err != nil {
-					return err
+				closing, err := decoder.Token()
+				if err != nil || closing != json.Delim('}') {
+					return malformed()
 				}
+			case '[':
+				for decoder.More() {
+					if err := visit(depth + 1); err != nil {
+						return err
+					}
+				}
+				closing, err := decoder.Token()
+				if err != nil || closing != json.Delim(']') {
+					return malformed()
+				}
+			default:
+				return malformed()
 			}
 		}
 		return nil
 	}
-	if err := visit(value, 0); err != nil {
+	if err := visit(0); err != nil {
 		return false, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return false, malformed()
 	}
 	return found, nil
 }

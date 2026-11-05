@@ -12,7 +12,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
-const nextjsBoundariesVersion = "nextjs-boundaries-v2"
+const nextjsBoundariesVersion = "nextjs-boundaries-v3"
 
 // NextjsBoundaryFixture holds exact controlled resources; never inferred scope.
 type NextjsBoundaryFixture struct {

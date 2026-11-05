@@ -18,6 +18,15 @@ func TestNextjsJSONMarkerDecodesOnlyBoundedStringValues(t *testing.T) {
 		{"array", `[null,42,{"records":["PRIVATE_42"]}]`, true, false},
 		{"key-only", `{"PRIVATE_42":false}`, false, false},
 		{"key-escaped", `{"PRIV\u0041TE_42":null}`, false, false},
+		{"duplicate-last-private", `{"record":null,"record":"PRIVATE_42"}`, false, true},
+		{"duplicate-first-private", `{"record":"PRIVATE_42","record":null}`, false, true},
+		{"duplicate-escaped-key", `{"record":null,"rec\u006frd":"PRIVATE_42"}`, false, true},
+		{"nested-duplicate", `{"child":{"record":null,"record":"PRIVATE_42"}}`, false, true},
+		{"independent-keys", `[{"record":"PRIVATE_42"},{"record":null}]`, true, false},
+		{"duplicate-no-private", `{"record":null,"record":false}`, false, true},
+		{"large-number", `{"number":1e999,"record":"PRIVATE_42"}`, true, false},
+		{"multiple-values", `"PRIVATE_42" null`, false, true},
+		{"empty", ``, false, true},
 		{"split", `["PRIVATE_","42"]`, false, false},
 		{"truncated", `{"record":"PRIVATE_42"`, false, true},
 		{"trailing", `{"record":"PRIVATE_42"} extra`, false, true},
@@ -28,6 +37,9 @@ func TestNextjsJSONMarkerDecodesOnlyBoundedStringValues(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			found, err := nextjsJSONMarker([]byte(tc.body), "PRIVATE_42")
+			if err != nil && strings.Contains(err.Error(), "PRIVATE_42") {
+				t.Fatal("response value leaked in diagnostics")
+			}
 			if found != tc.found || (err != nil) != tc.gap {
 				t.Fatalf("found=%v err=%v", found, err)
 			}
@@ -36,7 +48,7 @@ func TestNextjsJSONMarkerDecodesOnlyBoundedStringValues(t *testing.T) {
 }
 
 func TestNextjsJSONMarkerControlledAccessComparison(t *testing.T) {
-	for _, mode := range []string{"escaped", "key-only", "malformed", "depth"} {
+	for _, mode := range []string{"escaped", "key-only", "malformed", "depth", "duplicate"} {
 		t.Run(mode, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -51,6 +63,8 @@ func TestNextjsJSONMarkerControlledAccessComparison(t *testing.T) {
 					fmt.Fprint(w, `{"CONTROLLED_RESOURCE_1":false}`)
 				case "malformed":
 					fmt.Fprint(w, `{"record":"CONTROLLED_RESOURCE_1"`)
+				case "duplicate":
+					fmt.Fprint(w, `{"record":null,"record":"CONTROLLED_RESOURCE_1"}`)
 				case "depth":
 					fmt.Fprint(w, strings.Repeat("[", 34)+`"CONTROLLED_RESOURCE_1"`+strings.Repeat("]", 34))
 				}
@@ -71,7 +85,10 @@ func TestNextjsJSONMarkerControlledAccessComparison(t *testing.T) {
 			} else if checked != 1 || gaps != 1 || len(findings) != 0 || result.Status != "unknown" || result.MarkerConfirmed {
 				t.Fatalf("unsupported evidence proved access: checked=%d gaps=%d findings=%v result=%+v", checked, gaps, findings, result)
 			}
-			if (mode == "malformed" || mode == "depth") && !strings.Contains(result.Reason, "JSON") {
+			if mode == "duplicate" && !strings.Contains(result.Reason, "duplicate") {
+				t.Fatal("ambiguous JSON was not identified")
+			}
+			if (mode == "malformed" || mode == "depth" || mode == "duplicate") && !strings.Contains(result.Reason, "JSON") {
 				t.Fatal("JSON comparison gap not explained")
 			}
 		})
@@ -86,6 +103,7 @@ func TestNextjsJSONMarkerCacheBoundaryUsesDecodedValues(t *testing.T) {
 		{"escaped", `{"record":"PRIVATE\u005fCONTROLLED_42"}`, true},
 		{"key-only", `{"PRIVATE_CONTROLLED_42":false}`, false},
 		{"malformed", `{"record":"PRIVATE_CONTROLLED_42"`, false},
+		{"duplicate", `{"record":null,"record":"PRIVATE_CONTROLLED_42"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := cacheBoundaryManifest("https://owned.example.test")
