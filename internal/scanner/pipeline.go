@@ -892,6 +892,15 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	if run.Status == "completed" && spec.partialMarker != "" && strings.Contains(readCapped(run.StdoutPath, 1<<20), spec.partialMarker) {
 		run.Status, run.Reason = "failed", "scanner time budget reached; partial results may be available"
 	}
+	// Dalfox writes JSONL only when it finds a PoC. Retain an immutable empty
+	// result for its successful zero-finding case before bounding/redaction.
+	if name == "dalfox" && run.Status == "completed" && run.ArtifactPath != "" {
+		if _, statErr := os.Stat(run.ArtifactPath); errors.Is(statErr, os.ErrNotExist) {
+			if empty, createErr := os.OpenFile(run.ArtifactPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); createErr == nil {
+				_ = empty.Close()
+			}
+		}
+	}
 	if spec.artifact != "" {
 		bounded, boundErr := boundWebArtifact(run.ArtifactPath, name, cfg.MaxOutputBytes)
 		run.Truncated = run.Truncated || bounded

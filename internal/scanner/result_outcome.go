@@ -118,7 +118,11 @@ func validateWebResult(run *Run) {
 // monitorCommandAuth cannot change argv of a running scanner. Stop rather than
 // continue with an expired or rotated identity. A new attempt uses fresh headers.
 func monitorCommandAuth(ctx context.Context, req Request, cancel context.CancelFunc, done <-chan struct{}, result chan<- error) {
-	ticker := time.NewTicker(30 * time.Second)
+	monitorCommandAuthWithInterval(ctx, req, cancel, done, result, 30*time.Second)
+}
+
+func monitorCommandAuthWithInterval(ctx context.Context, req Request, cancel context.CancelFunc, done <-chan struct{}, result chan<- error, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -130,6 +134,18 @@ func monitorCommandAuth(ctx context.Context, req Request, cancel context.CancelF
 			return
 		case <-ticker.C:
 			headers, err := req.AuthRefresh(ctx, strings.Split(req.TargetAuth, "\n"))
+			// A verifier interrupted by the scanner deadline is not evidence
+			// that authentication failed. Likewise, do not invalidate a tool
+			// that finished while the verification request was in flight.
+			select {
+			case <-ctx.Done():
+				result <- nil
+				return
+			case <-done:
+				result <- nil
+				return
+			default:
+			}
 			if err != nil || strings.Join(headers, "\n") != req.TargetAuth {
 				cancel()
 				result <- fmt.Errorf("authenticated session expired or rotated; retry with verified credentials")

@@ -908,3 +908,43 @@ func TestAdapterTimeoutKeepsExecutionSeparateFromArtifactFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestSuccessfulDalfoxWithoutPoCsRetainsEmptySafeArtifact(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "scanner")
+	artifact := filepath.Join(dir, "results.jsonl")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	run := executeSpec(t.Context(), "dalfox", Request{Target: "http://fixture.test/", ScanDir: dir}, Config{MaxOutputBytes: 4096}, commandSpec{path: bin, artifact: artifact, timeout: time.Second}, nil)
+	if run.Status != "completed" || run.Outcome != "SUCCESS_NO_FINDINGS" || run.ParserOutcome != "SUCCESS" {
+		t.Fatalf("zero-result run failed: %+v", run)
+	}
+	data, err := os.ReadFile(artifact)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("empty artifact not retained: %q %v", data, err)
+	}
+	if err := VerifyChecksum(run); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := ParseRun(run)
+	if err != nil || len(findings) != 0 {
+		t.Fatalf("zero-result parse: %v %v", findings, err)
+	}
+}
+
+func TestFailedDalfoxWithoutArtifactDoesNotBecomeClean(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "scanner")
+	artifact := filepath.Join(dir, "results.jsonl")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	run := executeSpec(t.Context(), "dalfox", Request{Target: "http://fixture.test/", ScanDir: dir}, Config{MaxOutputBytes: 4096}, commandSpec{path: bin, artifact: artifact, timeout: time.Second}, nil)
+	if run.Status == "completed" || run.Outcome == "SUCCESS_NO_FINDINGS" {
+		t.Fatalf("failed execution became clean: %+v", run)
+	}
+	if _, err := os.Stat(artifact); !os.IsNotExist(err) {
+		t.Fatalf("failed execution received invented result: %v", err)
+	}
+}
