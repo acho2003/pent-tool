@@ -233,6 +233,9 @@ func runAuthorizationComparisons(ctx context.Context, req Request, cfg Config, r
 		}
 		result.Status = "unknown"
 		var representationErr error
+		if fixture.Representation == "html" && response.StatusCode >= 200 && response.StatusCode < 300 {
+			_, representationErr = nextjsHTMLMarker(body, fixture.ResponseMarker)
+		}
 		if fixture.Representation == "rsc" && response.StatusCode >= 200 && response.StatusCode < 300 {
 			_, representationErr = nextjsRSCMarker(body, fixture.ResponseMarker)
 		}

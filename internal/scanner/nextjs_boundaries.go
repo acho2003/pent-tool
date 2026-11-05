@@ -218,6 +218,9 @@ func (c boundaryClient) send(input ScannerRequestInput, raw, method, phase strin
 
 func boundaryMarker(r boundaryResponse, marker string) bool {
 	mediaType, _, _ := mime.ParseMediaType(r.header.Get("Content-Type"))
+	if mediaType == "text/html" {
+		return authorizationResponseMarker("html", r.body, marker)
+	}
 	if mediaType == "application/json" {
 		return authorizationResponseMarker("pages-json", r.body, marker)
 	}

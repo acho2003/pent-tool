@@ -127,6 +127,10 @@ func authorizationResponseMarker(representation string, body []byte, marker stri
 		found, err := nextjsRSCMarker(body, marker)
 		return err == nil && found
 	}
+	if representation == "html" {
+		found, err := nextjsHTMLMarker(body, marker)
+		return err == nil && found
+	}
 	if representation == "pages-json" {
 		found, err := nextjsJSONMarker(body, marker)
 		return err == nil && found

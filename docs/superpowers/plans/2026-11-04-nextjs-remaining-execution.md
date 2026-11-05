@@ -33,3 +33,9 @@ Continued with bounded Pages Router JSON value decoding after the original check
 Replaced JSON object-tree construction with bounded token parsing. Duplicate decoded object keys (including escaped aliases) leave comparisons unknown regardless of marker order; matching names in separate objects remain valid. JSON numbers stay numeric tokens, allowing valid large exponents alongside controlled string values. Diagnostics contain no keys or response values. Plan registry 26 and boundary catalog v3 invalidate earlier plans. Added duplicate-key access/cache negative controls and large-number positive coverage.
 
 Validation passed: focused JSON/access/cache controls, full Go suite, vet, targeted race checks, and the real Chrome/Next.js 16.4.3 production regression (50/50). Local fixtures only; no external application or CDN traffic.
+
+### Follow-up 2026-11-05: encoded HTML markers
+
+Added bounded HTML token comparisons for controlled access and cache responses. Text and attribute values decode character references; comments and names do not establish access. Raw script/style semantics are preserved without executing code or joining separate nodes. Added encoded text/attribute positives and comment, name-only, raw-script entity, split-node, duplicate-attribute, truncation, token/attribute/byte-limit, and encoding controls. Plan registry 27 and boundary catalog v4 invalidate earlier comparison plans.
+
+Validation passed: HTML helper/access/cache controls, full Go tests, vet, targeted race checks, and the real Chrome/Next.js 16.4.3 production regression (50/50). Validation used owned local fixtures; no application scan was started.
