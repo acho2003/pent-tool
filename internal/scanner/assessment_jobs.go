@@ -657,6 +657,18 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			req.ApplicationURL = job.Target
 		}
 
+		// Optional/profile-selected source jobs can be selected rather than
+		// conditional. Every repository job still needs the shared checkout.
+		if targetKinds[job.TargetID] == assessment.KindRepository {
+			dir, reason := prepareRepositoryCheckout(ctx, scanDir, job.TargetID, job.Target, p.Config.AssessmentRepoCreds[job.TargetID], repoCheckouts, targetByID[job.TargetID].Branch)
+			if reason != "" {
+				appendOutcome(job, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
+				continue
+			}
+			req.Target = dir
+			req.ApplicationURL = ""
+		}
+
 		if job.State == PlanConditional {
 			reason := ""
 			switch {
@@ -664,13 +676,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				// The accepted opt-in is the preparation condition. Results are
 				// candidates only and never mutate this plan's approved origins.
 			case targetKinds[job.TargetID] == assessment.KindRepository:
-				// Source scanners read a local checkout; the run keeps reporting
-				// the repository URL so coverage still matches the planned job.
-				var dir string
-				dir, reason = prepareRepositoryCheckout(ctx, scanDir, job.TargetID, job.Target, p.Config.AssessmentRepoCreds[job.TargetID], repoCheckouts, targetByID[job.TargetID].Branch)
-				if reason == "" {
-					req.Target = dir
-				}
+				// Prepared independently of the planner's selected/conditional state.
 			case job.Scanner != "vuls" && job.Scanner != "lynis":
 				reason = prepareLocalAssessmentResource(plan.Config.Mode, targetKinds[job.TargetID], job.Target, job.Scanner)
 			}

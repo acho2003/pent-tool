@@ -32,7 +32,11 @@ func prepareRepositoryCheckout(ctx context.Context, scanDir, targetID, repoURL s
 	if c, ok := cache[targetID]; ok {
 		return c.dir, c.reason
 	}
-	dir, reason := cloneRepositoryTarget(ctx, repositoryCheckoutDir(scanDir, targetID), repoURL, cred, branches...)
+	checkoutDir, err := filepath.Abs(repositoryCheckoutDir(scanDir, targetID))
+	if err != nil {
+		return "", "repository checkout path could not be resolved"
+	}
+	dir, reason := cloneRepositoryTarget(ctx, checkoutDir, repoURL, cred, branches...)
 	cache[targetID] = repoCheckout{dir: dir, reason: reason}
 	return dir, reason
 }
