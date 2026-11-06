@@ -647,6 +647,7 @@ var dashboardRoutes = []string{
 	"/api/scanners/registry",
 	"/api/scans/plan",
 	"/api/credentials",
+	"/api/github/organization/repositories",
 	"/api/credentials/",
 	"/api/api-definitions",
 	"/api/api-fixtures",
@@ -669,6 +670,7 @@ var dashboardRoutes = []string{
 
 // Server is the web UI server.
 type Server struct {
+	githubClient     *http.Client // optional transport for GitHub discovery tests
 	cfg              *config.Config
 	port             int
 	clients          map[*wsClient]bool
@@ -989,6 +991,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/scanners/status", s.handleScannerStatus)
 	mux.HandleFunc("/api/scanners/registry", s.handleScannerRegistry)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
+	mux.HandleFunc("/api/github/organization/repositories", s.handleGitHubOrganization)
 	mux.HandleFunc("/api/credentials/", s.handleCredentialDetail)
 	mux.HandleFunc("/api/api-definitions", s.handleAPIDefinitions)
 	mux.HandleFunc("/api/api-fixtures", s.handleAPIFixtures)
@@ -2951,6 +2954,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		})
 		rec := allScans[0].rec
 		s.applyInstanceSnapshot(&rec, true)
+		projectCorrelatedRecord(&rec, allScans[0].dir)
 		s.attachWildcardSubScans(&rec)
 		finalizeScanRecordForResponse(&rec)
 		s.markDiscordWebhookConfigured(&rec)
@@ -3037,8 +3041,9 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		inst := s.instances[scanID]
 		s.instancesMu.RUnlock()
 		if rec := s.scanRecordFromInstance(inst); rec != nil {
-			if _, persisted := s.findScanByID(scanID); persisted != nil {
+			if persistedDir, persisted := s.findScanByID(scanID); persisted != nil {
 				s.applyInstanceSnapshot(persisted, true)
+				projectCorrelatedRecord(persisted, persistedDir)
 				s.attachWildcardSubScans(persisted)
 				finalizeScanRecordForResponse(persisted)
 				s.markDiscordWebhookConfigured(persisted)
@@ -3072,6 +3077,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.applyInstanceSnapshot(rec, true)
+	projectCorrelatedRecord(rec, dir)
 	s.attachWildcardSubScans(rec)
 	finalizeScanRecordForResponse(rec)
 	s.markDiscordWebhookConfigured(rec)

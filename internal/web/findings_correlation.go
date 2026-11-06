@@ -2,7 +2,10 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,7 +63,22 @@ func buildFindingsSnapshot(rec *ScanRecord, scanDir string) (*scanner.FindingsSn
 	if snapshot == nil {
 		return nil, errs
 	}
-	scanner.ApplyFindingOverrides(snapshot, scanner.LoadFindingStatusOverrides(scanDir))
+	overrides := scanner.LoadFindingStatusOverrides(scanDir)
+	// Fingerprints can change after correlation fixes. Match saved observations
+	// to their native source records before applying current explicit overrides.
+	if data, err := os.ReadFile(scanner.FindingsSnapshotPath(scanDir)); err == nil {
+		var previous scanner.FindingsSnapshot
+		if json.Unmarshal(data, &previous) == nil && previous.EngineVersion != scanner.FindingsEngineVersion {
+			before := len(overrides)
+			migrateFindingOverrides(snapshot, &previous, overrides)
+			if len(overrides) != before {
+				if err := scanner.SaveFindingStatusOverrides(scanDir, overrides); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		}
+	}
+	scanner.ApplyFindingOverrides(snapshot, overrides)
 	return snapshot, errs
 }
 
@@ -166,4 +184,78 @@ func updateFindingStatus(scanDir string, snapshot *scanner.FindingsSnapshot, fin
 		return err
 	}
 	return scanner.SaveFindingsSnapshot(scanDir, snapshot)
+}
+
+// projectCorrelatedRecord replaces legacy/live duplicate rows at the response
+// boundary. The PDF and detail view use the same active-finding projection.
+func projectCorrelatedRecord(rec *ScanRecord, dir string) {
+	if rec == nil || rec.Status == "running" || len(rec.ScannerRuns) == 0 {
+		return
+	}
+	snapshot, ok := scanner.LoadFindingsSnapshot(dir)
+	if !ok {
+		snapshot, _ = rebuildFindingsSnapshot(rec, dir, false)
+	}
+	if snapshot == nil {
+		return
+	}
+	findings := fallbackSnapshotFindings(snapshot)
+	active := findings[:0]
+	for _, finding := range findings {
+		if scanner.FindingActive(scanner.FindingStatus(finding.Status)) {
+			active = append(active, finding)
+		}
+	}
+	rec.Vulns = reportFindingsToVulns(active)
+}
+
+func migrateFindingOverrides(current, previous *scanner.FindingsSnapshot, overrides scanner.FindingStatusOverrides) {
+	key := func(o scanner.RawObservation, runs []scanner.Run) string {
+		endpoint := o.Endpoint
+		for _, run := range runs {
+			if scanner.FindingScope(run) != o.Scope || !strings.HasPrefix(o.Scope, "source:") {
+				continue
+			}
+			root := filepath.Clean(run.Target) + string(filepath.Separator)
+			endpoint = strings.TrimPrefix(endpoint, root)
+		}
+		method := strings.ToUpper(o.Method)
+		if method == "" && (strings.HasPrefix(endpoint, "https://") || strings.HasPrefix(endpoint, "http://")) {
+			method = "GET"
+		}
+		return strings.Join([]string{o.Scope, o.Scanner, o.SourceID, endpoint, method, o.Parameter, o.ParameterLocation}, "\x00")
+	}
+	oldObservations := make(map[string]scanner.RawObservation, len(previous.RawObservations))
+	for _, o := range previous.RawObservations {
+		oldObservations[o.ID] = o
+	}
+	inherited := map[string]scanner.FindingStatusOverride{}
+	for _, finding := range previous.UniqueFindings {
+		override, ok := overrides[finding.Fingerprint]
+		if !ok {
+			continue
+		}
+		for _, id := range finding.ObservationIDs {
+			if o, ok := oldObservations[id]; ok {
+				inherited[key(o, previous.SourceRuns)] = override
+			}
+		}
+	}
+	byID := make(map[string]scanner.RawObservation, len(current.RawObservations))
+	for _, o := range current.RawObservations {
+		byID[o.ID] = o
+	}
+	for i := range current.UniqueFindings {
+		finding := &current.UniqueFindings[i]
+		if _, explicit := overrides[finding.Fingerprint]; explicit {
+			continue
+		}
+		for _, id := range finding.ObservationIDs {
+			if override, ok := inherited[key(byID[id], current.SourceRuns)]; ok {
+				finding.Status, finding.StatusReason = override.Status, override.Reason
+				overrides[finding.Fingerprint] = override
+				break
+			}
+		}
+	}
 }

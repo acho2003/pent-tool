@@ -1,0 +1,173 @@
+- generic [ref=e2]:
+  - generic [ref=e5]:
+    - complementary [ref=e7]:
+      - generic [ref=e11]:
+        - generic [ref=e12]: Xalgorix
+        - generic [ref=e13]: v4.2.9
+      - navigation "Primary" [ref=e14]:
+        - list [ref=e15]:
+          - listitem [ref=e16]:
+            - paragraph [ref=e17]: Workspace
+            - list [ref=e18]:
+              - listitem [ref=e19]:
+                - link "Overview" [ref=e20] [cursor=pointer]:
+                  - /url: /
+              - listitem [ref=e27]:
+                - link "Assessments" [ref=e28] [cursor=pointer]:
+                  - /url: /scans
+              - listitem [ref=e34]:
+                - link "Findings" [ref=e35] [cursor=pointer]:
+                  - /url: /findings
+              - listitem [ref=e39]:
+                - link "Reports" [ref=e40] [cursor=pointer]:
+                  - /url: /reports
+          - listitem [ref=e45]:
+            - paragraph [ref=e46]: Operations
+            - list [ref=e47]:
+              - listitem [ref=e48]:
+                - link "New assessment" [ref=e49] [cursor=pointer]:
+                  - /url: /scans/new
+              - listitem [ref=e52]:
+                - link "Live feed" [ref=e53] [cursor=pointer]:
+                  - /url: /live
+              - listitem [ref=e61]:
+                - link "Monitoring" [ref=e62] [cursor=pointer]:
+                  - /url: /monitoring
+              - listitem [ref=e66]:
+                - link "Instances" [ref=e67] [cursor=pointer]:
+                  - /url: /instances
+              - listitem [ref=e72]:
+                - link "Schedules" [ref=e73] [cursor=pointer]:
+                  - /url: /schedules
+          - listitem [ref=e78]:
+            - paragraph [ref=e79]: Configure
+            - list [ref=e80]:
+              - listitem [ref=e81]:
+                - link "Integrations" [ref=e82] [cursor=pointer]:
+                  - /url: /integrations
+              - listitem [ref=e86]:
+                - link "Settings" [ref=e87] [cursor=pointer]:
+                  - /url: /settings
+      - generic [ref=e92]:
+        - generic [ref=e93]: Local scanner
+        - generic [ref=e97]: Ctrl+K for actions
+    - generic [ref=e101]:
+      - banner [ref=e102]:
+        - button "Open command palette" [ref=e103]:
+          - generic [ref=e107]: Search scans, findings, actions…
+          - generic [ref=e108]: Ctrl K
+        - link "Scanning Acme Corp pentest" [ref=e109] [cursor=pointer]:
+          - /url: /scans/inst_01
+        - generic [ref=e112]:
+          - 'generic "WebSocket: Connected" [ref=e113]': Connected
+          - button "Stop all" [ref=e116]
+          - link "New scan" [ref=e118] [cursor=pointer]:
+            - /url: /scans/new
+            - generic [ref=e119]: New Scan
+      - main [ref=e120]:
+        - generic [ref=e122]:
+          - generic [ref=e123]:
+            - button "Back" [ref=e124]
+            - paragraph [ref=e125]: Assessment setup
+            - heading "New assessment" [level=1] [ref=e126]
+            - paragraph [ref=e127]: Choose a testing mode. Xalgorix will show the inputs and tools that apply to your scope.
+          - navigation "Assessment setup steps" [ref=e128]:
+            - button "01 Mode & target" [ref=e129]:
+              - paragraph [ref=e130]:
+                - generic [ref=e131]: "01"
+                - text: Mode & target
+            - button "02 Coverage" [ref=e132]:
+              - paragraph [ref=e133]:
+                - generic [ref=e134]: "02"
+                - text: Coverage
+            - button "03 Access & inputs" [ref=e135]:
+              - paragraph [ref=e136]:
+                - generic [ref=e137]: "03"
+                - text: Access & inputs
+            - button "04 Review & start" [ref=e138]:
+              - paragraph [ref=e139]:
+                - generic [ref=e140]: "04"
+                - text: Review & start
+          - generic [ref=e141]:
+            - generic [ref=e142]:
+              - generic [ref=e143]:
+                - heading "Choose an assessment mode" [level=3] [ref=e145]
+                - generic [ref=e146]:
+                  - button "BLACK BOX External testing with no application credentials or internal source inputs." [ref=e147]:
+                    - text: BLACK BOX
+                    - generic [ref=e148]: External testing with no application credentials or internal source inputs.
+                  - button "GRAY BOX External testing with target bound access, API definitions, or supported host access." [ref=e149]:
+                    - text: GRAY BOX
+                    - generic [ref=e150]: External testing with target bound access, API definitions, or supported host access.
+                  - button "WHITE BOX Testing with internal source, dependency, container, and supported infrastructure inputs." [pressed] [ref=e151]:
+                    - text: WHITE BOX
+                    - generic [ref=e152]: Testing with internal source, dependency, container, and supported infrastructure inputs.
+              - generic [ref=e153]:
+                - heading "Target and scope" [level=3] [ref=e155]
+                - generic [ref=e156]:
+                  - generic [ref=e157]:
+                    - text: Assessment name
+                    - textbox "Assessment name" [ref=e158]:
+                      - /placeholder: Quarterly external assessment
+                  - generic [ref=e159]:
+                    - text: URLs or hosts
+                    - textbox "URLs or hosts" [ref=e160]:
+                      - /placeholder: "https://example.com\napi.example.com"
+                    - paragraph [ref=e161]: One approved target per line. Wildcard discovery requires explicit authorization in the next step.
+                  - generic [ref=e176]:
+                    - generic [ref=e177]:
+                      - text: Internal resource type
+                      - combobox [ref=e178]:
+                        - generic: GitHub Organization
+                      - combobox [aria-hidden] [ref=e181]
+                    - generic [ref=e206]:
+                      - text: GitHub organization
+                      - textbox "GitHub organization" [ref=e207]:
+                        - /placeholder: organization or https://github.com/organization
+                        - text: demo
+                      - text: Repository access token (optional)
+                      - textbox "Repository access token (optional)" [ref=e208]:
+                        - /placeholder: Token for private repository access
+                      - button "Discover repositories" [ref=e210]
+                      - paragraph [ref=e209]: Results reflect this credential’s access. Tokens are encrypted on the server. Selected repositories are scanned on their default branches under this assessment.
+                      - generic [ref=e211]:
+                        - generic [ref=e212]:
+                          - text: Visibility
+                          - combobox "Repository visibility" [ref=e213]:
+                            - option "All" [selected]
+                            - option "Public"
+                            - option "Private"
+                        - generic [ref=e214]:
+                          - checkbox "Include archived" [checked] [ref=e215]
+                          - text: Include archived
+                        - generic [ref=e216]:
+                          - checkbox "Include forks" [checked] [ref=e217]
+                          - text: Include forks
+                      - textbox "Search repositories" [ref=e218]
+                      - generic [ref=e219]:
+                        - button "Select all" [ref=e220]
+                        - button "Clear selection" [ref=e221]
+                      - paragraph [ref=e222]: 2 selected / 2 accessible repositories
+                      - generic [ref=e223]:
+                        - generic [ref=e224]:
+                          - checkbox "demo/api · private · main" [checked] [ref=e225]
+                          - generic [ref=e226]: demo/api · private · main
+                        - generic [ref=e227]:
+                          - checkbox "demo/archive · public · archived · fork · develop" [checked] [ref=e228]
+                          - generic [ref=e229]: demo/archive · public · archived · fork · develop
+                  - generic [ref=e162]:
+                    - generic [ref=e163]:
+                      - text: Scope mode
+                      - combobox [ref=e164]:
+                        - generic: Supplied targets only
+                      - combobox [aria-hidden] [ref=e167]
+                    - generic [ref=e168]:
+                      - text: Web profile
+                      - combobox [ref=e169]:
+                        - generic: Gentle · production
+                      - combobox [aria-hidden] [ref=e172]
+                      - paragraph [ref=e173]: Next.js deep adds framework discovery and public exposure checks at 10 requests/sec, up to 3,000 endpoints and 90 minutes. Access comparisons require controlled resource fixtures.
+            - generic [ref=e174]:
+              - button "Back" [disabled]
+              - button "Continue" [ref=e175]
+  - region "Notifications alt+T"

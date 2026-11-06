@@ -151,3 +151,39 @@ func TestRunAssessmentJobsReportsRepositoryCloneRefusal(t *testing.T) {
 		t.Fatalf("refused clone should explain itself without running the scanner: calls=%d runs=%+v", len(trivy.targets), runs)
 	}
 }
+
+func TestRepositoryCheckoutUsesSelectedDefaultBranch(t *testing.T) {
+	logPath := fakeGit(t, 0, "")
+	_, reason := cloneRepositoryTarget(t.Context(), filepath.Join(t.TempDir(), "checkout"), "https://github.com/org/repo.git", RepoCredential{}, "develop")
+	log, _ := os.ReadFile(logPath)
+	if reason != "" || !strings.Contains(string(log), "--branch develop -- https://github.com/org/repo.git") {
+		t.Fatalf("branch not used: %s %s", reason, log)
+	}
+}
+
+func TestRepositoryFailureDoesNotStopOtherRepositories(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+for arg; do
+ if [ "$arg" = "https://github.com/org/bad.git" ]; then echo 'Repository not found' >&2; exit 128; fi
+ last="$arg"
+done
+mkdir -p "$last/.git"
+`
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	runner := &targetCaptureRunner{name: "trivy"}
+	pipeline := &Pipeline{Runners: []Runner{runner}}
+	plan := AssessmentPlan{Fingerprint: "sha256:multi-repo", Config: assessment.AssessmentConfig{Mode: assessment.ModeWhiteBox}}
+	for _, name := range []string{"bad", "good"} {
+		repo := "https://github.com/org/" + name + ".git"
+		plan.Config.Targets = append(plan.Config.Targets, assessment.Target{ID: name, Kind: assessment.KindRepository, Value: repo})
+		plan.Jobs = append(plan.Jobs, PlanJob{ID: "trivy:" + name, Scanner: "trivy", TargetID: name, Target: repo, Variant: "trivy", State: PlanConditional})
+	}
+	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
+	if len(runs) != 2 || runs[0].Status != "skipped" || runs[1].Status != "completed" || len(runner.targets) != 1 {
+		t.Fatalf("calls=%v runs=%+v", runner.targets, runs)
+	}
+}

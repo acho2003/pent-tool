@@ -49,3 +49,34 @@ The dashboard generates a temporary password at startup unless a password or
 bcrypt hash is set in `.env`. The credential encryption key remains a mounted
 secret at `secrets/xalgorix-credential.key`. This workflow does not start,
 recreate, or modify the original `docker-compose.yml` stack.
+
+## Scan a GitHub organization
+
+In **New assessment**, choose **White Box** and **GitHub Organization** under
+Internal resource type. Use the assessment name to group the project/system.
+Enter an organization name or `https://github.com/<organization>` and click
+**Discover repositories**. An optional read-only token is stored in the encrypted
+credential vault and used server-side for discovery and repository checkout.
+
+Discovery loads every page before exposing the inventory. Results include only
+repositories visible to the supplied credential; without a token, only public
+repositories are visible. All discovered repositories are initially selected.
+Use visibility, archived, and fork filters, search, individual checkboxes,
+**Select all**, or **Clear selection** to choose the assessment targets. All
+visibility types, archived repositories, and forks are included by default.
+Search changes the displayed rows; filters also exclude repositories from the
+scan. Select all selects all repositories matching the filters.
+
+Choose source, dependency, and/or infrastructure coverage, then preview the
+workflow. The preview freezes the selected repository targets and their default
+branches. Changing the selection or filters requires a new preview. Repository
+coverage shows progress, failures, and findings for each repository; one refused
+checkout does not prevent other repositories from being checked. Unavailable
+scanners and failed or skipped jobs remain explicit coverage gaps.
+
+Only GitHub.com organizations are supported. Discovery errors never expose a
+partial inventory as a complete organization. Existing scans can rebuild their
+correlated findings from saved scanner artifacts without contacting targets;
+status overrides and scanner evidence are retained. Scan detail and generated
+PDFs use the same active findings, while the findings API retains observations
+and reviewed inactive findings for inspection.

@@ -96,3 +96,27 @@ func TestScanFallbackValidationStaysInsideTypedAssessmentScope(t *testing.T) {
 		t.Fatalf("results = %#v ok=%v", results, ok)
 	}
 }
+
+func TestMigrateOverridesPersistsNewFingerprintAndPreservesLocations(t *testing.T) {
+	oldObservation := scanner.RawObservation{ID: "old", Scanner: "semgrep", SourceID: "native-1", Scope: "source:repo", Endpoint: "/checkout/app.go:10"}
+	previous := &scanner.FindingsSnapshot{SourceRuns: []scanner.Run{{Scope: "source:repo", Target: "/checkout"}}, RawObservations: []scanner.RawObservation{oldObservation}, UniqueFindings: []scanner.SecurityFinding{{Fingerprint: "old-fingerprint", ObservationIDs: []string{"old"}}}}
+	current := &scanner.FindingsSnapshot{RawObservations: []scanner.RawObservation{{ID: "new", Scanner: "semgrep", SourceID: "native-1", Scope: "source:repo", Endpoint: "app.go:10"}}, UniqueFindings: []scanner.SecurityFinding{{Fingerprint: "new-fingerprint", ObservationIDs: []string{"new"}, Status: scanner.StatusPotential}, {Fingerprint: "other", ObservationIDs: []string{"other"}, Status: scanner.StatusPotential}}}
+	overrides := scanner.FindingStatusOverrides{"old-fingerprint": {Status: scanner.StatusAcceptedRisk, Reason: "reviewed"}}
+	migrateFindingOverrides(current, previous, overrides)
+	if current.UniqueFindings[0].Status != scanner.StatusAcceptedRisk || current.UniqueFindings[1].Status != scanner.StatusPotential || overrides["new-fingerprint"].Reason != "reviewed" {
+		t.Fatalf("migration=%+v overrides=%+v", current.UniqueFindings, overrides)
+	}
+}
+
+func TestScanDetailProjectionMatchesActiveReportFindings(t *testing.T) {
+	dir := t.TempDir()
+	rec := &ScanRecord{Status: "finished", ScannerRuns: []scanner.Run{{Scanner: "custom"}}, Vulns: []VulnSummary{{Title: "duplicate"}, {Title: "duplicate"}}}
+	snapshot, _ := scanner.BuildFindingsSnapshot(nil, []scanner.Finding{{Scanner: "a", Title: "SQL Injection", Endpoint: "https://example.test/item?id=1", Parameter: "id", Severity: "high"}, {Scanner: "b", Title: "SQL Injection", Endpoint: "https://example.test/item?id=2", Parameter: "id", Severity: "high"}, {Scanner: "a", Title: "Technology detection", Endpoint: "https://example.test/"}})
+	if err := scanner.SaveFindingsSnapshot(dir, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	projectCorrelatedRecord(rec, dir)
+	if len(rec.Vulns) != 1 || rec.Vulns[0].ObservationCount != 2 || len(rec.Vulns[0].Scanners) != 2 || rec.Vulns[0].Scope != snapshot.UniqueFindings[0].Scope {
+		t.Fatalf("projection=%+v", rec.Vulns)
+	}
+}

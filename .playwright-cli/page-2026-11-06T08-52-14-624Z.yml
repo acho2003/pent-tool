@@ -1,0 +1,168 @@
+- generic:
+  - generic:
+    - generic [aria-hidden]:
+      - generic:
+        - complementary:
+          - generic:
+            - generic:
+              - generic: Xalgorix
+              - generic: v4.2.9
+          - navigation:
+            - list:
+              - listitem:
+                - paragraph: Workspace
+                - list:
+                  - listitem:
+                    - link:
+                      - /url: /
+                      - generic: Overview
+                  - listitem:
+                    - link:
+                      - /url: /scans
+                      - generic: Assessments
+                  - listitem:
+                    - link:
+                      - /url: /findings
+                      - generic: Findings
+                  - listitem:
+                    - link:
+                      - /url: /reports
+                      - generic: Reports
+              - listitem:
+                - paragraph: Operations
+                - list:
+                  - listitem:
+                    - link:
+                      - /url: /scans/new
+                      - generic: New assessment
+                  - listitem:
+                    - link:
+                      - /url: /live
+                      - generic: Live feed
+                  - listitem:
+                    - link:
+                      - /url: /monitoring
+                      - generic: Monitoring
+                  - listitem:
+                    - link:
+                      - /url: /instances
+                      - generic: Instances
+                  - listitem:
+                    - link:
+                      - /url: /schedules
+                      - generic: Schedules
+              - listitem:
+                - paragraph: Configure
+                - list:
+                  - listitem:
+                    - link:
+                      - /url: /integrations
+                      - generic: Integrations
+                  - listitem:
+                    - link:
+                      - /url: /settings
+                      - generic: Settings
+          - generic:
+            - generic: Local scanner
+            - generic: Ctrl+K for actions
+      - generic:
+        - banner:
+          - button:
+            - generic: Search scans, findings, actions…
+            - generic: Ctrl K
+          - link:
+            - /url: /scans/inst_01
+            - generic: Scanning Acme Corp pentest
+          - generic:
+            - generic: Connected
+            - button:
+              - generic: Stop all
+            - link:
+              - /url: /scans/new
+              - generic: New Scan
+        - main:
+          - generic:
+            - generic:
+              - generic:
+                - button: Back
+                - paragraph: Assessment setup
+                - heading [level=1]: New assessment
+                - paragraph: Choose a testing mode. Xalgorix will show the inputs and tools that apply to your scope.
+              - navigation:
+                - button:
+                  - paragraph:
+                    - generic: "01"
+                    - text: Mode & target
+                - button:
+                  - paragraph:
+                    - generic: "02"
+                    - text: Coverage
+                - button:
+                  - paragraph:
+                    - generic: "03"
+                    - text: Access & inputs
+                - button:
+                  - paragraph:
+                    - generic: "04"
+                    - text: Review & start
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - heading [level=3]: Choose an assessment mode
+                    - generic:
+                      - button:
+                        - text: BLACK BOX
+                        - generic: External testing with no application credentials or internal source inputs.
+                      - button:
+                        - text: GRAY BOX
+                        - generic: External testing with target bound access, API definitions, or supported host access.
+                      - button [pressed]:
+                        - text: WHITE BOX
+                        - generic: Testing with internal source, dependency, container, and supported infrastructure inputs.
+                  - generic:
+                    - generic:
+                      - heading [level=3]: Target and scope
+                    - generic:
+                      - generic:
+                        - text: Assessment name
+                        - textbox:
+                          - /placeholder: Quarterly external assessment
+                      - generic:
+                        - text: URLs or hosts
+                        - textbox:
+                          - /placeholder: "https://example.com\napi.example.com"
+                        - paragraph: One approved target per line. Wildcard discovery requires explicit authorization in the next step.
+                      - generic:
+                        - generic:
+                          - text: Internal resource type
+                          - combobox [expanded]:
+                            - generic: No internal resource
+                          - combobox [aria-hidden]
+                        - generic:
+                          - text: Resource reference
+                          - textbox:
+                            - /placeholder: /src/project, image@sha256:…, or /src/bom.json
+                      - generic:
+                        - generic:
+                          - text: Scope mode
+                          - combobox:
+                            - generic: Supplied targets only
+                          - combobox [aria-hidden]
+                        - generic:
+                          - text: Web profile
+                          - combobox:
+                            - generic: Gentle · production
+                          - combobox [aria-hidden]
+                          - paragraph: Next.js deep adds framework discovery and public exposure checks at 10 requests/sec, up to 3,000 endpoints and 90 minutes. Access comparisons require controlled resource fixtures.
+                - generic:
+                  - button [disabled]: Back
+                  - button: Continue
+    - region "Notifications alt+T"
+  - listbox [ref=e184]:
+    - option "No internal resource" [active] [selected] [ref=e185]
+    - option "Local source directory" [ref=e191]
+    - option "Repository" [ref=e194]
+    - option "GitHub Organization" [ref=e197]
+    - option "Container image" [ref=e200]
+    - option "SBOM file" [ref=e203]

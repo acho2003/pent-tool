@@ -21,7 +21,7 @@ import (
 
 const (
 	FindingsSchemaVersion = 1
-	FindingsEngineVersion = "deterministic-correlation-v1"
+	FindingsEngineVersion = "deterministic-correlation-v2"
 )
 
 type DedupeScope string
@@ -193,7 +193,7 @@ func LoadFindingsSnapshot(scanDir string) (*FindingsSnapshot, bool) {
 		return nil, false
 	}
 	var snapshot FindingsSnapshot
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.SchemaVersion != FindingsSchemaVersion {
+	if json.Unmarshal(data, &snapshot) != nil || snapshot.SchemaVersion != FindingsSchemaVersion || snapshot.EngineVersion == "deterministic-correlation-v1" {
 		return nil, false
 	}
 	return &snapshot, true
@@ -241,7 +241,28 @@ var findingRules = map[string]findingRule{
 	"cross_site_scripting":            {Type: "cross_site_scripting", Title: "Cross-Site Scripting", Scope: DedupeParameter},
 }
 
+// Prefer scanner-independent vulnerability identifiers and location scopes.
 func normalizedFindingRule(f Finding) findingRule {
+	r := legacyNormalizedFindingRule(f)
+	if _, known := findingRules[r.Type]; !known && f.CVE == "" {
+		identity := firstNonEmpty(f.RuleID, f.SourceID, r.Type)
+		r.Type = strings.ToLower(f.Scanner) + ":" + strings.TrimSpace(identity)
+	}
+	if cve := normalizeFindingTitle(f.CVE); cve != "" {
+		r.Type = "vulnerability_" + cve
+	}
+	switch {
+	case f.SourceLocation != "":
+		r.Scope = DedupeSourceLocation
+	case f.Package != "":
+		r.Scope = DedupePackage
+	case f.Parameter != "" && r.Scope == DedupeEndpoint:
+		r.Scope = DedupeParameter
+	}
+	return r
+}
+
+func legacyNormalizedFindingRule(f Finding) findingRule {
 	text := strings.ToLower(strings.Join([]string{f.RuleID, f.Title, f.Description}, " "))
 	switch {
 	case strings.Contains(text, "content-security-policy") || strings.Contains(text, "content security policy"):
@@ -354,8 +375,11 @@ func observationFromFinding(f Finding, run Run, index int) RawObservation {
 	if canonical == "" {
 		canonical = observed
 	}
+	if f.Method == "" && (strings.HasPrefix(canonical, "https://") || strings.HasPrefix(canonical, "http://")) {
+		f.Method = "GET"
+	}
 	rule := normalizedFindingRule(f)
-	seed := strings.Join([]string{f.Scanner, f.Scope, f.RuleID, f.SourceID, canonical, strings.ToUpper(f.Method), f.Parameter, fmt.Sprint(index)}, "\x00")
+	seed := strings.Join([]string{f.Scanner, f.Scope, f.RuleID, f.SourceID, run.ArtifactPath, run.AttemptID, canonical, strings.ToUpper(f.Method), f.Parameter, fmt.Sprint(index)}, "\x00")
 	h := sha256.Sum256([]byte(seed))
 	id := hex.EncodeToString(h[:16])
 	seen := run.FinishedAt
@@ -382,11 +406,11 @@ func findingFingerprint(f RawObservation, rule findingRule) string {
 		if p != nil && p.Path != "" {
 			path = p.Path
 		}
-		locator = strings.Join([]string{asset, path, strings.ToUpper(f.Method), strings.ToLower(f.ParameterLocation), strings.ToLower(f.Parameter)}, "|")
+		locator = strings.Join([]string{asset, path, strings.ToUpper(f.Method), strings.ToLower(f.ParameterLocation), f.Parameter}, "|")
 	case DedupeService:
 		locator = strings.Join([]string{host, protocol, port, strings.ToLower(f.Resource), strings.ToLower(f.Title)}, "|")
 	case DedupePackage:
-		locator = strings.Join([]string{f.Scope, strings.ToLower(f.Package), strings.ToLower(f.PackageVersion), strings.ToLower(f.Target)}, "|")
+		locator = strings.Join([]string{f.Scope, f.Package, f.PackageVersion, f.Target}, "|")
 	case DedupeSourceLocation:
 		locator = strings.Join([]string{f.Scope, f.SourceLocation, f.Target, f.Parameter}, "|")
 	case DedupeContainer:
@@ -437,6 +461,11 @@ func BuildFindingsSnapshot(runs []Run, legacy []Finding) (*FindingsSnapshot, []e
 				f.EvidenceCompleteness = "partial"
 			}
 			f.Scope = FindingScope(run)
+			if strings.HasPrefix(f.Scope, "source:") {
+				f.Target = relativeToRoot(f.Target, run.Target)
+				f.Endpoint = relativeToRoot(f.Endpoint, run.Target)
+				f.SourceLocation = relativeToRoot(f.SourceLocation, run.Target)
+			}
 			f.EvidenceRef = run.ArtifactPath + "#" + f.SourceID
 			snapshot.RawObservations = append(snapshot.RawObservations, observationFromFinding(f, run, i))
 		}
@@ -448,7 +477,7 @@ func BuildFindingsSnapshot(runs []Run, legacy []Finding) (*FindingsSnapshot, []e
 	}
 	groups := map[string]*SecurityFinding{}
 	for _, o := range snapshot.RawObservations {
-		f := Finding{Scanner: o.Scanner, RuleID: o.RuleID, Title: o.Title, Description: o.Description, Target: o.Target, Endpoint: o.Endpoint, Method: o.Method, Parameter: o.Parameter, ParameterLocation: o.ParameterLocation, Scope: o.Scope, Resource: o.Resource, Package: o.Package, PackageVersion: o.PackageVersion, SourceLocation: o.SourceLocation, Container: o.Container}
+		f := Finding{Scanner: o.Scanner, RuleID: o.RuleID, Title: o.Title, Description: o.Description, Target: o.Target, Endpoint: o.Endpoint, Method: o.Method, Parameter: o.Parameter, ParameterLocation: o.ParameterLocation, Scope: o.Scope, Resource: o.Resource, Package: o.Package, PackageVersion: o.PackageVersion, SourceLocation: o.SourceLocation, Container: o.Container, CVE: o.CVE, SourceID: o.SourceID}
 		rule := normalizedFindingRule(f)
 		if rule.Title == "" {
 			rule.Title = o.Title
@@ -511,6 +540,33 @@ func BuildFindingsSnapshot(runs []Run, legacy []Finding) (*FindingsSnapshot, []e
 }
 
 func ApplyFindingOverrides(snapshot *FindingsSnapshot, overrides FindingStatusOverrides) {
+	byObservation := map[string]*SecurityFinding{}
+	if len(overrides) > 0 {
+		for i := range snapshot.UniqueFindings {
+			for _, id := range snapshot.UniqueFindings[i].ObservationIDs {
+				byObservation[id] = &snapshot.UniqueFindings[i]
+			}
+		}
+	}
+	for _, observation := range snapshot.RawObservations {
+		old := Finding{Scanner: observation.Scanner, RuleID: observation.RuleID, Title: observation.Title, Description: observation.Description, Target: observation.Target, Endpoint: observation.Endpoint, Method: observation.Method, Parameter: observation.Parameter, Scope: observation.Scope}
+		fingerprint := findingFingerprint(observation, legacyNormalizedFindingRule(old))
+		override, exists := overrides[fingerprint]
+		if !exists && observation.Method == "GET" {
+			original := observation
+			original.Method = ""
+			override, exists = overrides[findingFingerprint(original, legacyNormalizedFindingRule(old))]
+		}
+		if !exists {
+			continue
+		}
+		if finding := byObservation[observation.ID]; finding != nil {
+			if _, explicit := overrides[finding.Fingerprint]; !explicit {
+				finding.Status, finding.StatusReason = override.Status, override.Reason
+			}
+		}
+	}
+
 	for i := range snapshot.UniqueFindings {
 		if o, ok := overrides[snapshot.UniqueFindings[i].Fingerprint]; ok {
 			snapshot.UniqueFindings[i].Status, snapshot.UniqueFindings[i].StatusReason = o.Status, o.Reason

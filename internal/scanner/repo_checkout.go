@@ -28,11 +28,11 @@ func repositoryCheckoutDir(scanDir, targetID string) string {
 // prepareRepositoryCheckout returns the local path a repository target's
 // source scanners read, cloning it on first use. The returned reason is
 // operator-facing and never contains the token.
-func prepareRepositoryCheckout(ctx context.Context, scanDir, targetID, repoURL string, cred RepoCredential, cache map[string]repoCheckout) (string, string) {
+func prepareRepositoryCheckout(ctx context.Context, scanDir, targetID, repoURL string, cred RepoCredential, cache map[string]repoCheckout, branches ...string) (string, string) {
 	if c, ok := cache[targetID]; ok {
 		return c.dir, c.reason
 	}
-	dir, reason := cloneRepositoryTarget(ctx, repositoryCheckoutDir(scanDir, targetID), repoURL, cred)
+	dir, reason := cloneRepositoryTarget(ctx, repositoryCheckoutDir(scanDir, targetID), repoURL, cred, branches...)
 	cache[targetID] = repoCheckout{dir: dir, reason: reason}
 	return dir, reason
 }
@@ -41,7 +41,7 @@ func prepareRepositoryCheckout(ctx context.Context, scanDir, targetID, repoURL s
 // to git as an Authorization header scoped to the repository host through
 // GIT_CONFIG_* environment variables, so it never appears in argv, the remote
 // URL, the checkout's .git/config, or scanner output.
-func cloneRepositoryTarget(ctx context.Context, dir, repoURL string, cred RepoCredential) (string, string) {
+func cloneRepositoryTarget(ctx context.Context, dir, repoURL string, cred RepoCredential, branches ...string) (string, string) {
 	raw := strings.TrimSpace(repoURL)
 	u, err := url.Parse(raw)
 	if err != nil || strings.ContainsAny(raw, " \t\r\n,") || strings.ToLower(u.Scheme) != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -56,7 +56,12 @@ func cloneRepositoryTarget(ctx context.Context, dir, repoURL string, cred RepoCr
 	_ = os.RemoveAll(dir) // drop a partial clone left by an interrupted run
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "git", "clone", "--depth", "1", "--single-branch", "--no-tags", "--", u.String(), dir)
+	args := []string{"clone", "--depth", "1", "--single-branch", "--no-tags"}
+	if len(branches) > 0 && strings.TrimSpace(branches[0]) != "" {
+		args = append(args, "--branch", branches[0])
+	}
+	args = append(args, "--", u.String(), dir)
+	cmd := exec.CommandContext(cctx, "git", args...)
 	configureCommandCancellation(cmd)
 	// Never block on an interactive username/password prompt.
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")

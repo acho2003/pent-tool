@@ -14,7 +14,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-const reportPromptVersion = "scanner-report-v5"
+const reportPromptVersion = "scanner-report-v6"
 
 type reportManifest struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -208,7 +208,7 @@ func fallbackSnapshotFindings(snapshot *scanner.FindingsSnapshot) []reportFindin
 			}
 			evidenceItems = append(evidenceItems, evidenceItemFromObservation(observation))
 		}
-		out = append(out, reportFinding{SourceID: f.ID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: string(f.DedupeScope), Scanner: firstFindingScanner(securityFindingToSummary(f)), Scanners: append([]string(nil), f.Scanners...), Title: f.Title, Severity: f.Severity, SeverityUnrated: primary.SeverityUnrated, Status: string(f.Status), StatusReason: f.StatusReason, Target: sanitizeEvidenceText(sanitizeEvidenceURL(f.Target)), Endpoint: sanitizeEvidenceURL(firstFindingEndpoint(f)), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, ObservationIDs: append([]string(nil), f.ObservationIDs...), AffectedEndpoints: sanitizeFindingEndpoints(f.Endpoints), EvidenceItems: evidenceItems, Explanation: "The originating scanners reported this normalized issue; review the linked raw observations for evidence.", Evidence: sanitizeEvidenceText(primary.Evidence), EvidenceRef: sanitizeEvidenceText(primary.EvidenceReference), CVE: strings.Join(f.CVE, ", "), CWE: strings.Join(f.CWE, ", "), CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Scope: f.Scope})
+		out = append(out, reportFinding{SourceID: f.ID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: string(f.DedupeScope), Scanner: firstFindingScanner(securityFindingToSummary(f)), Scanners: append([]string(nil), f.Scanners...), Title: f.Title, Severity: f.Severity, SeverityUnrated: primary.SeverityUnrated, Method: primary.Method, Parameter: primary.Parameter, Remediation: sanitizeEvidenceText(primary.Remediation), Status: string(f.Status), StatusReason: f.StatusReason, Target: sanitizeEvidenceText(sanitizeEvidenceURL(f.Target)), Endpoint: sanitizeEvidenceURL(firstFindingEndpoint(f)), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, ObservationIDs: append([]string(nil), f.ObservationIDs...), AffectedEndpoints: sanitizeFindingEndpoints(f.Endpoints), EvidenceItems: evidenceItems, Explanation: "The originating scanners reported this normalized issue; review the linked raw observations for evidence.", Evidence: sanitizeEvidenceText(primary.Evidence), EvidenceRef: sanitizeEvidenceText(primary.EvidenceReference), CVE: strings.Join(f.CVE, ", "), CWE: strings.Join(f.CWE, ", "), CVSS: f.CVSS, Impact: "Scanner-reported issue; validate impact in the affected environment.", Scope: f.Scope})
 	}
 	return out
 }
@@ -327,10 +327,12 @@ func evidenceLocation(item reportEvidenceItem) string {
 
 // reportScanners lists the distinct scanners that reported f, primary first.
 func reportScanners(f reportFinding) []string {
-	if len(f.Sources) == 0 {
-		return []string{f.Scanner}
-	}
 	var out []string
+	for _, name := range append(append([]string(nil), f.Scanners...), f.Scanner) {
+		if name != "" && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
 	for _, s := range f.Sources {
 		if !slices.Contains(out, s.Scanner) {
 			out = append(out, s.Scanner)

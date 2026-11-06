@@ -182,3 +182,90 @@ func TestSPAFallbackValidationRespectsScopeExclusionsAndBudget(t *testing.T) {
 		t.Fatalf("zero scope sent requests; results=%#v", results)
 	}
 }
+
+func TestCorrelationCVEAliasesAndLocationBoundaries(t *testing.T) {
+	base := Finding{Scanner: "a", RuleID: "rule-a", Title: "Dependency issue", Severity: "high", CVE: "CVE-2026-1234", Target: "package-lock.json", Package: "example", PackageVersion: "1.0", Scope: "source:repo-one"}
+	duplicate := base
+	duplicate.Scanner = "b"
+	duplicate.RuleID = "rule-b"
+	duplicate.Title = "Different scanner title"
+	otherRepo := base
+	otherRepo.Scope = "source:repo-two"
+	otherPackage := base
+	otherPackage.Package = "another"
+	snapshot, errs := BuildFindingsSnapshot(nil, []Finding{base, duplicate, otherRepo, otherPackage})
+	if len(errs) > 0 || len(snapshot.UniqueFindings) != 3 {
+		t.Fatalf("findings=%+v errors=%v", snapshot.UniqueFindings, errs)
+	}
+	merged := false
+	for _, f := range snapshot.UniqueFindings {
+		if f.ObservationCount == 2 {
+			merged = true
+			if len(f.Scanners) != 2 {
+				t.Fatal("lost scanner attribution")
+			}
+		}
+	}
+	if !merged {
+		t.Fatal("CVE aliases did not merge")
+	}
+}
+
+func TestCorrelationDefaultMethodAndParameterCase(t *testing.T) {
+	base := Finding{Scanner: "zap", Title: "SQL Injection", Severity: "high", Endpoint: "https://example.test/item?id=1", Parameter: "id"}
+	duplicate := base
+	duplicate.Method = "GET"
+	duplicate.Endpoint = "https://example.test/item?id=2"
+	otherParameter := duplicate
+	otherParameter.Parameter = "ID"
+	snapshot, _ := BuildFindingsSnapshot(nil, []Finding{base, duplicate, otherParameter})
+	if len(snapshot.UniqueFindings) != 2 {
+		t.Fatalf("findings=%+v", snapshot.UniqueFindings)
+	}
+}
+
+func TestCorrelationSourceRulesAndLocationsStayDistinct(t *testing.T) {
+	base := Finding{Scanner: "semgrep", RuleID: "rule-one", Title: "Issue", SourceLocation: "app.go:10", Target: "app.go", Scope: "source:one"}
+	duplicate := base
+	otherLine := base
+	otherLine.SourceLocation = "app.go:20"
+	otherRule := base
+	otherRule.RuleID = "rule-two"
+	otherRepo := base
+	otherRepo.Scope = "source:two"
+	snapshot, _ := BuildFindingsSnapshot(nil, []Finding{base, duplicate, otherLine, otherRule, otherRepo})
+	if len(snapshot.UniqueFindings) != 4 {
+		t.Fatalf("findings=%+v", snapshot.UniqueFindings)
+	}
+}
+
+func TestCorrelationPreservesLegacyCVEStatusOverride(t *testing.T) {
+	finding := Finding{Scanner: "custom", Title: "Issue", CVE: "CVE-2026-1234", Endpoint: "https://example.test/item", Method: "GET"}
+	observation := observationFromFinding(finding, Run{}, 0)
+	oldFinding := finding
+	oldFinding.CVE = ""
+	oldFingerprint := findingFingerprint(observation, legacyNormalizedFindingRule(oldFinding))
+	snapshot, _ := BuildFindingsSnapshot(nil, []Finding{finding})
+	ApplyFindingOverrides(snapshot, FindingStatusOverrides{oldFingerprint: {Status: StatusFalsePositive, Reason: "reviewed"}})
+	if snapshot.UniqueFindings[0].Status != StatusFalsePositive {
+		t.Fatalf("override lost: %+v", snapshot.UniqueFindings[0])
+	}
+}
+
+func TestRepeatedScannerArtifactsPreserveSeparateObservationEvidence(t *testing.T) {
+	var runs []Run
+	for _, name := range []string{"first", "second"} {
+		artifact := writeFixture(t, name+".json", fmt.Sprintf(`{"alerts":[{"pluginId":"10038","name":"Content Security Policy Header Not Set","riskdesc":"Medium","url":"https://example.test/","evidence":%q}]}`, name))
+		runs = append(runs, Run{Scanner: "zap", Scope: "app:site", Status: "completed", ArtifactPath: artifact})
+	}
+	snapshot, errs := BuildFindingsSnapshot(runs, nil)
+	if len(errs) != 0 || len(snapshot.UniqueFindings) != 1 || len(snapshot.RawObservations) != 2 {
+		t.Fatalf("snapshot=%+v errors=%v", snapshot, errs)
+	}
+	if snapshot.RawObservations[0].ID == snapshot.RawObservations[1].ID {
+		t.Fatal("observation IDs collide across artifacts, losing evidence")
+	}
+	if snapshot.RawObservations[0].Evidence == snapshot.RawObservations[1].Evidence {
+		t.Fatal("distinct evidence was lost")
+	}
+}

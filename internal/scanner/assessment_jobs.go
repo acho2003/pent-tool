@@ -667,7 +667,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				// Source scanners read a local checkout; the run keeps reporting
 				// the repository URL so coverage still matches the planned job.
 				var dir string
-				dir, reason = prepareRepositoryCheckout(ctx, scanDir, job.TargetID, job.Target, p.Config.AssessmentRepoCreds[job.TargetID], repoCheckouts)
+				dir, reason = prepareRepositoryCheckout(ctx, scanDir, job.TargetID, job.Target, p.Config.AssessmentRepoCreds[job.TargetID], repoCheckouts, targetByID[job.TargetID].Branch)
 				if reason == "" {
 					req.Target = dir
 				}

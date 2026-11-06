@@ -522,14 +522,15 @@ func parseSemgrep(path string) ([]Finding, error) {
 		line := str(start["line"])
 		extra, _ := r["extra"].(map[string]any)
 		out = append(out, Finding{
-			SourceID:    "semgrep:" + rule + ":" + file + ":" + line,
-			Scanner:     "semgrep",
-			RuleID:      rule,
-			Title:       firstNonEmpty(rule, "semgrep finding"),
-			Severity:    semgrepSeverity(str(extra["severity"])),
-			Target:      file,
-			Endpoint:    file + ":" + line,
-			Description: str(extra["message"]),
+			SourceID:       "semgrep:" + rule + ":" + file + ":" + line,
+			Scanner:        "semgrep",
+			RuleID:         rule,
+			Title:          firstNonEmpty(rule, "semgrep finding"),
+			Severity:       semgrepSeverity(str(extra["severity"])),
+			Target:         file,
+			Endpoint:       file + ":" + line,
+			SourceLocation: file + ":" + line,
+			Description:    str(extra["message"]),
 		})
 	}
 	return out, nil
@@ -560,14 +561,15 @@ func parseGitleaks(path string) ([]Finding, error) {
 		file := str(m["File"])
 		commit := str(m["Commit"])
 		out = append(out, Finding{
-			SourceID:    "gitleaks:" + rule + ":" + file + ":" + commit,
-			Scanner:     "gitleaks",
-			RuleID:      rule,
-			Title:       firstNonEmpty(rule, "secret"),
-			Severity:    "high",
-			Target:      file,
-			Endpoint:    file + ":" + str(m["StartLine"]),
-			Description: firstNonEmpty(str(m["Description"]), "secret detected"),
+			SourceID:       "gitleaks:" + rule + ":" + file + ":" + commit,
+			Scanner:        "gitleaks",
+			RuleID:         rule,
+			Title:          firstNonEmpty(rule, "secret"),
+			Severity:       "high",
+			Target:         file,
+			Endpoint:       file + ":" + str(m["StartLine"]),
+			SourceLocation: file + ":" + str(m["StartLine"]),
+			Description:    firstNonEmpty(str(m["Description"]), "secret detected"),
 		})
 	}
 	return out, nil
@@ -609,6 +611,8 @@ func parseOSV(path string) ([]Finding, error) {
 					SeverityUnrated: !rated,
 					CVSS:            cvss,
 					Target:          srcPath,
+					Package:         name,
+					PackageVersion:  str(pkg["version"]),
 					Endpoint:        srcPath,
 					Description:     str(v["summary"]),
 					Evidence:        osvPackageLabel(pkg),
