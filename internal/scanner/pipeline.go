@@ -909,7 +909,7 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 				run.ExecutionOutcome = "SUCCESS"
 			}
 			run.ParserOutcome, run.Completeness = "FAILED", "partial"
-			if run.ExecutionOutcome != "TIMEOUT" && run.ExecutionOutcome != "CANCELLED" {
+			if run.ExecutionOutcome != "TIMEOUT" && run.ExecutionOutcome != "CANCELLED" && !(name == "semgrep" && run.Status == "failed" && run.ExitCode != 0) {
 				run.Outcome, run.Status = "PARSER_FAILED", "failed"
 				run.Reason = "could not retain usable bounded artifact: " + boundErr.Error()
 			}
