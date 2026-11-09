@@ -410,7 +410,7 @@ WebSocket client); scan deletion halts the scan first and removes only directori
 inside the data directory; artifact paths are resolved through symbolic links;
 uploads are created 0600; raw artifacts are withheld until their run is terminal.
 
-Only nuclei, wapiti, dalfox and ZAP traffic passes through the recording gateway.
+Only nuclei, wapiti, dalfox, schemathesis and ZAP traffic passes through the recording gateway.
 httpx, apichecks and the Go browser validate scope natively.
 katana, testssl, nikto, nmap, masscan and OpenVAS run without the gateway; their
 runs carry a `scope_not_gateway_enforced` limitation shown on the coverage job rows,

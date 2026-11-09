@@ -16,7 +16,7 @@ import (
 
 func scannerUsesWebAuth(name string) bool {
 	switch name {
-	case "zap", "nuclei", "wapiti", "dalfox", "apiwrites", "katana":
+	case "zap", "nuclei", "wapiti", "dalfox", "schemathesis", "apiwrites", "katana":
 		return true
 	}
 	return false
@@ -26,7 +26,7 @@ func scannerUsesWebAuth(name string) bool {
 // Empty JSONL is valid for Nuclei; empty JSON objects are not valid reports.
 func validateWebResult(run *Run) {
 	switch run.Scanner {
-	case "zap", "wapiti", "dalfox", "nuclei", "nikto", "testssl", "sslyze":
+	case "zap", "wapiti", "dalfox", "schemathesis", "nuclei", "nikto", "testssl", "sslyze":
 	default:
 		return
 	}
@@ -49,6 +49,18 @@ func validateWebResult(run *Run) {
 			run.Outcome, run.Completeness = "PARTIAL", "partial"
 		}
 		return
+	}
+	if err == nil && run.Scanner == "schemathesis" {
+		// Exit code 1 means failures or errors; only the event log tells which,
+		// and whether the run actually reached its end.
+		var fatal string
+		var limitations []RunLimitation
+		if fatal, limitations, err = schemathesisRunState(run.ArtifactPath); err == nil && fatal != "" {
+			run.ParserOutcome, run.Outcome, run.Completeness = "SUCCESS", "FAILED", "unknown"
+			run.Status, run.Reason = "failed", fatal
+			return
+		}
+		run.Limitations = append(run.Limitations, limitations...)
 	}
 	if err == nil && (run.Scanner == "zap" || run.Scanner == "wapiti") {
 		var root map[string]json.RawMessage

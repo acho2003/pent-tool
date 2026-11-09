@@ -296,6 +296,7 @@ type Config struct {
 	KatanaChromePath    string
 	BrowserLocalOrigins []string
 	DalfoxPath          string
+	SchemathesisPath    string
 	WapitiPath          string
 	KubeBenchPath       string
 	ProwlerPath         string
@@ -360,6 +361,7 @@ type Config struct {
 	NiktoTimeout        time.Duration
 	KatanaTimeout       time.Duration
 	DalfoxTimeout       time.Duration
+	SchemathesisTimeout time.Duration
 	WapitiTimeout       time.Duration
 	KubeBenchTimeout    time.Duration
 	ProwlerTimeout      time.Duration

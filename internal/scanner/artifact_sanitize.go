@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -33,6 +34,8 @@ func sanitizeArtifactValue(value any, secrets []string) any {
 		for key, item := range v {
 			if sensitiveArtifactKey(key) {
 				v[key] = "[REDACTED]"
+			} else if encoded, ok := item.(string); ok && key == "$base64" {
+				v[key] = sanitizeBase64Body(encoded, secrets)
 			} else {
 				v[key] = sanitizeArtifactValue(item, secrets)
 			}
@@ -45,6 +48,22 @@ func sanitizeArtifactValue(value any, secrets []string) any {
 		return sanitizeArtifactText(v, secrets)
 	}
 	return value
+}
+
+// sanitizeBase64Body redacts a body recorded as {"$base64": "..."} (the
+// Schemathesis/VCR convention). Text redaction cannot see a secret through the
+// encoding, and a target that echoes the gateway-injected credential would
+// otherwise leak it. An unchanged or undecodable body keeps its exact bytes.
+func sanitizeBase64Body(encoded string, secrets []string) string {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return sanitizeArtifactText(encoded, secrets)
+	}
+	clean := sanitizeArtifactText(string(decoded), secrets)
+	if clean == string(decoded) {
+		return encoded
+	}
+	return base64.StdEncoding.EncodeToString([]byte(clean))
 }
 
 // Decode native formats before replacing values: escaped headers and quoted

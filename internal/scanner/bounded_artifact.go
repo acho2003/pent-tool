@@ -37,7 +37,7 @@ func boundWebArtifact(path, scanner string, limit int64) (bool, error) {
 		return false, nil
 	}
 	switch scanner {
-	case "nuclei", "dalfox":
+	case "nuclei", "dalfox", "schemathesis":
 		file, err := os.Open(path)
 		if err != nil {
 			return true, err

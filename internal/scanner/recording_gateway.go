@@ -258,7 +258,7 @@ func (g *RecordingGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	if g.closing {
 		g.mu.Unlock()
-		http.Error(w, "attempt closed", 503)
+		gatewayReject(w, "attempt closed", 503)
 		return
 	}
 	g.workers.Add(1)
@@ -266,7 +266,7 @@ func (g *RecordingGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer g.workers.Done()
 	if !g.authorization(r) {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="Xalgorix attempt"`)
-		http.Error(w, "proxy authorization required", 407)
+		gatewayReject(w, "proxy authorization required", 407)
 		return
 	}
 	if r.Method == "CONNECT" {
@@ -279,7 +279,7 @@ func (g *RecordingGateway) connect(w http.ResponseWriter, r *http.Request) {
 	raw := "https://" + r.Host + "/"
 	origin, err := assessment.ParseApprovedOrigin("", raw)
 	if err != nil {
-		http.Error(w, "invalid CONNECT", 400)
+		gatewayReject(w, "invalid CONNECT", 400)
 		return
 	}
 	allowed := false
@@ -290,17 +290,17 @@ func (g *RecordingGateway) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	if !allowed {
 		g.record(CoverageEvent{Kind: "blocked", Method: "CONNECT", URL: raw, Reason: "origin not approved"})
-		http.Error(w, "origin not approved", 403)
+		gatewayReject(w, "origin not approved", 403)
 		return
 	}
 	cert, err := g.certificate(origin.Host)
 	if err != nil {
-		http.Error(w, "certificate unavailable", 500)
+		gatewayReject(w, "certificate unavailable", 500)
 		return
 	}
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, "CONNECT unavailable", 500)
+		gatewayReject(w, "CONNECT unavailable", 500)
 		return
 	}
 	conn, _, err := hijacker.Hijack()
@@ -360,7 +360,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	event := CoverageEvent{URL: raw, Method: r.Method}
 	if g.req.WapitiPostApproval != nil && r.Method != "POST" && (raw != g.req.WapitiPostURL || (r.Method != "GET" && r.Method != "HEAD")) {
 		g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: "form fuzzing is restricted to its approved entry point"})
-		http.Error(w, "request outside form operation", 403)
+		gatewayReject(w, "request outside form operation", 403)
 		return
 	}
 
@@ -394,14 +394,14 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 				reason = fuzzReason
 			}
 			g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: reason})
-			http.Error(w, "POST outside approved policy", 403)
+			gatewayReject(w, "POST outside approved policy", 403)
 			return
 		}
 	}
 	if err := browserRequestAllowed(g.req, g.cfg, r.Method, raw); err != nil && r.Method != http.MethodPost {
 		event.Kind, event.Reason = "blocked", err.Error()
 		g.record(event)
-		http.Error(w, "request outside approved policy", 403)
+		gatewayReject(w, "request outside approved policy", 403)
 		return
 	}
 	g.mu.Lock()
@@ -416,13 +416,13 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	if failed != nil || over {
 		event.Kind, event.Reason = "blocked", "recording or request budget unavailable"
 		g.record(event)
-		http.Error(w, "recording/request budget unavailable", 429)
+		gatewayReject(w, "recording/request budget unavailable", 429)
 		return
 	}
 	if err := g.cfg.Budget.Wait(r.Context()); err != nil {
 		event.Kind, event.Reason = "blocked", "assessment budget exhausted"
 		g.record(event)
-		http.Error(w, "assessment budget exhausted", 429)
+		gatewayReject(w, "assessment budget exhausted", 429)
 		return
 	}
 	var body []byte
@@ -433,7 +433,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		if err != nil || len(body) > 2<<20 {
 			event.Kind, event.Reason = "blocked", "request body exceeds recording budget"
 			g.record(event)
-			http.Error(w, "request body unavailable", 413)
+			gatewayReject(w, "request body unavailable", 413)
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
@@ -491,7 +491,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		event.Kind, event.Reason = "failed", "upstream request failed"
 		g.record(event)
-		http.Error(w, "upstream unavailable", 502)
+		gatewayReject(w, "upstream unavailable", 502)
 		return
 	}
 	defer response.Body.Close()
@@ -499,11 +499,13 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	if err != nil || len(data) > 8<<20 {
 		event.Kind, event.Reason = "failed", "upstream response exceeds recording limit"
 		g.record(event)
-		http.Error(w, "response limit exceeded", 502)
+		gatewayReject(w, "response limit exceeded", 502)
 		return
 	}
 	for key, values := range response.Header {
-		if strings.EqualFold(key, "Connection") {
+		// A target must not be able to pass its own response off as a gateway
+		// rejection, which parsers discard as non-target behaviour.
+		if strings.EqualFold(key, "Connection") || strings.EqualFold(key, GatewayRejectionHeader) {
 			continue
 		}
 		for _, v := range values {
@@ -515,6 +517,19 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	event.Kind, event.ResponseCode = "observed", response.StatusCode
 	g.record(event)
 }
+
+// GatewayRejectionHeader marks a response the gateway produced itself (a
+// blocked, budget-limited or failed upstream request) rather than relayed from
+// the target. Scanners see the status code only, so a parser that judges target
+// behaviour from status codes (a 502 read as a server error, for example) must
+// discard responses carrying this header.
+const GatewayRejectionHeader = "X-Xalgorix-Gateway-Rejection"
+
+func gatewayReject(w http.ResponseWriter, message string, status int) {
+	w.Header().Set(GatewayRejectionHeader, "1")
+	http.Error(w, message, status)
+}
+
 func (g *RecordingGateway) certificate(host string) (*tls.Certificate, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -4,7 +4,7 @@ package scanner
 // gateway in an expanded assessment. Their scope is enforced only by tool flags
 // or by checks made before the tool starts, so a completed run must not be read
 // as proof that all of its traffic stayed inside the approved boundary. Adapters
-// that do route through the gateway (nuclei, wapiti, dalfox, ZAP) or that
+// that do route through the gateway (nuclei, wapiti, dalfox, schemathesis, ZAP) or that
 // validate each request natively (apichecks, the Go browser) are not listed.
 var directEgressReasons = map[string]string{
 	"katana":  "katana is not routed through the recording gateway: only its URL regexes constrain the pages it queues, so requests made by its headless browser itself (for example the origin-root favicon) are not bounded by the approved path prefix, and its traffic is not recorded as coverage events",

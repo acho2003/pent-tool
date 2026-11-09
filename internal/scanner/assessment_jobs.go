@@ -26,7 +26,7 @@ func HasAssessmentRunner(id string) bool {
 	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "nextjs-boundaries" || id == "kube-exposure" || id == "nextjs-assets" || id == "nextjs-sast" || id == "nextjs-deps" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" {
 		return true
 	}
-	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
+	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "schemathesis" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
 		return true
 	}
 	for _, runner := range NewPipeline(Config{}).Runners {
@@ -121,6 +121,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["nikto"] = niktoRunner{}
 	// Dalfox is opt-in XSS detection over discovered parameterized URLs.
 	byName["dalfox"] = dalfoxRunner{}
+	// Schemathesis fuzzes approved read-only OpenAPI operations through the gateway.
+	byName["schemathesis"] = schemathesisRunner{}
 	// Wapiti is opt-in bounded web fuzzing seeded with discovered endpoints.
 	byName["wapiti"] = wapitiRunner{}
 	// kube-bench is opt-in CIS Kubernetes benchmark (read-only).
@@ -800,7 +802,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		var gateway *RecordingGateway
-		if expanded && req.AppScope != nil && (job.Scanner == "nuclei" || job.Scanner == "wapiti" || job.Scanner == "dalfox") {
+		if expanded && req.AppScope != nil && (job.Scanner == "nuclei" || job.Scanner == "wapiti" || job.Scanner == "dalfox" || job.Scanner == "schemathesis") {
 			var err error
 			gateway, err = NewRecordingGateway(jobCtx, req, p.Config, job.Scanner)
 			if err != nil {

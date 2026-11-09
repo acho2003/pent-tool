@@ -208,3 +208,48 @@ request observations prove traffic, not that every vulnerability check ran.
 
 Registry version 12 records this planning and execution policy. The expanded
 workflow remains disabled by default pending complete rollout acceptance.
+
+## Schemathesis API fuzzing
+
+Registry version 29 adds Schemathesis 4.32.5 as an optional web/API adapter for
+unified-v1 plans. The planner selects it automatically only for a target with a
+bound API definition; without one it stays optional, and a custom scanner
+selection that omits it is respected. Named identities get their own jobs, like
+Nuclei, ZAP, Wapiti and Dalfox.
+
+Schemathesis never receives the operator's original document. Each attempt
+rebuilds an OpenAPI 3.0 definition from the plan's operations and keeps only
+OpenAPI GET/HEAD operations without a required body whose paths stay under the
+approved application URL, inside the approved scope and outside its exclusions.
+Every other operation is recorded as skipped with its reason in
+`scanner-output/schemathesis/operations.json`, and any skipped operation leaves
+the run's coverage partial. Path and query parameters keep their declared types
+and use operator-supplied values as examples; header and cookie parameters are
+not generated. GraphQL operations are skipped because generated GraphQL input
+is sent as POST bodies the read-only gateway policy does not admit.
+
+The run passes only through the recording gateway (it is not applicable
+without one). The gateway injects and renews the verified session, so no
+credential is placed on the Schemathesis command line; it also enforces scope,
+exclusions, GET/HEAD/OPTIONS and the request budget, and records every request.
+The base URL is the approved application URL, so Schemathesis's own capability
+probes stay inside the boundary. A configuration file disables the coverage
+phase's "unspecified HTTP method" cases, which otherwise send TRACE, QUERY and
+write methods to declared paths. The stateful phase is off, one worker runs at
+the profile rate, redirects are not followed and no example database persists.
+
+Only the `not_a_server_error` check runs. The rebuilt definition has no
+response schemas, so conformance checks would judge invented contracts, and
+`ignored_auth` would mistake the gateway's re-injected session for an
+authentication bypass. A 5xx response the target itself returned becomes a
+low-severity CWE-755 finding with the request, status and response excerpt;
+responses the gateway produced (marked `X-Xalgorix-Gateway-Rejection`, which
+the gateway strips from upstream responses) are discarded. Exit code 1 means
+failures or errors, so the NDJSON event log decides: a fatal error fails the
+run, while a missing end event, an early stop or errored test cases make it
+partial. Response bodies are stored base64-encoded; the artifact sanitizer now
+decodes `$base64` values to redact secrets a target echoes back.
+
+Schemathesis coverage is per operation, not per recorded request: inventory
+endpoints carry an explicit "tests OpenAPI operations" reason rather than a
+submission claim, and gateway events show the requests actually sent.

@@ -907,6 +907,8 @@ func endpointEligibleWithPolicy(ep AttackSurfaceEndpoint, scannerName string, sc
 			}
 		}
 		return false, "endpoint has no query parameter"
+	case "schemathesis":
+		return false, "Schemathesis tests OpenAPI operations from the approved definition, not individual recorded requests; see its operation manifest"
 	case "nikto", "testssl":
 		u, err := url.Parse(ep.URL)
 		if err == nil && u.Path == "/" && u.RawQuery == "" {

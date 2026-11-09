@@ -27,7 +27,7 @@ func (s *Server) scannerAvailability() map[string]bool {
 		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "nextjs-sast": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 		"lynis": s.cfg.SSHPath,
 		// Staged web-pipeline adapters: availability is genuine binary presence.
-		"katana": s.cfg.KatanaPath, "dalfox": s.cfg.DalfoxPath, "wapiti": s.cfg.WapitiPath,
+		"katana": s.cfg.KatanaPath, "dalfox": s.cfg.DalfoxPath, "wapiti": s.cfg.WapitiPath, "schemathesis": s.cfg.SchemathesisPath,
 		// Cloud / Kubernetes posture-audit adapters.
 		"kube-bench": s.cfg.KubeBenchPath, "prowler": s.cfg.ProwlerPath, "scoutsuite": s.cfg.ScoutSuitePath,
 	}

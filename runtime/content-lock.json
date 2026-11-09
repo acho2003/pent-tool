@@ -27,7 +27,8 @@
     "amass": "v4.2.0",
     "gau": "v2.2.4",
     "waybackurls": "v0.1.0",
-    "sslyze": "6.3.1"
+    "sslyze": "6.3.1",
+    "schemathesis": "4.32.5"
   },
   "optional": {},
   "runtime_family": "debian-slim",

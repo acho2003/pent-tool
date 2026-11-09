@@ -11,7 +11,7 @@ import (
 
 func identityRoutedScanner(name string) bool {
 	switch name {
-	case "auth", "nuclei", "zap", "wapiti", "dalfox":
+	case "auth", "nuclei", "zap", "wapiti", "dalfox", "schemathesis":
 		return true
 	}
 	return false

@@ -44,6 +44,7 @@ func ScannerRegistry() []ScannerDefinition {
 		{ID: "nikto", Name: "nikto", Category: PhaseWeb, AssessmentTypes: append(append([]assessment.Type{}, web...), network...), TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindIP, assessment.KindHost, assessment.KindDomain}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, DefaultSelection: "optional", Risk: "medium", Available: false, Summary: "Optional root-path web server checks on a URL or network host"},
 		{ID: "dalfox", Name: "dalfox", Category: PhaseWeb, AssessmentTypes: append(append([]assessment.Type{}, web...), api...), TargetKinds: []assessment.TargetKind{assessment.KindURL}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, OptionalCapabilities: []assessment.Capability{assessment.CapAuthWeb}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "medium", Available: false, Summary: "XSS detection over discovered parameterized URLs"},
 		{ID: "wapiti", Name: "wapiti", Category: PhaseWeb, AssessmentTypes: web, TargetKinds: []assessment.TargetKind{assessment.KindURL}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, OptionalCapabilities: []assessment.Capability{assessment.CapAuthWeb}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "medium", Available: false, Summary: "Bounded web fuzzing seeded with discovered endpoints"},
+		{ID: "schemathesis", Name: "schemathesis", Category: PhaseWeb, AssessmentTypes: append(append([]assessment.Type{}, web...), api...), TargetKinds: []assessment.TargetKind{assessment.KindURL, assessment.KindDomain, assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapWeb}, OptionalCapabilities: []assessment.Capability{assessment.CapAuthWeb, assessment.CapSchema}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "medium", Available: false, Summary: "Property-based fuzzing of approved read-only OpenAPI operations through the recording gateway; selected automatically when an OpenAPI definition is bound to the target"},
 		{ID: "lynis", Name: "lynis", Category: PhaseServer, AssessmentTypes: []assessment.Type{assessment.TypeHost, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindHost}, RequiredCapabilities: []assessment.Capability{assessment.CapSSH}, DefaultSelection: "automatic", Risk: "low", Available: false, Summary: "Run a bounded Lynis audit through a target-bound SSH alias"},
 		{ID: "prowler", Name: "prowler", Category: PhaseCloud, AssessmentTypes: []assessment.Type{assessment.TypeCloud, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindCloudAccount}, RequiredCapabilities: []assessment.Capability{assessment.CapCloud}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Read-only AWS security & configuration audit using a supplied read-only credential"},
 		{ID: "scoutsuite", Name: "scoutsuite", Category: PhaseCloud, AssessmentTypes: []assessment.Type{assessment.TypeCloud, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindCloudAccount}, RequiredCapabilities: []assessment.Capability{assessment.CapCloud}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Read-only multi-cloud security posture audit using a supplied read-only credential"},
@@ -90,6 +91,7 @@ var webScannerMetadata = map[string]struct {
 	"nikto":             {[]string{PolicyRateLimited}, "json"},
 	"dalfox":            {[]string{PolicyOASTDisabled, PolicyRateLimited, PolicyWriteCapable}, "jsonl"},
 	"wapiti":            {[]string{PolicyExclusions, PolicyWriteCapable}, "json"},
+	"schemathesis":      {[]string{PolicyExclusions, PolicyGetHeadOnly, PolicyRateLimited, PolicyScopeRegex}, "jsonl"},
 }
 
 // scannerGroups assigns each scanner to a New-Assessment UI group. Recon/web
@@ -101,7 +103,7 @@ var scannerGroups = map[string]string{
 	"subfinder": GroupWebAPI, "amass": GroupWebAPI, "dnsx": GroupWebAPI, "sslyze": GroupWebAPI, "httpx": GroupWebAPI, "katana": GroupWebAPI,
 	"nuclei": GroupWebAPI, "zap": GroupWebAPI, "apichecks": GroupWebAPI, "apiwrites": GroupWebAPI, "nextjs-actions": GroupWebAPI, "nextjs-boundaries": GroupWebAPI, "testssl": GroupWebAPI,
 	"kube-exposure": GroupWebAPI, "nextjs-assets": GroupWebAPI, "actuator": GroupWebAPI, "vcs-exposure": GroupWebAPI, "exposed-files": GroupWebAPI,
-	"nikto": GroupWebAPI, "dalfox": GroupWebAPI, "wapiti": GroupWebAPI,
+	"nikto": GroupWebAPI, "dalfox": GroupWebAPI, "wapiti": GroupWebAPI, "schemathesis": GroupWebAPI,
 	"nmap": GroupNetwork, "masscan": GroupNetwork, "openvas": GroupNetwork,
 	"vuls": GroupNetwork, "lynis": GroupNetwork,
 	"trivy": GroupCode, "semgrep": GroupCode, "nextjs-sast": GroupCode, "nextjs-deps": GroupCode, "gitleaks": GroupCode, "osv": GroupCode,

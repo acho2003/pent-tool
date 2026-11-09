@@ -99,6 +99,8 @@ RUN python3 -m venv --without-pip /opt/venvs/scoutsuite \
     && python3 -m pip --python /opt/venvs/scoutsuite install --no-compile 'scoutsuite==5.14.0'
 RUN python3 -m venv --without-pip /opt/venvs/sslyze \
     && python3 -m pip --python /opt/venvs/sslyze install --no-compile 'sslyze==6.3.1'
+RUN python3 -m venv --without-pip /opt/venvs/schemathesis \
+    && python3 -m pip --python /opt/venvs/schemathesis install --no-compile 'schemathesis==4.32.5'
 # Export only the interpreter/stdlib and scanner environments, not installers.
 RUN python3 -m pip uninstall -y pip setuptools wheel \
     && rm -rf /usr/local/include /usr/local/lib/pkgconfig /usr/local/share/man
@@ -171,6 +173,7 @@ RUN ldconfig \
     && ln -s /opt/venvs/prowler/bin/prowler /usr/local/bin/prowler \
     && ln -s /opt/venvs/scoutsuite/bin/scout /usr/local/bin/scout \
     && ln -s /opt/venvs/sslyze/bin/sslyze /usr/local/bin/sslyze \
+    && ln -s /opt/venvs/schemathesis/bin/schemathesis /usr/local/bin/schemathesis \
     && ln -s /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh \
     && printf '#!/bin/sh\ncd /opt/lynis\nexec ./lynis "$@"\n' > /usr/bin/lynis \
     && chmod +x /usr/bin/lynis \

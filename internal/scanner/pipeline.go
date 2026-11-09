@@ -136,6 +136,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.DalfoxPath == "" {
 		cfg.DalfoxPath = "dalfox"
 	}
+	if cfg.SchemathesisPath == "" {
+		cfg.SchemathesisPath = "schemathesis"
+	}
 	if cfg.WapitiPath == "" {
 		cfg.WapitiPath = "wapiti"
 	}
@@ -168,6 +171,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.DalfoxTimeout <= 0 {
 		cfg.DalfoxTimeout = 15 * time.Minute
+	}
+	if cfg.SchemathesisTimeout <= 0 {
+		cfg.SchemathesisTimeout = schemathesisDefaultDuration
 	}
 	if cfg.WapitiTimeout <= 0 {
 		cfg.WapitiTimeout = 20 * time.Minute
@@ -811,6 +817,8 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 		case "wapiti":
 			spec.args = append(spec.args, "--proxy", req.GatewayURL)
 		case "dalfox":
+			spec.args = append(spec.args, "--proxy", req.GatewayURL)
+		case "schemathesis":
 			spec.args = append(spec.args, "--proxy", req.GatewayURL)
 		}
 		spec.env = append(spec.env, "SSL_CERT_FILE="+req.GatewayCAPath, "REQUESTS_CA_BUNDLE="+req.GatewayCAPath)

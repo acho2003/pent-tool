@@ -80,8 +80,9 @@ type PlanInput struct {
 
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
-// schedules (version 23: multiformat dependency and explicit version evidence correlation).
-const PlanRegistryVersion = "28"
+// schedules (version 23: multiformat dependency and explicit version evidence correlation;
+// version 29: Schemathesis API fuzzing).
+const PlanRegistryVersion = "29"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -222,6 +223,13 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 				if cfg.Profile == ProfileNextjsDeep && (def.ID == "nextjs-assets" || def.ID == "nextjs-sast" || def.ID == "nextjs-deps") && !requestedCustom && state == PlanOptional {
 					state, code, reason = PlanSelected, "profile.nextjs_deep", "The Next.js deep profile selects applicable bounded framework discovery, exposure, and offline source checks."
 				}
+				promoted := false
+				if def.ID == "schemathesis" && !requestedCustom && state == PlanOptional && cfg.WorkflowVersion == "unified-v1" && targetHasAPIDefinition(cfg, target.ID) {
+					// Selected by evidence, not by default: only a target with a bound
+					// API definition gets schema-driven fuzzing.
+					state, code, reason = PlanSelected, "api_definition.bound", "An API definition is bound to this target, so its approved read-only OpenAPI operations are fuzzed through the recording gateway."
+					promoted = true
+				}
 				if requestedCustom && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
 					state, code, reason = PlanSelected, "scanner.explicitly_selected", "This optional scanner was explicitly selected by the operator."
 				}
@@ -232,7 +240,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					state, code, reason = PlanSkipped, "selection.provider_alternative", fmt.Sprintf("Skipped because %s was chosen as the alternative provider.", chosen)
 				}
 				if state == PlanSelected || state == PlanConditional {
-					if !selected {
+					if !selected && !promoted {
 						state, code, reason = PlanSkipped, "selection.customized", "This scanner is applicable but omitted from the custom scanner selection."
 					}
 				}
@@ -646,4 +654,15 @@ func planFingerprint(plan AssessmentPlan, toolVersions, credentialRevisions map[
 	}{plan.Config, plan.Capabilities, plan.Decisions, plan.Jobs, plan.RegistryVersion, toolVersions, credentialRevisions})
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// targetHasAPIDefinition reports whether an uploaded API definition is bound to
+// the target, including the legacy single-target definition list.
+func targetHasAPIDefinition(cfg assessment.AssessmentConfig, targetID string) bool {
+	for _, binding := range cfg.APIDefinitions {
+		if binding.TargetID == targetID {
+			return true
+		}
+	}
+	return len(cfg.APIDefinitions) == 0 && len(cfg.APIDefinitionIDs) > 0 && len(cfg.Targets) == 1 && cfg.Targets[0].ID == targetID
 }
