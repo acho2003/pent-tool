@@ -615,6 +615,10 @@ export interface CoverageEvent {
   attempt_id: string; scanner: string; endpoint_ids?: string[]; url?: string; method?: string;
   phase: string; kind: string; at: string; response_code?: number; reason?: string;
 }
+export interface AccessMatrixResult {
+ endpoint_id: string; method: string; url: string; owner_context_id: string; owner_identity: string; owner_role?: string; owner_status?: number;
+ auth_context_id?: string; identity: string; role?: string; response_code?: number; anonymous_status?: number; observed_by_identity: boolean; verdict: string; reason?: string; evidence_reference?: string;
+}
 export interface AuthorizationResult {
  case_id?: string; cleanup_status?: string; representation?: string; cache_attribution?: string; correlation_digest?: string;
  endpoint_id?: string; auth_context_id?: string; identity: string; role?: string; operation_id: string; fixture_ref: string; url?: string; method?: string; expected: string; observed?: string; status: string; response_code?: number; marker_confirmed: boolean; reason?: string; evidence_reference?: string;
@@ -622,6 +626,7 @@ export interface AuthorizationResult {
 export interface CoverageProof {
  identity_discovery?: Array<{auth_context_id: string; identity: string; role?: string; auth_state: string; status: string; reason?: string; attempt_id?: string; plan_fingerprint?: string; evidence_reference?: string; observed_requests: number}>;
  authorization_results?: AuthorizationResult[];
+ access_matrix?: AccessMatrixResult[];
  approved: number; eligible: number; observed: number;
   expanded_enabled: boolean; discovered: number; seeds: number; candidates: number; hosts: number;
   services: number; tls_services: number; forms: number; parameterized: number; observed_with_auth: number;

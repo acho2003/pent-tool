@@ -52,6 +52,7 @@ type IdentityDiscovery struct {
 type CoverageProof struct {
 	IdentityDiscovery    []IdentityDiscovery    `json:"identity_discovery,omitempty"`
 	AuthorizationResults []AuthorizationResult  `json:"authorization_results,omitempty"`
+	AccessMatrix         []AccessMatrixResult   `json:"access_matrix,omitempty"`
 	Items                map[string][]ProofItem `json:"-"`
 	ExpandedEnabled      bool                   `json:"expanded_enabled"`
 	Approved             int                    `json:"approved"`
@@ -99,6 +100,10 @@ func BuildCoverageProof(surfaces []AttackSurface, runs []Run) CoverageProof {
 		for _, result := range run.AuthorizationResults {
 			result.URL = SafeTelemetryURL(result.URL)
 			proof.AuthorizationResults = append(proof.AuthorizationResults, result)
+		}
+		for _, result := range run.AccessMatrix {
+			result.URL = SafeTelemetryURL(result.URL)
+			proof.AccessMatrix = append(proof.AccessMatrix, result)
 		}
 	}
 	type sets struct {

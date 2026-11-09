@@ -16,7 +16,7 @@ import (
 
 func scannerUsesWebAuth(name string) bool {
 	switch name {
-	case "zap", "nuclei", "wapiti", "dalfox", "schemathesis", "apiwrites", "katana":
+	case "zap", "nuclei", "wapiti", "dalfox", "schemathesis", "authz-matrix", "apiwrites", "katana":
 		return true
 	}
 	return false

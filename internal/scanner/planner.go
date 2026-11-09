@@ -81,8 +81,8 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 23: multiformat dependency and explicit version evidence correlation;
-// version 29: Schemathesis API fuzzing).
-const PlanRegistryVersion = "29"
+// version 29: Schemathesis API fuzzing; version 30: the identity access matrix).
+const PlanRegistryVersion = "30"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -228,6 +228,10 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					// Selected by evidence, not by default: only a target with a bound
 					// API definition gets schema-driven fuzzing.
 					state, code, reason = PlanSelected, "api_definition.bound", "An API definition is bound to this target, so its approved read-only OpenAPI operations are fuzzed through the recording gateway."
+					promoted = true
+				}
+				if def.ID == "authz-matrix" && !requestedCustom && state == PlanOptional && cfg.WorkflowVersion == "unified-v1" && targetIdentityCount(cfg, target.ID) >= 2 {
+					state, code, reason = PlanSelected, "identities.multiple", "Two or more identities are bound to this target, so their observed read-only requests are compared across identities."
 					promoted = true
 				}
 				if requestedCustom && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
@@ -665,4 +669,20 @@ func targetHasAPIDefinition(cfg assessment.AssessmentConfig, targetID string) bo
 		}
 	}
 	return len(cfg.APIDefinitions) == 0 && len(cfg.APIDefinitionIDs) > 0 && len(cfg.Targets) == 1 && cfg.Targets[0].ID == targetID
+}
+
+// targetIdentityCount counts the distinct web identities bound to the target.
+func targetIdentityCount(cfg assessment.AssessmentConfig, targetID string) int {
+	identities := map[string]bool{}
+	for _, binding := range cfg.Access {
+		switch binding.Kind {
+		case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin:
+		default:
+			continue
+		}
+		if slices.Contains(binding.TargetIDs, targetID) {
+			identities[binding.Identity] = true
+		}
+	}
+	return len(identities)
 }

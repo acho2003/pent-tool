@@ -199,6 +199,7 @@ type Run struct {
 	AuthIdentity          string                `json:"auth_identity,omitempty"`
 	AuthRole              string                `json:"auth_role,omitempty"`
 	AuthorizationResults  []AuthorizationResult `json:"authorization_results,omitempty"`
+	AccessMatrix          []AccessMatrixResult  `json:"access_matrix,omitempty"`
 	WorkflowVersion       string                `json:"workflow_version,omitempty"`
 	TemplateInventoryPath string                `json:"template_inventory_path,omitempty"`
 	DefinitionImports     []DefinitionImport    `json:"definition_imports,omitempty"`

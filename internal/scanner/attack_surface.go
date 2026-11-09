@@ -775,7 +775,7 @@ func dispatchTargetsWithPolicy(surface *AttackSurface, scannerName string, max i
 			continue
 		}
 		eligible, reason := endpointEligibleWithPolicy(*ep, scannerName, scope, expanded)
-		if expanded && scannerName != "apichecks" && ep.AuthContextID != "" && ep.AuthContextID != inventoryID(surface.Scope, "target-bound") && ep.AuthContextID != contextID {
+		if expanded && scannerName != "apichecks" && scannerName != "authz-matrix" && ep.AuthContextID != "" && ep.AuthContextID != inventoryID(surface.Scope, "target-bound") && ep.AuthContextID != contextID {
 			eligible, reason = false, "request requires a separate named authentication context"
 		}
 		status := "skipped"
@@ -907,6 +907,8 @@ func endpointEligibleWithPolicy(ep AttackSurfaceEndpoint, scannerName string, sc
 			}
 		}
 		return false, "endpoint has no query parameter"
+	case "authz-matrix":
+		return accessMatrixEligible(ep)
 	case "schemathesis":
 		return false, "Schemathesis tests OpenAPI operations from the approved definition, not individual recorded requests; see its operation manifest"
 	case "nikto", "testssl":

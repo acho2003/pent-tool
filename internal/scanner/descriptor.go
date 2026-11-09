@@ -144,7 +144,7 @@ func stageForScanner(id string) string {
 		return StageTLS
 	case "dalfox":
 		return StageValidation
-	case "apichecks":
+	case "apichecks", "authz-matrix":
 		return StageValidation
 	case "apiwrites", "nextjs-actions", "nextjs-boundaries":
 		return StageWrite

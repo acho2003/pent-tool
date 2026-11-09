@@ -23,7 +23,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "nextjs-boundaries" || id == "kube-exposure" || id == "nextjs-assets" || id == "nextjs-sast" || id == "nextjs-deps" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "nextjs-boundaries" || id == "kube-exposure" || id == "nextjs-assets" || id == "nextjs-sast" || id == "nextjs-deps" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" || id == "authz-matrix" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "schemathesis" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -137,6 +137,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["httpx"] = httpxRunner{}
 	byName["sslyze"] = sslyzeRunner{}
 	byName["apichecks"] = apiChecksRunner{}
+	byName["authz-matrix"] = accessMatrixRunner{}
 	byName["kube-exposure"] = kubeExposureRunner{}
 	byName["nextjs-assets"] = nextjsAssetsRunner{}
 	byName["nextjs-sast"] = nextjsSASTRunner{}
@@ -593,6 +594,15 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			addAuthorizationRequestVariants(surface, req)
 			sealInventoryRequests(surface, replayStore, assessmentTargetScope(targetByID[job.TargetID]))
 			hydrateRequestReplay(surface, replayStore, assessmentTargetScope(targetByID[job.TargetID]))
+		}
+		if expanded && job.Scanner == "authz-matrix" {
+			// The matrix compares identities itself; it is not routed per identity.
+			req.Inventory = surface
+			for _, auth := range p.Config.AssessmentAuthContexts {
+				if auth.TargetID == job.TargetID {
+					req.AuthContexts = append(req.AuthContexts, auth)
+				}
+			}
 		}
 		if job.Scanner == "nextjs-assets" {
 			// Read-only: the adapter takes recorded script URLs from the inventory.

@@ -168,6 +168,9 @@ func assessmentCoverageLines(coverage assessmentCoverageResponse) []string {
 				lines = append(lines, line)
 			}
 		}
+		for _, result := range proof.AccessMatrix {
+			lines = append(lines, fmt.Sprintf("Access matrix: %s %s owned by %s (%s, HTTP %d) as %s (%s): %s, HTTP %d, anonymous HTTP %d. %s", result.Method, result.URL, result.OwnerIdentity, result.OwnerRole, result.OwnerStatus, result.Identity, result.Role, result.Verdict, result.ResponseCode, result.AnonymousStatus, result.Reason))
+		}
 		for _, metric := range proof.NotTracked {
 			lines = append(lines, metric+": NOT TRACKED")
 		}

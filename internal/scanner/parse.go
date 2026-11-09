@@ -233,6 +233,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseDalfox(run.ArtifactPath)
 	case "schemathesis":
 		return parseSchemathesis(run.ArtifactPath)
+	case "authz-matrix":
+		return parseAccessMatrix(run.ArtifactPath)
 	case "wapiti":
 		return parseWapiti(run.ArtifactPath)
 	case "kube-bench":

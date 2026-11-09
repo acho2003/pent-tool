@@ -253,3 +253,33 @@ decodes `$base64` values to redact secrets a target echoes back.
 Schemathesis coverage is per operation, not per recorded request: inventory
 endpoints carry an explicit "tests OpenAPI operations" reason rather than a
 submission claim, and gateway events show the requests actually sent.
+
+## Identity access matrix (Autorize-style)
+
+The Autorize Burp extension needs an interactive Burp session, so it cannot run
+inside automated assessments. Registry version 30 adds `authz-matrix`, a native
+check with the same idea. It is optional and selected automatically for
+unified-v1 targets with two or more bound identities; it is not split into
+per-identity jobs because it compares identities itself.
+
+It replays GET requests that a verified identity actually observed while
+browsing (not seeds, schema operations or HEAD), skipping routes whose names
+suggest a state change, at most 100 per attempt. Each request is sent again as
+its owner (a fresh baseline), anonymously, and as every other verified identity,
+each with only its own renewed credential, through the same scoped client and
+budget as the native API checks. Bodies are compared after removing CSRF tokens,
+nonces, timestamps and long opaque tokens.
+
+Autorize reports every equal response as a bypass, which floods results with
+shared and public pages. Here a `bypass_suspected` row and its tentative
+CWE-285 finding need all of: a 2xx owner baseline of at least 64 bytes, a denied
+anonymous control (401/403/404 or a redirect away), an equivalent response for
+the other identity, and that identity's own browsing never reaching the request.
+Other rows are `enforced`, `denied` (anonymous), `shared`, `public`,
+`different_response`, `equivalent_unprotected_unknown` or `unknown`, each with a
+reason. Sessions are verified again after the matrix; rows for an identity that
+lost its session become unknown and its findings are withheld, and a stopped
+matrix withholds all suspected bypasses. Results appear as `access_matrix` in
+coverage, the scan detail page and the offline report. Role expectations
+supplied for the strict controlled-resource comparison remain the way to turn a
+tentative result into a confirmed one.
