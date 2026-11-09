@@ -1,5 +1,6 @@
 export interface GitHubRepository { id: number; full_name: string; clone_url: string; default_branch: string; private: boolean; archived: boolean; fork: boolean }
 import type {
+	IntegrationInfo,
  DiscoveryPreview, DiscoveryRevision, EndpointTrace,
 	AssessmentCoverage,
 	AttackSurfaceResponse,
@@ -375,6 +376,7 @@ export const api = {
 		return http<AttackSurfaceResponse>(`/api/scans/${scanId}/attack-surface${query.size ? `?${query}` : ""}`);
 	},
 	scannerStatus: () => http<{ scanners: ToolInfo[] }>("/api/scanners/status"),
+	integrations: () => http<{ registry_version: string; integrations: IntegrationInfo[] }>("/api/scanners/integrations"),
 	discoverGitHubOrganization: (organization: string, credential_id?: string) =>
 		http<{ repositories: GitHubRepository[] }>("/api/github/organization/repositories", { method: "POST", json: { organization, credential_id } }),
 	planAssessment: (config: AssessmentConfig) =>

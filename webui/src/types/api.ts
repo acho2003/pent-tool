@@ -101,6 +101,20 @@ export interface ToolInfo {
   endpoint_configured?: boolean;
 }
 
+export interface IntegrationInfo {
+  id: string;
+  name: string;
+  group: string;
+  summary: string;
+  integration: "bundled" | "service" | "built-in" | "operator-supplied" | string;
+  available: boolean;
+  availability_reason?: string;
+  path?: string;
+  version?: string;
+  default_selection?: string;
+  risk?: string;
+}
+
 export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
 export interface AssessmentTarget { id: string; type: string; value: string; branch?: string; related_to?: string; }

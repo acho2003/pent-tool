@@ -645,6 +645,7 @@ var dashboardRoutes = []string{
 	"/api/reports/",
 	"/api/scanners/status",
 	"/api/scanners/registry",
+	"/api/scanners/integrations",
 	"/api/scans/plan",
 	"/api/credentials",
 	"/api/github/organization/repositories",
@@ -990,6 +991,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/reports/", s.handleReportAction)
 	mux.HandleFunc("/api/scanners/status", s.handleScannerStatus)
 	mux.HandleFunc("/api/scanners/registry", s.handleScannerRegistry)
+	mux.HandleFunc("/api/scanners/integrations", s.handleIntegrations)
 	mux.HandleFunc("/api/credentials", s.handleCredentials)
 	mux.HandleFunc("/api/github/organization/repositories", s.handleGitHubOrganization)
 	mux.HandleFunc("/api/credentials/", s.handleCredentialDetail)
