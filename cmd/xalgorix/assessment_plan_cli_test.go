@@ -88,7 +88,12 @@ done
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "assessment.json")
-	assessmentJSON := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://192.0.2.1/"}]}`
+	// Pin the scanner set so the structured-output assertion stays deterministic
+	// and fast: katana is always added as the crawl stage, nuclei is the one
+	// custom-selected vulnerability scanner. Auto scanners (e.g. security-headers)
+	// are intentionally excluded here so the test does not depend on reaching the
+	// unroutable fixture target.
+	assessmentJSON := `{"assessment_mode":"BLACK_BOX","assessment_types":["WEB_APPLICATION"],"assessment_targets":[{"id":"app","type":"URL","value":"https://192.0.2.1/"}],"scanner_selection":{"mode":"custom","variants":["nuclei"]}}`
 	if err := os.WriteFile(configPath, []byte(assessmentJSON), 0600); err != nil {
 		t.Fatal(err)
 	}

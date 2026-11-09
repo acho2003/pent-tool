@@ -82,8 +82,9 @@ type PlanInput struct {
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 23: multiformat dependency and explicit version evidence correlation;
 // version 29: Schemathesis API fuzzing; version 30: the identity access matrix;
-// version 31: operator-supplied CodeQL; version 32: consented Nuclei OAST jobs).
-const PlanRegistryVersion = "32"
+// version 31: operator-supplied CodeQL; version 32: consented Nuclei OAST jobs;
+// version 33: passive security-header check).
+const PlanRegistryVersion = "33"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -120,6 +121,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	toolVersions["actuator-catalog"] = actuatorCatalogVersion
 	toolVersions["vcs-exposure-catalog"] = vcsCatalogVersion
 	toolVersions["exposed-files-catalog"] = exposedFilesCatalogVersion
+	toolVersions["security-headers-catalog"] = securityHeadersCatalogVersion
 	toolVersions["nextjs-advisories"] = fmt.Sprintf("%s:%x", nextjsAdvisoriesVersion, sha256.Sum256(nextjsAdvisoriesJSON))
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: toolVersions}
 	for i := range plan.Capabilities {

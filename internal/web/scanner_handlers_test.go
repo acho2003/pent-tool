@@ -380,13 +380,19 @@ func TestTypedAssessmentSavePersistsPlanSnapshotAndFingerprint(t *testing.T) {
 
 func TestTypedAssessmentStartRejectsPlanWithoutRunnableAdapters(t *testing.T) {
 	s := newTestServer(t, nil)
-	s.cfg.NucleiPath = "xalgorix-test-missing-nuclei"
+	// A network assessment whose every adapter is an external tool, all made
+	// unavailable: nmap/masscan missing and Greenbone unconfigured. Web adapters
+	// (including the built-in security-header check) do not apply to an IP
+	// target, so this plan has no runnable adapter and must be rejected.
+	s.cfg.NmapPath = "xalgorix-test-missing-nmap"
+	s.cfg.MasscanPath = "xalgorix-test-missing-masscan"
+	s.cfg.NiktoPath = "xalgorix-test-missing-nikto"
 	s.cfg.TestsslPath = "xalgorix-test-missing-testssl"
-	s.cfg.ZAPURL = ""
-	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeWebApplication}, Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/Portal/"}}, Profile: "web-gentle"}
+	s.cfg.GVMHost, s.cfg.GVMSocket = "", ""
+	cfg := assessment.AssessmentConfig{Mode: assessment.ModeBlackBox, Types: []assessment.Type{assessment.TypeNetwork}, Targets: []assessment.Target{{ID: "host", Kind: assessment.KindIP, Value: "192.0.2.10"}}, Profile: "web-gentle"}
 	plan := s.buildAssessmentPlan(cfg)
 	request, err := json.Marshal(map[string]any{
-		"assessment": cfg, "targets": []string{"https://app.example.test/Portal/"}, "profile": "web-gentle", "plan_fingerprint": plan.Fingerprint,
+		"assessment": cfg, "targets": []string{"192.0.2.10"}, "profile": "web-gentle", "plan_fingerprint": plan.Fingerprint,
 	})
 	if err != nil {
 		t.Fatal(err)
