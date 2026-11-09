@@ -27,7 +27,7 @@ func (s *Server) scannerAvailability() map[string]bool {
 		"trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath, "nextjs-sast": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 		"lynis": s.cfg.SSHPath,
 		// Staged web-pipeline adapters: availability is genuine binary presence.
-		"katana": s.cfg.KatanaPath, "dalfox": s.cfg.DalfoxPath, "wapiti": s.cfg.WapitiPath, "schemathesis": s.cfg.SchemathesisPath,
+		"katana": s.cfg.KatanaPath, "dalfox": s.cfg.DalfoxPath, "wapiti": s.cfg.WapitiPath, "schemathesis": s.cfg.SchemathesisPath, "codeql": s.cfg.CodeQLPath,
 		// Cloud / Kubernetes posture-audit adapters.
 		"kube-bench": s.cfg.KubeBenchPath, "prowler": s.cfg.ProwlerPath, "scoutsuite": s.cfg.ScoutSuitePath,
 	}
@@ -37,6 +37,10 @@ func (s *Server) scannerAvailability() map[string]bool {
 	}
 	if scanner.MasscanCapabilityReason() != "" {
 		available["masscan"] = false
+	}
+	// CodeQL is operator-supplied and needs a confirmed license entitlement.
+	if scanner.CodeQLUnavailableReason(s.cfg.CodeQLPath, s.cfg.CodeQLLicenseAccepted, exec.LookPath) != "" {
+		available["codeql"] = false
 	}
 	// Typed assessment planning requires an explicitly dedicated managed ZAP
 	// backend; a configured shared daemon is not sufficient evidence.
@@ -103,6 +107,9 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 		if reason := scanner.MasscanCapabilityReason(); reason != "" {
 			unavailableReasons["masscan"] = reason
 		}
+	}
+	if reason := scanner.CodeQLUnavailableReason(s.cfg.CodeQLPath, s.cfg.CodeQLLicenseAccepted, exec.LookPath); reason != "" {
+		unavailableReasons["codeql"] = reason
 	}
 	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), UnavailabilityReasons: unavailableReasons, CredentialAvailability: credentialAvailability, ToolVersions: s.toolVersions, CredentialRevisions: credentialRevisions})
 	plan.Errors = append(plan.Errors, s.assessmentScopeProblems(cfg, allowLoopbackPorts)...)
@@ -252,6 +259,9 @@ func (s *Server) handleScannerRegistry(w http.ResponseWriter, r *http.Request) {
 		}
 		if definitions[i].ID == "masscan" && !definitions[i].Available {
 			definitions[i].AvailabilityReason = scanner.MasscanCapabilityReason()
+		}
+		if definitions[i].ID == "codeql" && !definitions[i].Available {
+			definitions[i].AvailabilityReason = scanner.CodeQLUnavailableReason(s.cfg.CodeQLPath, s.cfg.CodeQLLicenseAccepted, exec.LookPath)
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

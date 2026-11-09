@@ -81,8 +81,9 @@ type PlanInput struct {
 // PlanRegistryVersion pins scanner, stage and preparation semantics that affect
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 23: multiformat dependency and explicit version evidence correlation;
-// version 29: Schemathesis API fuzzing; version 30: the identity access matrix).
-const PlanRegistryVersion = "30"
+// version 29: Schemathesis API fuzzing; version 30: the identity access matrix;
+// version 31: operator-supplied CodeQL).
+const PlanRegistryVersion = "31"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -228,6 +229,12 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					// Selected by evidence, not by default: only a target with a bound
 					// API definition gets schema-driven fuzzing.
 					state, code, reason = PlanSelected, "api_definition.bound", "An API definition is bound to this target, so its approved read-only OpenAPI operations are fuzzed through the recording gateway."
+					promoted = true
+				}
+				if def.ID == "codeql" && !requestedCustom && state == PlanOptional && input.Availability["codeql"] {
+					// Available only when the operator supplied the CLI and confirmed
+					// its license; languages are detected in the prepared source.
+					state, code, reason = PlanSelected, "codeql.operator_enabled", "The operator supplied CodeQL and confirmed its license; languages extracted without a build are analyzed."
 					promoted = true
 				}
 				if def.ID == "authz-matrix" && !requestedCustom && state == PlanOptional && cfg.WorkflowVersion == "unified-v1" && targetIdentityCount(cfg, target.ID) >= 2 {

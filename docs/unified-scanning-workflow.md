@@ -283,3 +283,33 @@ matrix withholds all suspected bypasses. Results appear as `access_matrix` in
 coverage, the scan detail page and the offline report. Role expectations
 supplied for the strict controlled-resource comparison remain the way to turn a
 tentative result into a confirmed one.
+
+## CodeQL (operator-supplied)
+
+CodeQL is not bundled in the image. Its CLI terms allow free use only for
+open-source code, academic research and demonstration, require a GitHub
+Advanced Security entitlement for other code, and do not allow redistribution,
+while this repository publishes images. Registry version 31 therefore adds a
+`codeql` source adapter that stays unavailable, with the reason shown in setup
+and in the plan, until the operator:
+
+1. downloads a CodeQL bundle for the container's architecture (for example
+   `codeql-bundle-linux-arm64.tar.gz` or `codeql-bundle-linux64.tar.gz` from the
+   `github/codeql-action` releases) and mounts it, for example at `/opt/codeql`;
+2. sets `XALGORIX_CODEQL_PATH=/opt/codeql/codeql`; and
+3. sets `XALGORIX_CODEQL_LICENSE_ACCEPTED=1` only if the deployment is entitled
+   to analyze the code it will scan.
+
+When available, it is selected automatically for source-code assessments. The
+runner detects languages in the prepared checkout (skipping vendored and build
+directories) and analyzes, one at a time, those CodeQL extracts without a build:
+GitHub Actions workflows, C#, Java, JavaScript/TypeScript, Python and Ruby. The
+runtime deliberately has no compilers, so detected C/C++, Go, Kotlin, Swift and
+Rust sources are recorded as gaps rather than skipped silently. Each language
+runs `database create --build-mode=none` and `database analyze` with the default
+code-scanning suite, without downloading query packs; the database (a full copy
+of the source) is deleted afterwards and the SARIF is sanitized. Severity follows
+each rule's `security-severity` score with GitHub's thresholds, CWE comes from
+the rule tags and precision is kept as confidence. A failed language, a spent
+time budget (`XALGORIX_CODEQL_TIMEOUT_SECONDS`, default 3600) or a detected
+language that needs a build leaves the run partial.

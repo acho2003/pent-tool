@@ -43,6 +43,9 @@ type Config struct {
 	BrowserLocalOrigins   []string
 	DalfoxPath            string
 	SchemathesisPath      string
+	CodeQLPath            string
+	CodeQLLicenseAccepted bool
+	CodeQLTimeoutSec      int
 	WapitiPath            string
 	KubeBenchPath         string
 	ProwlerPath           string
@@ -282,6 +285,9 @@ func load() *Config {
 		BrowserLocalOrigins:   strings.Split(os.Getenv("XALGORIX_BROWSER_LOCAL_ORIGINS"), ","),
 		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
 		SchemathesisPath:      envOr("XALGORIX_SCHEMATHESIS_PATH", "schemathesis"),
+		CodeQLPath:            envOr("XALGORIX_CODEQL_PATH", "codeql"),
+		CodeQLLicenseAccepted: envOrBool("XALGORIX_CODEQL_LICENSE_ACCEPTED", false),
+		CodeQLTimeoutSec:      envOrInt("XALGORIX_CODEQL_TIMEOUT_SECONDS", 3600),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
 		KubeBenchPath:         envOr("XALGORIX_KUBEBENCH_PATH", "kube-bench"),
 		ProwlerPath:           envOr("XALGORIX_PROWLER_PATH", "prowler"),

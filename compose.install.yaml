@@ -30,6 +30,10 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       XALGORIX_UNIFIED_WORKFLOW: ${XALGORIX_UNIFIED_WORKFLOW:-0}
+      # CodeQL is not bundled. Mount an entitled CLI bundle (for example at
+      # /opt/codeql) and confirm the license only if this deployment may use it.
+      XALGORIX_CODEQL_PATH: ${XALGORIX_CODEQL_PATH:-codeql}
+      XALGORIX_CODEQL_LICENSE_ACCEPTED: ${XALGORIX_CODEQL_LICENSE_ACCEPTED:-0}
       XALGORIX_SCANNER_GATEWAY_HOST: xalgorix
       XALGORIX_ZAP_URL: http://zap:8080
       XALGORIX_ZAP_API_KEY: ${XALGORIX_ZAP_API_KEY:-xalgorix-internal-zap}
