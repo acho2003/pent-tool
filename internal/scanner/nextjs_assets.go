@@ -21,7 +21,7 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v7"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v8"
 
 const (
 	nextjsMaxScripts      = 40
@@ -245,8 +245,11 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		}
 		if finding := nextjsPrivateKeyFinding(req, raw, body, eventsPath); finding != nil {
 			findings = append(findings, *finding)
-			exposedKeys[raw] = true
 		}
+		// Detection-only secret scanning of the asset body already in memory:
+		// provider keys, misused NEXT_PUBLIC_ secret variables and internal URLs.
+		findings = append(findings, nextjsBundleSecretFindings(req, raw, body, eventsPath)...)
+		exposedKeys[raw] = true
 	}
 	scripts := nextjsInventoryScripts(req)
 	page := *base
@@ -262,6 +265,9 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		html := string(res.body)
 		if strings.Contains(html, "__NEXT_DATA__") {
 			addSignal("__NEXT_DATA__ page data")
+			if req.Profile == ProfileNextjsDeep {
+				findings = append(findings, nextjsNextDataFindings(req, page.String(), res.body, eventsPath)...)
+			}
 		}
 		if strings.Contains(html, "self.__next_f") {
 			addSignal("App Router flight data")
