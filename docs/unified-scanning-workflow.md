@@ -347,3 +347,37 @@ a disposable internal network: the payload reached the local target through the
 gateway, the target's callback was matched, the gateway saw only target traffic
 and the token did not appear in saved output. Nuclei needs the server as a URL
 with a scheme; a bare hostname makes it try HTTPS on port 443 only.
+
+## Detection-only secret, header and exposure checks
+
+Registry version 33 adds four passive detection improvements. None send a
+payload, submit a form or change state; each is a read-only GET and
+pattern-matching, and no secret value is ever written to the findings artifact.
+
+- **Served-bundle secret scanning (nextjs-assets).** The Next.js asset job
+  already downloads every client bundle; it now also scans those bodies (no
+  extra request) for curated high-confidence provider credentials (AWS, Google,
+  GitHub, GitLab, Slack, Stripe secret/restricted, SendGrid, npm, OpenAI,
+  Twilio, Square, FCM, PEM private keys), secret-named `NEXT_PUBLIC_` variables
+  misused as the public prefix compiles them into the bundle, and internal or
+  non-routable URLs. Publicly safe values (Stripe publishable keys, the Firebase
+  web apiKey) are deliberately excluded. Findings name the provider and a safe
+  prefix only.
+- **`__NEXT_DATA__` config leaks (nextjs-assets).** The serialized page data is
+  parsed for secret-named prop keys with real values and for a populated
+  `serverRuntimeConfig`/`runtimeConfig` object that reached the client. Evidence
+  reports the key path, never the value.
+- **Next.js exposed files (exposed-files, catalog v2).** Adds the Next.js env
+  family (`.env.development`, `.env.development.local`, `.env.test`) and the
+  framework config source (`next.config.js`/`.mjs`/`.ts`). The config classifier
+  requires a module export plus a Next.js config-shape marker, so a generic
+  served `.js` file is not misreported.
+- **Passive security headers (security-headers).** A new web adapter selected
+  automatically for URL web/API targets. One GET on the target root, then a
+  check for missing/weak HSTS (https only), missing/weak CSP, missing
+  clickjacking protection (X-Frame-Options or CSP frame-ancestors), missing
+  `X-Content-Type-Options: nosniff`, missing Referrer-Policy, and software
+  version banners. Findings map to the existing missing_security_header class so
+  ZAP/Nikto results dedupe with them by host. It validates each request through
+  the scope guard, so it is gateway-equivalent and carries no direct-egress
+  caveat.
