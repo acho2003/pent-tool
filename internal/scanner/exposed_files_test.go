@@ -94,7 +94,7 @@ func TestExposedFilesClassifierRequiresSignature(t *testing.T) {
 }
 
 func TestExposedFilesCatalogIsDeterministic(t *testing.T) {
-	if exposedFilesCatalogVersion != "exposed-files-v1" {
+	if exposedFilesCatalogVersion != "exposed-files-v2" {
 		t.Fatalf("unexpected catalog version: %s", exposedFilesCatalogVersion)
 	}
 	seen := map[string]bool{}
@@ -103,5 +103,42 @@ func TestExposedFilesCatalogIsDeterministic(t *testing.T) {
 			t.Fatalf("catalog contains an invalid or duplicate entry: %+v", check)
 		}
 		seen[check.ID] = true
+	}
+}
+
+func TestExposedFilesDetectsNextjsConfigAndDevEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/next.config.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = w.Write([]byte("/** @type {import('next').NextConfig} */\nconst nextConfig = { reactStrictMode: true, images: { domains: ['cdn.internal'] }, async rewrites() { return [] } };\nmodule.exports = nextConfig;\n"))
+		case "/.env.development.local":
+			_, _ = w.Write([]byte("NEXT_PUBLIC_API=https://api.internal\nDB_PASSWORD=dev-secret\n"))
+		case "/app.config.js":
+			// A served generic JS file that is NOT a Next.js config: must not match.
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = w.Write([]byte("module.exports = { greeting: 'hello', retries: 3 };\n"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	target := server.URL
+	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}}
+	scope := assessment.AppScopeForTarget(cfg, "app")
+	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 50, 0)}, nil)
+	if run.Status != "completed" {
+		t.Fatalf("status=%q reason=%q", run.Status, run.Reason)
+	}
+	data, _ := os.ReadFile(run.ArtifactPath)
+	text := string(data)
+	if !strings.Contains(text, "Exposed Next.js configuration source") {
+		t.Fatalf("next.config.js exposure not reported: %s", text)
+	}
+	if !strings.Contains(text, "Exposed environment file with configuration secrets") {
+		t.Fatalf(".env.development.local not reported: %s", text)
+	}
+	if strings.Contains(text, "dev-secret") || strings.Contains(text, "api.internal") {
+		t.Fatalf("a secret value leaked into the artifact: %s", text)
 	}
 }

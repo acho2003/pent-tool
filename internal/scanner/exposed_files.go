@@ -9,7 +9,8 @@ import (
 )
 
 // exposedFilesCatalogVersion is part of the plan fingerprint. Keep it small.
-const exposedFilesCatalogVersion = "exposed-files-v1"
+// v2 adds the Next.js env family and framework config source paths.
+const exposedFilesCatalogVersion = "exposed-files-v2"
 
 type exposedFilesRunner struct{}
 
@@ -32,6 +33,14 @@ var exposedFilesCatalog = []exposureCheck{
 	{ID: "dotenv-local", Path: "/.env.local", Purpose: "Exposed .env.local file"},
 	{ID: "dotenv-prod", Path: "/.env.production", Purpose: "Exposed .env.production file"},
 	{ID: "dotenv-bak", Path: "/.env.bak", Purpose: "Exposed .env backup"},
+	{ID: "dotenv-dev", Path: "/.env.development", Purpose: "Exposed .env.development file"},
+	{ID: "dotenv-dev-local", Path: "/.env.development.local", Purpose: "Exposed .env.development.local file"},
+	{ID: "dotenv-test", Path: "/.env.test", Purpose: "Exposed .env.test file"},
+	// Next.js framework config is server-side source; it is never meant to be
+	// served and leaks rewrites, allowed image hosts, headers and env wiring.
+	{ID: "nextjs-config-js", Path: "/next.config.js", Purpose: "Exposed Next.js configuration source"},
+	{ID: "nextjs-config-mjs", Path: "/next.config.mjs", Purpose: "Exposed Next.js configuration source"},
+	{ID: "nextjs-config-ts", Path: "/next.config.ts", Purpose: "Exposed Next.js configuration source"},
 	{ID: "aws-credentials", Path: "/.aws/credentials", Purpose: "Exposed AWS credentials file"},
 	{ID: "git-credentials", Path: "/.git-credentials", Purpose: "Exposed git credential store"},
 	{ID: "npmrc", Path: "/.npmrc", Purpose: "Exposed npm configuration"},
@@ -51,6 +60,9 @@ var (
 	gitCredURL    = regexp.MustCompile(`https?://[^/\s]+:[^/@\s]+@`)
 	htpasswdEntry = regexp.MustCompile(`(?m)^[^:\s]+:(\$(apr1|2[aby]|1|5|6)\$|\{SHA\}|[A-Za-z0-9./]{13}$)`)
 	sqlDumpMarker = regexp.MustCompile(`(?i)(insert into|create table|mysql dump|postgresql database dump|drop table)`)
+	// nextConfigShape matches keys that only appear in a Next.js config object,
+	// keeping a generic served .js file from being misread as the config.
+	nextConfigShape = regexp.MustCompile(`(?i)(nextconfig|reactstrictmode|experimental|\brewrites\b|\bredirects\b|\bimages\s*:|poweredbyheader|output\s*:\s*["']standalone["']|async\s+headers)`)
 )
 
 // classifyExposedFile confirms each response matches the target file's signature
@@ -76,9 +88,17 @@ func classifyExposedFile(check exposureCheck, resp *http.Response, body []byte) 
 		return exposureVerdict{Classification: "sensitive_file_exposed", Severity: sev, Title: title}
 	}
 	switch check.ID {
-	case "dotenv", "dotenv-local", "dotenv-prod", "dotenv-bak":
+	case "dotenv", "dotenv-local", "dotenv-prod", "dotenv-bak", "dotenv-dev", "dotenv-dev-local", "dotenv-test":
 		if len(dotenvLine.FindAllIndex(trimmed, 2)) >= 2 {
 			return leak("high", "Exposed environment file with configuration secrets")
+		}
+	case "nextjs-config-js", "nextjs-config-mjs", "nextjs-config-ts":
+		// Confirm it is the config module, not an HTML route or 200 catch-all:
+		// a module export plus a Next.js config shape marker.
+		isModule := strings.Contains(text, "module.exports") || strings.Contains(text, "export default") || strings.Contains(text, "export const")
+		hasConfigShape := nextConfigShape.MatchString(lower)
+		if isModule && hasConfigShape {
+			return leak("medium", "Exposed Next.js configuration source")
 		}
 	case "aws-credentials":
 		if strings.Contains(lower, "aws_access_key_id") || strings.Contains(lower, "aws_secret_access_key") {
