@@ -82,8 +82,8 @@ type PlanInput struct {
 // execution identity. Bumping it deliberately invalidates stored plans and
 // schedules (version 23: multiformat dependency and explicit version evidence correlation;
 // version 29: Schemathesis API fuzzing; version 30: the identity access matrix;
-// version 31: operator-supplied CodeQL).
-const PlanRegistryVersion = "31"
+// version 31: operator-supplied CodeQL; version 32: consented Nuclei OAST jobs).
+const PlanRegistryVersion = "32"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -292,6 +292,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	}
 	ensureApprovedDiscoveryPreparation(&plan, input)
 	plan.Jobs = appendFuzzJobs(cfg, plan.Jobs, input.Availability)
+	appendOASTJobs(&plan, cfg, input.Availability, input.UnavailabilityReasons)
 	writeTargets := map[string]bool{}
 	for _, approval := range cfg.WriteApprovals {
 		if writeTargets[approval.TargetID] {

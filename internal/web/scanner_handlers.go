@@ -38,6 +38,8 @@ func (s *Server) scannerAvailability() map[string]bool {
 	if scanner.MasscanCapabilityReason() != "" {
 		available["masscan"] = false
 	}
+	// Out-of-band Nuclei templates need a self-hosted Interactsh server.
+	available[scanner.NucleiOASTVariant] = available["nuclei"] && scanner.InteractshUnavailableReason(s.cfg.InteractshServer) == ""
 	// CodeQL is operator-supplied and needs a confirmed license entitlement.
 	if scanner.CodeQLUnavailableReason(s.cfg.CodeQLPath, s.cfg.CodeQLLicenseAccepted, exec.LookPath) != "" {
 		available["codeql"] = false
@@ -107,6 +109,9 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 		if reason := scanner.MasscanCapabilityReason(); reason != "" {
 			unavailableReasons["masscan"] = reason
 		}
+	}
+	if reason := scanner.InteractshUnavailableReason(s.cfg.InteractshServer); reason != "" {
+		unavailableReasons[scanner.NucleiOASTVariant] = reason
 	}
 	if reason := scanner.CodeQLUnavailableReason(s.cfg.CodeQLPath, s.cfg.CodeQLLicenseAccepted, exec.LookPath); reason != "" {
 		unavailableReasons["codeql"] = reason

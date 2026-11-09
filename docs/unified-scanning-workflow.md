@@ -313,3 +313,37 @@ each rule's `security-severity` score with GitHub's thresholds, CWE comes from
 the rule tags and precision is kept as confidence. A failed language, a spent
 time budget (`XALGORIX_CODEQL_TIMEOUT_SECONDS`, default 3600) or a detected
 language that needs a build leaves the run partial.
+
+## Out-of-band callback checks (Interactsh)
+
+Ordinary Nuclei jobs keep interactsh disabled (`-ni`) and exclude the `oast`,
+`oob` and `interactsh` template tags. Registry version 32 adds an explicitly
+consented alternative: setting `oast_callbacks` (the "Allow out-of-band callback
+checks" option in setup) plans one extra `nuclei` job with variant
+`nuclei-oast` for each target whose ordinary Nuclei job is selected. It runs
+only the callback templates; every other excluded tag (rce, dos, intrusive,
+brute force, uploads and so on) stays excluded, and it inherits the gateway,
+rate, redirect, signed-template and scope rules of Nuclei. Its endpoint coverage
+and input manifest are keyed `nuclei-oast` so they never overwrite ordinary
+Nuclei coverage. Legacy (non unified-v1) plans warn instead.
+
+Nuclei's default callback servers are ProjectDiscovery's public `oast.*`
+services, so payloads naming the target would reach a third party. Xalgorix
+never uses them: `XALGORIX_INTERACTSH_SERVER` must be the origin of a
+self-hosted `interactsh-server` (for example `https://oast.example.org`), and
+public Interactsh hosts are refused. Without a valid server the consented job is
+planned as unavailable with the reason. `XALGORIX_INTERACTSH_TOKEN` is the
+server's `-token`; it is passed to Nuclei on its command line (like the other
+child-process credentials) and redacted from saved output. For internet-facing
+targets the server needs a public IP and a domain whose DNS is delegated to it.
+
+Target traffic still passes through the recording gateway. Nuclei polls the
+Interactsh server directly, not through the gateway, so that polling is not
+recorded as target coverage. A callback is matched only while Nuclei polls (a
+20-second cooldown follows the last request); later callbacks, or targets that
+cannot reach the server, produce no result, which the run records as a
+limitation. Verified with retained Nuclei 3.11.1 and interactsh-server 1.4.1 on
+a disposable internal network: the payload reached the local target through the
+gateway, the target's callback was matched, the gateway saw only target traffic
+and the token did not appear in saved output. Nuclei needs the server as a URL
+with a scheme; a bare hostname makes it try HTTPS on port 443 only.

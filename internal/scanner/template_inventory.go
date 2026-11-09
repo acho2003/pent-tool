@@ -26,7 +26,15 @@ func saveNucleiTemplateInventory(ctx context.Context, req Request, cfg Config) (
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	args := []string{"-tl", "-silent", "-nc", "-duc", "-dut", "-t", cfg.NucleiTemplatesDir}
-	args = append(args, nucleiPolicyArgs(cfg)...)
+	policy := nucleiPolicyArgs(cfg)
+	if req.OASTServer != "" {
+		oast, err := nucleiOASTArgs(policy, req.OASTServer, req.OASTToken)
+		if err != nil {
+			return "", err
+		}
+		policy = oast
+	}
+	args = append(args, policy...)
 	command := exec.CommandContext(ctx, cfg.NucleiPath, args...)
 	configureCommandCancellation(command)
 	var output limitedTemplateOutput

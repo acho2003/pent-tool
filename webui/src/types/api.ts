@@ -111,6 +111,7 @@ export interface AssessmentConfig {
   nextjs?: { max_pages?: number; max_scripts?: number; max_route_checks?: number; max_requests?: number; max_response_bytes?: number };
   test_environment?: boolean;
   wapiti_mode?: "" | "safe" | "full";
+  oast_callbacks?: boolean;
   fuzz_approvals?: Array<{target_id: string; method: "POST"; path: string; operation_id: string; fixture_ref: string; content_type: "application/x-www-form-urlencoded"; cleanup_method: "DELETE"; cleanup_path: string; scanner: "wapiti"; request_limit: number; repeat_testing_approved: boolean}>;
  workflow_version?: string;
  parent_assessment_id?: string; parent_plan_fingerprint?: string; approval_preview_fingerprint?: string;

@@ -46,6 +46,8 @@ type Config struct {
 	CodeQLPath            string
 	CodeQLLicenseAccepted bool
 	CodeQLTimeoutSec      int
+	InteractshServer      string
+	InteractshToken       string
 	WapitiPath            string
 	KubeBenchPath         string
 	ProwlerPath           string
@@ -288,6 +290,8 @@ func load() *Config {
 		CodeQLPath:            envOr("XALGORIX_CODEQL_PATH", "codeql"),
 		CodeQLLicenseAccepted: envOrBool("XALGORIX_CODEQL_LICENSE_ACCEPTED", false),
 		CodeQLTimeoutSec:      envOrInt("XALGORIX_CODEQL_TIMEOUT_SECONDS", 3600),
+		InteractshServer:      os.Getenv("XALGORIX_INTERACTSH_SERVER"),
+		InteractshToken:       os.Getenv("XALGORIX_INTERACTSH_TOKEN"),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
 		KubeBenchPath:         envOr("XALGORIX_KUBEBENCH_PATH", "kube-bench"),
 		ProwlerPath:           envOr("XALGORIX_PROWLER_PATH", "prowler"),

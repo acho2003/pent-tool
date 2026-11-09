@@ -426,6 +426,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			Profile: plan.Config.Profile, Nextjs: plan.Config.Nextjs, TypedAssessment: true,
 			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment, WapitiMode: plan.Config.WapitiMode,
 		}
+		// Endpoint coverage and input manifests are keyed per scanner; the OAST
+		// variant gets its own key so it never overwrites ordinary Nuclei coverage.
+		coverageName := job.Scanner
+		if job.Variant == NucleiOASTVariant {
+			coverageName = NucleiOASTVariant
+			req.OASTServer, req.OASTToken = p.Config.InteractshServer, p.Config.InteractshToken
+			if req.OASTToken != "" {
+				req.Secrets = append(req.Secrets, req.OASTToken)
+			}
+		}
 		if checkpointErr != nil {
 			run := plannedJobNotRun(job, req, plan.Fingerprint, "workflow checkpoint failed; dependent execution was refused", emit)
 			run.GapKind = GapInterruptedWrite
@@ -612,8 +622,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 		if old, ok := completed[key]; ok && old.Status == "completed" && (!assessmentWebAuthBound(plan.Config.Access, job.TargetID) || old.Authenticated || !scannerUsesWebAuth(job.Scanner)) && VerifyChecksum(old) == nil {
 
-			req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
-			CompleteEndpointCoverage(surface, job.Scanner, old)
+			req.EndpointTargets = dispatchTargetsWithPolicy(surface, coverageName, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
+			CompleteEndpointCoverage(surface, coverageName, old)
 			_ = SaveAttackSurface(scanDir, surface)
 			appendOutcome(job, old)
 			continue
@@ -733,7 +743,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				continue
 			}
 		} else {
-			req.EndpointTargets = dispatchTargetsWithPolicy(surface, job.Scanner, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
+			req.EndpointTargets = dispatchTargetsWithPolicy(surface, coverageName, endpointDispatchLimitForWorkflow(job.Scanner, p.Config.WebMaxEndpoints, expanded), req.AppScope, p.Config.Budget, expanded, req.AuthContextID)
 		}
 		if surface != nil {
 			req.EndpointMethods = map[string]string{}
@@ -761,9 +771,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			continue
 		}
 		if req.WapitiPostApproval == nil && job.Scanner != "nextjs-actions" && job.Scanner != "nextjs-boundaries" {
-			req.InputRequests = BuildScannerInputs(surface, req, job.Scanner)
+			req.InputRequests = BuildScannerInputs(surface, req, coverageName)
 		}
-		manifestPath, manifestErr := SaveScannerInputs(req, job.Scanner)
+		manifestPath, manifestErr := SaveScannerInputs(req, coverageName)
 		if manifestErr != nil {
 			appendOutcome(job, failedPlannedJob(job, req, plan.Fingerprint, "could not persist scanner inputs", emit))
 			continue
@@ -816,7 +826,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		var gateway *RecordingGateway
 		if expanded && req.AppScope != nil && (job.Scanner == "nuclei" || job.Scanner == "wapiti" || job.Scanner == "dalfox" || job.Scanner == "schemathesis") {
 			var err error
-			gateway, err = NewRecordingGateway(jobCtx, req, p.Config, job.Scanner)
+			gateway, err = NewRecordingGateway(jobCtx, req, p.Config, coverageName)
 			if err != nil {
 				jobCancel()
 				unregisterAttempt()
@@ -901,7 +911,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 			emit(Event{Type: typ, Scanner: job.Scanner, Run: run, Output: run.Reason})
 		}
-		CompleteEndpointCoverage(surface, job.Scanner, run)
+		CompleteEndpointCoverage(surface, coverageName, run)
 		_ = SaveAttackSurface(scanDir, surface)
 		appendOutcome(job, run)
 	}

@@ -1327,7 +1327,18 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 	// Every path (typed and legacy) runs the reviewed policy: a redirect never
 	// changes the destination and no template hands a callback to an external
 	// service.
-	args = append(args, nucleiPolicyArgs(cfg)...)
+	policy := nucleiPolicyArgs(cfg)
+	limitations := nucleiPolicyLimitations()
+	if req.OASTServer != "" {
+		// The consented OAST job: callback templates only, against the
+		// deployment's self-hosted Interactsh server.
+		oast, err := nucleiOASTArgs(policy, req.OASTServer, req.OASTToken)
+		if err != nil {
+			return commandSpec{notApp: err.Error(), timeout: cfg.NucleiTimeout}
+		}
+		policy, limitations = oast, nucleiOASTLimitations()
+	}
+	args = append(args, policy...)
 	args = append(args, "-ot")
 	for _, h := range cfg.ScanHeaders {
 		args = append(args, "-H", h)
@@ -1350,7 +1361,7 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 			timeout = remaining
 		}
 	}
-	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: timeout, prepare: prepare, limitations: nucleiPolicyLimitations()}
+	return commandSpec{path: cfg.NucleiPath, args: args, artifact: artifact, timeout: timeout, prepare: prepare, limitations: limitations}
 }
 
 func buildTrivy(req Request, cfg Config) commandSpec {
