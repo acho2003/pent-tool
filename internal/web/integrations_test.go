@@ -47,6 +47,19 @@ func TestIntegrationsListsEveryRegistryToolAndProvider(t *testing.T) {
 	if entry := byID["authz-matrix"]; entry.Integration != "built-in" {
 		t.Errorf("native checks must show as built-in: %+v", entry)
 	}
+	// Built-in checks are compiled into the binary and run via their assessment
+	// runner, so they must report as available rather than "no assessment adapter
+	// in this build".
+	for _, id := range []string{"security-headers", "exposed-files", "nextjs-assets", "vcs-exposure", "actuator"} {
+		entry, ok := byID[id]
+		if !ok {
+			t.Errorf("%s missing", id)
+			continue
+		}
+		if !entry.Available || entry.AvailabilityReason != "" {
+			t.Errorf("built-in check %s must show available with no reason: %+v", id, entry)
+		}
+	}
 	for _, entry := range body.Integrations {
 		if !entry.Available && entry.AvailabilityReason == "" {
 			t.Errorf("unavailable %s needs a reason", entry.ID)

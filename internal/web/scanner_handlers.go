@@ -246,6 +246,15 @@ func (s *Server) assessmentScannerAvailability() map[string]bool {
 	for _, def := range scanner.ScannerRegistry() {
 		if !scanner.HasAssessmentRunner(def.ID) {
 			available[def.ID] = false
+			continue
+		}
+		// Built-in checks have no external binary or service, so scannerAvailability
+		// above does not record them. Their availability is the registry default
+		// the planner also falls back to for an unrecorded ID, so the Integrations
+		// view and selection reflect what actually runs instead of reading an
+		// absent entry as unavailable.
+		if _, recorded := available[def.ID]; !recorded {
+			available[def.ID] = def.Available
 		}
 	}
 	return available
