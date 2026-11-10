@@ -74,7 +74,11 @@ func parseBrowserAssetFindings(path string) ([]Finding, error) {
 		if row.Finding == nil {
 			continue
 		}
-		if row.Finding.Scanner != "browser" || row.Finding.RuleID != "nextjs-authenticated-private-key" || row.Finding.Confidence != "confirmed" {
+		// Accept the authenticated private-key asset finding and the runtime
+		// console-leak findings; both are produced by the browser adapter and
+		// carry confirmed confidence.
+		okRule := row.Finding.RuleID == "nextjs-authenticated-private-key" || strings.HasPrefix(row.Finding.RuleID, "browser-console-")
+		if row.Finding.Scanner != "browser" || !okRule || row.Finding.Confidence != "confirmed" {
 			return findings, fmt.Errorf("unsupported browser finding record")
 		}
 		if len(findings) >= 500 {

@@ -186,6 +186,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	observed := map[string]bool{}
 	assetObserved := map[string]bool{}
 	assetMaps, assetFindings := 0, 0
+	consoleFindings := 0
 	count := 0
 	partial := false
 	limitReasons := map[string]bool{}
@@ -416,6 +417,17 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 			_ = page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{Width: 1366, Height: 900, DeviceScaleFactor: 1})
 			_ = page.SetUserAgent(&proto.NetworkSetUserAgentOverride{UserAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"})
 		}
+		// Capture runtime console output on real crawl pages (not the auth probe)
+		// so credentials, tokens and internal URLs the app logs are detected. The
+		// subscription is attached before navigation and ends when pageCtx is
+		// cancelled below; no extra request is made.
+		var console *consoleCollector
+		if err == nil && !req.BrowserAccessTest {
+			console = &consoleCollector{}
+			_ = proto.RuntimeEnable{}.Call(page)
+			consoleWait := page.EachEvent(console.handle)
+			go consoleWait()
+		}
 		if err == nil && req.BrowserStorage != nil {
 			storage, encodeErr := json.Marshal(req.BrowserStorage)
 			boundURL, _ := json.Marshal(bound.Origin())
@@ -516,6 +528,24 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 		} else if err != nil {
 			markLimit("browser navigation or page loading failed (20-second navigation deadline)")
 		}
+		if console != nil && err == nil {
+			if text := console.joined(); text != "" {
+				for _, finding := range browserConsoleLeakFindings(req, next.url, text, run.ArtifactPath) {
+					mu.Lock()
+					if consoleFindings < 500 {
+						if encErr := encoder.Encode(map[string]any{"finding": finding}); encErr != nil {
+							partial = true
+							limitReasons["browser console finding could not be persisted"] = true
+						}
+						consoleFindings++
+					} else {
+						partial = true
+						limitReasons["browser console finding limit reached"] = true
+					}
+					mu.Unlock()
+				}
+			}
+		}
 		if page != nil {
 			_ = page.Close()
 		}
@@ -540,7 +570,7 @@ func DiscoverBrowser(ctx context.Context, req Request, cfg Config) (run Run) {
 	}
 	authMu.Unlock()
 	run.Completeness = "complete"
-	if assetFindings > 0 {
+	if assetFindings > 0 || consoleFindings > 0 {
 		run.Outcome = "SUCCESS_WITH_FINDINGS"
 	}
 	if req.BrowserAccessTest {
