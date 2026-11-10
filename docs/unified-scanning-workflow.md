@@ -381,3 +381,23 @@ pattern-matching, and no secret value is ever written to the findings artifact.
   ZAP/Nikto results dedupe with them by host. It validates each request through
   the scope guard, so it is gateway-equivalent and carries no direct-egress
   caveat.
+
+A later increment adds three more passive detections in the same style:
+
+- **Insecure cookie attributes (security-headers, catalog v2).** The same root
+  GET's `Set-Cookie` headers are inspected for missing `HttpOnly`, missing
+  `Secure` over HTTPS, and an absent or `SameSite=None` attribute. Session-named
+  cookies raise the HttpOnly/Secure findings to medium. Evidence names the
+  affected cookies only; cookie values are never read.
+- **Development mode in production (nextjs-assets, catalog v9).** The
+  already-fetched landing HTML is checked for markers Next.js emits only in a
+  development build (React Fast Refresh, `webpack-hmr`, the dev error-overlay
+  endpoint, a `development` `__NEXT_DATA__` buildId). A definitive marker reports
+  high. No extra request; evidence names the matched markers only.
+- **Runtime console leaks (browser).** During the authenticated crawl the driver
+  subscribes to each in-scope page's console output and scans it for provider
+  credentials, JWT auth tokens, misused `NEXT_PUBLIC_` secret variables and
+  internal URLs the app logs at runtime. The subscription is attached before
+  navigation and torn down with the page, so no extra request is made. Findings
+  reuse the browser adapter and the served-bundle secret rule set; raw values
+  are never retained.
