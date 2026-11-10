@@ -43,9 +43,6 @@ type Config struct {
 	BrowserLocalOrigins   []string
 	DalfoxPath            string
 	SchemathesisPath      string
-	CodeQLPath            string
-	CodeQLLicenseAccepted bool
-	CodeQLTimeoutSec      int
 	InteractshServer      string
 	InteractshToken       string
 	WapitiPath            string
@@ -287,9 +284,6 @@ func load() *Config {
 		BrowserLocalOrigins:   strings.Split(os.Getenv("XALGORIX_BROWSER_LOCAL_ORIGINS"), ","),
 		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
 		SchemathesisPath:      envOr("XALGORIX_SCHEMATHESIS_PATH", "schemathesis"),
-		CodeQLPath:            envOr("XALGORIX_CODEQL_PATH", "codeql"),
-		CodeQLLicenseAccepted: envOrBool("XALGORIX_CODEQL_LICENSE_ACCEPTED", false),
-		CodeQLTimeoutSec:      envOrInt("XALGORIX_CODEQL_TIMEOUT_SECONDS", 3600),
 		InteractshServer:      os.Getenv("XALGORIX_INTERACTSH_SERVER"),
 		InteractshToken:       os.Getenv("XALGORIX_INTERACTSH_TOKEN"),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),

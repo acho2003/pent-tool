@@ -33,13 +33,10 @@ func TestIntegrationsListsEveryRegistryToolAndProvider(t *testing.T) {
 			t.Errorf("registry tool %s is missing from the integrations page", def.ID)
 		}
 	}
-	for _, id := range []string{"gau", "waybackurls", "chromium", "interactsh", "schemathesis", "authz-matrix", "codeql"} {
+	for _, id := range []string{"gau", "waybackurls", "chromium", "interactsh", "schemathesis", "authz-matrix"} {
 		if _, ok := byID[id]; !ok {
 			t.Errorf("%s is missing", id)
 		}
-	}
-	if entry := byID["codeql"]; entry.Integration != "operator-supplied" || entry.Available || entry.AvailabilityReason == "" {
-		t.Errorf("CodeQL must show as operator-supplied with a reason: %+v", entry)
 	}
 	if entry := byID["interactsh"]; entry.Available || !strings.Contains(entry.AvailabilityReason, "public Interactsh") {
 		t.Errorf("a public Interactsh server must show as unavailable with its reason: %+v", entry)

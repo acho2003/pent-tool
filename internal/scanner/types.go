@@ -280,38 +280,36 @@ type Event struct {
 }
 
 type Config struct {
-	ReplayKey             []byte `json:"-"`
-	NucleiPath            string
-	NucleiTemplatesDir    string
-	TrivyPath             string
-	VulsPath              string
-	VulsSSHConfigPath     string
-	SubfinderPath         string
-	AmassPath             string
-	DNSXPath              string
-	GauPath               string
-	WaybackurlsPath       string
-	SSLyzePath            string
-	HttpxPath             string
-	NmapPath              string
-	MasscanPath           string
-	NiktoPath             string
-	KatanaPath            string
-	KatanaChromePath      string
-	BrowserLocalOrigins   []string
-	DalfoxPath            string
-	SchemathesisPath      string
-	CodeQLPath            string
-	CodeQLLicenseAccepted bool
-	WapitiPath            string
-	KubeBenchPath         string
-	ProwlerPath           string
-	ScoutSuitePath        string
-	SSHPath               string
-	TestsslPath           string
-	SemgrepPath           string
-	GitleaksPath          string
-	OsvPath               string
+	ReplayKey           []byte `json:"-"`
+	NucleiPath          string
+	NucleiTemplatesDir  string
+	TrivyPath           string
+	VulsPath            string
+	VulsSSHConfigPath   string
+	SubfinderPath       string
+	AmassPath           string
+	DNSXPath            string
+	GauPath             string
+	WaybackurlsPath     string
+	SSLyzePath          string
+	HttpxPath           string
+	NmapPath            string
+	MasscanPath         string
+	NiktoPath           string
+	KatanaPath          string
+	KatanaChromePath    string
+	BrowserLocalOrigins []string
+	DalfoxPath          string
+	SchemathesisPath    string
+	WapitiPath          string
+	KubeBenchPath       string
+	ProwlerPath         string
+	ScoutSuitePath      string
+	SSHPath             string
+	TestsslPath         string
+	SemgrepPath         string
+	GitleaksPath        string
+	OsvPath             string
 
 	ZAPURL       string
 	ZAPAPIKey    string
@@ -368,7 +366,6 @@ type Config struct {
 	KatanaTimeout       time.Duration
 	DalfoxTimeout       time.Duration
 	SchemathesisTimeout time.Duration
-	CodeQLTimeout       time.Duration
 	InteractshServer    string
 	InteractshToken     string
 	WapitiTimeout       time.Duration

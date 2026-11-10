@@ -26,7 +26,7 @@ import (
 func ScannerConfig(cfg *config.Config) scanner.Config {
 	return scanner.Config{
 		NucleiPath: cfg.NucleiPath, NucleiTemplatesDir: cfg.NucleiTemplatesDir, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
-		SubfinderPath: cfg.SubfinderPath, AmassPath: cfg.AmassPath, DNSXPath: cfg.DNSXPath, GauPath: cfg.GauPath, WaybackurlsPath: cfg.WaybackurlsPath, SSLyzePath: cfg.SSLyzePath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, KatanaPath: cfg.KatanaPath, KatanaChromePath: cfg.BrowserPath, BrowserLocalOrigins: cfg.BrowserLocalOrigins, DalfoxPath: cfg.DalfoxPath, SchemathesisPath: cfg.SchemathesisPath, CodeQLPath: cfg.CodeQLPath, CodeQLLicenseAccepted: cfg.CodeQLLicenseAccepted, InteractshServer: cfg.InteractshServer, InteractshToken: cfg.InteractshToken, WapitiPath: cfg.WapitiPath, KubeBenchPath: cfg.KubeBenchPath, ProwlerPath: cfg.ProwlerPath, ScoutSuitePath: cfg.ScoutSuitePath, SSHPath: cfg.SSHPath, TestsslPath: cfg.TestsslPath,
+		SubfinderPath: cfg.SubfinderPath, AmassPath: cfg.AmassPath, DNSXPath: cfg.DNSXPath, GauPath: cfg.GauPath, WaybackurlsPath: cfg.WaybackurlsPath, SSLyzePath: cfg.SSLyzePath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, KatanaPath: cfg.KatanaPath, KatanaChromePath: cfg.BrowserPath, BrowserLocalOrigins: cfg.BrowserLocalOrigins, DalfoxPath: cfg.DalfoxPath, SchemathesisPath: cfg.SchemathesisPath, InteractshServer: cfg.InteractshServer, InteractshToken: cfg.InteractshToken, WapitiPath: cfg.WapitiPath, KubeBenchPath: cfg.KubeBenchPath, ProwlerPath: cfg.ProwlerPath, ScoutSuitePath: cfg.ScoutSuitePath, SSHPath: cfg.SSHPath, TestsslPath: cfg.TestsslPath,
 		SemgrepPath: cfg.SemgrepPath, GitleaksPath: cfg.GitleaksPath, OsvPath: cfg.OsvPath,
 		ZAPURL: cfg.ZAPURL, ZAPAPIKey: cfg.ZAPAPIKey, ZAPDedicated: cfg.ZAPDedicated, GVMHost: cfg.GVMHost, GVMPort: cfg.GVMPort, GVMSocket: cfg.GVMSocket, GVMUser: cfg.GVMUsername, GVMPass: cfg.GVMPassword,
 		RateRPS: int(cfg.RateLimitRPS), MaxWorkers: cfg.MaxWorkers, ScanHeaders: append([]string(nil), cfg.ScanHeaders...), MaxOutputBytes: cfg.ScannerMaxOutputBytes,
@@ -40,7 +40,6 @@ func ScannerConfig(cfg *config.Config) scanner.Config {
 		NmapTimeout:     time.Duration(cfg.NmapTimeoutSec) * time.Second,
 		TestsslTimeout:  time.Duration(cfg.TestsslTimeoutSec) * time.Second,
 		SemgrepTimeout:  time.Duration(cfg.SemgrepTimeoutSec) * time.Second,
-		CodeQLTimeout:   time.Duration(cfg.CodeQLTimeoutSec) * time.Second,
 		GitleaksTimeout: time.Duration(cfg.GitleaksTimeoutSec) * time.Second,
 		OsvTimeout:      time.Duration(cfg.OsvTimeoutSec) * time.Second,
 	}

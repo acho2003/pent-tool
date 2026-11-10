@@ -32,7 +32,7 @@ func (s *Server) integrationPaths() map[string]string {
 		"subfinder": s.cfg.SubfinderPath, "amass": s.cfg.AmassPath, "dnsx": s.cfg.DNSXPath, "httpx": s.cfg.HttpxPath,
 		"katana": s.cfg.KatanaPath, "nmap": s.cfg.NmapPath, "masscan": s.cfg.MasscanPath, "nikto": s.cfg.NiktoPath,
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "sslyze": s.cfg.SSLyzePath, "dalfox": s.cfg.DalfoxPath,
-		"wapiti": s.cfg.WapitiPath, "schemathesis": s.cfg.SchemathesisPath, "codeql": s.cfg.CodeQLPath,
+		"wapiti": s.cfg.WapitiPath, "schemathesis": s.cfg.SchemathesisPath,
 		"vuls": s.cfg.VulsPath, "lynis": s.cfg.SSHPath, "trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath,
 		"nextjs-sast": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 		"kube-bench": s.cfg.KubeBenchPath, "prowler": s.cfg.ProwlerPath, "scoutsuite": s.cfg.ScoutSuitePath,
@@ -74,9 +74,6 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			if !entry.Available {
 				entry.AvailabilityReason = "Greenbone credentials and socket or host are required"
 			}
-		case def.ID == "codeql":
-			entry.Integration, entry.Path = "operator-supplied", path
-			entry.AvailabilityReason = scanner.CodeQLUnavailableReason(s.cfg.CodeQLPath, s.cfg.CodeQLLicenseAccepted, exec.LookPath)
 		case hasPath:
 			entry.Integration, entry.Path = "bundled", path
 			if !present(path) {
