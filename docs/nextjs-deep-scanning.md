@@ -352,3 +352,25 @@ entering credentials. It triggers one submit action and prevents an unhandled GE
 form from putting the password in a URL. Cross-origin public subresources use an
 anonymous client without the login cookie jar, including other ports on the same
 hostname. No credential values are added to these diagnostics.
+
+## Tuning the active-scan budget
+
+The `nextjs-deep` profile runs the active web scanners (nuclei, nikto, dalfox,
+ZAP) as well as the passive Next.js checks. By default it allows 50 requests per
+second, up to 3000 endpoints, over a 240-minute web budget shared across the web
+scanners. The budget is divided among the still-pending scanners, so the heavy
+active scanners need enough total time and rate to finish rather than being cut
+off with partial coverage.
+
+For an authorized engagement against your own application you can tune this per
+deployment, without a rebuild, with these environment variables (they apply to
+whichever web profile the scan resolves):
+
+- `XALGORIX_WEB_RATE_RPS` — requests per second (positive integer).
+- `XALGORIX_WEB_MAX_ENDPOINTS` — endpoint cap (positive integer).
+- `XALGORIX_WEB_BUDGET_MINUTES` — total web time budget in minutes; `0` means no
+  time cap (the scan runs until the scanners finish or the endpoint cap is hit).
+
+An unset or invalid value keeps the profile default. These never change the
+write/state-changing or browser policy. Raise the rate only against targets you
+are authorized to scan at that rate.

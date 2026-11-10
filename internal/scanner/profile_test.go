@@ -43,7 +43,29 @@ func TestProfileThoroughNeverAllowsStateChanging(t *testing.T) {
 
 func TestNextjsDeepProfileHasFiniteBudgetsAndNeverApprovesWrites(t *testing.T) {
 	p, ok := ResolveWebProfile(ProfileNextjsDeep)
-	if !ok || p.Name != ProfileNextjsDeep || p.RateRPS != 10 || p.MaxEndpoints != 3000 || p.Budget != 90*time.Minute || !p.Browser || p.AllowStateChanging {
+	if !ok || p.Name != ProfileNextjsDeep || p.RateRPS != 50 || p.MaxEndpoints != 3000 || p.Budget != 240*time.Minute || !p.Browser || p.AllowStateChanging {
 		t.Fatalf("profile=%+v ok=%v", p, ok)
+	}
+}
+
+func TestWebProfileEnvOverrides(t *testing.T) {
+	t.Setenv("XALGORIX_WEB_RATE_RPS", "80")
+	t.Setenv("XALGORIX_WEB_MAX_ENDPOINTS", "5000")
+	t.Setenv("XALGORIX_WEB_BUDGET_MINUTES", "0") // unlimited
+	p, ok := ResolveWebProfile(ProfileNextjsDeep)
+	if !ok || p.RateRPS != 80 || p.MaxEndpoints != 5000 || p.Budget != 0 {
+		t.Fatalf("overrides not applied: %+v", p)
+	}
+	// An override never flips the write/browser policy.
+	if p.AllowStateChanging || !p.Browser {
+		t.Fatalf("overrides changed safety policy: %+v", p)
+	}
+	// Invalid or non-positive rate/endpoints are ignored (default kept).
+	t.Setenv("XALGORIX_WEB_RATE_RPS", "-5")
+	t.Setenv("XALGORIX_WEB_MAX_ENDPOINTS", "notanumber")
+	t.Setenv("XALGORIX_WEB_BUDGET_MINUTES", "")
+	p, _ = ResolveWebProfile(ProfileNextjsDeep)
+	if p.RateRPS != 50 || p.MaxEndpoints != 3000 || p.Budget != 240*time.Minute {
+		t.Fatalf("invalid overrides should keep defaults: %+v", p)
 	}
 }
