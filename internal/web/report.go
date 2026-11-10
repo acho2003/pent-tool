@@ -372,7 +372,7 @@ var agentProseTypes = map[string]bool{
 	"phase":    true,
 }
 
-func collectReconReportSummary(events []WSEvent) reconReportSummary {
+func collectReconReportSummary(events []WSEvent, findings ...VulnSummary) reconReportSummary {
 	var summary reconReportSummary
 	seenDNS := map[string]bool{}
 	seenIP := map[string]bool{}
@@ -394,7 +394,7 @@ func collectReconReportSummary(events []WSEvent) reconReportSummary {
 		"jQuery":     {"jquery"},
 		"Django":     {"django", "csrftoken"},
 		"Flask":      {"flask"},
-		"Spring":     {"spring", "jsessionid"},
+		"Spring":     {"springframework", "x-application-context", "whitelabel error page", "jsessionid"},
 		"Tomcat":     {"tomcat"},
 		"GraphQL":    {"graphql"},
 	}
@@ -454,6 +454,23 @@ func collectReconReportSummary(events []WSEvent) reconReportSummary {
 			if strings.Contains(word, "http://") || strings.Contains(word, "https://") {
 				if u := extractURL(word); u != "" {
 					addUnique(&summary.URLs, seenURL, u, 50)
+				}
+			}
+		}
+	}
+
+	// Technologies are also detected from the parsed findings' evidence, which
+	// reliably carries the target's own responses (headers, served asset paths)
+	// — unlike the scan feed, which can echo a scanner's own probe descriptions
+	// (e.g. the Spring Boot Actuator check) and misreport them as the target's
+	// stack. Only tech signals are taken from findings; hosts/ports/DNS are not.
+	for _, f := range findings {
+		lower := strings.ToLower(strings.Join([]string{f.Title, f.Endpoint, f.Description, f.TechnicalAnalysis}, "\n"))
+		for tech, signals := range techSignals {
+			for _, signal := range signals {
+				if strings.Contains(lower, signal) {
+					addUnique(&summary.Technologies, seenTech, tech, 30)
+					break
 				}
 			}
 		}
@@ -1012,7 +1029,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 	}
 
 	// ─── RECONNAISSANCE FINDINGS ─────────────────────────
-	recon := collectReconReportSummary(scan.Events)
+	recon := collectReconReportSummary(scan.Events, scan.Vulns...)
 	if recon.hasData() {
 		pdf.AddPage()
 		drawRect(0, 0, 210, 297, darkBg)

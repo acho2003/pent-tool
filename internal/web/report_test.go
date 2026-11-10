@@ -311,3 +311,29 @@ func TestCollectReconReportSummary_EmptyEvents(t *testing.T) {
 		t.Error("nil events should produce empty summary")
 	}
 }
+
+func TestReconTechDetectionIgnoresScannerProbesUsesFindings(t *testing.T) {
+	// The scan feed echoes the actuator scanner's own description, which must NOT
+	// be read as the target running Spring.
+	events := []WSEvent{{Type: "tool_call", Output: "Running Spring Boot Actuator exposure checks against the target"}}
+	// The findings carry the target's real responses (Next.js).
+	findings := []VulnSummary{
+		{Title: "Server Leaks Information via X-Powered-By", TechnicalAnalysis: "Evidence excerpt: X-Powered-By: Next.js"},
+		{Title: "Modern Web Application", TechnicalAnalysis: `<script src="/_next/static/chunks/40-abc.js">`},
+	}
+	summary := collectReconReportSummary(events, findings...)
+	has := func(want string) bool {
+		for _, tech := range summary.Technologies {
+			if tech == want {
+				return true
+			}
+		}
+		return false
+	}
+	if has("Spring") {
+		t.Fatalf("Spring must not be detected from a scanner's own probe text: %v", summary.Technologies)
+	}
+	if !has("Next.js") {
+		t.Fatalf("Next.js was not detected from finding evidence: %v", summary.Technologies)
+	}
+}
