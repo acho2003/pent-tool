@@ -169,7 +169,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 			activeReport = append(activeReport, finding)
 		}
 	}
-	copyRec.Vulns = reportFindingsToVulns(collapseNextjsAdvisories(activeReport))
+	copyRec.Vulns = reportFindingsToVulns(collapseDuplicateTitles(collapseNextjsAdvisories(activeReport)))
 	rec.Vulns = append([]VulnSummary(nil), copyRec.Vulns...)
 	copyRec.ReportMode = manifest.Mode
 	copyRec.ReportGeneratedAt = manifest.GeneratedAt
@@ -287,6 +287,46 @@ func collapseNextjsAdvisories(in []reportFinding) []reportFinding {
 		g.ObservationCount = count[key]
 	}
 	return out
+}
+
+// collapseDuplicateTitles merges findings that share an exact title on the same
+// target and scope — e.g. "Missing Content Security Policy" reported by wapiti,
+// zap and nikto as separate findings. It keeps the first as the seed, raises it
+// to the highest severity any duplicate reported, and gathers their evidence
+// (the evidence renderer then deduplicates the combined observations). A merge
+// only happens when the CVEs do not conflict, so two distinct CVE findings that
+// happen to share a title are never collapsed.
+func collapseDuplicateTitles(in []reportFinding) []reportFinding {
+	out := make([]reportFinding, 0, len(in))
+	seed := map[string]int{}
+	for _, f := range in {
+		key := strings.ToLower(strings.TrimSpace(f.Title)) + "\x00" + f.Target + "\x00" + f.Scope
+		if idx, ok := seed[key]; ok && strings.TrimSpace(f.Title) != "" && sameOrEmptyCVE(out[idx].CVE, f.CVE) {
+			g := &out[idx]
+			g.CVE = joinUniqueCSV(g.CVE, f.CVE)
+			g.CWE = joinUniqueCSV(g.CWE, f.CWE)
+			if severityRank[strings.ToLower(f.Severity)] > severityRank[strings.ToLower(g.Severity)] {
+				g.Severity = f.Severity
+			}
+			g.EvidenceItems = append(g.EvidenceItems, f.EvidenceItems...)
+			for _, s := range append([]string{f.Scanner}, f.Scanners...) {
+				if s != "" && !slices.Contains(g.Scanners, s) && s != g.Scanner {
+					g.Scanners = append(g.Scanners, s)
+				}
+			}
+			continue
+		}
+		seed[key] = len(out)
+		out = append(out, f)
+	}
+	return out
+}
+
+// sameOrEmptyCVE reports whether two CVE lists are safe to merge: at least one is
+// empty, or they are identical.
+func sameOrEmptyCVE(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	return a == "" || b == "" || a == b
 }
 
 // joinUniqueCSV merges two comma-separated lists, dropping blanks and duplicates.

@@ -489,3 +489,30 @@ func TestCollapseNextjsAdvisories(t *testing.T) {
 		t.Fatalf("non-advisory finding was altered: %+v", out[1])
 	}
 }
+
+func TestCollapseDuplicateTitles(t *testing.T) {
+	csp := func(scanner, sev string) reportFinding {
+		return reportFinding{SourceID: scanner + ":csp", Scanner: scanner, Target: "https://app.test/", Scope: "s",
+			Title: "Missing Content Security Policy", Severity: sev,
+			EvidenceItems: []reportEvidenceItem{{Scanner: scanner, Description: "CSP not set"}}}
+	}
+	in := []reportFinding{
+		csp("wapiti", "medium"),
+		csp("nikto", "info"),
+		{SourceID: "testssl:breach", Scanner: "testssl", Target: "https://app.test/", Scope: "s", Title: "BREACH", Severity: "medium", CVE: "CVE-2013-3587"},
+		// Same title but a conflicting CVE must NOT merge with another.
+		{SourceID: "a", Scanner: "x", Target: "https://app.test/", Scope: "s", Title: "Dup", Severity: "high", CVE: "CVE-1"},
+		{SourceID: "b", Scanner: "y", Target: "https://app.test/", Scope: "s", Title: "Dup", Severity: "high", CVE: "CVE-2"},
+	}
+	out := collapseDuplicateTitles(in)
+	// CSP x2 -> 1; BREACH -> 1; the two conflicting-CVE "Dup" stay separate -> 4 total.
+	if len(out) != 4 {
+		t.Fatalf("expected 4 findings, got %d: %+v", len(out), out)
+	}
+	if out[0].Severity != "medium" {
+		t.Fatalf("merged CSP should be medium (max), got %q", out[0].Severity)
+	}
+	if len(out[0].EvidenceItems) != 2 || !slices.Contains(out[0].Scanners, "nikto") {
+		t.Fatalf("CSP merge lost evidence/scanners: %+v", out[0])
+	}
+}
