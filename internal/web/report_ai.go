@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -168,7 +169,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 			activeReport = append(activeReport, finding)
 		}
 	}
-	copyRec.Vulns = reportFindingsToVulns(activeReport)
+	copyRec.Vulns = reportFindingsToVulns(collapseNextjsAdvisories(activeReport))
 	rec.Vulns = append([]VulnSummary(nil), copyRec.Vulns...)
 	copyRec.ReportMode = manifest.Mode
 	copyRec.ReportGeneratedAt = manifest.GeneratedAt
@@ -231,6 +232,76 @@ func reportFindingsToVulns(in []reportFinding) []VulnSummary {
 		out = append(out, VulnSummary{ID: f.SourceID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: f.DedupeScope, Title: f.Title, Severity: f.Severity, Status: f.Status, StatusReason: f.StatusReason, Target: f.Target, Scope: f.Scope, Endpoint: displayURL(f.Endpoint), Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, ObservationIDs: append([]string(nil), f.ObservationIDs...), Scanners: append([]string(nil), scanners...), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.AffectedEndpoints...), Description: stripReportBoilerplate(f.Explanation), Impact: stripReportBoilerplate(f.Impact), CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: renderFindingEvidence(f), Remediation: f.Remediation, VerificationMethod: strings.Join(scanners, ", "), Verified: f.Status == string(scanner.StatusConfirmed), Tags: tags})
 	}
 	return out
+}
+
+var severityRank = map[string]int{"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1, "informational": 1}
+
+var nextjsVersionInTitle = regexp.MustCompile(`(?i)next\.?js[ /]+v?(\d+\.\d+\.\d+)`)
+
+// collapseNextjsAdvisories groups a target's Next.js version-advisory findings
+// into one finding. They share a single root cause — the served Next.js version
+// is outdated — and were matched by version only, not tested for exploitability,
+// so listing each as its own critical inflates both the finding count and the
+// risk score. All advisories and their CVEs are kept under the one finding (and
+// the full set remains in the report manifest for traceability). Order is
+// preserved: the first (highest-severity) advisory becomes the group seed.
+func collapseNextjsAdvisories(in []reportFinding) []reportFinding {
+	out := make([]reportFinding, 0, len(in))
+	seed := map[string]int{}
+	count := map[string]int{}
+	for _, f := range in {
+		if !strings.HasPrefix(f.SourceID, "nextjs-advisory:") {
+			out = append(out, f)
+			continue
+		}
+		key := f.Target + "\x00" + f.Scope
+		if idx, ok := seed[key]; ok {
+			count[key]++
+			g := &out[idx]
+			g.CVE = joinUniqueCSV(g.CVE, f.CVE)
+			g.CWE = joinUniqueCSV(g.CWE, f.CWE)
+			if severityRank[strings.ToLower(f.Severity)] > severityRank[strings.ToLower(g.Severity)] {
+				g.Severity = f.Severity
+			}
+			g.EvidenceItems = append(g.EvidenceItems, f.EvidenceItems...)
+			continue
+		}
+		seed[key] = len(out)
+		count[key] = 1
+		out = append(out, f)
+	}
+	for key, idx := range seed {
+		if count[key] <= 1 {
+			continue
+		}
+		g := &out[idx]
+		version := "in use"
+		if m := nextjsVersionInTitle.FindStringSubmatch(g.Title); m != nil {
+			version = m[1]
+		}
+		g.SourceID = "nextjs-advisory-group:" + key
+		g.Title = fmt.Sprintf("Next.js %s is outdated — %d known advisories", version, count[key])
+		g.Explanation = fmt.Sprintf("The served Next.js version (%s) matches %d published security advisories by version alone; exploitability depends on the features and hosting each advisory describes and was not tested. Upgrading Next.js to a patched release clears all of them. The individual advisories, CVEs and fixed-version ranges are listed in the evidence below.", version, count[key])
+		g.Impact = ""
+		g.Remediation = "Upgrade Next.js to the latest patched release."
+		g.ObservationCount = count[key]
+	}
+	return out
+}
+
+// joinUniqueCSV merges two comma-separated lists, dropping blanks and duplicates.
+func joinUniqueCSV(a, b string) string {
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range append(strings.Split(a, ","), strings.Split(b, ",")...) {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	return strings.Join(out, ", ")
 }
 
 // stripReportBoilerplate blanks the generic per-finding Description/Impact lines

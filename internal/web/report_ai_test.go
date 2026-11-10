@@ -452,3 +452,40 @@ func TestRenderFindingEvidenceCollapsesRepeatedObservations(t *testing.T) {
 		t.Fatalf("second distinct alert dropped:\n%s", out)
 	}
 }
+
+func TestCollapseNextjsAdvisories(t *testing.T) {
+	adv := func(cve, title, sev string) reportFinding {
+		return reportFinding{SourceID: "nextjs-advisory:" + cve, Scanner: "nextjs-assets", Target: "https://app.test/",
+			Title: "Next.js 16.2.12: " + title, Severity: sev, CVE: cve, CWE: "CWE-1395",
+			EvidenceItems: []reportEvidenceItem{{Scanner: "nextjs-assets", Description: title}}}
+	}
+	in := []reportFinding{
+		adv("CVE-2026-1", "RCE in image optimization", "critical"),
+		adv("CVE-2026-2", "SSRF in image optimization", "high"),
+		adv("CVE-2026-3", "cache poisoning", "medium"),
+		{SourceID: "wapiti:csp:0", Scanner: "wapiti", Target: "https://app.test/", Title: "Missing Content Security Policy", Severity: "medium"},
+	}
+	out := collapseNextjsAdvisories(in)
+	// 3 advisories collapse to 1; the CSP finding stays -> 2 total.
+	if len(out) != 2 {
+		t.Fatalf("expected 2 findings after collapse, got %d: %+v", len(out), out)
+	}
+	g := out[0]
+	if !strings.Contains(g.Title, "outdated") || !strings.Contains(g.Title, "3 known") {
+		t.Fatalf("group title not set: %q", g.Title)
+	}
+	if g.Severity != "critical" {
+		t.Fatalf("group severity should be the max (critical), got %q", g.Severity)
+	}
+	for _, cve := range []string{"CVE-2026-1", "CVE-2026-2", "CVE-2026-3"} {
+		if !strings.Contains(g.CVE, cve) {
+			t.Fatalf("group dropped %s: %q", cve, g.CVE)
+		}
+	}
+	if len(g.EvidenceItems) != 3 {
+		t.Fatalf("group should keep all 3 advisory evidence items, got %d", len(g.EvidenceItems))
+	}
+	if out[1].Title != "Missing Content Security Policy" {
+		t.Fatalf("non-advisory finding was altered: %+v", out[1])
+	}
+}
