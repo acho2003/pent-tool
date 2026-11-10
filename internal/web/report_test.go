@@ -337,3 +337,30 @@ func TestReconTechDetectionIgnoresScannerProbesUsesFindings(t *testing.T) {
 		t.Fatalf("Next.js was not detected from finding evidence: %v", summary.Technologies)
 	}
 }
+
+func TestMergeScopeReconSurfacesNmapAndLiveURLs(t *testing.T) {
+	recon := reconReportSummary{}
+	scopes := []reportScope{
+		{Kind: "host", Target: "192.0.2.10", OpenPorts: []string{"443/tcp https", "22/tcp ssh"}, Services: []string{"https", "ssh"},
+			LiveURLs: []string{"https://192.0.2.10/"}},
+		{Kind: "source", Target: "repo"}, // non-host scope must be ignored
+	}
+	mergeScopeReconSummary(&recon, scopes)
+	hasIn := func(list []string, want string) bool {
+		for _, v := range list {
+			if v == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasIn(recon.Ports, "443/tcp https") || !hasIn(recon.Ports, "22/tcp ssh") {
+		t.Fatalf("nmap ports not surfaced in recon: %v", recon.Ports)
+	}
+	if !hasIn(recon.URLs, "https://192.0.2.10/") {
+		t.Fatalf("live URL not surfaced: %v", recon.URLs)
+	}
+	if !hasIn(recon.IPAddresses, "192.0.2.10") {
+		t.Fatalf("host IP not surfaced: %v", recon.IPAddresses)
+	}
+}

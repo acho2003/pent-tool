@@ -484,6 +484,43 @@ func collectReconReportSummary(events []WSEvent, findings ...VulnSummary) reconR
 	return summary
 }
 
+// mergeScopeReconSummary enriches the recon section with the authoritative host
+// recon captured in the report scopes — nmap open ports and services, and httpx
+// live URLs — so the section reflects the structured scanner output rather than
+// only what the event feed happened to echo. A scope host that is a bare IP is
+// also recorded as a resolved address.
+func mergeScopeReconSummary(summary *reconReportSummary, scopes []reportScope) {
+	seenMap := func(in []string) map[string]bool {
+		m := make(map[string]bool, len(in))
+		for _, v := range in {
+			m[v] = true
+		}
+		return m
+	}
+	seenPort, seenURL, seenIP := seenMap(summary.Ports), seenMap(summary.URLs), seenMap(summary.IPAddresses)
+	for _, sc := range scopes {
+		if sc.Kind != string(scanner.ScopeHost) {
+			continue
+		}
+		for _, p := range sc.OpenPorts {
+			addUnique(&summary.Ports, seenPort, p, 200)
+		}
+		for _, u := range sc.LiveURLs {
+			addUnique(&summary.URLs, seenURL, u, 200)
+		}
+		host := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(sc.Target), "https://"), "http://")
+		if i := strings.IndexAny(host, "/:"); i >= 0 {
+			host = host[:i]
+		}
+		if validIPv4(host) {
+			addUnique(&summary.IPAddresses, seenIP, host, 60)
+		}
+	}
+	sort.Strings(summary.Ports)
+	sort.Strings(summary.URLs)
+	sort.Strings(summary.IPAddresses)
+}
+
 func addUnique(values *[]string, seen map[string]bool, value string, max int) {
 	value = strings.TrimSpace(value)
 	if value == "" || seen[value] || len(*values) >= max {
@@ -1030,6 +1067,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 
 	// ─── RECONNAISSANCE FINDINGS ─────────────────────────
 	recon := collectReconReportSummary(scan.Events, scan.Vulns...)
+	mergeScopeReconSummary(&recon, scan.ReportScopes)
 	if recon.hasData() {
 		pdf.AddPage()
 		drawRect(0, 0, 210, 297, darkBg)
