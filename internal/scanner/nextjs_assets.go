@@ -21,7 +21,7 @@ import (
 
 // nextjsAssetsCatalogVersion is part of the plan fingerprint. Bump it when the
 // detection rules or request bounds change.
-const nextjsAssetsCatalogVersion = "nextjs-assets-v8"
+const nextjsAssetsCatalogVersion = "nextjs-assets-v9"
 
 const (
 	nextjsMaxScripts      = 40
@@ -274,6 +274,9 @@ func (nextjsAssetsRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		}
 		if m := nextjsBuildIDPattern.FindStringSubmatch(html); m != nil {
 			buildID = m[1]
+		}
+		if req.Profile == ProfileNextjsDeep {
+			findings = append(findings, nextjsDevModeFindings(req, page.String(), html, buildID, eventsPath)...)
 		}
 		refs := nextjsHTMLReferences(&page, res.body)
 		scripts = append(scripts, refs.Scripts...)
