@@ -94,7 +94,7 @@ func TestExposedFilesClassifierRequiresSignature(t *testing.T) {
 }
 
 func TestExposedFilesCatalogIsDeterministic(t *testing.T) {
-	if exposedFilesCatalogVersion != "exposed-files-v2" {
+	if exposedFilesCatalogVersion != "exposed-files-v3" {
 		t.Fatalf("unexpected catalog version: %s", exposedFilesCatalogVersion)
 	}
 	seen := map[string]bool{}
@@ -140,5 +140,55 @@ func TestExposedFilesDetectsNextjsConfigAndDevEnv(t *testing.T) {
 	}
 	if strings.Contains(text, "dev-secret") || strings.Contains(text, "api.internal") {
 		t.Fatalf("a secret value leaked into the artifact: %s", text)
+	}
+}
+
+func TestExposedFilesDetectsNextjsBuildArtifacts(t *testing.T) {
+	const signingKey = "a1b2c3d4e5f6signingkeysecret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/.next/prerender-manifest.json":
+			_, _ = w.Write([]byte(`{"version":4,"routes":{},"dynamicRoutes":{},"preview":{"previewModeId":"pid","previewModeSigningKey":"` + signingKey + `","previewModeEncryptionKey":"enc"}}`))
+		case "/.next/build-manifest.json":
+			_, _ = w.Write([]byte(`{"polyfillFiles":["x.js"],"pages":{"/_app":["app.js"],"/":["index.js"]}}`))
+		case "/.next/routes-manifest.json":
+			_, _ = w.Write([]byte(`{"version":4,"basePath":"","redirects":[],"rewrites":[],"dynamicRoutes":[{"page":"/u/[id]"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	target := server.URL
+	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}}
+	scope := assessment.AppScopeForTarget(cfg, "app")
+	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 50, 0)}, nil)
+	if run.Status != "completed" {
+		t.Fatalf("status=%q reason=%q", run.Status, run.Reason)
+	}
+	data, _ := os.ReadFile(run.ArtifactPath)
+	text := string(data)
+	for _, want := range []string{
+		"Exposed Next.js prerender manifest with preview-mode keys",
+		"Exposed Next.js build manifest",
+		"Exposed Next.js routes manifest",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing finding %q in: %s", want, text)
+		}
+	}
+	// The preview signing key must never reach the findings artifact.
+	if strings.Contains(text, signingKey) {
+		t.Fatalf("preview signing key leaked into the artifact: %s", text)
+	}
+}
+
+func TestNextjsBuildArtifactClassifierRejectsGenericJSON(t *testing.T) {
+	ok := &http.Response{StatusCode: 200, Header: http.Header{}}
+	// An unrelated 200 JSON body must not be mistaken for a manifest.
+	for _, id := range []string{"nextjs-prerender-manifest", "nextjs-build-manifest", "nextjs-routes-manifest", "nextjs-trace"} {
+		if v := classifyExposedFile(exposureCheck{ID: id}, ok, []byte(`{"ok":true,"data":[1,2,3]}`)); v.Classification != "" {
+			t.Fatalf("%s matched a generic JSON body: %+v", id, v)
+		}
 	}
 }

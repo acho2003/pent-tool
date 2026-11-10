@@ -10,7 +10,8 @@ import (
 
 // exposedFilesCatalogVersion is part of the plan fingerprint. Keep it small.
 // v2 adds the Next.js env family and framework config source paths.
-const exposedFilesCatalogVersion = "exposed-files-v2"
+// v3 adds Next.js build-output artifacts served at the web root.
+const exposedFilesCatalogVersion = "exposed-files-v3"
 
 type exposedFilesRunner struct{}
 
@@ -41,6 +42,14 @@ var exposedFilesCatalog = []exposureCheck{
 	{ID: "nextjs-config-js", Path: "/next.config.js", Purpose: "Exposed Next.js configuration source"},
 	{ID: "nextjs-config-mjs", Path: "/next.config.mjs", Purpose: "Exposed Next.js configuration source"},
 	{ID: "nextjs-config-ts", Path: "/next.config.ts", Purpose: "Exposed Next.js configuration source"},
+	// Next.js build output served at the web root (a misconfigured static host).
+	// None of these are meant to be public: the prerender manifest carries
+	// preview-mode signing/encryption keys, and the manifests disclose every
+	// route, rewrite, redirect and header rule plus the internal build layout.
+	{ID: "nextjs-prerender-manifest", Path: "/.next/prerender-manifest.json", Purpose: "Exposed Next.js prerender manifest"},
+	{ID: "nextjs-build-manifest", Path: "/.next/build-manifest.json", Purpose: "Exposed Next.js build manifest"},
+	{ID: "nextjs-routes-manifest", Path: "/.next/routes-manifest.json", Purpose: "Exposed Next.js routes manifest"},
+	{ID: "nextjs-trace", Path: "/_next/trace", Purpose: "Exposed Next.js build trace"},
 	{ID: "aws-credentials", Path: "/.aws/credentials", Purpose: "Exposed AWS credentials file"},
 	{ID: "git-credentials", Path: "/.git-credentials", Purpose: "Exposed git credential store"},
 	{ID: "npmrc", Path: "/.npmrc", Purpose: "Exposed npm configuration"},
@@ -99,6 +108,33 @@ func classifyExposedFile(check exposureCheck, resp *http.Response, body []byte) 
 		hasConfigShape := nextConfigShape.MatchString(lower)
 		if isModule && hasConfigShape {
 			return leak("medium", "Exposed Next.js configuration source")
+		}
+	case "nextjs-prerender-manifest":
+		// The prerender manifest is JSON; when it carries preview-mode keys their
+		// exposure lets anyone enter draft/preview mode. The verdict never includes
+		// the body, so no key value is written to the artifact.
+		if strings.HasPrefix(text, "{") && strings.Contains(lower, "\"preview\"") &&
+			(strings.Contains(lower, "previewmodeid") || strings.Contains(lower, "previewmodesigningkey") || strings.Contains(lower, "previewmodeencryptionkey")) {
+			return leak("high", "Exposed Next.js prerender manifest with preview-mode keys")
+		}
+		if strings.HasPrefix(text, "{") && strings.Contains(lower, "\"version\"") && strings.Contains(lower, "\"routes\"") {
+			return leak("medium", "Exposed Next.js prerender manifest")
+		}
+	case "nextjs-build-manifest":
+		if strings.HasPrefix(text, "{") && strings.Contains(lower, "\"pages\"") &&
+			(strings.Contains(lower, "\"/_app\"") || strings.Contains(lower, "rootmainfiles") || strings.Contains(lower, "polyfillfiles")) {
+			return leak("medium", "Exposed Next.js build manifest")
+		}
+	case "nextjs-routes-manifest":
+		if strings.HasPrefix(text, "{") && strings.Contains(lower, "\"version\"") &&
+			(strings.Contains(lower, "dynamicroutes") || strings.Contains(lower, "staticroutes") || strings.Contains(lower, "\"redirects\"") || strings.Contains(lower, "\"rewrites\"")) {
+			return leak("medium", "Exposed Next.js routes manifest")
+		}
+	case "nextjs-trace":
+		// The build trace is a JSON array of spans; confirm the shape rather than
+		// trust the path alone.
+		if strings.HasPrefix(text, "[") && (strings.Contains(lower, "\"traceid\"") || strings.Contains(lower, "\"parentid\"") || strings.Contains(lower, "\"starttime\"")) {
+			return leak("low", "Exposed Next.js build trace")
 		}
 	case "aws-credentials":
 		if strings.Contains(lower, "aws_access_key_id") || strings.Contains(lower, "aws_secret_access_key") {
