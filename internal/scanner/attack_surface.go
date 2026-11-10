@@ -56,7 +56,7 @@ const assessmentEndpointCapReason = "assessment endpoint budget exhausted"
 
 // batchEvidenceScanners only report results for the dispatched batch as a
 // whole; a completed run of one of them marks its endpoints batch_completed.
-var batchEvidenceScanners = map[string]bool{"nuclei": true, NucleiOASTVariant: true, "wapiti": true, "dalfox": true, "katana": true, "zap": true}
+var batchEvidenceScanners = map[string]bool{"nuclei": true, "wapiti": true, "dalfox": true, "katana": true, "zap": true}
 
 // EndpointProvenance records which tool observed an endpoint, where, and
 // whether the observation was made with an authenticated session.
@@ -876,11 +876,11 @@ func endpointEligibleWithPolicy(ep AttackSurfaceEndpoint, scannerName string, sc
 	if ep.Kind == "static" {
 		return false, "static resource is discovery-only"
 	}
-	if ep.Method != "GET" && (scannerName == "nuclei" || scannerName == NucleiOASTVariant || scannerName == "wapiti" || scannerName == "dalfox") {
+	if ep.Method != "GET" && (scannerName == "nuclei" || scannerName == "wapiti" || scannerName == "dalfox") {
 		return false, "URL-only adapter does not preserve this HTTP method; route the request to ZAP"
 	}
 	switch scannerName {
-	case "nuclei", NucleiOASTVariant:
+	case "nuclei":
 		return true, ""
 	case "apichecks":
 		if ep.Kind == "api" {

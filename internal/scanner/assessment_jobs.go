@@ -425,16 +425,8 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			Profile: plan.Config.Profile, Nextjs: plan.Config.Nextjs, TypedAssessment: true,
 			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment, WapitiMode: plan.Config.WapitiMode,
 		}
-		// Endpoint coverage and input manifests are keyed per scanner; the OAST
-		// variant gets its own key so it never overwrites ordinary Nuclei coverage.
+		// Endpoint coverage and input manifests are keyed per scanner.
 		coverageName := job.Scanner
-		if job.Variant == NucleiOASTVariant {
-			coverageName = NucleiOASTVariant
-			req.OASTServer, req.OASTToken = p.Config.InteractshServer, p.Config.InteractshToken
-			if req.OASTToken != "" {
-				req.Secrets = append(req.Secrets, req.OASTToken)
-			}
-		}
 		if checkpointErr != nil {
 			run := plannedJobNotRun(job, req, plan.Fingerprint, "workflow checkpoint failed; dependent execution was refused", emit)
 			run.GapKind = GapInterruptedWrite

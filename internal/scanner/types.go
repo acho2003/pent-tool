@@ -53,15 +53,12 @@ type Artifact struct {
 }
 
 type Request struct {
-	NextjsBoundaryApprovals []assessment.NextjsBoundaryApproval `json:"-"`
-	NextjsBoundaryTokens    map[string]string                   `json:"-"`
-	NextjsActionApprovals   []assessment.NextjsActionApproval   `json:"-"`
-	TargetID                string                              `json:"-"`
-	Nextjs                  assessment.NextjsScanOptions        `json:"-"`
-	WapitiPostApproval      *assessment.FuzzApproval            `json:"-"`
-	// OASTServer/OASTToken are set only on the consented Nuclei OAST job.
-	OASTServer                string                                  `json:"-"`
-	OASTToken                 string                                  `json:"-"`
+	NextjsBoundaryApprovals   []assessment.NextjsBoundaryApproval     `json:"-"`
+	NextjsBoundaryTokens      map[string]string                       `json:"-"`
+	NextjsActionApprovals     []assessment.NextjsActionApproval       `json:"-"`
+	TargetID                  string                                  `json:"-"`
+	Nextjs                    assessment.NextjsScanOptions            `json:"-"`
+	WapitiPostApproval        *assessment.FuzzApproval                `json:"-"`
 	WapitiPostURL             string                                  `json:"-"`
 	WapitiPostBody            string                                  `json:"-"`
 	Variant                   string                                  `json:"-"`
@@ -366,8 +363,6 @@ type Config struct {
 	KatanaTimeout       time.Duration
 	DalfoxTimeout       time.Duration
 	SchemathesisTimeout time.Duration
-	InteractshServer    string
-	InteractshToken     string
 	WapitiTimeout       time.Duration
 	KubeBenchTimeout    time.Duration
 	ProwlerTimeout      time.Duration

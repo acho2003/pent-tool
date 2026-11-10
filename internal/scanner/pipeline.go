@@ -1329,15 +1329,6 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 	// service.
 	policy := nucleiPolicyArgs(cfg)
 	limitations := nucleiPolicyLimitations()
-	if req.OASTServer != "" {
-		// The consented OAST job: callback templates only, against the
-		// deployment's self-hosted Interactsh server.
-		oast, err := nucleiOASTArgs(policy, req.OASTServer, req.OASTToken)
-		if err != nil {
-			return commandSpec{notApp: err.Error(), timeout: cfg.NucleiTimeout}
-		}
-		policy, limitations = oast, nucleiOASTLimitations()
-	}
 	args = append(args, policy...)
 	args = append(args, "-ot")
 	for _, h := range cfg.ScanHeaders {

@@ -38,8 +38,6 @@ func (s *Server) scannerAvailability() map[string]bool {
 	if scanner.MasscanCapabilityReason() != "" {
 		available["masscan"] = false
 	}
-	// Out-of-band Nuclei templates need a self-hosted Interactsh server.
-	available[scanner.NucleiOASTVariant] = available["nuclei"] && scanner.InteractshUnavailableReason(s.cfg.InteractshServer) == ""
 	// Typed assessment planning requires an explicitly dedicated managed ZAP
 	// backend; a configured shared daemon is not sufficient evidence.
 	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
@@ -105,9 +103,6 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 		if reason := scanner.MasscanCapabilityReason(); reason != "" {
 			unavailableReasons["masscan"] = reason
 		}
-	}
-	if reason := scanner.InteractshUnavailableReason(s.cfg.InteractshServer); reason != "" {
-		unavailableReasons[scanner.NucleiOASTVariant] = reason
 	}
 	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), UnavailabilityReasons: unavailableReasons, CredentialAvailability: credentialAvailability, ToolVersions: s.toolVersions, CredentialRevisions: credentialRevisions})
 	plan.Errors = append(plan.Errors, s.assessmentScopeProblems(cfg, allowLoopbackPorts)...)

@@ -91,7 +91,6 @@ export default function NewScanPage() {
   // Credentials remain independently bound to one target and named identity.
   const [testEnvironment, setTestEnvironment] = useState(false);
   const [wapitiMode, setWapitiMode] = useState<"" | "safe" | "full">("");
-  const [oastCallbacks, setOastCallbacks] = useState(false);
   const [nextjsBoundaryApprovals, setNextjsBoundaryApprovals] = useState<NonNullable<AssessmentConfig["nextjs_boundary_approvals"]>>([]);
   const [boundaryScopes, setBoundaryScopes] = useState<Record<string, NonNullable<AssessmentConfig["approved_origins"]>>>({});
   const boundaryOrigins = nextjsBoundaryApprovals.flatMap(probe => boundaryScopes[`${probe.target_id}:${probe.id}`] ?? []);
@@ -172,7 +171,7 @@ export default function NewScanPage() {
 
   function onAssessmentModeChange(next: AssessmentMode) {
     setAssessmentMode(next);
-    setTestEnvironment(false); setWapitiMode(""); setOastCallbacks(false); setFuzzApprovals([]); setNextjsActionApprovals([]); setNextjsBoundaryApprovals([]); setBoundaryScopes({});
+    setTestEnvironment(false); setWapitiMode(""); setFuzzApprovals([]); setNextjsActionApprovals([]); setNextjsBoundaryApprovals([]); setBoundaryScopes({});
     setAssessmentPlan(null);
     setOptionalAssessmentScanners([]);
     if (next !== "WHITE_BOX") { setArtifactKind("none"); setArtifactRef(""); setRepoToken(""); setRepoCredentialId(""); setRepoCredentialError(null); }
@@ -186,7 +185,7 @@ export default function NewScanPage() {
 
   function onTargetsChange(value: string) {
     setTargetsText(value);
-    setTestEnvironment(false); setWapitiMode(""); setOastCallbacks(false); setFuzzApprovals([]); setNextjsActionApprovals([]); setNextjsBoundaryApprovals([]); setBoundaryScopes({});
+    setTestEnvironment(false); setWapitiMode(""); setFuzzApprovals([]); setNextjsActionApprovals([]); setNextjsBoundaryApprovals([]); setBoundaryScopes({});
     setAssessmentPlan(null);
     setSavedAccess([]); setAuthorizationExpectations([]); setCredentialError(null); setCredentialTargetId("target-1");
     setAPIDefinitionId(""); setAPIDefinitionInfo(""); setAPITargetId("");
@@ -299,7 +298,6 @@ export default function NewScanPage() {
         nextjs: profile === "nextjs-deep" ? nextjs : undefined,
         test_environment: testEnvironment,
         wapiti_mode: wapitiMode || undefined,
-        oast_callbacks: oastCallbacks || undefined,
         fuzz_approvals: fuzzApprovals.length ? fuzzApprovals : undefined,
         nextjs_action_approvals: nextjsActionApprovals.length ? nextjsActionApprovals : undefined,
         nextjs_boundary_approvals: nextjsBoundaryApprovals.length ? nextjsBoundaryApprovals : undefined,
@@ -548,7 +546,6 @@ export default function NewScanPage() {
         {coverageOptions.some((type) => ["WEB_APPLICATION", "API"].includes(type)) && <label className="flex items-start gap-3 rounded-lg border p-3"><input type="checkbox" checked={subdomainDiscovery} onChange={(e) => { setSubdomainDiscovery(e.target.checked); setAssessmentPlan(null); }} className="mt-1" /><span className="text-sm">Authorize subdomain discovery<p className="mt-1 text-xs text-muted-foreground">Adds Subfinder for domain targets. Leave off unless you have permission to enumerate subdomains.</p></span></label>}
         {coverageOptions.some((type) => ["WEB_APPLICATION", "API"].includes(type)) && <Card><CardHeader><CardTitle>Request exclusions</CardTitle></CardHeader><CardContent className="space-y-4"><div className="space-y-2"><Label htmlFor="excluded-routes">Request exclusions</Label><Textarea id="excluded-routes" value={excludedRoutesText} onChange={(event) => { setExcludedRoutesText(event.target.value); setAssessmentPlan(null); }} placeholder={"GET /logout\n* /admin/delete*"} rows={3} /><p className="text-xs text-muted-foreground">One METHOD /path-pattern per line. Use * as the method to exclude every method on a route.</p></div>{subdomainDiscovery && <label className="flex items-start gap-3 rounded-lg border p-3"><input type="checkbox" checked={amassEnrichment} onChange={(event) => { setAmassEnrichment(event.target.checked); setAssessmentPlan(null); }} className="mt-1" /><span className="text-sm">Add Amass passive enrichment<p className="mt-1 text-xs text-muted-foreground">Runs alongside Subfinder. Results remain candidate evidence and never expand scan scope.</p></span></label>}</CardContent></Card>}
         <details className="rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">Customize optional tools <span className="font-normal text-muted-foreground">({optionalDefinitions.length} applicable)</span></summary><p className="mt-2 text-xs text-muted-foreground">Automatic selection includes the required tools. Select an optional tool only when you want that additional test.</p><div className="mt-3 space-y-2">{optionalDefinitions.map((definition) => <label key={definition.id} className={`flex items-start gap-3 rounded-md border p-3 ${definition.available ? "cursor-pointer" : "opacity-60"}`}><input type="checkbox" checked={optionalAssessmentScanners.includes(definition.id)} disabled={!definition.available} onChange={() => { setOptionalAssessmentScanners((current) => current.includes(definition.id) ? current.filter((id) => id !== definition.id) : [...current, definition.id]); setAssessmentPlan(null); }} className="mt-1" /><span><span className="text-sm font-medium">{definition.name} · {definition.risk} risk · {definition.available ? "available" : "unavailable"}</span><span className="mt-1 block text-xs text-muted-foreground">{definition.summary}</span>{definition.default_selection === "explicit_opt_in" && <span className="mt-1 block text-xs text-amber-300">Explicit opt in required. Selecting this tool records that choice in the plan.</span>}{!definition.available && <span className="mt-1 block text-xs text-muted-foreground">Unavailable: required tool or service is not configured.</span>}</span></label>)}{!optionalDefinitions.length && <p className="text-xs text-muted-foreground">No optional tools apply to the selected coverage and target.</p>}</div></details>
-        {assessmentTypes.some((type) => ["WEB_APPLICATION", "API"].includes(type)) && <Card><CardHeader><CardTitle>Out-of-band callback checks</CardTitle><p className="text-xs text-muted-foreground">Adds a separate Nuclei run of callback (OAST) templates. They make the target contact this deployment's self-hosted Interactsh server; public Interactsh services are never used. The plan shows the job as unavailable until the server is configured.</p></CardHeader><CardContent><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={oastCallbacks} onChange={(e) => { setOastCallbacks(e.target.checked); setAssessmentPlan(null); }} />Allow out-of-band callback checks (Interactsh)</label></CardContent></Card>}
         {optionalAssessmentScanners.includes("wapiti") && <Card><CardHeader><CardTitle>Wapiti web fuzzing</CardTitle><p className="text-xs text-muted-foreground">Wapiti is off by default because its defaults submit forms and can make the target call external hosts. Enable it explicitly and choose how much it runs.</p></CardHeader><CardContent className="space-y-3"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={wapitiMode !== ""} onChange={(e) => { setWapitiMode(e.target.checked ? "safe" : ""); setAssessmentPlan(null); }} />Enable Wapiti active fuzzing</label>{wapitiMode !== "" && <div className="space-y-2"><Label>Mode</Label><Select value={wapitiMode} onValueChange={(value) => { setWapitiMode(value as "safe" | "full"); setAssessmentPlan(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="safe">Safe — GET-only (XSS, SQLi, path, redirect, CRLF on GET params; no form submission, no callbacks)</SelectItem><SelectItem value="full">Full — forms and all modules (submits discovered forms and runs external-callback checks)</SelectItem></SelectContent></Select>{wapitiMode === "full" && <p className="rounded-md border border-amber-500/40 p-2 text-xs text-amber-200">Full mode submits forms, so it writes data, and runs external-callback modules (SSRF/XXE). Use it only on a disposable system you control.</p>}</div>}</CardContent></Card>}
       </CardContent></Card>}
 

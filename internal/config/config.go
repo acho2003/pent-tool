@@ -43,8 +43,6 @@ type Config struct {
 	BrowserLocalOrigins   []string
 	DalfoxPath            string
 	SchemathesisPath      string
-	InteractshServer      string
-	InteractshToken       string
 	WapitiPath            string
 	KubeBenchPath         string
 	ProwlerPath           string
@@ -284,8 +282,6 @@ func load() *Config {
 		BrowserLocalOrigins:   strings.Split(os.Getenv("XALGORIX_BROWSER_LOCAL_ORIGINS"), ","),
 		DalfoxPath:            envOr("XALGORIX_DALFOX_PATH", "dalfox"),
 		SchemathesisPath:      envOr("XALGORIX_SCHEMATHESIS_PATH", "schemathesis"),
-		InteractshServer:      os.Getenv("XALGORIX_INTERACTSH_SERVER"),
-		InteractshToken:       os.Getenv("XALGORIX_INTERACTSH_TOKEN"),
 		WapitiPath:            envOr("XALGORIX_WAPITI_PATH", "wapiti"),
 		KubeBenchPath:         envOr("XALGORIX_KUBEBENCH_PATH", "kube-bench"),
 		ProwlerPath:           envOr("XALGORIX_PROWLER_PATH", "prowler"),

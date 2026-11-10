@@ -109,13 +109,6 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 		browser.AvailabilityReason = "browser executable not found: " + s.cfg.BrowserPath
 	}
 	entries = append(entries, browser)
-	interactsh := integrationEntry{ID: "interactsh", Name: "Interactsh (OAST)", Group: scanner.GroupWebAPI, Summary: "Self-hosted callback server for consented out-of-band Nuclei checks", Integration: "operator-supplied", Path: s.cfg.InteractshServer, DefaultSelection: "explicit_opt_in", Risk: "high"}
-	interactsh.AvailabilityReason = scanner.InteractshUnavailableReason(s.cfg.InteractshServer)
-	interactsh.Available = interactsh.AvailabilityReason == "" && available["nuclei"]
-	if interactsh.AvailabilityReason == "" && !interactsh.Available {
-		interactsh.AvailabilityReason = "Nuclei is unavailable"
-	}
-	entries = append(entries, interactsh)
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].Group != entries[j].Group {
 			return entries[i].Group < entries[j].Group

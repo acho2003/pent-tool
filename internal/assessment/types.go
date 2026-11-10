@@ -308,12 +308,7 @@ type AssessmentConfig struct {
 	// crawling and module set, which submits discovered forms (writes) and can
 	// make the target call out to external hosts. "full" is an explicit,
 	// high-impact operator choice.
-	WapitiMode string `json:"wapiti_mode,omitempty"`
-	// OASTCallbacks is the operator's explicit consent to out-of-band testing:
-	// a separate Nuclei job runs only callback (OAST) templates, which make the
-	// target contact the deployment's self-hosted Interactsh server. It is never
-	// enabled by default and never uses a public Interactsh service.
-	OASTCallbacks      bool                `json:"oast_callbacks,omitempty"`
+	WapitiMode         string              `json:"wapiti_mode,omitempty"`
 	DiscoveryProviders *DiscoveryProviders `json:"discovery_providers,omitempty"`
 	// ManualSeeds are operator-supplied entry URLs merged into the inventory.
 	// Each must lie inside some target's AppScope and not be excluded.

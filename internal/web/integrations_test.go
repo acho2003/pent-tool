@@ -12,7 +12,6 @@ import (
 
 func TestIntegrationsListsEveryRegistryToolAndProvider(t *testing.T) {
 	s := newTestServer(t, nil)
-	s.cfg.InteractshServer = "https://oast.pro"
 	rr := httptest.NewRecorder()
 	s.handleIntegrations(rr, httptest.NewRequest(http.MethodGet, "/api/scanners/integrations", nil))
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Header().Get("Content-Type"), "application/json") {
@@ -33,13 +32,10 @@ func TestIntegrationsListsEveryRegistryToolAndProvider(t *testing.T) {
 			t.Errorf("registry tool %s is missing from the integrations page", def.ID)
 		}
 	}
-	for _, id := range []string{"gau", "waybackurls", "chromium", "interactsh", "schemathesis", "authz-matrix"} {
+	for _, id := range []string{"gau", "waybackurls", "chromium", "schemathesis", "authz-matrix"} {
 		if _, ok := byID[id]; !ok {
 			t.Errorf("%s is missing", id)
 		}
-	}
-	if entry := byID["interactsh"]; entry.Available || !strings.Contains(entry.AvailabilityReason, "public Interactsh") {
-		t.Errorf("a public Interactsh server must show as unavailable with its reason: %+v", entry)
 	}
 	if entry := byID["authz-matrix"]; entry.Integration != "built-in" {
 		t.Errorf("native checks must show as built-in: %+v", entry)
