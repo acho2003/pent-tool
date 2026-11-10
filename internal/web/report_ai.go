@@ -259,28 +259,86 @@ func renderFindingEvidence(f reportFinding) string {
 		}
 		return b.String()
 	}
-	b.WriteString("Scanner evidence and affected locations:\n")
-	for i, item := range f.EvidenceItems {
-		if i > 0 {
-			b.WriteString("\n")
+	// Collapse repeated observations. Scanners (ZAP especially) report the same
+	// alert at many locations, each with an identical description and evidence
+	// excerpt. Grouping by that shared content and listing the distinct locations
+	// once shows the issue instead of the same paragraph dozens of times.
+	type evidenceGroup struct {
+		item      reportEvidenceItem
+		locations []string
+		count     int
+	}
+	var groups []*evidenceGroup
+	index := map[string]*evidenceGroup{}
+	for _, item := range f.EvidenceItems {
+		key := strings.Join([]string{item.Scanner, item.Description, item.Evidence, item.Parameter, item.ParameterLocation, item.Method, item.SourceLocation, item.Package, item.PackageVersion}, "\x00")
+		g := index[key]
+		if g == nil {
+			g = &evidenceGroup{item: item}
+			index[key] = g
+			groups = append(groups, g)
 		}
-		b.WriteString(fmt.Sprintf("Observation %d — scanner: %s", i+1, firstNonBlank(item.Scanner, "Not provided by scanner")))
+		g.count++
+		if loc := evidenceLocation(item); loc != "Not provided by scanner" && !slices.Contains(g.locations, loc) {
+			g.locations = append(g.locations, loc)
+		}
+	}
+
+	b.WriteString("Scanner evidence and affected locations:")
+	shown := groups
+	extraGroups := 0
+	if len(shown) > maxEvidenceGroups {
+		extraGroups = len(shown) - maxEvidenceGroups
+		shown = shown[:maxEvidenceGroups]
+	}
+	for i, g := range shown {
+		item := g.item
+		b.WriteString(fmt.Sprintf("\n\nObservation %d — scanner: %s", i+1, firstNonBlank(item.Scanner, "Not provided by scanner")))
 		if item.SourceID != "" {
 			b.WriteString("; source: " + sanitizeEvidenceText(item.SourceID))
 		}
 		b.WriteString("\nEvidence available: " + evidenceAvailabilityLabel(item))
-		b.WriteString("\nLocation: " + evidenceLocation(item))
+		switch {
+		case len(g.locations) > 0:
+			locs := g.locations
+			extra := 0
+			if len(locs) > maxLocationsPerGroup {
+				extra = len(locs) - maxLocationsPerGroup
+				locs = locs[:maxLocationsPerGroup]
+			}
+			label := "Location: "
+			if g.count > 1 {
+				label = fmt.Sprintf("Locations (%d occurrences): ", g.count)
+			}
+			b.WriteString("\n" + label + strings.Join(locs, "; "))
+			if extra > 0 {
+				b.WriteString(fmt.Sprintf("; (+%d more location(s))", extra))
+			}
+		case g.count > 1:
+			b.WriteString(fmt.Sprintf("\nLocation: Not provided by scanner (%d occurrences)", g.count))
+		default:
+			b.WriteString("\nLocation: Not provided by scanner")
+		}
 		if item.EvidenceReference != "" {
 			b.WriteString("\nEvidence reference: " + sanitizeEvidenceText(item.EvidenceReference))
 		}
 		if item.Description != "" {
 			b.WriteString("\nFinding detail: " + item.Description)
 		}
-		evidence := firstNonBlank(item.Evidence, "Not provided by scanner")
-		b.WriteString("\nEvidence excerpt: " + sanitizeEvidenceText(evidence))
+		b.WriteString("\nEvidence excerpt: " + sanitizeEvidenceText(firstNonBlank(item.Evidence, "Not provided by scanner")))
+	}
+	if extraGroups > 0 {
+		b.WriteString(fmt.Sprintf("\n\n(+%d more distinct observation group(s) not shown)", extraGroups))
 	}
 	return b.String()
 }
+
+// Evidence rendering caps so a scanner that reports the same alert at hundreds of
+// locations cannot turn one finding into pages of repetition.
+const (
+	maxEvidenceGroups    = 20
+	maxLocationsPerGroup = 8
+)
 
 func evidenceLocation(item reportEvidenceItem) string {
 	parts := []string{}

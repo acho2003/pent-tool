@@ -425,3 +425,30 @@ func TestEvidenceAvailabilityLabelsRecordedContent(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderFindingEvidenceCollapsesRepeatedObservations(t *testing.T) {
+	// 31 identical ZAP observations (as in the User Agent Fuzzer finding) plus a
+	// distinct second alert.
+	var items []reportEvidenceItem
+	for i := 0; i < 31; i++ {
+		items = append(items, reportEvidenceItem{Scanner: "zap", SourceID: "zap:10104:0", Method: "GET",
+			Parameter: "Header User-Agent", Description: "Check for differences in response based on fuzzed User Agent.", Evidence: ""})
+	}
+	items = append(items, reportEvidenceItem{Scanner: "wapiti", Endpoint: "https://app.test/terms", Method: "GET",
+		Description: "X-Frame-Options is not set", Evidence: "curl ..."})
+	out := renderFindingEvidence(reportFinding{EvidenceItems: items})
+
+	if strings.Count(out, "Check for differences in response based on fuzzed User Agent.") != 1 {
+		t.Fatalf("repeated description was not collapsed:\n%s", out)
+	}
+	if !strings.Contains(out, "Locations (31 occurrences)") {
+		t.Fatalf("occurrence count not summarized:\n%s", out)
+	}
+	// Both distinct alerts must still appear, once each.
+	if strings.Count(out, "Observation ") != 2 {
+		t.Fatalf("expected 2 observation groups, got:\n%s", out)
+	}
+	if !strings.Contains(out, "X-Frame-Options is not set") {
+		t.Fatalf("second distinct alert dropped:\n%s", out)
+	}
+}
