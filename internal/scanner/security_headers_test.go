@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
@@ -64,6 +65,34 @@ func TestSecurityHeadersAcceptsStrongHeaders(t *testing.T) {
 	for rule := range got {
 		if rule != "security-header-hsts-missing" { // n/a over http anyway
 			t.Errorf("unexpected finding on a well-configured response: %s", rule)
+		}
+	}
+}
+
+func TestSecurityHeadersFlagsInsecureCookies(t *testing.T) {
+	// A session cookie set with no HttpOnly and no SameSite over plain HTTP.
+	got := ruleIDs(runSecurityHeaders(t, func(h http.Header) {
+		h.Add("Set-Cookie", "sid=supersecretvalue123; Path=/")
+		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+	}))
+	f, ok := got["security-cookie-no-httponly"]
+	if !ok || f.Severity != "medium" { // "sid" is a session-like name
+		t.Fatalf("missing-HttpOnly not reported as medium: %v", got)
+	}
+	if _, ok := got["security-cookie-weak-samesite"]; !ok {
+		t.Error("expected weak-SameSite finding")
+	}
+	// Secure is https-only; httptest is HTTP, so it must not be flagged.
+	if _, ok := got["security-cookie-no-secure"]; ok {
+		t.Error("Secure must not be flagged over plain HTTP")
+	}
+	// The cookie value must never appear in any finding.
+	for _, finding := range []Finding{f, got["security-cookie-weak-samesite"]} {
+		if strings.Contains(finding.Evidence, "supersecretvalue123") {
+			t.Fatalf("cookie value leaked into evidence: %q", finding.Evidence)
 		}
 	}
 }

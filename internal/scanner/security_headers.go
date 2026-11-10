@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,11 @@ import (
 // on the approved target root, then inspection of the response headers. No
 // payloads, no state change. Findings map to the existing missing_security_header
 // class, so ZAP/Nikto results dedupe with these by host.
-const securityHeadersCatalogVersion = "security-headers-v1"
+const securityHeadersCatalogVersion = "security-headers-v2"
+
+// sessionCookieName marks a cookie whose name indicates it carries a session or
+// token, so a missing HttpOnly/Secure attribute on it is more serious.
+var sessionCookieName = regexp.MustCompile(`(?i)(session|sess|sid|auth|token|jwt|csrf|xsrf|login|connect\.sid|next-auth|__secure|__host|phpsessid|aspnet|jsessionid)`)
 
 // hstsMinMaxAge is six months in seconds; a shorter HSTS lifetime is weak.
 const hstsMinMaxAge = 15552000
@@ -166,6 +171,50 @@ func securityHeaderFindings(req Request, endpoint string, https bool, header htt
 			"No Referrer-Policy is set, so full URLs (which may contain tokens or identifiers) can be sent to third-party sites in the Referer header.",
 			"Response header Referrer-Policy is absent.",
 			"Set a restrictive Referrer-Policy such as 'strict-origin-when-cross-origin' or 'no-referrer'.")
+	}
+
+	// Cookie attribute checks. Evidence names the cookie(s) only; cookie values
+	// are never read or reported.
+	if cookies := (&http.Response{Header: header}).Cookies(); len(cookies) > 0 {
+		cookieSeverity := func(names []string) string {
+			for _, n := range names {
+				if sessionCookieName.MatchString(n) {
+					return "medium"
+				}
+			}
+			return "low"
+		}
+		var noHTTPOnly, noSecure, weakSameSite []string
+		for _, c := range cookies {
+			if !c.HttpOnly {
+				noHTTPOnly = append(noHTTPOnly, c.Name)
+			}
+			if https && !c.Secure {
+				noSecure = append(noSecure, c.Name)
+			}
+			// Protective values are Lax or Strict; absent (zero value) or None is weak.
+			if c.SameSite != http.SameSiteLaxMode && c.SameSite != http.SameSiteStrictMode {
+				weakSameSite = append(weakSameSite, c.Name)
+			}
+		}
+		if len(noHTTPOnly) > 0 {
+			add("security-cookie-no-httponly", "Cookie set without HttpOnly", cookieSeverity(noHTTPOnly), "CWE-1004",
+				"A cookie is set without the HttpOnly attribute, so client-side JavaScript can read it. If the cookie carries a session or token, cross-site scripting can steal it.",
+				"Cookie(s) set without HttpOnly: "+strings.Join(dedupeStrings(noHTTPOnly), ", ")+"; cookie values were not read.",
+				"Set the HttpOnly attribute on session and authentication cookies so scripts cannot read them.")
+		}
+		if len(noSecure) > 0 {
+			add("security-cookie-no-secure", "Cookie set without Secure over HTTPS", cookieSeverity(noSecure), "CWE-614",
+				"Over HTTPS a cookie is set without the Secure attribute, so a browser may also send it over plain HTTP, where it can be intercepted.",
+				"Cookie(s) set without Secure over HTTPS: "+strings.Join(dedupeStrings(noSecure), ", ")+"; cookie values were not read.",
+				"Set the Secure attribute on every cookie served over HTTPS.")
+		}
+		if len(weakSameSite) > 0 {
+			add("security-cookie-weak-samesite", "Cookie set without a protective SameSite attribute", "low", "CWE-1275",
+				"A cookie is set with SameSite=None or no SameSite attribute, so it can be sent on cross-site requests, widening exposure to cross-site request forgery.",
+				"Cookie(s) with absent or SameSite=None: "+strings.Join(dedupeStrings(weakSameSite), ", ")+"; cookie values were not read.",
+				"Set SameSite=Lax (or Strict) on cookies that need no cross-site delivery; use SameSite=None only together with Secure and a genuine cross-site need.")
+		}
 	}
 
 	for _, disclosure := range softwareVersionDisclosures(header) {
