@@ -228,9 +228,33 @@ func reportFindingsToVulns(in []reportFinding) []VulnSummary {
 	for _, f := range in {
 		scanners := reportScanners(f)
 		tags := append([]string{"scanner-reported"}, scanners...)
-		out = append(out, VulnSummary{ID: f.SourceID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: f.DedupeScope, Title: f.Title, Severity: f.Severity, Status: f.Status, StatusReason: f.StatusReason, Target: f.Target, Scope: f.Scope, Endpoint: f.Endpoint, Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, ObservationIDs: append([]string(nil), f.ObservationIDs...), Scanners: append([]string(nil), scanners...), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.AffectedEndpoints...), Description: f.Explanation, Impact: f.Impact, CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: renderFindingEvidence(f), Remediation: f.Remediation, VerificationMethod: strings.Join(scanners, ", "), Verified: f.Status == string(scanner.StatusConfirmed), Tags: tags})
+		out = append(out, VulnSummary{ID: f.SourceID, Fingerprint: f.Fingerprint, NormalizedType: f.NormalizedType, DedupeScope: f.DedupeScope, Title: f.Title, Severity: f.Severity, Status: f.Status, StatusReason: f.StatusReason, Target: f.Target, Scope: f.Scope, Endpoint: displayURL(f.Endpoint), Method: f.Method, Parameter: f.Parameter, CVSS: f.CVSS, ObservationIDs: append([]string(nil), f.ObservationIDs...), Scanners: append([]string(nil), scanners...), AffectedEndpointCount: f.AffectedEndpointCount, AffectedInstanceCount: f.AffectedInstanceCount, ObservationCount: f.ObservationCount, AffectedEndpoints: append([]scanner.FindingEndpoint(nil), f.AffectedEndpoints...), Description: stripReportBoilerplate(f.Explanation), Impact: stripReportBoilerplate(f.Impact), CVE: f.CVE, CWE: f.CWE, Confidence: f.Confidence, NativeConfidence: f.NativeConfidence, EvidenceCompleteness: f.EvidenceCompleteness, TechnicalAnalysis: renderFindingEvidence(f), Remediation: f.Remediation, VerificationMethod: strings.Join(scanners, ", "), Verified: f.Status == string(scanner.StatusConfirmed), Tags: tags})
 	}
 	return out
+}
+
+// stripReportBoilerplate blanks the generic per-finding Description/Impact lines
+// so the report shows the real scanner detail (carried in the evidence section)
+// instead of the same sentence on every finding.
+func stripReportBoilerplate(s string) string {
+	switch strings.TrimSpace(s) {
+	case "The originating scanners reported this normalized issue; review the linked raw observations for evidence.",
+		"The originating scanner reported this issue in its native output.",
+		"Scanner-reported issue; validate impact in the affected environment.":
+		return ""
+	}
+	return s
+}
+
+// displayURL hides the "[invalid URL]" placeholder that SafeTelemetryURL emits
+// for a site-wide alert with no parseable URL, so the report omits the endpoint
+// instead of printing a broken-looking value.
+func displayURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[invalid URL]" {
+		return ""
+	}
+	return sanitizeEvidenceURL(raw)
 }
 
 func evidenceItemFromObservation(o scanner.RawObservation) reportEvidenceItem {
@@ -342,8 +366,8 @@ const (
 
 func evidenceLocation(item reportEvidenceItem) string {
 	parts := []string{}
-	if item.Endpoint != "" {
-		parts = append(parts, "URL/endpoint="+sanitizeEvidenceURL(item.Endpoint))
+	if ep := displayURL(item.Endpoint); ep != "" {
+		parts = append(parts, "URL/endpoint="+ep)
 	}
 	if item.Method != "" {
 		parts = append(parts, "method="+item.Method)
