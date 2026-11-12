@@ -441,3 +441,104 @@ func TestGatewayAdmitsAPIWriteFuzzOnlyForSchemathesisOnTestEnvironment(t *testin
 		t.Fatal("writes admitted without the write-fuzz opt-in")
 	}
 }
+
+func TestGatewayRetriesOn429(t *testing.T) {
+	hits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits <= 2 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", target.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	req := Request{Target: target.URL, AppScope: &scope, ScanDir: t.TempDir(), AttemptID: "attempt"}
+	g, err := NewRecordingGateway(context.Background(), req, Config{}, "zap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, _ := url.Parse(g.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+	request, _ := http.NewRequest("GET", target.URL+"/items?q=q", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatalf("expected the backoff retries to reach a 200, got %d", response.StatusCode)
+	}
+	if hits != 3 {
+		t.Fatalf("expected two 429s then a 200 (3 upstream hits), got %d", hits)
+	}
+	if err := g.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetryAfterDelay(t *testing.T) {
+	if d := retryAfterDelay("2"); d.Seconds() != 2 {
+		t.Fatalf("delta-seconds not parsed: %v", d)
+	}
+	if d := retryAfterDelay(""); d != 0 {
+		t.Fatalf("empty Retry-After must be zero: %v", d)
+	}
+	if d := retryAfterDelay("0"); d != 0 {
+		t.Fatalf("zero delta must be zero: %v", d)
+	}
+	if d := retryAfterDelay("garbage"); d != 0 {
+		t.Fatalf("unparseable Retry-After must be zero: %v", d)
+	}
+}
+
+func TestGatewayReportsPersistentRateLimit(t *testing.T) {
+	origin, _ := assessment.ParseApprovedOrigin("app", "https://app.test")
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	req := Request{Target: "https://app.test", AppScope: &scope, ScanDir: t.TempDir(), AttemptID: "attempt"}
+	g, err := NewRecordingGateway(context.Background(), req, Config{}, "zap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	g.upstreamRequests = 40
+	g.rateLimitedFinal = 30
+	run := &Run{Status: "completed"}
+	g.ApplyOutcome(run)
+	found := false
+	for _, l := range run.Limitations {
+		if strings.Contains(l.Reason, "rate-limited 75% of requests") && strings.Contains(l.Reason, "SQL injection") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a rate-limit coverage limitation, got %+v", run.Limitations)
+	}
+	if run.Outcome != "PARTIAL" || run.Completeness != "partial" {
+		t.Fatalf("a rate-limited scan must be partial, got outcome=%q completeness=%q", run.Outcome, run.Completeness)
+	}
+}
+
+func TestGatewayNoRateLimitBelowFloor(t *testing.T) {
+	origin, _ := assessment.ParseApprovedOrigin("app", "https://app.test")
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	req := Request{Target: "https://app.test", AppScope: &scope, ScanDir: t.TempDir(), AttemptID: "attempt"}
+	g, err := NewRecordingGateway(context.Background(), req, Config{}, "zap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	g.upstreamRequests = 10
+	g.rateLimitedFinal = 10
+	run := &Run{Status: "completed"}
+	g.ApplyOutcome(run)
+	for _, l := range run.Limitations {
+		if strings.Contains(l.Reason, "rate-limited") {
+			t.Fatalf("a tiny sample must not raise a rate-limit limitation: %+v", run.Limitations)
+		}
+	}
+}

@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,6 +73,8 @@ type RecordingGateway struct {
 	formFuzzArmed      bool
 	formFuzzRequests   int
 	requests           int
+	upstreamRequests   int
+	rateLimitedFinal   int
 	phase              string
 	URL                string
 	CAPath             string
@@ -530,7 +533,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	}
 	event.Kind = "requested"
 	g.record(event)
-	response, err := g.client.Do(request)
+	response, err := g.roundTripWithBackoff(request, body)
 	if err != nil {
 		event.Kind, event.Reason = "failed", "upstream request failed"
 		g.record(event)
@@ -538,6 +541,16 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer response.Body.Close()
+	// Track residual rate limiting so a scan the target throttled is reported
+	// as degraded rather than a clean, low-finding pass. Differential active
+	// checks (SQL injection, reflected XSS) compare a true/false response pair
+	// and silently find nothing when both come back 429.
+	g.mu.Lock()
+	g.upstreamRequests++
+	if response.StatusCode == http.StatusTooManyRequests {
+		g.rateLimitedFinal++
+	}
+	g.mu.Unlock()
 	data, err := io.ReadAll(io.LimitReader(response.Body, (8<<20)+1))
 	if err != nil || len(data) > 8<<20 {
 		event.Kind, event.Reason = "failed", "upstream response exceeds recording limit"
@@ -559,6 +572,80 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 	event.Kind, event.ResponseCode = "observed", response.StatusCode
 	g.record(event)
+}
+
+// rateLimitSampleFloor is the minimum number of upstream requests before a
+// high 429 ratio is reported as a coverage limitation; it avoids flagging tiny
+// scans on a couple of throttled responses.
+const rateLimitSampleFloor = 20
+
+// roundTripWithBackoff sends an in-scope request and retries on HTTP 429. A 429
+// means the target did not process the request, so replaying it is safe and
+// idempotent for the read-only GET traffic (and the explicitly approved writes)
+// the gateway admits. Without this, a rate-limited target returns 429 to the
+// true/false request pairs that differential active-scan rules rely on, and
+// those rules silently report nothing. Retries honour Retry-After, back off
+// exponentially, are bounded, and stop on cancellation.
+func (g *RecordingGateway) roundTripWithBackoff(request *http.Request, body []byte) (*http.Response, error) {
+	const maxAttempts = 5
+	const maxBackoff = 2 * time.Second
+	backoff := 200 * time.Millisecond
+	ctx := request.Context()
+	request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	var response *http.Response
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		request.ContentLength = int64(len(body))
+		response, err = g.client.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		if response.StatusCode != http.StatusTooManyRequests || attempt == maxAttempts-1 {
+			return response, nil
+		}
+		wait := backoff
+		if ra := retryAfterDelay(response.Header.Get("Retry-After")); ra > 0 {
+			wait = ra
+		}
+		if wait > maxBackoff {
+			wait = maxBackoff
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
+		_ = response.Body.Close()
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		if backoff < maxBackoff {
+			backoff *= 2
+		}
+	}
+	return response, nil
+}
+
+// retryAfterDelay parses an HTTP Retry-After header (delta-seconds or an
+// HTTP-date) into a wait duration. An absent, malformed, or past value yields 0.
+func retryAfterDelay(header string) time.Duration {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(header); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(header); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // GatewayRejectionHeader marks a response the gateway produced itself (a
@@ -603,6 +690,18 @@ func (g *RecordingGateway) certificate(host string) (*tls.Certificate, error) {
 func (g *RecordingGateway) ApplyOutcome(run *Run) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// A target that keeps returning 429 even after backoff degrades every
+	// differential active-scan rule (SQL injection, reflected XSS, boolean
+	// comparisons). Report it so the scan is not mistaken for a clean pass.
+	if g.upstreamRequests >= rateLimitSampleFloor && g.rateLimitedFinal*4 >= g.upstreamRequests {
+		if g.limitations == nil {
+			g.limitations = map[string]bool{}
+		}
+		if len(g.limitations) < 16 {
+			pct := g.rateLimitedFinal * 100 / g.upstreamRequests
+			g.limitations[fmt.Sprintf("target rate-limited %d%% of requests with HTTP 429 after backoff; differential active checks (SQL injection, reflected XSS) compare a true/false response pair and are suppressed when the target throttles — lower the request rate (XALGORIX_WEB_RATE_RPS) and rescan", pct)] = true
+		}
+	}
 	if len(g.limitations) == 0 {
 		return
 	}
