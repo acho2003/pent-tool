@@ -376,14 +376,32 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fullModeForm {
-		if err := fullModeFormAllowed(g.req, g.cfg, raw); err != nil {
+		if err := fullModeFormAllowed(g.req, g.cfg, http.MethodPost, raw); err != nil {
 			g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: err.Error()})
 			gatewayReject(w, "request outside approved policy", 403)
 			return
 		}
 		event.NativeRef = "wapiti-full-form"
 	}
-	if r.Method == http.MethodPost && !fullModeForm {
+	// Schemathesis write fuzzing (opt-in) sends generated POST/PUT/PATCH/DELETE
+	// requests. Consent is the operator's api_write_fuzz choice plus a declared
+	// test environment; the requests stay inside the approved scope, honour
+	// exclusions and count against the request budget.
+	writeFuzz := g.scanner == "schemathesis" && g.req.APIWriteFuzz && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete)
+	if writeFuzz && !g.req.TestEnvironment {
+		g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: "API write fuzzing changes data only when the target is declared a test environment; the request was blocked"})
+		gatewayReject(w, "write fuzzing requires a declared test environment", 403)
+		return
+	}
+	if writeFuzz {
+		if err := fullModeFormAllowed(g.req, g.cfg, r.Method, raw); err != nil {
+			g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: err.Error()})
+			gatewayReject(w, "request outside approved policy", 403)
+			return
+		}
+		event.NativeRef = "api-write-fuzz"
+	}
+	if r.Method == http.MethodPost && !fullModeForm && !writeFuzz {
 		if r.Body == nil {
 			r.Body = http.NoBody
 		}
@@ -417,7 +435,7 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := browserRequestAllowed(g.req, g.cfg, r.Method, raw); err != nil && r.Method != http.MethodPost {
+	if err := browserRequestAllowed(g.req, g.cfg, r.Method, raw); err != nil && r.Method != http.MethodPost && !writeFuzz {
 		event.Kind, event.Reason = "blocked", err.Error()
 		g.record(event)
 		gatewayReject(w, "request outside approved policy", 403)
@@ -634,14 +652,14 @@ func gatewayInputAuthenticationMatches(input ScannerRequestInput, request *http.
 // fullModeFormAllowed applies the scope, exclusion and scope-guard checks to a
 // Wapiti full-mode form submission. It is the write-admitting counterpart of
 // browserRequestAllowed, reached only for that explicit, test-environment run.
-func fullModeFormAllowed(req Request, cfg Config, rawURL string) error {
+func fullModeFormAllowed(req Request, cfg Config, method, rawURL string) error {
 	if req.AppScope == nil {
 		return fmt.Errorf("approved scope required")
 	}
 	if ok, reason := req.AppScope.Allows(rawURL); !ok {
 		return fmt.Errorf("%s", reason)
 	}
-	if excluded, reason := req.AppScope.Excluded(http.MethodPost, rawURL); excluded {
+	if excluded, reason := req.AppScope.Excluded(method, rawURL); excluded {
 		return fmt.Errorf("excluded: %s", reason)
 	}
 	if cfg.ScopeGuard != nil {

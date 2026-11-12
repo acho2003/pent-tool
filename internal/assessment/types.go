@@ -349,7 +349,13 @@ type AssessmentConfig struct {
 	// crawling and module set, which submits discovered forms (writes) and can
 	// make the target call out to external hosts. "full" is an explicit,
 	// high-impact operator choice.
-	WapitiMode         string              `json:"wapiti_mode,omitempty"`
+	WapitiMode string `json:"wapiti_mode,omitempty"`
+	// APIWriteFuzz opts into Schemathesis fuzzing of state-changing API
+	// operations (POST/PUT/PATCH/DELETE with generated bodies). It has no
+	// cleanup, so it requires a declared test environment and a non-Black-Box
+	// mode. APIWriteFuzzMax caps the generated requests per operation.
+	APIWriteFuzz       bool                `json:"api_write_fuzz,omitempty"`
+	APIWriteFuzzMax    int                 `json:"api_write_fuzz_max,omitempty"`
 	DiscoveryProviders *DiscoveryProviders `json:"discovery_providers,omitempty"`
 	// ManualSeeds are operator-supplied entry URLs merged into the inventory.
 	// Each must lie inside some target's AppScope and not be excluded.

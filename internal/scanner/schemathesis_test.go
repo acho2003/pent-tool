@@ -324,3 +324,47 @@ func TestSchemathesisIsSelectedOnlyWhenAnAPIDefinitionIsBound(t *testing.T) {
 		t.Fatal("a custom selection that omits Schemathesis must be respected")
 	}
 }
+
+func TestSchemathesisDefinitionIncludesWritesOnlyWhenOptedIn(t *testing.T) {
+	endpoints := []APIEndpoint{
+		{Method: "GET", Path: "/common/countries", Source: "openapi", Resolved: true, Eligible: true},
+		{Method: "POST", Path: "/common/countries", Source: "openapi", Resolved: true, Eligible: false, RequestBodyRequired: true, RequestBodyContentTypes: []string{"application/json"}, RequestBodySchema: []byte(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`)},
+		{Method: "DELETE", Path: "/common/countries/{id}", Source: "openapi", Resolved: true, Eligible: false, Parameters: []APIParameter{{Name: "id", Location: "path", Required: true, SchemaType: "string"}}},
+	}
+	parse := func(writeFuzz bool) map[string]bool {
+		req := schemathesisTestRequest(t, "http://svc.test:5003/common")
+		req.APIWriteFuzz, req.APIEndpoints = writeFuzz, endpoints
+		doc, _, ops, err := schemathesisDefinition(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		included := map[string]bool{}
+		for _, op := range ops {
+			if op.Status == "included" {
+				included[op.Method] = true
+			}
+		}
+		if writeFuzz {
+			var parsed struct {
+				Paths map[string]map[string]struct {
+					RequestBody json.RawMessage `json:"requestBody"`
+				} `json:"paths"`
+			}
+			if json.Unmarshal(doc, &parsed) != nil {
+				t.Fatal("generated schema is not JSON")
+			}
+			if len(parsed.Paths["/countries"]["post"].RequestBody) == 0 {
+				t.Fatal("write operation has no requestBody in the generated schema")
+			}
+		}
+		return included
+	}
+	readOnly := parse(false)
+	if readOnly["GET"] != true || readOnly["POST"] || readOnly["DELETE"] {
+		t.Fatalf("writes included without opt-in: %v", readOnly)
+	}
+	withWrites := parse(true)
+	if !withWrites["GET"] || !withWrites["POST"] || !withWrites["DELETE"] {
+		t.Fatalf("writes not included with opt-in: %v", withWrites)
+	}
+}

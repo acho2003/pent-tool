@@ -24,10 +24,11 @@ import (
 // request budget, and records every request), and it checks only for server
 // errors, because the rebuilt definition carries no response schemas.
 const (
-	schemathesisMaxDuration     = 20 * time.Minute
-	schemathesisDefaultDuration = 15 * time.Minute
-	schemathesisDefaultExamples = 25
-	schemathesisThoroughExample = 50
+	schemathesisMaxDuration          = 20 * time.Minute
+	schemathesisDefaultDuration      = 15 * time.Minute
+	schemathesisDefaultExamples      = 25
+	schemathesisDefaultWriteExamples = 200
+	schemathesisThoroughExample      = 50
 )
 
 // schemathesisConfig disables the coverage phase's "unspecified HTTP method"
@@ -134,11 +135,17 @@ func schemathesisDefinition(req Request) ([]byte, string, []SchemathesisOperatio
 		if paths[schemaPath] == nil {
 			paths[schemaPath] = map[string]any{}
 		}
-		paths[schemaPath][strings.ToLower(method)] = map[string]any{
+		operationDoc := map[string]any{
 			"operationId": operationID,
 			"parameters":  parameters,
 			"responses":   map[string]any{"default": map[string]string{"description": "Any response"}},
 		}
+		if req.APIWriteFuzz && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE") {
+			if body := schemathesisRequestBody(endpoint); body != nil {
+				operationDoc["requestBody"] = body
+			}
+		}
+		paths[schemaPath][strings.ToLower(method)] = operationDoc
 		op.Status, op.Reason = "included", note
 		operations = append(operations, op)
 	}
@@ -154,12 +161,15 @@ func schemathesisDefinition(req Request) ([]byte, string, []SchemathesisOperatio
 }
 
 func schemathesisSkipReason(req Request, base *url.URL, boundary *regexp.Regexp, endpoint APIEndpoint, method string) string {
+	writeMethod := method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE"
 	switch {
 	case endpoint.Source == "graphql":
 		return "GraphQL operations are sent as POST bodies, which the read-only gateway policy does not admit for generated input"
-	case method != "GET" && method != "HEAD":
+	case writeMethod && !req.APIWriteFuzz:
 		return "state-changing method is not fuzzed"
-	case endpoint.RequestBodyRequired:
+	case !writeMethod && method != "GET" && method != "HEAD":
+		return "state-changing method is not fuzzed"
+	case endpoint.RequestBodyRequired && !req.APIWriteFuzz:
 		return "operation requires a request body"
 	case !strings.HasPrefix(endpoint.Path, "/") || strings.ContainsAny(endpoint.Path, "?#\\"):
 		return "operation path is not a plain absolute path"
@@ -333,6 +343,15 @@ func buildSchemathesis(req Request, cfg Config) commandSpec {
 	examples := schemathesisDefaultExamples
 	if req.Profile == ProfileThorough || req.Profile == ProfileNextjsDeep {
 		examples = schemathesisThoroughExample
+	}
+	// Write fuzzing caps generated requests per operation to the operator's
+	// bound (default 200), so an opt-in destructive run stays bounded.
+	if req.APIWriteFuzz {
+		cap := req.APIWriteFuzzMax
+		if cap <= 0 {
+			cap = schemathesisDefaultWriteExamples
+		}
+		examples = cap
 	}
 	// Flags verified against the pinned 4.32.5 CLI:
 	//   --phases examples,coverage,fuzzing : no stateful link-following phase
@@ -678,4 +697,30 @@ func schemathesisFinding(operation, code, title, message, phase, caseID string, 
 	}
 	finding.Evidence = evidence
 	return finding
+}
+
+// schemathesisRequestBody returns the application/json requestBody object for a
+// write operation, using the operation's captured body schema or a permissive
+// object schema when it required a body but none was captured. Returns nil when
+// the operation declares no body.
+func schemathesisRequestBody(endpoint APIEndpoint) map[string]any {
+	var schema any
+	if len(endpoint.RequestBodySchema) > 0 {
+		if json.Unmarshal(endpoint.RequestBodySchema, &schema) != nil {
+			schema = nil
+		}
+	}
+	if schema == nil {
+		hasJSON := false
+		for _, contentType := range endpoint.RequestBodyContentTypes {
+			if strings.Contains(strings.ToLower(contentType), "json") {
+				hasJSON = true
+			}
+		}
+		if !hasJSON && !endpoint.RequestBodyRequired {
+			return nil
+		}
+		schema = map[string]any{"type": "object"}
+	}
+	return map[string]any{"required": endpoint.RequestBodyRequired, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 }

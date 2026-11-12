@@ -14,6 +14,8 @@ import (
 
 const MaxOpenAPISpecBytes = 5 << 20
 
+const maxRequestBodySchemaBytes = 64 << 10
+
 type APIEndpoint struct {
 	DefinitionSDL string `json:"-"`
 	// RequestURL is a runtime-only concrete candidate from the already scoped
@@ -39,6 +41,10 @@ type APIEndpoint struct {
 	// ("path values observed in the response of GET ..."). Empty for operator-
 	// supplied values.
 	ValueSource string `json:"value_source,omitempty"`
+	// RequestBodySchema is the resolved JSON Schema of the operation's
+	// application/json request body, used only to generate bodies for opt-in
+	// write fuzzing. It is never sent on its own.
+	RequestBodySchema json.RawMessage `json:"request_body_schema,omitempty"`
 }
 
 type APIParameter struct {
@@ -184,13 +190,13 @@ func ParseOpenAPI(data []byte, origin string) ([]APIEndpoint, error) {
 			if resolved && !eligible {
 				reason = "operation method is not yet supported by the safe request adapter"
 			}
-			parameters, bodyRequired, bodyTypes, security, servers := openAPIInputMetadata(operations, operation, doc)
+			parameters, bodyRequired, bodyTypes, security, servers, bodySchema := openAPIInputMetadata(operations, operation, doc)
 			operationID, _ := operation["operationId"].(string)
 			if strings.TrimSpace(operationID) == "" {
 				operationID = strings.ToLower(method) + " " + path
 			}
 			out = append(out, APIEndpoint{Method: method, Path: path, Origin: origin, OperationID: operationID, Source: "openapi", Resolved: resolved, Eligible: eligible, Reason: reason,
-				Parameters: parameters, RequestBodyRequired: bodyRequired, RequestBodyContentTypes: bodyTypes, SecuritySchemes: security, SpecServers: servers})
+				Parameters: parameters, RequestBodyRequired: bodyRequired, RequestBodyContentTypes: bodyTypes, SecuritySchemes: security, SpecServers: servers, RequestBodySchema: bodySchema})
 		}
 	}
 	return out, nil
@@ -316,7 +322,7 @@ func compactStrings(values []string) []string {
 	return out
 }
 
-func openAPIInputMetadata(pathItem, operation, root map[string]any) ([]APIParameter, bool, []string, []string, []string) {
+func openAPIInputMetadata(pathItem, operation, root map[string]any) ([]APIParameter, bool, []string, []string, []string, json.RawMessage) {
 	parametersByKey := map[string]APIParameter{}
 	for _, listValue := range []any{pathItem["parameters"], operation["parameters"]} {
 		list, _ := listValue.([]any)
@@ -354,11 +360,19 @@ func openAPIInputMetadata(pathItem, operation, root map[string]any) ([]APIParame
 		return parameters[i].Location < parameters[j].Location
 	})
 	bodyRequired, bodyTypes := false, []string{}
+	var bodySchema json.RawMessage
 	if body, err := resolveOpenAPIObject(root, operation["requestBody"]); err == nil {
 		bodyRequired, _ = body["required"].(bool)
 		if content, ok := body["content"].(map[string]any); ok {
 			for contentType := range content {
 				bodyTypes = append(bodyTypes, contentType)
+			}
+			if media, ok := content["application/json"].(map[string]any); ok {
+				if schema, err := resolveOpenAPIObject(root, media["schema"]); err == nil {
+					if encoded, err := json.Marshal(schema); err == nil && len(encoded) <= maxRequestBodySchemaBytes {
+						bodySchema = encoded
+					}
+				}
 			}
 		}
 	} else {
@@ -408,7 +422,7 @@ func openAPIInputMetadata(pathItem, operation, root map[string]any) ([]APIParame
 			servers = []string{scheme + "://" + host + basePath}
 		}
 	}
-	return parameters, bodyRequired, bodyTypes, security, servers
+	return parameters, bodyRequired, bodyTypes, security, servers, bodySchema
 }
 
 func openAPIServerURLs(value any) []string {

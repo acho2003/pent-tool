@@ -153,3 +153,25 @@ func TestWapitiFullModeWithoutTestEnvironmentWarns(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIWriteFuzzRequiresTestEnvironment(t *testing.T) {
+	cfg := AssessmentConfig{Mode: ModeGrayBox, Types: []Type{TypeAPI}, Targets: []Target{{ID: "app", Kind: KindURL, Value: "https://app.example.test"}}, APIWriteFuzz: true}
+	codes := problemCodes(cfg)
+	if !codes["api_write_fuzz.test_environment_required"] {
+		t.Fatal("write fuzzing allowed without a declared test environment")
+	}
+	cfg.TestEnvironment = true
+	if problemCodes(cfg)["api_write_fuzz.test_environment_required"] {
+		t.Fatal("still blocked after declaring a test environment")
+	}
+	black := cfg
+	black.Mode = ModeBlackBox
+	if !problemCodes(black)["api_write_fuzz.black_box"] {
+		t.Fatal("write fuzzing allowed in Black Box")
+	}
+	over := cfg
+	over.APIWriteFuzzMax = 5000
+	if !problemCodes(over)["api_write_fuzz.max_invalid"] {
+		t.Fatal("over-limit cap accepted")
+	}
+}

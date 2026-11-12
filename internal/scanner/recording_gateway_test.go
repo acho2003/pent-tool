@@ -389,3 +389,55 @@ func TestGatewayAdmitsWapitiFullModeFormsOnlyOnDeclaredTestEnvironment(t *testin
 		t.Fatalf("target received POSTs %v, want exactly the one full-mode submission", posts)
 	}
 }
+
+func TestGatewayAdmitsAPIWriteFuzzOnlyForSchemathesisOnTestEnvironment(t *testing.T) {
+	var got []string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.Path)
+		w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", target.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin}, assessment.Exclusion{Method: "*", PathPattern: "/common/logout", Reason: "ends the session"})
+	send := func(req Request, scannerName, method, path string) int {
+		g, err := NewRecordingGateway(t.Context(), req, Config{}, scannerName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxy, _ := url.Parse(g.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+		request, _ := http.NewRequest(method, target.URL+path, strings.NewReader(`{"x":1}`))
+		request.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		g.Close()
+		return response.StatusCode
+	}
+	base := Request{Target: target.URL, AppScope: &scope, ScanDir: t.TempDir(), APIWriteFuzz: true}
+
+	if send(base, "schemathesis", http.MethodPost, "/common/countries") != 403 {
+		t.Fatal("write fuzzing without a test environment was admitted")
+	}
+	env := base
+	env.TestEnvironment = true
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		if code := send(env, "schemathesis", method, "/common/countries/x"); code != 200 {
+			t.Fatalf("%s write not admitted on a test environment: %d", method, code)
+		}
+	}
+	if send(env, "schemathesis", http.MethodDelete, "/common/logout") != 403 {
+		t.Fatal("excluded route was write-fuzzed")
+	}
+	if send(env, "nuclei", http.MethodPost, "/common/countries") != 403 {
+		t.Fatal("a non-schemathesis scanner was allowed to write-fuzz")
+	}
+	off := env
+	off.APIWriteFuzz = false
+	if send(off, "schemathesis", http.MethodPost, "/common/countries") != 403 {
+		t.Fatal("writes admitted without the write-fuzz opt-in")
+	}
+}

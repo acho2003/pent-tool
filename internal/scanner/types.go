@@ -135,6 +135,10 @@ type Request struct {
 	// WapitiMode is the operator's enable switch for the Wapiti fuzzer: ""
 	// (restricted), "safe" (GET-only allowlist) or "full" (forms + all modules).
 	WapitiMode string `json:"-"`
+	// APIWriteFuzz enables Schemathesis fuzzing of state-changing operations
+	// (gated on TestEnvironment). APIWriteFuzzMax caps requests per operation.
+	APIWriteFuzz    bool `json:"-"`
+	APIWriteFuzzMax int  `json:"-"`
 	// WriteApprovals are target-filtered, previewed approvals. Only apiwrites
 	// consumes them, after prerequisites pass and with a persistent write journal.
 	WriteApprovals  []assessment.WriteApproval `json:"-"`

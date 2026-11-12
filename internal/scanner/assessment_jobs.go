@@ -437,6 +437,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				stableJobPath(job.Scanner+"\x00"+job.Variant)),
 			Profile: plan.Config.Profile, Nextjs: plan.Config.Nextjs, TypedAssessment: true,
 			AppScope: appScopes[job.TargetID], TestEnvironment: plan.Config.TestEnvironment, WapitiMode: plan.Config.WapitiMode,
+			APIWriteFuzz: plan.Config.APIWriteFuzz, APIWriteFuzzMax: plan.Config.APIWriteFuzzMax,
 		}
 		// Endpoint coverage and input manifests are keyed per scanner.
 		coverageName := job.Scanner

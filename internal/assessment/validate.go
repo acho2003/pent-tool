@@ -696,6 +696,17 @@ func validateScopePolicy(cfg AssessmentConfig, ids map[string]bool) []Problem {
 	if cfg.WapitiMode == "full" && cfg.Mode != ModeBlackBox && !cfg.TestEnvironment {
 		probs = append(probs, advisory("wapiti.mode.full_needs_test_environment", "Wapiti full mode will crawl and attack GET parameters, but its form submissions are blocked until the targets are declared a test environment"))
 	}
+	if cfg.APIWriteFuzz {
+		if cfg.Mode == ModeBlackBox {
+			probs = append(probs, blocking("api_write_fuzz.black_box", "API write fuzzing sends generated POST/PUT/PATCH/DELETE requests; use Gray Box or White Box"))
+		}
+		if !cfg.TestEnvironment {
+			probs = append(probs, blocking("api_write_fuzz.test_environment_required", "API write fuzzing has no cleanup and changes data; it requires the targets to be declared a test environment"))
+		}
+		if cfg.APIWriteFuzzMax < 0 || cfg.APIWriteFuzzMax > 1000 {
+			probs = append(probs, blocking("api_write_fuzz.max_invalid", "api_write_fuzz_max must be between 0 and 1000"))
+		}
+	}
 
 	if dp := cfg.DiscoveryProviders; dp != nil {
 		for _, p := range dp.Subdomain {
