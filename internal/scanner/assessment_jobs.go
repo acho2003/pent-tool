@@ -519,6 +519,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			run := Run{Scanner: "auth", Target: job.Target, Scope: scope, Status: "completed", StartedAt: now, FinishedAt: now, AuthState: assessment.StateVerified, AuthCheckedAt: now, PlanFingerprint: plan.Fingerprint, Variant: job.Variant}
+			if reason, unverified := unverifiedTokenAuth(plan, job.TargetID); unverified {
+				run.AuthState, run.Reason = assessment.StateAvailable, reason
+			}
 			if !authVerified[job.TargetID] {
 				run.Status, run.Reason = "failed", "target-bound authentication could not be verified"
 				run.AuthState, run.GapKind = assessment.StateFailed, GapAuthFailed
@@ -869,6 +872,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		run.Authenticated = req.TargetAuth != "" && run.Status == "completed" && scannerUsesWebAuth(job.Scanner)
 		if run.Authenticated && run.AuthState == "" {
 			run.AuthState, run.AuthCheckedAt = assessment.StateVerified, time.Now().UTC().Format(time.RFC3339)
+			if _, unverified := unverifiedTokenAuth(plan, job.TargetID); unverified && job.AuthContextID == "" {
+				run.AuthState = assessment.StateAvailable
+			}
 		}
 		if run.Authenticated && job.Scanner == "nuclei" {
 			if err := refreshRunIdentity(ctx, p, job); err != nil {
@@ -967,7 +973,7 @@ func assessmentTargetScope(target assessment.Target) string {
 func assessmentWebAuthBound(bindings []assessment.AccessBinding, targetID string) bool {
 	for _, binding := range bindings {
 		switch binding.Kind {
-		case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin:
+		case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin, assessment.AccessTokenLogin:
 			if slices.Contains(binding.TargetIDs, targetID) {
 				return true
 			}
@@ -1118,4 +1124,16 @@ func failedPlannedJob(job PlanJob, req Request, fingerprint, reason string, emit
 		emit(Event{Type: "scanner_failed", Scanner: job.Scanner, Run: run, Output: reason})
 	}
 	return run
+}
+
+// unverifiedTokenAuth reports a target whose shared login token is applied
+// but whose access was never verified (no protected path proved it). Runs on
+// such a target carry the token yet must not claim verified authentication.
+func unverifiedTokenAuth(plan AssessmentPlan, targetID string) (string, bool) {
+	for _, capability := range plan.Capabilities {
+		if capability.Capability == assessment.CapAuthWeb && capability.TargetID == targetID && capability.AccessKind == assessment.AccessTokenLogin && capability.State == assessment.StateAvailable {
+			return capability.Reason, true
+		}
+	}
+	return "", false
 }

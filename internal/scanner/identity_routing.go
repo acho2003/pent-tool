@@ -26,7 +26,7 @@ func expandIdentityJobs(cfg assessment.AssessmentConfig, jobs []PlanJob) []PlanJ
 	identities := map[string]map[string]string{}
 	for _, binding := range cfg.Access {
 		switch binding.Kind {
-		case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin:
+		case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin, assessment.AccessTokenLogin:
 		default:
 			continue
 		}

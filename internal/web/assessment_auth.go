@@ -63,6 +63,9 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 		}
 		return headersByTarget, nil
 	}
+	// One login per token credential, shared by every target bound to it.
+	tokenSessions := map[string]*tokenSession{}
+	tokenFailures := map[string]error{}
 	for _, binding := range plan.Config.Access {
 		if !webAuthenticationKind(binding.Kind) {
 			continue
@@ -105,7 +108,52 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 				continue
 			}
 			var lines []string
-			if binding.Kind == assessment.AccessFormLogin {
+			tokenUnverified := ""
+			if binding.Kind == assessment.AccessTokenLogin {
+				session, failure := tokenSessions[binding.CredentialID], tokenFailures[binding.CredentialID]
+				if session == nil && failure == nil {
+					cfg, cfgErr := parseTokenLoginConfig(record.Values)
+					if cfgErr == nil && !tokenLoginAllowed(cfg.loginURL, assessmentURLScopes(plan.Config)) {
+						cfgErr = tokenConfigError("the login URL is outside every application target of this assessment")
+					}
+					if cfgErr != nil {
+						failure = cfgErr
+					} else {
+						session, failure = newTokenSession(ctx, cfg)
+					}
+					tokenSessions[binding.CredentialID], tokenFailures[binding.CredentialID] = session, failure
+				}
+				if failure != nil {
+					var configErr tokenConfigError
+					if errors.As(failure, &configErr) {
+						setAuthCapability(plan, targetID, assessment.StateUnavailable, "token login is not usable ("+configErr.Error()+"); authenticated scanning was skipped")
+					} else {
+						// obtainLoginToken errors are fixed, secret-free phrases.
+						setAuthVerification(plan, targetID, assessment.StateFailed, "token login failed ("+failure.Error()+"); authenticated scanning was skipped")
+					}
+					continue
+				}
+				lines = []string{session.headerLine()}
+				positive, verifyErr := probeHeaderSession(ctx, verifyURL, binding.VerifyMarker, lines, target.Value)
+				if verifyErr == nil && binding.VerifyMarker != "" {
+					negativeMarker := binding.NegativeMarker
+					if negativeMarker == "" {
+						negativeMarker = binding.VerifyMarker
+					}
+					verifyErr = verifyNegativeControl(ctx, scope, verifyURL, negativeMarker)
+				} else if verifyErr == nil {
+					verifyErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
+				}
+				if verifyErr != nil {
+					if binding.VerifyURL != "" {
+						setAuthVerification(plan, targetID, assessment.StateFailed, "token verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
+						continue
+					}
+					// No protected path was supplied: the token is still applied,
+					// but nothing claims this service accepted it.
+					tokenUnverified = "token login succeeded and the token is applied, but access to this service was not verified (no protected path supplied and the anonymous response was not distinguishable)"
+				}
+			} else if binding.Kind == assessment.AccessFormLogin {
 				browserLogin := formBrowserLogin
 				var cookieHeader string
 				if browserLogin {
@@ -193,7 +241,14 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 			} else {
 				verificationReason += " and the unauthenticated negative control passed"
 			}
-			setAuthVerification(plan, targetID, assessment.StateVerified, verificationReason)
+			if binding.Kind == assessment.AccessTokenLogin {
+				verificationReason = "shared token login succeeded; " + verificationReason
+			}
+			if tokenUnverified != "" {
+				setAuthVerification(plan, targetID, assessment.StateAvailable, tokenUnverified)
+			} else {
+				setAuthVerification(plan, targetID, assessment.StateVerified, verificationReason)
+			}
 			for i := range plan.Jobs {
 				if plan.Jobs[i].TargetID == targetID && (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") {
 					plan.Jobs[i].ExecutionMode = "authenticated"
@@ -205,6 +260,9 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 				}
 			}
 		}
+	}
+	if len(tokenSessions) > 0 {
+		s.tokenSessions.Store(plan, tokenSessions)
 	}
 	for i := range plan.Jobs {
 		if (plan.Jobs[i].Scanner == "zap" || plan.Jobs[i].Scanner == "nuclei") && plan.Jobs[i].ExecutionMode != "authenticated" && hasBlockingAuth(plan.Capabilities, plan.Jobs[i].TargetID) {
@@ -231,6 +289,10 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 		return refreshers, nil
 	}
 
+	var tokenSessions map[string]*tokenSession
+	if raw, ok := s.tokenSessions.LoadAndDelete(plan); ok {
+		tokenSessions, _ = raw.(map[string]*tokenSession)
+	}
 	if len(headers) == 0 {
 		return refreshers, nil
 	}
@@ -240,6 +302,10 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 	}
 	for _, target := range plan.Config.Targets {
 		if len(headers[target.ID]) == 0 {
+			continue
+		}
+		if refresh := tokenTargetRefresher(plan, target, tokenSessions); refresh != nil {
+			refreshers[target.ID] = refresh
 			continue
 		}
 		var verifyURL, marker string
@@ -335,11 +401,7 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 }
 
 func webAuthenticationKind(kind assessment.AccessKind) bool {
-	switch kind {
-	case assessment.AccessApplicationHeaders, assessment.AccessApplicationCookies, assessment.AccessBearerToken, assessment.AccessAPIKey, assessment.AccessFormLogin:
-		return true
-	}
-	return false
+	return kind.IsWebApplication()
 }
 
 func credentialHeaderLines(kind assessment.AccessKind, values map[string]string) ([]string, error) {
@@ -511,4 +573,15 @@ func blockingAuthReason(all []assessment.CapabilityEvidence, target string) stri
 		}
 	}
 	return "credential verification failed or is unsupported"
+}
+
+// assessmentURLScopes returns the application scope of every URL target.
+func assessmentURLScopes(cfg assessment.AssessmentConfig) []assessment.AppScope {
+	var scopes []assessment.AppScope
+	for _, target := range cfg.Targets {
+		if target.Kind == assessment.KindURL {
+			scopes = append(scopes, assessment.AppScopeForTarget(cfg, target.ID))
+		}
+	}
+	return scopes
 }

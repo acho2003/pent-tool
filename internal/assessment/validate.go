@@ -343,7 +343,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if len(ab.Identity) > 128 || len(ab.Role) > 128 || strings.ContainsAny(ab.Identity+ab.Role, "\r\n\x00") {
 			probs = append(probs, blocking("access.identity.invalid", "identity and role labels must be at most 128 printable characters"))
 		}
-		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin || ab.Kind == AccessTokenLogin {
+		if ab.Kind.IsWebApplication() {
 			if strings.TrimSpace(ab.CredentialID) != "" {
 				if ab.Kind == AccessFormLogin && strings.TrimSpace(ab.VerifyURL) == "" {
 					probs = append(probs, blocking("access.verification_required", "form login requires an in-scope verify_url; a verify_marker is optional (markerless login verifies by redirect behavior)"))
@@ -365,7 +365,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 				probs = append(probs, blocking("access.target.unknown",
 					fmt.Sprintf("access binding %q references unknown target id %q", ab.Kind, id)))
 			}
-			if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin || ab.Kind == AccessTokenLogin {
+			if ab.Kind.IsWebApplication() {
 				for _, target := range cfg.Targets {
 					if target.ID == id && target.Kind != KindURL {
 						probs = append(probs, blocking("access.target_must_be_url", fmt.Sprintf("application credential target %q must be an explicit URL", id)))

@@ -30,6 +30,9 @@ type testCredentialRequest struct {
 	TargetURL    string `json:"target_url"`
 	VerifyURL    string `json:"verify_url"`
 	VerifyMarker string `json:"verify_marker"`
+	// LoginTargets are the assessment's other URL targets. A token login's
+	// login URL must lie inside the tested target or one of these.
+	LoginTargets []string `json:"login_targets,omitempty"`
 }
 
 type testCredentialResponse struct {
@@ -199,6 +202,10 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 	scope := applicationScope(req.TargetURL)
+	if record.Kind == assessment.AccessTokenLogin {
+		writeCredentialTestResult(w, s.testTokenLogin(ctx, req, verifyURL, record.Values))
+		return
+	}
 	if record.Kind == assessment.AccessFormLogin {
 		// A "browser" submit format logs in through a real browser (for
 		// NextAuth/SPA logins the HTTP replayer cannot reproduce), then verifies
@@ -311,4 +318,50 @@ func credentialError(w http.ResponseWriter, err error) bool {
 		http.Error(w, "credential operation failed", http.StatusInternalServerError)
 	}
 	return true
+}
+
+// testTokenLogin performs one token login and checks the token against the
+// tested service. Without a protected path that distinguishes the token from
+// an anonymous request the result is "available", never "verified".
+func (s *Server) testTokenLogin(ctx context.Context, req testCredentialRequest, verifyURL string, values map[string]string) testCredentialResponse {
+	result := testCredentialResponse{State: "unavailable"}
+	cfg, err := parseTokenLoginConfig(values)
+	if err != nil {
+		result.Reason = err.Error()
+		return result
+	}
+	scopes := []assessment.AppScope{applicationScope(req.TargetURL)}
+	for _, target := range req.LoginTargets {
+		lower := strings.ToLower(strings.TrimSpace(target))
+		if (strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) && !s.isBlockedTargetForScan(target, nil) {
+			scopes = append(scopes, applicationScope(strings.TrimSpace(target)))
+		}
+	}
+	if !tokenLoginAllowed(cfg.loginURL, scopes) || s.isBlockedTargetForScan(cfg.loginURL, nil) {
+		result.Reason = "the login URL must be inside one of this assessment's target URLs"
+		return result
+	}
+	session, err := newTokenSession(ctx, cfg)
+	if err != nil {
+		result.State, result.Reason = "failed", "token login failed: "+err.Error()
+		return result
+	}
+	lines := []string{session.headerLine()}
+	scope := applicationScope(req.TargetURL)
+	positive, err := probeHeaderSession(ctx, verifyURL, req.VerifyMarker, lines, req.TargetURL)
+	if err == nil && req.VerifyMarker != "" {
+		err = verifyNegativeControl(ctx, scope, verifyURL, req.VerifyMarker)
+	} else if err == nil {
+		err = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
+	}
+	if err != nil {
+		if req.VerifyURL != "" {
+			result.State, result.Reason = "failed", "login succeeded but the token was not accepted at the protected path: "+err.Error()
+			return result
+		}
+		result.State, result.Reason = "available", "login succeeded and a token was issued; access to this service was not verified (add a protected path such as /api/me)"
+		return result
+	}
+	result.Verified, result.State, result.Reason = true, "verified", "login succeeded and the token passed the protected-path and anonymous-control checks"
+	return result
 }

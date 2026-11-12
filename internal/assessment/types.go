@@ -154,6 +154,16 @@ func (a AccessKind) Valid() bool {
 	return false
 }
 
+// IsWebApplication reports whether the access kind authenticates HTTP
+// requests to an application target (headers, cookies, tokens, logins).
+func (a AccessKind) IsWebApplication() bool {
+	switch a {
+	case AccessApplicationHeaders, AccessApplicationCookies, AccessBearerToken, AccessAPIKey, AccessFormLogin, AccessTokenLogin:
+		return true
+	}
+	return false
+}
+
 // EvidenceState is the derivation state of a CapabilityEvidence entry. Reports
 // distinguish declared/available from verified, and unavailable from
 // not-applicable.

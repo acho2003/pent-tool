@@ -671,6 +671,10 @@ var dashboardRoutes = []string{
 
 // Server is the web UI server.
 type Server struct {
+	// tokenSessions holds runtime-only shared token logins per prepared
+	// assessment plan (*scanner.AssessmentPlan -> map[credentialID]*tokenSession)
+	// until the plan's session refreshers take them over.
+	tokenSessions    sync.Map
 	githubClient     *http.Client // optional transport for GitHub discovery tests
 	cfg              *config.Config
 	port             int

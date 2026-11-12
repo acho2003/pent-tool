@@ -77,6 +77,12 @@ func (s *Server) prepareAssessmentAuthentication(ctx context.Context, plan *scan
 			reason := blockingAuthReason(isolated.Capabilities, targetID)
 			if len(headers[targetID]) > 0 {
 				state, reason = assessment.StateVerified, "identity passed its target-bound verification and anonymous negative control"
+				for _, capability := range isolated.Capabilities {
+					if capability.Capability == assessment.CapAuthWeb && capability.TargetID == targetID && capability.State == assessment.StateAvailable {
+						// A shared token applied without a protected-path check.
+						state, reason = assessment.StateAvailable, capability.Reason
+					}
+				}
 			}
 			auth := scanner.AuthContext{ID: scanner.AuthenticationContextID(targetID, identity), TargetID: targetID, Identity: identity, Role: targets[targetID], Primary: !chosen[targetID], State: state, Reason: reason, Headers: slices.Clone(headers[targetID]), Refresh: refreshers[targetID], BrowserStorage: storage[targetID]}
 			plan.AuthContexts = append(plan.AuthContexts, auth)

@@ -72,7 +72,7 @@ func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 	for _, ab := range cfg.Access {
 		for _, id := range ab.TargetIDs {
 			switch ab.Kind {
-			case AccessApplicationHeaders, AccessApplicationCookies, AccessBearerToken, AccessAPIKey, AccessFormLogin, AccessTokenLogin:
+			case AccessApplicationHeaders, AccessApplicationCookies, AccessBearerToken, AccessAPIKey, AccessFormLogin, AccessTokenLogin: // IsWebApplication kinds
 				st := StateDeclared
 				prov := "credential_ref"
 				reason := "credential reference supplied; verification pending"
