@@ -637,11 +637,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 				run.APIEndpointResults = append(run.APIEndpointResults, result)
 				continue
 			}
-			operationURL := endpoint.RequestURL
-			var urlErr error
-			if operationURL == "" {
-				operationURL, urlErr = apiEndpointURL(target, endpoint)
-			}
+			operationURL, _, urlErr := operationRequestURL(target, endpoint)
 			if urlErr != nil {
 				result.Status, result.Reason = "skipped", urlErr.Error()
 				run.APIEndpointResults = append(run.APIEndpointResults, result)
@@ -712,10 +708,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	if req.StructuredDispatch {
 		for _, endpoint := range req.APIEndpoints {
 			result := APIEndpointResult{Method: endpoint.Method, Path: endpoint.Path, Origin: endpoint.Origin, Status: "skipped", Reason: "operation was not selected as an exact inventory request"}
-			raw := endpoint.RequestURL
-			if raw == "" {
-				raw, _ = apiEndpointURL(target, endpoint)
-			}
+			raw, _, _ := operationRequestURL(target, endpoint)
 			if !endpoint.Resolved || !endpoint.Eligible {
 				if endpoint.Reason != "" {
 					result.Reason = endpoint.Reason

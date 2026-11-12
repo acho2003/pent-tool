@@ -1151,6 +1151,13 @@ func MergeOpenAPIEndpointsScoped(surface *AttackSurface, applicationURL string, 
 		if err != nil {
 			continue
 		}
+		// Dispatchable read-only operations carry their declared optional query
+		// parameters (labelled placeholders) so parameter-based checks have the
+		// inputs the operation accepts. Unmaterialized templates stay bare.
+		var placeholders []string
+		if endpoint.Resolved && endpoint.Eligible {
+			resolved, placeholders = withQueryPlaceholders(resolved, endpoint)
+		}
 		params := endpointParameters(resolved)
 		ep, ok := normalizeAttackSurfaceEndpoint(resolved, endpoint.Method, endpoint.Source, time.Now().UTC().Format(time.RFC3339Nano), 0, "application/json", params, false, false)
 		if !ok {
@@ -1160,6 +1167,9 @@ func MergeOpenAPIEndpointsScoped(surface *AttackSurface, applicationURL string, 
 		ep.Provenance = []EndpointProvenance{{Tool: endpoint.Source, Source: endpoint.Source, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}}
 		if endpoint.ValueSource != "" {
 			ep.Provenance = append(ep.Provenance, EndpointProvenance{Tool: "value-harvest", Source: endpoint.ValueSource, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+		}
+		if len(placeholders) > 0 {
+			ep.Provenance = append(ep.Provenance, EndpointProvenance{Tool: placeholderProvenance, Source: "definition placeholder values for optional query parameters: " + strings.Join(placeholders, ", "), ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)})
 		}
 		allowed, reason := true, ""
 		if scope != nil {

@@ -109,7 +109,9 @@ func HarvestPathValues(ctx context.Context, req Request, cfg Config, application
 		materialized.RequestURL = requestURL
 		materialized.Resolved, materialized.Eligible, materialized.Reason = true, true, ""
 		materialized.MissingInputs = nil
-		materialized.Parameters = nil
+		// Path values are concrete now; keep only the optional query metadata
+		// so seeding can still add the operation's query placeholders.
+		materialized.Parameters = optionalQueryParameters(endpoint.Parameters)
 		materialized.ValueSource = "path values observed in the response of GET " + strings.Join(compactStrings(sources), ", GET ")
 		out = append(out, materialized)
 	}

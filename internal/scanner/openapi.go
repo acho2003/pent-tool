@@ -52,6 +52,10 @@ type APIParameter struct {
 	Location   string `json:"location"`
 	Required   bool   `json:"required,omitempty"`
 	SchemaType string `json:"schema_type,omitempty"`
+	// Placeholder is a definition-derived value for an optional query
+	// parameter (see openapi_query_placeholder.go). It is never an
+	// operator-supplied input.
+	Placeholder string `json:"placeholder,omitempty"`
 }
 
 type APIEndpointResult struct {
@@ -338,15 +342,21 @@ func openAPIInputMetadata(pathItem, operation, root map[string]any) ([]APIParame
 			}
 			required, _ := parameter["required"].(bool)
 			schemaType := ""
-			if schema, err := resolveOpenAPIObject(root, parameter["schema"]); err == nil {
+			var schema map[string]any
+			if resolved, err := resolveOpenAPIObject(root, parameter["schema"]); err == nil {
+				schema = resolved
 				schemaType, _ = schema["type"].(string)
 			}
 			if schemaType == "" {
 				schemaType, _ = parameter["type"].(string) // Swagger 2.0
 			}
+			placeholder := ""
+			if location == "query" && !required {
+				placeholder = openAPIQueryPlaceholder(parameter, schema, root)
+			}
 			key := strings.ToLower(location) + "\x00" + name
 			prior := parametersByKey[key]
-			parametersByKey[key] = APIParameter{Name: name, Location: location, Required: prior.Required || required, SchemaType: schemaType}
+			parametersByKey[key] = APIParameter{Name: name, Location: location, Required: prior.Required || required, SchemaType: schemaType, Placeholder: placeholder}
 		}
 	}
 	parameters := make([]APIParameter, 0, len(parametersByKey))

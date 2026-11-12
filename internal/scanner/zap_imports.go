@@ -53,10 +53,7 @@ func zapImportDefinitions(ctx context.Context, cfg Config, req Request, contextI
 	origins := map[string]map[string]any{}
 	graphs := map[string][]APIEndpoint{}
 	for _, endpoint := range req.APIEndpoints {
-		raw := endpoint.RequestURL
-		if raw == "" {
-			raw, _ = apiEndpointURL(req.Target, endpoint)
-		}
+		raw, _, _ := operationRequestURL(req.Target, endpoint)
 		if req.StructuredDispatch {
 			selected := false
 			for _, input := range req.InputRequests {
