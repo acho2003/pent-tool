@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 // One microservice: its URL(s) (";"-separated), optional container image,
 // optional repository URL or absolute server source path, and an optional
 // protected path used to verify the shared login token on this service.
-export type ServiceRow = { name: string; urls: string; image: string; repo: string; protectedPath: string };
+export type ServiceRow = { name: string; urls: string; image: string; repo: string; protectedPath: string; apiDefinitionId?: string; apiDefinitionInfo?: string };
 
 export type ServiceURLTarget = { id: string; value: string; service: string; protectedPath: string };
 export type ServiceImageTarget = { id: string; value: string; service: string };
@@ -20,6 +20,7 @@ export type ServiceSet = {
   services: AssessmentService[];
   urlTargets: ServiceURLTarget[];
   imageTargets: ServiceImageTarget[];
+  apiDefinitions: Array<{ target_id: string; definition_id: string }>;
   ignoredInternal: number;
 };
 
@@ -33,7 +34,7 @@ function splitURLs(value: string): string[] {
 // grouping. Images and source are internal resources, so they are only
 // included in White Box mode (the count of skipped ones is reported).
 export function serviceTargets(rows: ServiceRow[], whiteBox: boolean): ServiceSet {
-  const set: ServiceSet = { targets: [], services: [], urlTargets: [], imageTargets: [], ignoredInternal: 0 };
+  const set: ServiceSet = { targets: [], services: [], urlTargets: [], imageTargets: [], apiDefinitions: [], ignoredInternal: 0 };
   rows.forEach((row, index) => {
     const name = row.name.trim();
     if (!name) return;
@@ -45,6 +46,8 @@ export function serviceTargets(rows: ServiceRow[], whiteBox: boolean): ServiceSe
       set.urlTargets.push({ id, value, service: name, protectedPath: row.protectedPath.trim() });
       ids.push(id);
     });
+    // An uploaded OpenAPI/GraphQL definition belongs to the service's first URL.
+    if (row.apiDefinitionId && ids.length) set.apiDefinitions.push({ target_id: ids[0], definition_id: row.apiDefinitionId });
     const image = row.image.trim();
     const repo = row.repo.trim();
     if (whiteBox && image) {
@@ -87,8 +90,9 @@ export function servicesToCSV(rows: ServiceRow[]): string {
   return lines.join("\n") + "\n";
 }
 
-export function ServicesSetup({ rows, onChange, whiteBox }: { rows: ServiceRow[]; onChange: (rows: ServiceRow[]) => void; whiteBox: boolean }) {
+export function ServicesSetup({ rows, onChange, whiteBox, allowAPI }: { rows: ServiceRow[]; onChange: (rows: ServiceRow[]) => void; whiteBox: boolean; allowAPI: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
+  const [uploadingRow, setUploadingRow] = useState<number | null>(null);
   const [importing, setImporting] = useState(false);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importNote, setImportNote] = useState<string | null>(null);
@@ -96,6 +100,21 @@ export function ServicesSetup({ rows, onChange, whiteBox }: { rows: ServiceRow[]
 
   function update(index: number, patch: Partial<ServiceRow>) {
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  async function uploadDefinition(index: number, event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setUploadingRow(index);
+    try {
+      const result = await api.uploadAPIDefinition(file);
+      update(index, { apiDefinitionId: result.id, apiDefinitionInfo: `${file.name}: ${result.operation_count} operation${result.operation_count === 1 ? "" : "s"} (${result.format})` });
+    } catch (err) {
+      update(index, { apiDefinitionId: undefined, apiDefinitionInfo: err instanceof Error ? `Upload failed: ${err.message}` : "Upload failed" });
+    } finally {
+      setUploadingRow(null);
+    }
   }
 
   async function onImport(event: ChangeEvent<HTMLInputElement>) {
@@ -154,8 +173,14 @@ export function ServicesSetup({ rows, onChange, whiteBox }: { rows: ServiceRow[]
         <div className="flex items-end sm:col-span-1"><Button type="button" variant="ghost" size="sm" aria-label={`Remove ${row.name || "service"}`} onClick={() => onChange(rows.filter((_, i) => i !== index))}><Trash2 className="h-4 w-4" /></Button></div>
         <div className="space-y-1 sm:col-span-6"><Label htmlFor={`svc-image-${index}`} className="text-xs">Container image {whiteBox ? "(optional)" : "(White Box only)"}</Label><Input id={`svc-image-${index}`} value={row.image} onChange={(e) => update(index, { image: e.target.value })} placeholder="registry.example/team/auth-service:6" /></div>
         <div className="space-y-1 sm:col-span-6"><Label htmlFor={`svc-repo-${index}`} className="text-xs">Repository or source path {whiteBox ? "(optional)" : "(White Box only)"}</Label><Input id={`svc-repo-${index}`} value={row.repo} onChange={(e) => update(index, { repo: e.target.value })} placeholder="https://git.example/team/auth.git or /src/auth" /></div>
+        {allowAPI && <div className="flex flex-wrap items-center gap-2 sm:col-span-12">
+          <label className="cursor-pointer rounded-md border px-2 py-1 text-xs hover:bg-muted/30">{uploadingRow === index ? "Uploading…" : row.apiDefinitionId ? "Replace OpenAPI file" : "Upload OpenAPI / Swagger file (optional)"}<input type="file" accept=".json,.yaml,.yml,.graphql,.gql" hidden disabled={uploadingRow === index} onChange={(e) => void uploadDefinition(index, e)} /></label>
+          {row.apiDefinitionInfo && <span className={`text-xs ${row.apiDefinitionId ? "text-emerald-300" : "text-destructive"}`}>{row.apiDefinitionInfo}</span>}
+          {row.apiDefinitionId && <button type="button" className="text-xs underline" onClick={() => update(index, { apiDefinitionId: undefined, apiDefinitionInfo: undefined })}>Remove</button>}
+        </div>}
       </div>)}
       {set.services.length > 0 && <p className="text-xs text-muted-foreground">{set.services.length} service{set.services.length === 1 ? "" : "s"} · {set.urlTargets.length} URL target{set.urlTargets.length === 1 ? "" : "s"} · {set.imageTargets.length} image{set.imageTargets.length === 1 ? "" : "s"}. The protected path is a page that only works when logged in; it lets the shared login prove access per service.</p>}
+      {allowAPI && <p className="text-xs text-muted-foreground">Without an uploaded file, Xalgorix still looks for a published schema on each service (/openapi.json, /swagger.json, /v3/api-docs, /api-docs, and the NestJS /api-json, /docs-json, /api/docs-json). Select API coverage so the endpoints are tested.</p>}
       {set.ignoredInternal > 0 && <p className="text-xs text-amber-200">{set.ignoredInternal} image/source entr{set.ignoredInternal === 1 ? "y is" : "ies are"} ignored outside White Box mode. Choose White Box to scan images and source.</p>}
     </CardContent>
   </Card>;
