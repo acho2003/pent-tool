@@ -101,7 +101,7 @@ func apiEndpointURL(applicationURL string, endpoint APIEndpoint) (string, error)
 		// /app/graphql/app/graphql, and invent a request that does not exist.
 		base.Path = "/" + strings.TrimLeft(operationPath, "/")
 	} else {
-		base.Path = strings.TrimSuffix(base.Path, "/") + "/" + strings.TrimLeft(operationPath, "/")
+		base.Path = joinOperationPath(base.Path, operationPath)
 	}
 	base.RawPath = ""
 	base.RawQuery, base.Fragment = "", ""
@@ -522,4 +522,31 @@ func openAPIOperationResolved(path string, pathItem, operation, root map[string]
 		return false, "request body needs an explicit safe request example"
 	}
 	return true, ""
+}
+
+// joinOperationPath places an operation path under the application URL's path.
+// Frameworks with a global route prefix (NestJS setGlobalPrefix) publish
+// operation paths that already include it, so for a target such as
+// http://host:5003/common an operation /common/villages stays /common/villages
+// instead of becoming /common/common/villages; /villages becomes
+// /common/villages.
+func joinOperationPath(basePath, operationPath string) string {
+	basePath = strings.TrimSuffix(basePath, "/")
+	op := "/" + strings.TrimLeft(operationPath, "/")
+	if basePath != "" && (op == basePath || strings.HasPrefix(op, basePath+"/")) {
+		return op
+	}
+	return basePath + op
+}
+
+// relativeOperationPath is the operation path relative to the application
+// URL's path, the counterpart of joinOperationPath for tools that append
+// operation paths to a base URL themselves.
+func relativeOperationPath(basePath, operationPath string) string {
+	basePath = strings.TrimSuffix(basePath, "/")
+	op := "/" + strings.TrimLeft(operationPath, "/")
+	if basePath != "" && strings.HasPrefix(op, basePath+"/") {
+		return strings.TrimPrefix(op, basePath)
+	}
+	return op
 }

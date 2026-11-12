@@ -187,3 +187,26 @@ func TestMaterializeOpenAPIDoesNotTreatRequiredHeadersAsSatisfied(t *testing.T) 
 		t.Fatalf("required header was silently omitted: %+v", got)
 	}
 }
+
+func TestOperationPathsAreNotDoubledUnderAGlobalPrefix(t *testing.T) {
+	cases := []struct{ base, op, joined, relative string }{
+		{"/common", "/common/villages", "/common/villages", "/villages"},
+		{"/common/", "/villages", "/common/villages", "/villages"},
+		{"", "/common/villages", "/common/villages", "/common/villages"},
+		{"/common", "/common", "/common", "/common"},
+		{"/common", "/commonplace/x", "/common/commonplace/x", "/commonplace/x"},
+	}
+	for _, c := range cases {
+		if got := joinOperationPath(c.base, c.op); got != c.joined {
+			t.Errorf("join(%q,%q)=%q want %q", c.base, c.op, got, c.joined)
+		}
+		if got := relativeOperationPath(c.base, c.op); got != c.relative {
+			t.Errorf("relative(%q,%q)=%q want %q", c.base, c.op, got, c.relative)
+		}
+	}
+	endpoint := APIEndpoint{Method: "GET", Path: "/common/countries", Source: "openapi", Resolved: true, Eligible: true}
+	got, err := apiEndpointURL("http://svc.example.test:5003/common", endpoint)
+	if err != nil || got != "http://svc.example.test:5003/common/countries" {
+		t.Fatalf("prefixed target URL = %q, %v", got, err)
+	}
+}

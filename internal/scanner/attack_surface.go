@@ -1212,7 +1212,7 @@ func openAPIInventoryURL(applicationURL string, endpoint APIEndpoint) (string, e
 		// A GraphQL operation's path is the endpoint's own absolute path.
 		base.Path = "/" + strings.TrimLeft(operationPath, "/")
 	} else {
-		base.Path = strings.TrimSuffix(base.Path, "/") + "/" + strings.TrimLeft(operationPath, "/")
+		base.Path = joinOperationPath(base.Path, operationPath)
 	}
 	base.RawPath, base.RawQuery, base.Fragment = "", "", ""
 	return base.String(), nil

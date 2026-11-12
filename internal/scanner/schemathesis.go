@@ -129,10 +129,12 @@ func schemathesisDefinition(req Request) ([]byte, string, []SchemathesisOperatio
 		}
 		usedIDs[operationID] = true
 		parameters, note := schemathesisParameters(base, endpoint)
-		if paths[endpoint.Path] == nil {
-			paths[endpoint.Path] = map[string]any{}
+		// Schemathesis appends schema paths to the base URL itself.
+		schemaPath := relativeOperationPath(base.Path, endpoint.Path)
+		if paths[schemaPath] == nil {
+			paths[schemaPath] = map[string]any{}
 		}
-		paths[endpoint.Path][strings.ToLower(method)] = map[string]any{
+		paths[schemaPath][strings.ToLower(method)] = map[string]any{
 			"operationId": operationID,
 			"parameters":  parameters,
 			"responses":   map[string]any{"default": map[string]string{"description": "Any response"}},
@@ -175,7 +177,7 @@ func schemathesisSkipReason(req Request, base *url.URL, boundary *regexp.Regexp,
 			return "operation path escapes the application boundary"
 		}
 	}
-	probe.Path = base.Path + "/" + strings.TrimLeft(concrete, "/")
+	probe.Path = joinOperationPath(base.Path, concrete)
 	raw := probe.String()
 	if !boundary.MatchString(raw) {
 		return "operation path is outside the application boundary"
