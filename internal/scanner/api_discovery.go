@@ -19,10 +19,11 @@ import (
 
 // schemaProbePaths are well-known schema locations probed at each approved
 // origin root. The NestJS SwaggerModule serves its JSON at "<setup path>-json"
-// (for example /api-json for SwaggerModule.setup("api")), which microservice
-// back ends commonly expose without linking it from any page.
+// (for example /api-json for SwaggerModule.setup("api"), /documentation-json for
+// setup("documentation")), which microservice back ends commonly expose without
+// linking it from any page.
 var schemaProbePaths = []string{"/openapi.json", "/swagger.json", "/swagger/v1/swagger.json", "/v3/api-docs", "/api-docs",
-	"/api-json", "/docs-json", "/api/docs-json", "/swagger-json", "/api/swagger-json"}
+	"/api-json", "/docs-json", "/api/docs-json", "/swagger-json", "/api/swagger-json", "/documentation-json"}
 
 const graphQLIntrospection = `query XalgorixSchema { __schema { queryType { name fields { name args { name type { kind name ofType { kind name } } } type { kind name ofType { kind name } } } } mutationType { name fields { name } } } }`
 
@@ -99,10 +100,19 @@ func DiscoverAPIs(ctx context.Context, req Request, cfg Config, surface *AttackS
 	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	candidates := []string{}
 	for _, o := range req.AppScope.Origins() {
-		for _, p := range schemaProbePaths {
-			candidates = append(candidates, o.Origin()+p)
+		// Probe the origin root and, for a path-bounded target such as a NestJS
+		// service with a global prefix (http://host:5003/common), the same
+		// locations below that prefix (/common/documentation-json).
+		bases := []string{o.Origin()}
+		if prefix := strings.TrimRight(o.PathPrefix, "/"); prefix != "" {
+			bases = append(bases, o.Origin()+prefix)
 		}
-		candidates = append(candidates, o.Origin()+"/graphql")
+		for _, base := range bases {
+			for _, p := range schemaProbePaths {
+				candidates = append(candidates, base+p)
+			}
+			candidates = append(candidates, base+"/graphql")
+		}
 	}
 	for _, ep := range surface.Endpoints {
 		lower := strings.ToLower(ep.Path)
@@ -117,7 +127,7 @@ func DiscoverAPIs(ctx context.Context, req Request, cfg Config, surface *AttackS
 			continue
 		}
 		seen[raw] = true
-		if len(seen) > 48 {
+		if len(seen) > 64 {
 			surface.DiscoveryGaps = append(surface.DiscoveryGaps, "API definition probe limit reached")
 			break
 		}

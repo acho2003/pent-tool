@@ -4,6 +4,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -103,5 +104,32 @@ func TestDiscoverAPIsFindsNestJSSwaggerJSON(t *testing.T) {
 	endpoints := DiscoverAPIs(t.Context(), Request{Target: server.URL, AppScope: &scope, ScanDir: t.TempDir()}, Config{}, surface)
 	if len(endpoints) != 2 || len(surface.Definitions) != 1 {
 		t.Fatalf("NestJS /api-json not discovered: endpoints=%+v definitions=%+v", endpoints, surface.Definitions)
+	}
+}
+
+func TestDiscoverAPIsProbesBelowTargetPathPrefix(t *testing.T) {
+	var rootProbes int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/common/documentation-json":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"openapi":"3.0.0","info":{"title":"common","version":"1"},"paths":{"/common/countries":{"get":{"operationId":"listCountries"}},"/common/occupations":{"get":{"operationId":"listOccupations"}}}}`))
+		default:
+			if !strings.HasPrefix(r.URL.Path, "/common") {
+				rootProbes++
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	origin, _ := assessment.ParseApprovedOrigin("svc", server.URL+"/common")
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	surface := NewSeedAttackSurface("svc", server.URL+"/common")
+	endpoints := DiscoverAPIs(t.Context(), Request{Target: server.URL + "/common", AppScope: &scope, ScanDir: t.TempDir()}, Config{}, surface)
+	if len(endpoints) != 2 || len(surface.Definitions) != 1 {
+		t.Fatalf("schema below the target prefix not discovered: endpoints=%+v definitions=%+v", endpoints, surface.Definitions)
+	}
+	if rootProbes != 0 {
+		t.Fatalf("probed %d paths outside the approved /common prefix", rootProbes)
 	}
 }
