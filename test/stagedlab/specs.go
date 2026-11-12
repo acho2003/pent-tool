@@ -24,6 +24,8 @@ func Spec(name string) (body, contentType string, ok bool) {
 		return "type Query {\n  record(id: ID!): String\n}\n\ntype Mutation {\n  deleteRecord(id: ID!): Boolean\n}\n", "text/plain", true
 	case "svc-reports.json":
 		return reportsSpec(), "application/json", true
+	case "writefuzz.json":
+		return writeFuzzSpec(), "application/json", true
 	case "introspection.json":
 		return `{"data":{"__schema":{"queryType":{"name":"Query"}}}}`, "application/json", true
 	}

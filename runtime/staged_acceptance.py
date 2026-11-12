@@ -1354,6 +1354,62 @@ def phase_registry():
     return finish()
 
 
+def phase_writefuzz():
+    """Opt-in API write fuzzing on a declared test environment: Schemathesis sends generated
+    POST/PUT/PATCH/DELETE to the approved write surface, never to the excluded route, and only
+    with the opt-in plus the test-environment declaration."""
+    client = Client()
+    if not client.login():
+        return finish()
+    status, body = client.call("POST", "/api/api-definitions", raw_body=lab_spec("writefuzz.json"), content_type="application/octet-stream")
+    definition_id = body.get("id") if isinstance(body, dict) else None
+    check("writefuzz: write-surface definition accepted", status == 201 and bool(definition_id), "%s %s" % (status, str(body)[:120]))
+    if not definition_id:
+        return finish()
+
+    def config(api_write_fuzz, test_environment):
+        cfg = plan_config(["httpx", "katana", "schemathesis"])
+        cfg["assessment_mode"] = "GRAY_BOX"
+        cfg["assessment_types"] = ["WEB_APPLICATION", "API"]
+        cfg["profile"] = "web-thorough"
+        cfg["test_environment"] = test_environment
+        cfg["api_definitions"] = [{"target_id": "app", "definition_id": definition_id}]
+        cfg["api_write_fuzz"] = api_write_fuzz
+        cfg["api_write_fuzz_max"] = 20
+        cfg["exclusions"].append({"method": "DELETE", "path_pattern": "/app/api/wf/danger", "reason": "excluded destructive route"})
+        return cfg
+
+    def run(cfg, label):
+        status, plan = client.call("POST", "/api/scans/plan", cfg)
+        if not check("writefuzz %s: plan accepted" % label, status == 200 and isinstance(plan, dict) and not plan.get("errors"), plan.get("errors") if isinstance(plan, dict) else status):
+            return None
+        lab("POST", "/reset")
+        status, ack, scan_id = start_scan(client, cfg, plan["fingerprint"], "staged-writefuzz-" + label)
+        if not check("writefuzz %s: assessment started" % label, status == 200 and bool(scan_id), status):
+            return None
+        record = wait_terminal(client, scan_id, "writefuzz " + label)
+        check("writefuzz %s: reached a terminal state" % label, record is not None and record.get("status") in ("finished", "failed", "stopped"), record.get("status") if record else "timeout")
+        return scan_id
+
+    # Opt-in + declared test environment: generated writes reach the approved surface.
+    if run(config(True, True), "enabled"):
+        methods = set(lab("GET", "/write-fuzz-methods") or [])
+        check("writefuzz enabled: Schemathesis sent generated writes to the approved surface", methods & {"POST", "PUT", "PATCH", "DELETE"}, sorted(methods))
+        check("writefuzz enabled: the excluded destructive route was never called", "DANGER" not in methods, sorted(methods))
+        forbidden = [h for h in (lab("GET", "/forbidden") or []) if not is_known_limitation(h)]
+        check("writefuzz enabled: no traffic outside the approved boundary", not forbidden, forbidden[:3])
+
+    # Opt-in without a declared test environment: validation blocks it.
+    status, plan = client.call("POST", "/api/scans/plan", config(True, False))
+    check("writefuzz: opt-in without a test environment is rejected", status == 422 and any(e.get("code") == "api_write_fuzz.test_environment_required" for e in (plan.get("errors") or []) if isinstance(plan, dict)), status)
+
+    # Read-only run (no opt-in): the write surface is never written to.
+    if run(config(False, True), "readonly"):
+        methods = set(lab("GET", "/write-fuzz-methods") or [])
+        check("writefuzz read-only: no write reached the surface without the opt-in", not methods, sorted(methods))
+    return finish()
+
+
 PHASES = {
     "full": phase_full,
     "recovery-base": phase_recovery_base,
@@ -1372,6 +1428,7 @@ PHASES = {
     "write-after-kill": phase_write_after_kill,
     "services": phase_services,
     "registry": phase_registry,
+    "writefuzz": phase_writefuzz,
 }
 
 

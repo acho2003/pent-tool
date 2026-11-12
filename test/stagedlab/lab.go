@@ -97,7 +97,9 @@ type Lab struct {
 	// serviceTokens keeps them for leak checks.
 	serviceLogins int
 	serviceTokens []string
-	nextID        int
+	// writeFuzzMethodSet records the methods the JSON write-fuzz surface saw.
+	writeFuzzMethodSet map[string]bool
+	nextID             int
 }
 
 // Start launches the lab and registers cleanup.
@@ -184,6 +186,7 @@ func (l *Lab) ControlHandler() http.Handler {
 		writeJSON(w, map[string]int{"logins": l.ServiceLogins()})
 	}))
 	mux.HandleFunc("GET /service-tokens", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, l.ServiceTokens()) }))
+	mux.HandleFunc("GET /write-fuzz-methods", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, l.writeFuzzMethods()) }))
 	mux.HandleFunc("GET /variants", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, Variants()) }))
 	mux.HandleFunc("POST /delay-records", guard(func(w http.ResponseWriter, r *http.Request) {
 		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
@@ -569,6 +572,7 @@ document.getElementById("root").addEventListener("click",()=>{history.pushState(
 	// answers 200 with introspection disabled.
 	mux.HandleFunc(PathPrefix+"graphql", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, true) })
 	mux.HandleFunc(PathPrefix+"graphql-noint", func(w http.ResponseWriter, r *http.Request) { graphql(w, r, false) })
+	l.registerWriteFuzzRoutes(mux)
 	return mux
 }
 

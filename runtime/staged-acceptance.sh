@@ -39,6 +39,11 @@
 # microservices with real Nuclei and a dedicated ZAP daemon, and check that the
 # token reaches every bound service and never the unbound one.
 #
+# Set STAGED_SUITE=writefuzz to run opt-in API write fuzzing (Schemathesis sends
+# generated POST/PUT/PATCH/DELETE) against a disposable JSON write surface and
+# check it stays inside scope, skips the excluded route, and is blocked without
+# the test-environment declaration.
+#
 # Set STAGED_SUITE=registry to push a sample image (STAGED_REGISTRY_SOURCE,
 # default redis:8-alpine, must already exist locally) into a disposable
 # basic-auth registry and check that Trivy pulls it only with the bound
@@ -229,6 +234,8 @@ elif [[ "${STAGED_SUITE:-}" == services ]]; then
   run_phase services || status=$?
 elif [[ "${STAGED_SUITE:-}" == registry ]]; then
   run_phase registry || status=$?
+elif [[ "${STAGED_SUITE:-}" == writefuzz ]]; then
+  run_phase writefuzz || status=$?
 elif [[ "${STAGED_SUITE:-}" == recovery-auth ]]; then
   run_phase auth-start || status=$?
   if [[ $status -eq 0 ]]; then restart_after_kill; run_phase auth-after-kill || status=$?; fi
