@@ -85,3 +85,23 @@ func TestSchemaExternalServersStayApprovalCandidates(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoverAPIsFindsNestJSSwaggerJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api-json" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"openapi":"3.0.0","info":{"title":"orders","version":"1"},"paths":{"/api/orders":{"get":{"operationId":"listOrders"}},"/api/orders/{id}":{"get":{"operationId":"getOrder","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}]}}}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	origin, _ := assessment.ParseApprovedOrigin("svc", server.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin})
+	surface := NewSeedAttackSurface("svc", server.URL)
+	endpoints := DiscoverAPIs(t.Context(), Request{Target: server.URL, AppScope: &scope, ScanDir: t.TempDir()}, Config{}, surface)
+	if len(endpoints) != 2 || len(surface.Definitions) != 1 {
+		t.Fatalf("NestJS /api-json not discovered: endpoints=%+v definitions=%+v", endpoints, surface.Definitions)
+	}
+}

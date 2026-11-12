@@ -17,7 +17,12 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/storage"
 )
 
-var schemaProbePaths = []string{"/openapi.json", "/swagger.json", "/swagger/v1/swagger.json", "/v3/api-docs", "/api-docs"}
+// schemaProbePaths are well-known schema locations probed at each approved
+// origin root. The NestJS SwaggerModule serves its JSON at "<setup path>-json"
+// (for example /api-json for SwaggerModule.setup("api")), which microservice
+// back ends commonly expose without linking it from any page.
+var schemaProbePaths = []string{"/openapi.json", "/swagger.json", "/swagger/v1/swagger.json", "/v3/api-docs", "/api-docs",
+	"/api-json", "/docs-json", "/api/docs-json", "/swagger-json", "/api/swagger-json"}
 
 const graphQLIntrospection = `query XalgorixSchema { __schema { queryType { name fields { name args { name type { kind name ofType { kind name } } } type { kind name ofType { kind name } } } } mutationType { name fields { name } } } }`
 
@@ -112,7 +117,7 @@ func DiscoverAPIs(ctx context.Context, req Request, cfg Config, surface *AttackS
 			continue
 		}
 		seen[raw] = true
-		if len(seen) > 32 {
+		if len(seen) > 48 {
 			surface.DiscoveryGaps = append(surface.DiscoveryGaps, "API definition probe limit reached")
 			break
 		}
