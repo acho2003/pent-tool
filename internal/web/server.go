@@ -637,6 +637,7 @@ var dashboardRoutes = []string{
 	"/api/upload-targets",
 	"/api/upload-logo",
 	"/api/upload-context",
+	"/api/services/parse",
 	"/api/findings",
 	"/api/findings/projects",
 	"/api/findings/summary",
@@ -980,6 +981,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/upload-targets", s.handleUploadTargets)
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
 	mux.HandleFunc("/api/upload-context", s.handleUploadContext)
+	mux.HandleFunc("/api/services/parse", s.handleServicesParse)
 	// Findings surface (read-only). Handlers exist independently of the
 	// /api/scans/ dispatcher; register them explicitly so the SPA's
 	// findings table + severity summary resolve to real JSON instead of
