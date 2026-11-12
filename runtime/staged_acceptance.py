@@ -1403,10 +1403,20 @@ def phase_writefuzz():
     status, plan = client.call("POST", "/api/scans/plan", config(True, False))
     check("writefuzz: opt-in without a test environment is rejected", status == 422 and any(e.get("code") == "api_write_fuzz.test_environment_required" for e in (plan.get("errors") or []) if isinstance(plan, dict)), status)
 
-    # Read-only run (no opt-in): the write surface is never written to.
-    if run(config(False, True), "readonly"):
-        methods = set(lab("GET", "/write-fuzz-methods") or [])
-        check("writefuzz read-only: no write reached the surface without the opt-in", not methods, sorted(methods))
+    # Read-only run (no opt-in): the write surface is never written to. The
+    # write-fuzz spec has no GET operation, so Schemathesis is not applicable and
+    # the run is short; the assertion is that no write reached the surface
+    # whether or not the whole scan completed in time.
+    lab("POST", "/reset")
+    cfg = config(False, True)
+    status, plan = client.call("POST", "/api/scans/plan", cfg)
+    if check("writefuzz read-only: plan accepted", status == 200 and isinstance(plan, dict) and not plan.get("errors"), plan.get("errors") if isinstance(plan, dict) else status):
+        status, ack, scan_id = start_scan(client, cfg, plan["fingerprint"], "staged-writefuzz-readonly")
+        check("writefuzz read-only: assessment started", status == 200 and bool(scan_id), status)
+        if scan_id:
+            wait_terminal(client, scan_id, "writefuzz readonly")
+            methods = set(lab("GET", "/write-fuzz-methods") or [])
+            check("writefuzz read-only: no write reached the surface without the opt-in", not methods, sorted(methods))
     return finish()
 
 

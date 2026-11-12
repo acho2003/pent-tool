@@ -222,6 +222,7 @@ func (l *Lab) Hits() []Hit {
 func (l *Lab) Reset() {
 	l.mu.Lock()
 	l.hits = nil
+	l.writeFuzzMethodSet = nil
 	l.mu.Unlock()
 }
 
