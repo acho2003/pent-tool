@@ -58,6 +58,8 @@ type Hit struct {
 	// this shows whether authenticated traffic reused an older session.
 	Login int    `json:"login"`
 	Body  string `json:"body"`
+	// Authorization is true when the request carried any Authorization header.
+	Authorization bool `json:"authorization"`
 }
 
 // URL returns the path and query exactly as received.
@@ -91,7 +93,11 @@ type Lab struct {
 	expired      bool          // when set, every session is treated as expired and logins are refused
 	hits         []Hit
 	resources    map[string]string
-	nextID       int
+	// serviceLogins counts tokens issued by the microservice auth service and
+	// serviceTokens keeps them for leak checks.
+	serviceLogins int
+	serviceTokens []string
+	nextID        int
 }
 
 // Start launches the lab and registers cleanup.
@@ -129,6 +135,16 @@ func (l *Lab) PrimaryHandler() http.Handler { return l.record("primary", l.prima
 // SecondaryHandler serves the second approved origin (HTTPS when wrapped in TLS).
 func (l *Lab) SecondaryHandler() http.Handler { return l.record("secondary", l.secondaryRoutes()) }
 
+// ServiceHandler returns the recorded handler of one microservice lab origin
+// (see ServiceOrigins), or nil for an unknown name.
+func (l *Lab) ServiceHandler(name string) http.Handler {
+	handlers := map[string]func() http.Handler{"svc-auth": l.ServiceAuthHandler, "svc-orders": l.ServiceOrdersHandler, "svc-reports": l.ServiceReportsHandler, "svc-stray": l.ServiceStrayHandler}
+	if build, ok := handlers[name]; ok {
+		return l.record(name, build())
+	}
+	return nil
+}
+
 // AliasHandler serves the origin that must never be contacted.
 func (l *Lab) AliasHandler() http.Handler {
 	return l.record("alias", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +180,10 @@ func (l *Lab) ControlHandler() http.Handler {
 		w.Header().Set("Content-Type", contentType)
 		_, _ = io.WriteString(w, body)
 	}))
+	mux.HandleFunc("GET /service-logins", guard(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]int{"logins": l.ServiceLogins()})
+	}))
+	mux.HandleFunc("GET /service-tokens", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, l.ServiceTokens()) }))
 	mux.HandleFunc("GET /variants", guard(func(w http.ResponseWriter, r *http.Request) { writeJSON(w, Variants()) }))
 	mux.HandleFunc("POST /delay-records", guard(func(w http.ResponseWriter, r *http.Request) {
 		ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
@@ -235,6 +255,10 @@ func (l *Lab) Forbidden() []Hit {
 			out = append(out, hit)
 		case hit.Origin == "primary" && excluded(hit.Path):
 			out = append(out, hit)
+		case hit.Origin == "svc-auth" && hit.Path == ServiceLogoutPath:
+			out = append(out, hit)
+		case hit.Origin == "svc-stray" && hit.Identity == ServiceIdentity:
+			out = append(out, hit)
 		}
 	}
 	return out
@@ -281,7 +305,7 @@ func Variants() []string {
 
 func (l *Lab) record(origin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit := Hit{Origin: origin, Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Identity: l.identity(r), UserAgent: r.UserAgent(), Login: l.loginOf(r)}
+		hit := Hit{Origin: origin, Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Identity: l.identity(r), UserAgent: r.UserAgent(), Login: l.loginOf(r), Authorization: r.Header.Get("Authorization") != ""}
 		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 			hit.Body = string(body)
@@ -296,12 +320,15 @@ func (l *Lab) record(origin string, next http.Handler) http.Handler {
 
 // loginOf returns the login number that issued the request's session token.
 func (l *Lab) loginOf(r *http.Request) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if token := bearerToken(r); token != "" {
+		return l.sessionLogin[token]
+	}
 	cookie, err := r.Cookie(CookieName)
 	if err != nil {
 		return 0
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	return l.sessionLogin[cookie.Value]
 }
 
@@ -312,6 +339,11 @@ func (l *Lab) identity(r *http.Request) string {
 	defer l.mu.Unlock()
 	if l.expired {
 		return "anonymous"
+	}
+	if token := bearerToken(r); token != "" {
+		if identity, ok := l.sessions[token]; ok {
+			return identity
+		}
 	}
 	if cookie, err := r.Cookie(CookieName); err == nil {
 		if identity, ok := l.sessions[cookie.Value]; ok {

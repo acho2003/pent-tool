@@ -451,6 +451,20 @@ references may now be tags as well as digests (White Box only, validated, and
 passed after `--`). A tag scan records a `mutable_image_tag` limitation with the
 digest Trivy reported scanning.
 
+**API schemas per service.** Each service row can carry an uploaded
+OpenAPI/Swagger/GraphQL file, bound to the service's first URL target through
+the existing `api_definitions` bindings (not in Black Box). Without an upload,
+discovery probes each approved origin root for published schemas:
+`/openapi.json`, `/swagger.json`, `/swagger/v1/swagger.json`, `/v3/api-docs`,
+`/api-docs`, and the NestJS defaults `/api-json`, `/docs-json`,
+`/api/docs-json`, `/swagger-json`, `/api/swagger-json` (scope guard applies; per
+target probe limit 48).
+
+**Failure reasons.** A failed private-image scan states why: the registry refused
+access, no login was bound, or the bound login was for a different registry and
+was not sent. A scanner process that fails keeps its own reason rather than the
+secondary "could not retain usable bounded artifact" message.
+
 **Report and UI.** The PDF gets a Services Overview page (active findings by
 severity, authentication state, run outcomes per service) and groups findings
 by service then host; the scan detail page shows the same table from the
@@ -465,7 +479,7 @@ CSV import of three services, shared login save and per-service tests
 started scan where one login served all three services and the services card
 and PDF showed matching states, with no token or password in saved data.
 
-**Not verified:** an actual pull from a private registry (no registry was
-available locally), ZAP/Nuclei authenticated runs against the lab (not
-installed on the local host; the Docker runtime has them), and the staged
-acceptance suites.
+**Staged suites (2026-11-12):** `STAGED_SUITE=services` runs one shared login
+across four lab microservices with real Nuclei and a dedicated ZAP daemon;
+`STAGED_SUITE=registry` pulls a private image from a disposable basic-auth
+registry. Recorded outcomes are in `docs/unified-workflow-validation.md`.

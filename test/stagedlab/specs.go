@@ -22,6 +22,8 @@ func Spec(name string) (body, contentType string, ok bool) {
 		return `<html><body>"openapi": "3.0.0" appears in prose, not as a schema</body></html>`, "text/html", true
 	case "schema.graphql":
 		return "type Query {\n  record(id: ID!): String\n}\n\ntype Mutation {\n  deleteRecord(id: ID!): Boolean\n}\n", "text/plain", true
+	case "svc-reports.json":
+		return reportsSpec(), "application/json", true
 	case "introspection.json":
 		return `{"data":{"__schema":{"queryType":{"name":"Query"}}}}`, "application/json", true
 	}

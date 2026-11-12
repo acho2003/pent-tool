@@ -35,6 +35,18 @@
 # an anonymous control, role separation) and check that no synthetic credential
 # appears in any API response, saved artifact, output stream or the report.
 #
+# Set STAGED_SUITE=services to run one shared token login across four lab
+# microservices with real Nuclei and a dedicated ZAP daemon, and check that the
+# token reaches every bound service and never the unbound one.
+#
+# Set STAGED_SUITE=registry to push a sample image (STAGED_REGISTRY_SOURCE,
+# default redis:8-alpine, must already exist locally) into a disposable
+# basic-auth registry and check that Trivy pulls it only with the bound
+# registry login. This suite's network is not internal: Trivy downloads its
+# vulnerability database exactly as in production. The image is exported with
+# docker save and pushed from inside the network (runtime/registry_push.py), so
+# the operator's Docker daemon never logs in to or pushes to anything.
+#
 # Set STAGED_SUITE=ui to seed a base assessment through the API and then drive
 # the dashboard in a real browser (runtime/ui-acceptance, playwright-core with the
 # image's own Chromium and a Node binary copied from a pinned Node image).
@@ -57,9 +69,10 @@ network="$prefix-net"
 lab_container="$prefix-lab"
 app_container="$prefix-app"
 zap_container="$prefix-zap"
+registry_container="$prefix-registry"
 data_volume="$prefix-data"
 cleanup() {
-  docker rm -f "$app_container" "$lab_container" "$zap_container" >/dev/null 2>&1 || true
+  docker rm -f "$app_container" "$lab_container" "$zap_container" "$registry_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   docker volume rm "$data_volume" >/dev/null 2>&1 || true
 }
@@ -76,16 +89,21 @@ password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')
 python3 -c 'import os,sys; sys.stdout.buffer.write(os.urandom(32))' > "$result_dir/credential.key"
 chmod 0644 "$result_dir/credential.key"
 
-docker network create --internal "$network" >/dev/null
+if [[ "${STAGED_SUITE:-}" == registry ]]; then
+  docker network create "$network" >/dev/null
+else
+  docker network create --internal "$network" >/dev/null
+fi
 docker volume create "$data_volume" >/dev/null
 docker run -d --name "$lab_container" --network "$network" \
   --network-alias lab-primary --network-alias lab-secondary --network-alias lab-alias \
+  --network-alias lab-svc-auth --network-alias lab-svc-orders --network-alias lab-svc-reports --network-alias lab-svc-stray \
   --entrypoint /lab/stagedlab -v "$result_dir/stagedlab:/lab/stagedlab:ro" "$image" >/dev/null
 
 # The scanners suite adds a signed deterministic Nuclei template (prepared offline)
 # and a dedicated disposable ZAP daemon on the same internal network.
 scanner_env=()
-if [[ "${STAGED_SUITE:-}" == scanners ]]; then
+if [[ "${STAGED_SUITE:-}" == scanners || "${STAGED_SUITE:-}" == services ]]; then
   mkdir -p "$result_dir/nuclei"
   docker run --rm --network none \
     -v "$repo_root/runtime/staged-nuclei-prepare.sh:/prep.sh:ro" -v "$result_dir/nuclei:/nuclei" \
@@ -121,6 +139,41 @@ if [[ "${STAGED_SUITE:-}" == failures ]]; then
     -e XALGORIX_DALFOX_PATH=/nonexistent/dalfox -v "$repo_root/runtime/staged-fakes:/fakes:ro")
 fi
 
+phase_env=()
+if [[ "${STAGED_SUITE:-}" == registry ]]; then
+  registry_user=staged-reader
+  registry_password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')
+  docker run --rm --network none -e STAGED_REGISTRY_PASSWORD="$registry_password" \
+    --entrypoint /lab/stagedlab -v "$result_dir/stagedlab:/lab/stagedlab:ro" "$image" -htpasswd "$registry_user" > "$result_dir/htpasswd"
+  chmod 0644 "$result_dir/htpasswd"
+  docker run -d --name "$registry_container" --network "$network" --network-alias registry \
+    -e REGISTRY_AUTH=htpasswd -e REGISTRY_AUTH_HTPASSWD_REALM=staged -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
+    -v "$result_dir/htpasswd:/auth/htpasswd:ro" \
+    registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373 >/dev/null
+  # The image is exported locally and pushed from inside the network, so the
+  # operator's Docker daemon never logs in to or pushes to anything.
+  docker save --platform "linux/$arch" -o "$result_dir/sample-image.tar" "${STAGED_REGISTRY_SOURCE:-redis:8-alpine}" 2>/dev/null \
+    || docker save -o "$result_dir/sample-image.tar" "${STAGED_REGISTRY_SOURCE:-redis:8-alpine}"
+  chmod 0644 "$result_dir/sample-image.tar"
+  docker run --rm --network "$network" -e REGISTRY_USER="$registry_user" -e REGISTRY_PASSWORD="$registry_password" \
+    -v "$repo_root/runtime/registry_push.py:/registry_push.py:ro" -v "$result_dir/sample-image.tar:/sample.tar:ro" \
+    --entrypoint python3 "$image" -c '
+import subprocess, sys, time, urllib.request, urllib.error
+for _ in range(60):
+    try:
+        urllib.request.urlopen("http://registry:5000/v2/", timeout=2)
+        break
+    except urllib.error.HTTPError:
+        break  # 401 means the registry is up and enforcing auth
+    except Exception:
+        time.sleep(1)
+sys.exit(subprocess.call([sys.executable, "/registry_push.py", "/sample.tar", "registry:5000", "staged/sample", "1"]))
+'
+  scanner_env=(-e TRIVY_INSECURE=true)
+  phase_env=(-e STAGED_REGISTRY_IMAGE=registry:5000/staged/sample:1 -e STAGED_REGISTRY_HOST=registry:5000
+    -e STAGED_REGISTRY_USER="$registry_user" -e STAGED_REGISTRY_PASSWORD="$registry_password")
+fi
+
 app_mounts=()
 if [[ -n "$app_binary" ]]; then
   app_mounts=(-v "$(cd "$(dirname "$app_binary")" && pwd)/$(basename "$app_binary"):/usr/local/bin/xalgorix:ro")
@@ -139,6 +192,7 @@ run_phase() {
     -e STAGED_APP=http://app:8888 -e STAGED_USER=acceptance -e STAGED_PASSWORD="$password" \
     -e STAGED_PHASE="$phase" -e STAGED_RESULT="/out/result-$phase.json" -e STAGED_STATE=/out/state.json \
     -e STAGED_REUSE_SCAN="${STAGED_REUSE_SCAN:-}" -e STAGED_SCAN_TIMEOUT="${STAGED_SCAN_TIMEOUT:-2400}" \
+    ${phase_env[@]+"${phase_env[@]}"} \
     -v "$repo_root/runtime/staged_acceptance.py:/staged_acceptance.py:ro" -v "$result_dir:/out" \
     --entrypoint python3 "$image" /staged_acceptance.py
 }
@@ -171,6 +225,10 @@ elif [[ "${STAGED_SUITE:-}" == api ]]; then
   run_phase api || status=$?
 elif [[ "${STAGED_SUITE:-}" == scanners ]]; then
   run_phase scanners || status=$?
+elif [[ "${STAGED_SUITE:-}" == services ]]; then
+  run_phase services || status=$?
+elif [[ "${STAGED_SUITE:-}" == registry ]]; then
+  run_phase registry || status=$?
 elif [[ "${STAGED_SUITE:-}" == recovery-auth ]]; then
   run_phase auth-start || status=$?
   if [[ $status -eq 0 ]]; then restart_after_kill; run_phase auth-after-kill || status=$?; fi

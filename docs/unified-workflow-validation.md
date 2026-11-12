@@ -336,7 +336,9 @@ and a recorder that reports any request outside the boundary.
 
 Select a suite with `STAGED_SUITE`: default (full assessment, revision and
 report), `recovery`, `ui`, `identities`, `api`, `scanners`, `failures`,
-`recovery-write` or `recovery-auth`. Results are native Linux arm64 with the
+`recovery-write`, `recovery-auth`, `services` or `registry` (the last two were
+added on 2026-11-12 with the microservice work and ran on the
+`xalgorix:tools-db4a74e` runtime). Results are native Linux arm64 with the
 `xalgorix:workflow-validation-e69bc21` runtime and an application binary built
 from the working tree; httpx and katana selected, `web-gentle` profile.
 
@@ -352,6 +354,8 @@ from the working tree; httpx and katana selected, `web-gentle` profile.
 | failures | a missing binary and an unconfigured ZAP are planned unavailable with reasons and show as coverage gaps with no run; truncated Nuclei JSON and an empty Wapiti report end as PARSER_FAILED with a reason, never a clean zero-finding result; sessions expired while Nuclei runs are recorded as an authentication gap on that run, the authenticated capability is reported expired, and coverage is partial | 34 passed, 0 failed |
 | recovery-write | a SIGKILL while an approved form campaign is in flight: no further POST, no replayed cleanup, every job refused with "unresolved write journal prevents automatic resume", the uncleaned resources stay visible and no run claims completion | 8 passed, 0 failed |
 | recovery-auth | a SIGKILL during an authenticated crawl: the resumed assessment logs in again from the vault credentials and none of its authenticated requests carries a session token issued before the restart | 7 passed, 0 failed |
+| services | four lab microservices (auth service issuing JWTs from a JSON login API, an orders service publishing NestJS `/api-json`, a reports service with an uploaded definition, and an unbound "stray" service) in one Gray Box assessment with a shared `TOKEN_LOGIN` credential, real Nuclei and a dedicated ZAP daemon: one login serves every bound service; ~280 authenticated scanner requests reach each bound service and every Authorization header they carry is the issued token; the stray service is scanned but never receives the token; `/api-json` and the uploaded definition both drive authenticated requests; auth states verified / verified / available ("token applied, not verified") / not configured in auth runs, coverage `services` and the PDF Services Overview; no password or issued token in the scan record, coverage, inventory, findings, report or any ZAP/Nuclei/katana artifact | 53 passed, 0 failed, 1 known limitation (ZAP's cloud-metadata rule sends its own fixed `Authorization: Bearer Oracle` probe to `/opc/v2/instance/` on every target; it is an attack payload, not the issued token) |
+| registry | a sample image is exported locally and pushed (from inside the suite network, never through the operator's Docker login) to a disposable `registry:2` with basic auth; three White Box Trivy assessments of `registry:5000/staged/sample:1`: with the bound `REGISTRY_CREDENTIALS` login Trivy completes and records the digest it scanned (`mutable_image_tag`); without a login the run fails with "the registry refused to serve the image … no registry login is bound"; with a login bound to another registry host the credential is not sent and the reason says so; the registry password appears in no scan record, Trivy artifact or report. This suite's network is not internal because Trivy downloads its vulnerability database, as in production | 17 passed, 0 failed |
 
 The UI suite uses `playwright-core` with the runtime image's own Chromium and a Node
 binary copied from a pinned Node image, so it needs no browser download. The
@@ -362,6 +366,17 @@ final commit, in the order default (82 passed, 2 known limitations), recovery, u
 identities, api, scanners, failures, recovery-write and recovery-auth.
 
 ### Defects found by these runs and fixed
+
+- (2026-11-12, services suite) ZAP's supplemental discovery runs use scope keys with
+  a stage suffix (`discovery:<target>:zap`), so the services overview counted them
+  under "Other targets"; scopes are now matched by the longest target ID prefix.
+- (2026-11-12, registry suite) The plan preview did not default an empty profile
+  the way scan start does, so an API client that omitted `profile` always got 409
+  on start.
+- (2026-11-12, registry suite) A refused private-image pull was reported as "could
+  not retain usable bounded artifact"; Trivy image failures now say the registry
+  refused access, whether a login was bound, or that a login for another registry
+  was not sent.
 
 - After a hard kill the resumed assessment parsed the truncated katana output as a
   finished crawl: the crawl was not re-run and the job ended skipped. Leftover crawl

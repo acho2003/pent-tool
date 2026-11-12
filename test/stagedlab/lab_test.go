@@ -379,3 +379,66 @@ func TestEachLoginIssuesANewTokenAndHitsRecordWhichLoginIssuedIt(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+func TestServiceLabIssuesBearerTokensAndRecordsThem(t *testing.T) {
+	l := New()
+	auth := httptest.NewServer(l.ServiceHandler("svc-auth"))
+	orders := httptest.NewServer(l.ServiceHandler("svc-orders"))
+	stray := httptest.NewServer(l.ServiceHandler("svc-stray"))
+	defer auth.Close()
+	defer orders.Close()
+	defer stray.Close()
+	resp, err := http.Post(auth.URL+ServiceLoginPath, "application/json", strings.NewReader(`{"email":"`+ServiceUser+`","password":"`+ServicePassword+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Data struct {
+			AccessToken string `json:"accessToken"`
+		} `json:"data"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if body.Data.AccessToken == "" || l.ServiceLogins() != 1 {
+		t.Fatalf("no token issued: %+v logins=%d", body, l.ServiceLogins())
+	}
+	get := func(url, token string) int {
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if get(orders.URL+"/api/orders", "") != http.StatusUnauthorized || get(orders.URL+"/api/orders", body.Data.AccessToken) != http.StatusOK {
+		t.Fatal("orders service does not enforce the bearer token")
+	}
+	if get(orders.URL+"/api/orders", "forged") != http.StatusUnauthorized {
+		t.Fatal("forged token accepted")
+	}
+	get(stray.URL+"/status", "Oracle") // a scanner's own probe header is not the issued token
+	for _, hit := range l.Forbidden() {
+		if hit.Origin == "svc-stray" {
+			t.Fatal("a non-issued Authorization header was treated as a token leak")
+		}
+	}
+	get(stray.URL+"/status", body.Data.AccessToken)
+	var authed, strayForbidden bool
+	for _, hit := range l.Hits() {
+		if hit.Origin == "svc-orders" && hit.Identity == ServiceIdentity && hit.Login == 1 {
+			authed = true
+		}
+	}
+	for _, hit := range l.Forbidden() {
+		if hit.Origin == "svc-stray" {
+			strayForbidden = true
+		}
+	}
+	if !authed || !strayForbidden {
+		t.Fatalf("hits not recorded as expected: authed=%v stray=%v", authed, strayForbidden)
+	}
+}

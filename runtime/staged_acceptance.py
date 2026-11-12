@@ -1156,6 +1156,204 @@ def phase_auth_after_kill():
     return finish()
 
 
+SVC = {
+    "auth": os.environ.get("STAGED_SVC_AUTH", "http://lab-svc-auth:8090"),
+    "orders": os.environ.get("STAGED_SVC_ORDERS", "http://lab-svc-orders:8091"),
+    "reports": os.environ.get("STAGED_SVC_REPORTS", "http://lab-svc-reports:8092"),
+    "stray": os.environ.get("STAGED_SVC_STRAY", "http://lab-svc-stray:8093"),
+}
+SERVICE_PASSWORD = "lab-svc-password"
+SERVICE_VARIANTS = ["httpx", "katana", "nuclei", "zap"]
+
+
+def services_config(credential_id, definition_id):
+    names = [("svc-1", "Auth Service", "auth"), ("svc-2", "Orders Service", "orders"), ("svc-3", "Reports Service", "reports"), ("svc-4", "Stray Service", "stray")]
+    targets = [{"id": sid + "-url-1", "type": "URL", "value": SVC[key]} for sid, _, key in names]
+    verify = {"auth": SVC["auth"] + "/api/auth/me", "orders": SVC["orders"] + "/api/orders"}
+    access = []
+    for sid, _, key in names[:3]:  # the stray service is never bound to the token
+        binding = {"target_ids": [sid + "-url-1"], "kind": "TOKEN_LOGIN", "credential_id": credential_id}
+        if key in verify:
+            binding["verify_url"] = verify[key]
+        access.append(binding)
+    return {
+        "workflow_version": "unified-v1",
+        "assessment_mode": "GRAY_BOX",
+        "assessment_types": ["WEB_APPLICATION", "API"],
+        "assessment_targets": targets,
+        "services": [{"id": sid, "name": name, "target_ids": [sid + "-url-1"]} for sid, name, _ in names],
+        "access": access,
+        "api_definitions": [{"target_id": "svc-3-url-1", "definition_id": definition_id}],
+        "exclusions": [{"path_pattern": "/api/auth/logout", "reason": "ends the session"}],
+        "profile": "web-thorough",
+        "scanner_selection": {"mode": "custom", "variants": SERVICE_VARIANTS},
+    }
+
+
+def phase_services():
+    """One shared token login applied to several microservices: real ZAP and Nuclei traffic must
+    carry the token to every bound service and never to an unbound one, with truthful per-service
+    authentication states in coverage, UI data and the report."""
+    client = Client()
+    if not client.login():
+        return finish()
+    targets = ["svc-1-url-1", "svc-2-url-1", "svc-3-url-1"]
+    status, meta = client.call("POST", "/api/credentials", {"name": "staged shared login", "kind": "TOKEN_LOGIN", "target_ids": targets,
+                               "values": {"login_url": SVC["auth"] + "/api/auth/login", "username": "qa@lab.test", "password": SERVICE_PASSWORD, "username_field": "email"}})
+    credential_id = meta.get("id") if isinstance(meta, dict) else None
+    check("services: shared token login credential saved", status == 201 and bool(credential_id), status)
+    status, definition = client.call("POST", "/api/api-definitions", raw_body=lab_spec("svc-reports.json"), content_type="application/json")
+    definition_id = definition.get("id") if isinstance(definition, dict) else None
+    check("services: reports service definition uploaded", status in (200, 201) and bool(definition_id), status)
+    if not (credential_id and definition_id):
+        return finish()
+    for target, key, expect in (("svc-2-url-1", "orders", "verified"), ("svc-3-url-1", "reports", "available")):
+        body = {"target_id": target, "target_url": SVC[key], "login_targets": [SVC["auth"]]}
+        if key == "orders":
+            body["verify_url"] = SVC["orders"] + "/api/orders"
+        status, result = client.call("POST", "/api/credentials/%s/test" % credential_id, body)
+        check("services: credential test for %s reports %s" % (key, expect), isinstance(result, dict) and result.get("state") == expect, result)
+    config = services_config(credential_id, definition_id)
+    status, plan = client.call("POST", "/api/scans/plan", config)
+    check("services: plan preview accepts services, token bindings and the per-service definition", status == 200 and isinstance(plan, dict) and not plan.get("errors"), plan.get("errors") if isinstance(plan, dict) else status)
+    if not isinstance(plan, dict) or not plan.get("fingerprint"):
+        return finish()
+    zap_targets = sorted({j["target_id"] for j in plan["jobs"] if j["scanner"] == "zap" and j["state"] == "selected"})
+    check("services: ZAP is selected for every service", zap_targets == sorted(t["id"] for t in config["assessment_targets"]), zap_targets)
+    lab("POST", "/reset")
+    logins_before = (lab("GET", "/service-logins") or {}).get("logins", 0)
+    status, ack, scan_id = start_scan(client, config, plan["fingerprint"], "staged-services")
+    check("services: assessment started", status == 200 and bool(scan_id), status)
+    if not scan_id:
+        return finish()
+    record = wait_terminal(client, scan_id, "services")
+    check("services: assessment reached a terminal state", record is not None and record.get("status") in ("finished", "failed", "stopped"), record.get("status") if record else "timeout")
+    if record is None:
+        return finish()
+    logins = (lab("GET", "/service-logins") or {}).get("logins", 0) - logins_before
+    check("services: one login served every bound service", logins == 1, logins)
+
+    status, coverage = client.call("GET", "/api/scans/%s/coverage" % scan_id)
+    save_state({"services_scan": scan_id, "coverage": coverage})
+    services = {s["name"]: s for s in (coverage.get("services") or [])} if isinstance(coverage, dict) else {}
+    check("services: coverage lists every service", sorted(services) == ["Auth Service", "Orders Service", "Reports Service", "Stray Service"], sorted(services))
+    expected_auth = {"Auth Service": "verified", "Orders Service": "verified", "Reports Service": "token applied, not verified", "Stray Service": "not configured"}
+    for name, want in expected_auth.items():
+        check("services: %s authentication is %s" % (name, want), (services.get(name) or {}).get("auth") == want, services.get(name))
+    runs = client.call("GET", "/api/scans/" + scan_id)[1].get("scanner_runs") or []
+    zap_runs = {r.get("scope"): r for r in runs if r.get("scanner") == "zap"}
+    print("  zap runs:", {k: (v.get("status"), (v.get("reason") or "")[:80]) for k, v in zap_runs.items()}, flush=True)
+    for target in targets + ["svc-4-url-1"]:
+        run = zap_runs.get("app:" + target) or {}
+        check("services: ZAP on %s reached a recorded outcome" % target, run.get("status") in ("completed", "partial", "failed", "cancelled"), "%s %s" % (run.get("status"), (run.get("reason") or "")[:120]))
+    auth_runs = {r.get("scope"): r.get("auth_state") for r in runs if r.get("scanner") == "auth"}
+    check("services: auth runs record verified, verified and available (never verified without proof)",
+          auth_runs.get("app:svc-1-url-1") == "verified" and auth_runs.get("app:svc-2-url-1") == "verified" and auth_runs.get("app:svc-3-url-1") == "available", auth_runs)
+
+    hits = lab("GET", "/hits") or []
+    origin_of = {"auth": "svc-auth", "orders": "svc-orders", "reports": "svc-reports", "stray": "svc-stray"}
+    for key in ("auth", "orders", "reports"):
+        own = [h for h in hits if h["origin"] == origin_of[key]]
+        scanner_authed = [h for h in own if h["identity"] == "svc-user" and "Go-http-client" not in h.get("user_agent", "")]
+        check("services: scanners sent authenticated requests to %s" % key, len(scanner_authed) >= 3, "%d authenticated of %d hits; agents=%s" % (len(scanner_authed), len(own), sorted({h.get('user_agent', '')[:30] for h in scanner_authed})[:4]))
+        foreign = [h for h in own if h["authorization"] and h["identity"] != "svc-user"]
+        check("services: every Authorization header sent to %s was the issued token" % key, not foreign, [(h["method"], h["path"], h.get("user_agent", "")[:20]) for h in foreign][:3])
+    stray = [h for h in hits if h["origin"] == "svc-stray"]
+    check("services: the unbound service was scanned", len(stray) >= 1, len(stray))
+    check("services: the unbound service never received the issued token", not any(h["identity"] == "svc-user" for h in stray), [(h["path"], h.get("user_agent", "")[:20]) for h in stray if h["identity"] == "svc-user"][:3])
+    probes = [h for h in stray if h["authorization"] and h["identity"] != "svc-user"]
+    if probes:
+        # Scanner attack payloads carry their own Authorization values (for example ZAP's
+        # cloud-metadata rule sends a fixed Oracle bearer header); they are not credentials.
+        limitation("services: scanner probe Authorization headers on the unbound service (not the issued token)", sorted({h["path"] for h in probes})[:5])
+    orders_paths = {h["path"] for h in hits if h["origin"] == "svc-orders" and h["identity"] == "svc-user"}
+    check("services: the NestJS /api-json schema on the orders service was discovered and used", "/api/orders/search" in orders_paths, sorted(orders_paths)[:10])
+    reports_paths = {h["path"] for h in hits if h["origin"] == "svc-reports" and h["identity"] == "svc-user"}
+    check("services: the uploaded reports definition drove authenticated requests", "/api/reports/summary" in reports_paths, sorted(reports_paths)[:10])
+    forbidden = lab("GET", "/forbidden") or []
+    service_forbidden = [h for h in forbidden if h["origin"].startswith("svc-")]
+    check("services: no excluded logout call and no token on the unbound service", not service_forbidden, [(h["origin"], h["method"], h["path"]) for h in service_forbidden][:3])
+
+    tokens = lab("GET", "/service-tokens") or []
+    secrets = [SERVICE_PASSWORD] + tokens
+    surfaces = {"scan record": json.dumps(client.call("GET", "/api/scans/" + scan_id)[1]), "coverage": json.dumps(coverage),
+                "attack surface": json.dumps(surface_items(client, scan_id)), "findings": json.dumps(client.call("GET", "/api/scans/%s/findings" % scan_id)[1])}
+    pdf = client.call("GET", "/api/report/" + scan_id, raw=True)[1]
+    text = pdf_text(pdf)
+    surfaces["report text"] = text
+    check("services: the report has a Services Overview naming every service", "Services Overview" in text and all(n in text for n in expected_auth), [n for n in expected_auth if n not in text])
+    for run in runs:
+        if run.get("scanner") in ("zap", "nuclei", "katana") and run.get("status") in ("completed", "failed", "cancelled", "partial"):
+            status, body = client.call("GET", "/api/scans/%s/%s/artifact?scope=%s" % (scan_id, run["scanner"], run.get("scope") or ""), raw=True)
+            if status == 200:
+                surfaces["%s artifact %s" % (run["scanner"], run.get("scope"))] = body.decode("utf-8", "replace")
+    for name, value in surfaces.items():
+        leaked = [("password" if secret == SERVICE_PASSWORD else "token") for secret in secrets if secret and secret in value]
+        check("services: %s contains no password or issued token" % name, not leaked, leaked)
+    return finish()
+
+
+REGISTRY_IMAGE = os.environ.get("STAGED_REGISTRY_IMAGE", "registry:5000/staged/sample:1")
+REGISTRY_HOST = os.environ.get("STAGED_REGISTRY_HOST", "registry:5000")
+REGISTRY_USER = os.environ.get("STAGED_REGISTRY_USER", "")
+REGISTRY_PASSWORD = os.environ.get("STAGED_REGISTRY_PASSWORD", "")
+
+
+def registry_run(client, label, access):
+    config = {"assessment_mode": "WHITE_BOX", "assessment_types": ["CONTAINER"],
+              "assessment_targets": [{"id": "img", "type": "DOCKER_IMAGE", "value": REGISTRY_IMAGE}],
+              "scanner_selection": {"mode": "custom", "variants": ["trivy"]}}
+    if access:
+        config["access"] = access
+    status, plan = client.call("POST", "/api/scans/plan", config)
+    check("registry %s: plan accepted" % label, status == 200 and isinstance(plan, dict) and not plan.get("errors"), plan.get("errors") if isinstance(plan, dict) else status)
+    if not isinstance(plan, dict) or not plan.get("fingerprint"):
+        return None, None
+    status, ack, scan_id = start_scan(client, config, plan["fingerprint"], "staged-registry-" + label)
+    if not check("registry %s: assessment started" % label, status == 200 and bool(scan_id), status):
+        return None, None
+    record = wait_terminal(client, scan_id, "registry " + label)
+    runs = [r for r in (record or {}).get("scanner_runs") or [] if r.get("scanner") == "trivy"]
+    run = runs[0] if runs else {}
+    print("  registry %s trivy: %s %s %s" % (label, run.get("status"), (run.get("reason") or "")[:160], run.get("limitations")), flush=True)
+    return scan_id, run
+
+
+def phase_registry():
+    """Trivy pulls a private image with a target-bound registry login, refuses without it, and never
+    sends a credential bound to a different registry."""
+    client = Client()
+    if not client.login():
+        return finish()
+    status, good = client.call("POST", "/api/credentials", {"name": "staged registry", "kind": "REGISTRY_CREDENTIALS", "target_ids": ["img"],
+                               "values": {"registry": REGISTRY_HOST, "username": REGISTRY_USER, "password": REGISTRY_PASSWORD}})
+    status2, wrong = client.call("POST", "/api/credentials", {"name": "other registry", "kind": "REGISTRY_CREDENTIALS", "target_ids": ["img"],
+                                 "values": {"registry": "other-registry.example:5000", "username": REGISTRY_USER, "password": REGISTRY_PASSWORD}})
+    good_id, wrong_id = (good or {}).get("id"), (wrong or {}).get("id")
+    if not check("registry: credentials saved", status == 201 and status2 == 201 and good_id and wrong_id, (status, status2)):
+        return finish()
+    scan_ok, run_ok = registry_run(client, "with-login", [{"target_ids": ["img"], "kind": "REGISTRY_CREDENTIALS", "credential_id": good_id}])
+    limits = {l.get("kind"): l.get("reason", "") for l in (run_ok or {}).get("limitations") or []}
+    check("registry with-login: Trivy completed the private image scan", (run_ok or {}).get("status") == "completed", (run_ok or {}).get("reason"))
+    check("registry with-login: the tag scan records the digest Trivy scanned", "@sha256:" in limits.get("mutable_image_tag", "") or "image ID sha256:" in limits.get("mutable_image_tag", ""), limits)
+    _, run_none = registry_run(client, "anonymous", None)
+    check("registry anonymous: the private image is not scanned without a login", (run_none or {}).get("status") != "completed", (run_none or {}).get("status"))
+    check("registry anonymous: the failure says the registry refused access and no login was bound", "registry refused" in ((run_none or {}).get("reason") or "") and "no registry login" in ((run_none or {}).get("reason") or ""), (run_none or {}).get("reason"))
+    _, run_wrong = registry_run(client, "other-registry", [{"target_ids": ["img"], "kind": "REGISTRY_CREDENTIALS", "credential_id": wrong_id}])
+    wrong_limits = {l.get("kind") for l in (run_wrong or {}).get("limitations") or []}
+    check("registry other-registry: a credential for another registry is not sent", (run_wrong or {}).get("status") != "completed", (run_wrong or {}).get("status"))
+    check("registry other-registry: the run records why the credential was not applied", "registry_credential_not_applied" in wrong_limits or "different registry and was not sent" in ((run_wrong or {}).get("reason") or ""), (run_wrong or {}).get("reason"))
+    if scan_ok:
+        surfaces = {"scan record": json.dumps(client.call("GET", "/api/scans/" + scan_ok)[1])}
+        status, body = client.call("GET", "/api/scans/%s/trivy/artifact?scope=%s" % (scan_ok, (run_ok or {}).get("scope") or ""), raw=True)
+        if status == 200:
+            surfaces["trivy artifact"] = body.decode("utf-8", "replace")
+        surfaces["report text"] = pdf_text(client.call("GET", "/api/report/" + scan_ok, raw=True)[1])
+        for name, value in surfaces.items():
+            check("registry: %s contains no registry password" % name, REGISTRY_PASSWORD not in value, name)
+    return finish()
+
+
 PHASES = {
     "full": phase_full,
     "recovery-base": phase_recovery_base,
@@ -1172,6 +1370,8 @@ PHASES = {
     "auth-after-kill": phase_auth_after_kill,
     "write-start": phase_write_start,
     "write-after-kill": phase_write_after_kill,
+    "services": phase_services,
+    "registry": phase_registry,
 }
 
 
