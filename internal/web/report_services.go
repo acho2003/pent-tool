@@ -31,14 +31,20 @@ type reportService struct {
 // scopeTargetID maps a run or finding scope ("app:<id>", "host:<id>",
 // "assessment:<id>", "discovery:<id>") to a target ID of the config.
 func scopeTargetID(scope string, cfg assessment.AssessmentConfig) string {
-	if _, rest, ok := strings.Cut(scope, ":"); ok {
-		for _, target := range cfg.Targets {
-			if target.ID == rest {
-				return target.ID
-			}
+	_, rest, ok := strings.Cut(scope, ":")
+	if !ok {
+		return ""
+	}
+	// "app:<id>", "host:<id>", or a stage scope with a suffix such as
+	// "discovery:<id>:zap". Target IDs may themselves contain ":", so the
+	// longest matching prefix of rest wins.
+	best := ""
+	for _, target := range cfg.Targets {
+		if (rest == target.ID || strings.HasPrefix(rest, target.ID+":")) && len(target.ID) > len(best) {
+			best = target.ID
 		}
 	}
-	return ""
+	return best
 }
 
 // serviceIndex maps target IDs to the position of their service.

@@ -41,6 +41,7 @@ func TestBuildReportServicesAttributesFindingsRunsAndAuth(t *testing.T) {
 		{Scanner: "zap", Scope: "app:svc-2-url-1", Status: "skipped"},
 		{Scanner: "auth", Scope: "app:svc-2-url-1", Status: "completed"},
 		{Scanner: "zap", Scope: "app:loose", Status: "completed"},
+		{Scanner: "zap", Scope: "discovery:svc-2-url-1:zap", Status: "completed"},
 	}
 	vulns := []VulnSummary{
 		{Title: "SQL Injection", Severity: "high", Scope: "app:svc-2-url-1"},
@@ -60,7 +61,7 @@ func TestBuildReportServicesAttributesFindingsRunsAndAuth(t *testing.T) {
 	if auth.Completed != 2 || auth.Failed != 1 || auth.Skipped != 0 || auth.Auth != "verified" {
 		t.Fatalf("auth service runs/auth: %+v", auth)
 	}
-	if common.Findings != 1 || common.Counts["high"] != 1 || common.Skipped != 1 || common.Completed != 0 || common.Auth != "token applied, not verified" {
+	if common.Findings != 1 || common.Counts["high"] != 1 || common.Skipped != 1 || common.Completed != 1 || common.Auth != "token applied, not verified" {
 		t.Fatalf("common service row: %+v", common)
 	}
 	if other.Name != otherTargetsService || other.Findings != 2 || other.Counts["info"] != 1 || other.Counts["low"] != 1 || other.Completed != 1 {
