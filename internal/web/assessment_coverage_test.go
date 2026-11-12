@@ -256,3 +256,38 @@ func TestAssessmentCoverageCancelledActiveRunIsNotReportedAsFinished(t *testing.
 		t.Fatalf("cancelled ZAP run misreported: %+v", coverage.Operations)
 	}
 }
+
+func TestAssessmentCoverageShowsHarvestedOperationsAsTested(t *testing.T) {
+	plan := &scanner.AssessmentPlan{
+		Config:       assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "http://svc.example.test:5003"}}},
+		APIEndpoints: []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/common/villages/{id}", Origin: "http://svc.example.test:5003", Resolved: false, Reason: "required operation inputs are missing or do not match the definition: path:id"}},
+		Fingerprint:  "sha256:harvest",
+	}
+	record := &ScanRecord{AssessmentPlan: plan, ScannerRuns: []scanner.Run{{
+		Scanner: "zap", Scope: "app:app", PlanFingerprint: plan.Fingerprint, Target: "http://svc.example.test:5003", Status: "completed",
+		APIEndpointResults: []scanner.APIEndpointResult{{Method: "GET", Path: "/common/villages/{id}", Origin: "http://svc.example.test:5003", Status: "seeded"}},
+	}}}
+	coverage := buildAssessmentCoverage("scan", record, "")
+	if len(coverage.Operations) != 1 || coverage.Operations[0].Status != "batch_completed" || !strings.Contains(coverage.Operations[0].Reason, "own list responses") {
+		t.Fatalf("harvested operation not shown as tested: %+v", coverage.Operations)
+	}
+}
+
+func TestAssessmentCoveragePrefersRealResultOverSkippedDuplicate(t *testing.T) {
+	plan := &scanner.AssessmentPlan{
+		Config:       assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "http://svc.example.test:5003"}}},
+		APIEndpoints: []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/common/villages/{id}", Origin: "http://svc.example.test:5003", Resolved: false, Reason: "path parameters have no supplied values"}},
+		Fingerprint:  "sha256:dup",
+	}
+	record := &ScanRecord{AssessmentPlan: plan, ScannerRuns: []scanner.Run{{
+		Scanner: "zap", Scope: "app:app", PlanFingerprint: plan.Fingerprint, Target: "http://svc.example.test:5003", Status: "completed",
+		APIEndpointResults: []scanner.APIEndpointResult{
+			{Method: "GET", Path: "/common/villages/{id}", Origin: "http://svc.example.test:5003", Status: "skipped", Reason: "path parameters have no supplied values"},
+			{Method: "GET", Path: "/common/villages/{id}", Origin: "http://svc.example.test:5003", Status: "seeded"},
+		},
+	}}}
+	coverage := buildAssessmentCoverage("scan", record, "")
+	if coverage.Operations[0].Status != "batch_completed" {
+		t.Fatalf("skipped duplicate won over the real result: %+v", coverage.Operations[0])
+	}
+}

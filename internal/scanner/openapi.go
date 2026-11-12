@@ -35,6 +35,10 @@ type APIEndpoint struct {
 	RequestBodyContentTypes []string       `json:"request_body_content_types,omitempty"`
 	SecuritySchemes         []string       `json:"security_schemes,omitempty"`
 	SpecServers             []string       `json:"spec_servers,omitempty"`
+	// ValueSource records where runtime-harvested path values came from
+	// ("path values observed in the response of GET ..."). Empty for operator-
+	// supplied values.
+	ValueSource string `json:"value_source,omitempty"`
 }
 
 type APIParameter struct {

@@ -1158,6 +1158,9 @@ func MergeOpenAPIEndpointsScoped(surface *AttackSurface, applicationURL string, 
 		}
 		ep.ObservationKind = "schema"
 		ep.Provenance = []EndpointProvenance{{Tool: endpoint.Source, Source: endpoint.Source, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}}
+		if endpoint.ValueSource != "" {
+			ep.Provenance = append(ep.Provenance, EndpointProvenance{Tool: "value-harvest", Source: endpoint.ValueSource, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+		}
 		allowed, reason := true, ""
 		if scope != nil {
 			allowed, reason = scope.Allows(ep.URL)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
@@ -160,7 +161,8 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 			TargetID: endpoint.TargetID, Method: endpoint.Method, Path: endpoint.Path, Origin: endpoint.Origin,
 			Status: "inventoried_not_executed", Reason: "operation is inventoried but has not been submitted to ZAP", Eligible: endpoint.Eligible,
 		}
-		if !endpoint.Resolved || !endpoint.Eligible {
+		harvested := (!endpoint.Resolved || !endpoint.Eligible) && operationHasRuntimeResult(record, plan, endpoint)
+		if (!endpoint.Resolved || !endpoint.Eligible) && !harvested {
 			operation.Status = "skipped"
 			operation.Reason = endpoint.Reason
 			if operation.Reason == "" {
@@ -186,26 +188,32 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 			}
 			found := false
 			for _, run := range candidates {
+				matches := []scanner.APIEndpointResult{}
 				for _, result := range run.APIEndpointResults {
 					if result.Method == endpoint.Method && result.Path == endpoint.Path && (endpoint.Origin == "" || result.Origin == endpoint.Origin) {
-						operation.Status, operation.Reason, found = result.Status, result.Reason, true
-						if run.Scanner == "apichecks" && result.Status == "checked" {
-							operation.Status = "tested"
-							operation.Reason = "Native read-only API checks completed for this operation."
-						} else if result.Status == "seeded" {
-							if run.Status == "completed" {
-								operation.Status = "batch_completed"
-								operation.Reason = "Operation was seeded into the scoped ZAP batch; ZAP does not report per-operation completion."
-							} else if run.Status == "running" {
-								operation.Status = "attempted"
-								operation.Reason = "Operation was seeded into a ZAP batch that is still running."
-							} else {
-								operation.Status = "incomplete"
-								operation.Reason = "Operation was seeded, but the ZAP batch did not complete."
-							}
-						}
-						break
+						matches = append(matches, result)
 					}
+				}
+				// Prefer a real outcome over a "skipped" entry for the same operation.
+				sort.SliceStable(matches, func(a, b int) bool { return matches[a].Status != "skipped" && matches[b].Status == "skipped" })
+				for _, result := range matches {
+					operation.Status, operation.Reason, found = result.Status, result.Reason, true
+					if run.Scanner == "apichecks" && result.Status == "checked" {
+						operation.Status = "tested"
+						operation.Reason = "Native read-only API checks completed for this operation."
+					} else if result.Status == "seeded" {
+						if run.Status == "completed" {
+							operation.Status = "batch_completed"
+							operation.Reason = "Operation was seeded into the scoped ZAP batch; ZAP does not report per-operation completion."
+						} else if run.Status == "running" {
+							operation.Status = "attempted"
+							operation.Reason = "Operation was seeded into a ZAP batch that is still running."
+						} else {
+							operation.Status = "incomplete"
+							operation.Reason = "Operation was seeded, but the ZAP batch did not complete."
+						}
+					}
+					break
 				}
 				if found {
 					break
@@ -226,6 +234,9 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 					}
 				}
 			}
+		}
+		if harvested && operation.Reason != "" {
+			operation.Reason = "path values were taken from the application's own list responses; " + operation.Reason
 		}
 		// An approved write is sent by its own job, not by apichecks or ZAP, so its
 		// outcome is joined here: otherwise a write that ran once with cleanup would
@@ -403,4 +414,27 @@ func assessmentArtifactState(scanDir string, run scanner.Run) string {
 		return "unverified"
 	}
 	return "verified"
+}
+
+// operationHasRuntimeResult reports whether an active ZAP or apichecks run
+// recorded a result for an operation the plan could not materialize (its path
+// values were harvested at runtime from the application's responses).
+func operationHasRuntimeResult(record *ScanRecord, plan *scanner.AssessmentPlan, endpoint scanner.APIEndpoint) bool {
+	var targetValue string
+	for _, target := range plan.Config.Targets {
+		if target.ID == endpoint.TargetID {
+			targetValue = target.Value
+		}
+	}
+	for _, run := range record.ScannerRuns {
+		if (run.Scanner != "zap" && run.Scanner != "apichecks") || run.Target != targetValue || run.PlanFingerprint != plan.Fingerprint || strings.HasPrefix(run.Scope, "discovery:") {
+			continue
+		}
+		for _, result := range run.APIEndpointResults {
+			if result.Status != "skipped" && result.Method == endpoint.Method && result.Path == endpoint.Path && (endpoint.Origin == "" || result.Origin == endpoint.Origin) {
+				return true
+			}
+		}
+	}
+	return false
 }

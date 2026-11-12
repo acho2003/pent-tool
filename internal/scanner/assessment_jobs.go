@@ -385,6 +385,19 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				discoveredAPIs[target.ID][i].TargetID = target.ID
 			}
 			MergeOpenAPIEndpointsScoped(surface, inventoryTarget, discoveredAPIs[target.ID], appScopes[target.ID])
+			// Read-only operations missing only path values get values the
+			// application returned from a related list operation.
+			harvestReq := crawlReq
+			harvestReq.Target = inventoryTarget
+			harvestReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
+			known := append(append([]APIEndpoint(nil), apiEndpoints...), discoveredAPIs[target.ID]...)
+			if harvested := HarvestPathValues(ctx, harvestReq, p.Config, inventoryTarget, known); len(harvested) > 0 {
+				for i := range harvested {
+					harvested[i].TargetID = target.ID
+				}
+				MergeOpenAPIEndpointsScoped(surface, inventoryTarget, harvested, appScopes[target.ID])
+				discoveredAPIs[target.ID] = append(discoveredAPIs[target.ID], harvested...)
+			}
 		}
 		if expanded {
 			addIdentitySchemaSeeds(surface, target.ID, p.Config.AssessmentAuthContexts)
@@ -583,8 +596,17 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			req.StructuredDispatch = true
 		}
 		req.APIEndpoints = append(req.APIEndpoints, discoveredAPIs[job.TargetID]...)
+		materializedAtRuntime := map[string]bool{}
+		for _, endpoint := range discoveredAPIs[job.TargetID] {
+			if endpoint.ValueSource != "" {
+				materializedAtRuntime[endpoint.Method+" "+endpoint.Path] = true
+			}
+		}
 		for _, endpoint := range plan.APIEndpoints {
-			if endpoint.TargetID == job.TargetID {
+			// A plan operation whose path values were harvested is represented by
+			// its concrete runtime copy; the unresolved template would only add a
+			// second, skipped result for the same operation.
+			if endpoint.TargetID == job.TargetID && !materializedAtRuntime[endpoint.Method+" "+endpoint.Path] {
 				req.APIEndpoints = append(req.APIEndpoints, endpoint)
 			}
 		}
