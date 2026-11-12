@@ -1012,3 +1012,23 @@ func TestNextjsDeepRequiresTypedAssessmentAndRetainsLimits(t *testing.T) {
 		t.Fatalf("deep profile or limits lost: %+v", instance)
 	}
 }
+
+// A preview without a profile must produce the fingerprint scan start computes
+// after defaulting the profile, or the start is always refused as stale.
+func TestAssessmentPlanPreviewFingerprintMatchesStartWithoutProfile(t *testing.T) {
+	s := newTestServer(t, nil)
+	body := `{"assessment_mode":"WHITE_BOX","assessment_types":["CONTAINER"],"assessment_targets":[{"id":"img","type":"DOCKER_IMAGE","value":"registry.example.test/team/app:6"}],"scanner_selection":{"mode":"custom","variants":["trivy"]}}`
+	rr := httptest.NewRecorder()
+	s.handleAssessmentPlan(rr, httptest.NewRequest(http.MethodPost, "/api/scans/plan", strings.NewReader(body)))
+	var plan struct {
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &plan); err != nil || plan.Fingerprint == "" {
+		t.Fatalf("preview failed: %d %s", rr.Code, rr.Body.String())
+	}
+	start := httptest.NewRecorder()
+	s.handleScan(start, httptest.NewRequest(http.MethodPost, "/api/scan", strings.NewReader(`{"assessment":`+body+`,"plan_fingerprint":"`+plan.Fingerprint+`","scan_mode":"single","save_only":true}`)))
+	if start.Code == http.StatusConflict {
+		t.Fatalf("start refused the preview fingerprint: %s", start.Body.String())
+	}
+}

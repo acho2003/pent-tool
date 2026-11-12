@@ -56,6 +56,11 @@ func (s *Server) handleAssessmentPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid assessment configuration", http.StatusBadRequest)
 		return
 	}
+	// Scan start defaults an empty profile to web-gentle before re-planning;
+	// the preview must do the same or its fingerprint can never match.
+	if strings.TrimSpace(cfg.Profile) == "" {
+		cfg.Profile = scanner.ProfileGentle
+	}
 	cfg = newAssessmentWorkflowConfig(cfg)
 	plan := s.buildAssessmentPlan(cfg)
 	w.Header().Set("Content-Type", "application/json")
