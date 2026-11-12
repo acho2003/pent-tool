@@ -116,6 +116,9 @@ type Request struct {
 	// CloudCredential is the resolved, target-bound cloud credential for the cloud
 	// audit adapters (prowler/scoutsuite). Runtime-only; never serialized.
 	CloudCredential CloudCredential `json:"-"`
+	// RegistryCredential is the resolved private registry login for a Trivy
+	// image scan. Runtime-only; never serialized.
+	RegistryCredential RegistryCredential `json:"-"`
 	// Secrets are extra values redacted from every runner's output, such as the
 	// credentials embedded in a clone URL. Pipeline.Run derives them once from
 	// the original request, so they survive per-scope copies whose Target no
@@ -184,6 +187,9 @@ const (
 	// LimitationPortsNotBounded: a network scan used its tool's full default
 	// port list because no approved or discovered ports were available.
 	LimitationPortsNotBounded = "network_ports_not_bounded"
+	// LimitationMutableImageTag: an image was referenced by a tag, which can
+	// point to different content later; the reason records the scanned digest.
+	LimitationMutableImageTag = "mutable_image_tag"
 )
 
 // RunLimitation records a category of coverage a run that otherwise completed
@@ -340,6 +346,9 @@ type Config struct {
 	// (resolved from the vault) for prowler/scoutsuite, keyed by target ID. Passed
 	// to the runner via env, never persisted in scan records.
 	AssessmentCloudCreds map[string]CloudCredential
+	// AssessmentRegistryCreds holds runtime-only, target-bound private
+	// registry credentials for Trivy image scans.
+	AssessmentRegistryCreds map[string]RegistryCredential
 	// AssessmentRepoCreds holds runtime-only, target-bound tokens for cloning
 	// private repositories, keyed by target ID. Handed to git via env only.
 	AssessmentRepoCreds map[string]RepoCredential
@@ -401,6 +410,15 @@ type GVMSSHCredential struct {
 type CloudCredential struct {
 	Provider string
 	Env      map[string]string
+}
+
+// RegistryCredential lets Trivy pull images from one private registry. It is
+// resolved from the vault at scan start, passed only through the child
+// environment, and never written to scan records.
+type RegistryCredential struct {
+	Registry string
+	Username string
+	Password string
 }
 
 // RepoCredential authenticates a repository clone. Username defaults to

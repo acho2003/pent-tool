@@ -200,6 +200,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 					pipeline.Config.AssessmentGVMSSH = gvmCredentials
 					pipeline.Config.AssessmentSSHRequested = sshRequested
 					pipeline.Config.AssessmentCloudCreds = s.assessmentCloudCredentials(sess.assessmentPlan)
+					pipeline.Config.AssessmentRegistryCreds = s.assessmentRegistryCredentials(sess.assessmentPlan)
 					pipeline.Config.AssessmentRepoCreds = s.assessmentRepositoryCredentials(sess.assessmentPlan)
 				}
 				sess.record.AssessmentPlan = sess.assessmentPlan

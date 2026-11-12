@@ -637,6 +637,12 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			switch targetKinds[job.TargetID] {
 			case assessment.KindDockerImage:
 				req.Artifact = Artifact{Kind: "image", Ref: job.Target}
+				if cred, ok := p.Config.AssessmentRegistryCreds[job.TargetID]; ok {
+					req.RegistryCredential = cred
+					if cred.Password != "" {
+						req.Secrets = append(req.Secrets, cred.Password)
+					}
+				}
 			case assessment.KindSBOM:
 				req.Artifact = Artifact{Kind: "sbom", Ref: job.Target}
 			}
@@ -1029,9 +1035,8 @@ func prepareLocalAssessmentResource(mode assessment.Mode, kind assessment.Target
 		}
 		return ""
 	case assessment.KindDockerImage:
-		pinned, _ := regexp.MatchString(`^[^\s@]+@sha256:[a-fA-F0-9]{64}$`, value)
-		if mode != assessment.ModeWhiteBox || scannerID != "trivy" || !pinned {
-			return "Trivy image assessment requires a digest-pinned image reference in White Box mode"
+		if mode != assessment.ModeWhiteBox || scannerID != "trivy" || !validImageReference(value) {
+			return "Trivy image assessment requires a valid image reference (tag or digest) in White Box mode"
 		}
 		return ""
 	default:
@@ -1136,4 +1141,24 @@ func unverifiedTokenAuth(plan AssessmentPlan, targetID string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// imageReference accepts "registry/repo[:tag]" and "registry/repo@sha256:<64
+// hex>". Tags are allowed; the run then records the digest actually scanned.
+var imageReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[a-fA-F0-9]{64})?$`)
+
+func validImageReference(value string) bool {
+	if len(value) > 512 || strings.Contains(value, "..") || strings.Contains(value, "//") {
+		return false
+	}
+	// A registry port ("host:5000/repo:tag") puts a colon before the path.
+	first, rest, hasPath := strings.Cut(value, "/")
+	if hasPath && strings.Contains(first, ":") {
+		host, port, _ := strings.Cut(first, ":")
+		if host == "" || port == "" || strings.Trim(port, "0123456789") != "" {
+			return false
+		}
+		return imageReference.MatchString(host + "/" + rest)
+	}
+	return imageReference.MatchString(value)
 }

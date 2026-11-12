@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -700,6 +702,9 @@ type commandSpec struct {
 	// completed status is not read as full coverage of what the policy
 	// deliberately left out (e.g. nuclei's excluded template categories).
 	limitations []RunLimitation
+	// completed, when set, may annotate a completed run from its artifact
+	// (e.g. Trivy records the image digest it actually scanned).
+	completed func(*Run)
 }
 
 type commandBuilder func(Request, Config) commandSpec
@@ -928,6 +933,9 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 	}
 	if run.Truncated && run.Reason == "" {
 		run.Reason = fmt.Sprintf("output truncated at configured %d-byte limit", cfg.MaxOutputBytes)
+	}
+	if run.Status == "completed" && spec.completed != nil {
+		spec.completed(&run)
 	}
 	if run.Status == "completed" && len(spec.limitations) > 0 {
 		run.Limitations = append(run.Limitations, spec.limitations...)
@@ -1384,8 +1392,93 @@ func buildTrivyArtifact(req Request, cfg Config) commandSpec {
 	if cmd != "sbom" {
 		args = append(args, "--scanners", "vuln,misconfig,secret,license")
 	}
-	args = append(args, ref)
-	return commandSpec{path: cfg.TrivyPath, args: args, artifact: artifact, timeout: cfg.TrivyTimeout}
+	spec := commandSpec{path: cfg.TrivyPath, artifact: artifact, timeout: cfg.TrivyTimeout}
+	if cmd == "image" {
+		if strings.HasPrefix(ref, "-") {
+			return commandSpec{notApp: "invalid image reference", timeout: cfg.TrivyTimeout}
+		}
+		spec.env, spec.limitations = trivyRegistryEnv(req, ref)
+		if !imageReferencePinned(ref) {
+			spec.completed = func(run *Run) {
+				reason := "image was referenced by the mutable tag " + ref + "; "
+				if digest := trivyScannedDigest(artifact); digest != "" {
+					reason += "Trivy scanned " + digest
+				} else {
+					reason += "Trivy did not report the scanned digest"
+				}
+				run.Limitations = append(run.Limitations, RunLimitation{Kind: LimitationMutableImageTag, Reason: reason})
+			}
+		}
+	}
+	// "--" ends option parsing so a reference can never be read as a flag.
+	spec.args = append(args, "--", ref)
+	return spec
+}
+
+// trivyRegistryEnv passes a private registry login to Trivy through its
+// environment, only when the image is hosted on the credential's registry.
+func trivyRegistryEnv(req Request, ref string) ([]string, []RunLimitation) {
+	cred := req.RegistryCredential
+	if cred.Username == "" && cred.Password == "" {
+		return nil, nil
+	}
+	if normalizeRegistryHost(cred.Registry) != imageRegistryHost(ref) {
+		return nil, []RunLimitation{{Kind: "registry_credential_not_applied", Reason: "the bound registry credential is for a different registry than this image; it was not sent"}}
+	}
+	return []string{"TRIVY_USERNAME=" + cred.Username, "TRIVY_PASSWORD=" + cred.Password}, nil
+}
+
+var pinnedImageReference = regexp.MustCompile(`@sha256:[a-fA-F0-9]{64}$`)
+
+func imageReferencePinned(ref string) bool { return pinnedImageReference.MatchString(ref) }
+
+// imageRegistryHost returns the registry host of an image reference using
+// the Docker reference rules: the first path component is a registry when it
+// contains "." or ":" or is "localhost"; otherwise the image is on Docker Hub.
+func imageRegistryHost(ref string) string {
+	first, _, hasPath := strings.Cut(ref, "/")
+	if hasPath && (strings.ContainsAny(first, ".:") || first == "localhost") {
+		return normalizeRegistryHost(first)
+	}
+	return "docker.io"
+}
+
+func normalizeRegistryHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+	host, _, _ = strings.Cut(host, "/")
+	switch host {
+	case "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com":
+		return "docker.io"
+	}
+	return host
+}
+
+// trivyScannedDigest reads the repository digest (or image ID) Trivy reported
+// for the image it scanned.
+func trivyScannedDigest(artifact string) string {
+	raw, err := os.ReadFile(artifact)
+	if err != nil {
+		return ""
+	}
+	var report struct {
+		Metadata struct {
+			ImageID     string   `json:"ImageID"`
+			RepoDigests []string `json:"RepoDigests"`
+		} `json:"Metadata"`
+	}
+	if json.Unmarshal(raw, &report) != nil {
+		return ""
+	}
+	for _, digest := range report.Metadata.RepoDigests {
+		if strings.Contains(digest, "@sha256:") {
+			return digest
+		}
+	}
+	if strings.HasPrefix(report.Metadata.ImageID, "sha256:") {
+		return "image ID " + report.Metadata.ImageID
+	}
+	return ""
 }
 
 func buildVuls(req Request, cfg Config) commandSpec {

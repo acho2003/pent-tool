@@ -221,7 +221,11 @@ func TestWhiteBoxResourcePreparationAndTrivyVariants(t *testing.T) {
 		{assessment.KindLocalSourcePath, source, assessment.ModeBlackBox},
 		{assessment.KindLocalSourcePath, filepath.Join(source, "missing"), assessment.ModeWhiteBox},
 		{assessment.KindSBOM, source, assessment.ModeWhiteBox},
-		{assessment.KindDockerImage, "registry.test/app:latest", assessment.ModeWhiteBox},
+		{assessment.KindDockerImage, "registry.test/app:latest", assessment.ModeGrayBox},
+		{assessment.KindDockerImage, "-rf", assessment.ModeWhiteBox},
+		{assessment.KindDockerImage, "registry.test/app latest", assessment.ModeWhiteBox},
+		{assessment.KindDockerImage, "registry.test/../app:1", assessment.ModeWhiteBox},
+		{assessment.KindDockerImage, "registry.test/app@sha256:short", assessment.ModeWhiteBox},
 	} {
 		if reason := prepareLocalAssessmentResource(tc.mode, tc.kind, tc.value, "trivy"); reason == "" {
 			t.Fatalf("unsafe resource was prepared: %+v", tc)
