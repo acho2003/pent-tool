@@ -531,7 +531,11 @@ func probeHeaderSession(ctx context.Context, verifyURL, marker string, lines []s
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return result, fmt.Errorf("verification returned non-success status (HTTP %d at %s)", resp.StatusCode, u.Path)
+		path := u.Path
+		if path == "" {
+			path = "/"
+		}
+		return result, fmt.Errorf("verification returned non-success status (HTTP %d at %s)", resp.StatusCode, path)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
