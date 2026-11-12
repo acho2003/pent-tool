@@ -384,8 +384,10 @@ export const api = {
 	scannerRegistry: () => http<{ registry_version: string; scanners: AssessmentScannerDefinition[] }>("/api/scanners/registry"),
 	createCredential: (credential: { name: string; kind: string; target_ids: string[]; values: Record<string, string>; browser_storage?: {local?:Record<string,string>;session?:Record<string,string>} }) =>
 		http<CredentialMetadata>("/api/credentials", { method: "POST", json: credential }),
-	testCredential: (id: string, input: { target_id: string; target_url: string; verify_url?: string; verify_marker?: string; browser?: boolean }) =>
-		http<{ verified: boolean; state: "verified" | "failed" | "unavailable"; reason: string }>(`/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST", json: input }),
+	parseServices: (content: string, format?: "csv" | "yaml") =>
+		http<import("@/types/api").ServicesImportResult>(`/api/services/parse${format ? `?format=${format}` : ""}`, { method: "POST", body: content, headers: { "Content-Type": "text/plain" } }),
+	testCredential: (id: string, input: { target_id: string; target_url: string; verify_url?: string; verify_marker?: string; browser?: boolean; login_targets?: string[] }) =>
+		http<{ verified: boolean; state: "verified" | "failed" | "unavailable" | "available"; reason: string }>(`/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST", json: input }),
 	uploadAPIFixture: (body: string | Blob, contentType = "application/json") => http<{ref: string; size_bytes: number}>("/api/api-fixtures", {method:"POST",body,headers:{"Content-Type":contentType}}),
 	uploadAPIDefinition: async (file: File) =>
 		http<{ id: string; format: string; operation_count: number; size_bytes: number }>("/api/api-definitions", {

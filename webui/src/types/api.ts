@@ -118,6 +118,10 @@ export interface IntegrationInfo {
 export type AssessmentMode = "BLACK_BOX" | "GRAY_BOX" | "WHITE_BOX";
 export type AssessmentType = "NETWORK" | "WEB_APPLICATION" | "API" | "SOURCE_CODE" | "DEPENDENCIES" | "CONTAINER" | "HOST" | "CLOUD" | "KUBERNETES" | "INFRASTRUCTURE_AS_CODE" | "COMPLIANCE";
 export interface AssessmentTarget { id: string; type: string; value: string; branch?: string; related_to?: string; }
+export interface AssessmentService { id: string; name: string; target_ids: string[]; }
+export interface ImportedService { name: string; urls: string[]; image?: string; repo?: string; protected_path?: string; }
+export interface ServicesImportResult { services: ImportedService[]; errors: Array<{ row: number; message: string }>; }
+export interface ServiceOverview { id: string; name: string; targets: string[]; counts: Record<string, number>; findings: number; auth: string; completed: number; failed: number; skipped: number; }
 export interface AssessmentConfig {
   nextjs_boundary_approvals?: Array<{ id: string; target_id: string; kind: "cache" | "redirect" | "proxy"; fixture_ref: string; owner_identity?: string; identity: string }>;
   approved_origins?: Array<{ target_id: string; scheme: string; host: string; port?: number; path_prefix?: string }>;
@@ -131,6 +135,7 @@ export interface AssessmentConfig {
   assessment_mode: AssessmentMode;
   assessment_types: AssessmentType[];
   assessment_targets: AssessmentTarget[];
+  services?: AssessmentService[];
   profile?: string;
   subdomain_discovery?: boolean;
   discovery_providers?: { subdomain?: string[]; tls?: "testssl" | "sslyze" };
@@ -319,6 +324,7 @@ export interface AssessmentCoverage {
   gaps?: Array<{ scanner: string; target_id?: string; assessment_types?: AssessmentType[]; state: string; reason_code: string; reason: string }>;
   counts: Record<string, number>;
   reason?: string;
+  services?: ServiceOverview[];
 }
 
 export interface ScanListItem {

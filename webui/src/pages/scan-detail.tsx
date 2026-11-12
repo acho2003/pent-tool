@@ -1,4 +1,5 @@
 import { WorkflowProof, EndpointTraceDialog } from "@/components/workflow-proof";
+import { ServicesOverviewCard } from "@/components/services-overview";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -583,6 +584,7 @@ function DeterministicScanDetail({ scan }: { scan: ScanRecord }) {
 		{reimport.isSuccess && <p className="text-xs text-emerald-300">Findings re-imported from the saved scanner output.</p>}
 		{reimport.isError && <p role="alert" className="text-xs text-destructive">Could not re-import findings: {reimport.error instanceof Error ? reimport.error.message : "unknown error"}</p>}
 		{scanProgress && !["completed", "finished", "failed", "cancelled", "stopped"].includes(scan.status) && <ScanProgressBar progress={scanProgress} />}
+		<ServicesOverviewCard services={coverageQuery.data?.services} />
 		{scan.assessment && coverageQuery.data && <Card><CardHeader><CardTitle className="text-sm">Assessment coverage · {coverageQuery.data.state}</CardTitle><CardDescription>Requested types, scanner job outcomes, and remaining coverage gaps.</CardDescription></CardHeader><CardContent className="space-y-4">
 			{coverageQuery.data.reason && <p className="text-xs text-muted-foreground">{coverageQuery.data.reason}</p>}
 			<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{(coverageQuery.data.type_coverage ?? []).map((item) => <div key={item.type} className="rounded-md border p-3"><p className="text-xs font-medium">{item.type.replaceAll("_", " ")} · {item.state}</p><p className="mt-1 text-xs text-muted-foreground">{item.reason}</p></div>)}</div>
