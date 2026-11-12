@@ -124,3 +124,23 @@ func (r *recordingTrivyRunner) Run(_ context.Context, req Request, _ Config, _ E
 	r.requests = append(r.requests, req)
 	return Run{Scanner: "trivy", Target: req.Target, Status: "completed"}
 }
+
+func TestTrivyImageFailureExplainsRegistryRefusal(t *testing.T) {
+	ref := "hub.example.test/bcrs/auth:6"
+	anonymous := buildTrivy(Request{TypedAssessment: true, Artifact: Artifact{Kind: "image", Ref: ref}, ScanDir: t.TempDir()}, Config{TrivyPath: "trivy"})
+	status, reason, ok := anonymous.classify(1, "FATAL Fatal error: unable to initialize image: GET https://hub.example.test/v2/: UNAUTHORIZED: authentication required")
+	if !ok || status != "failed" || !strings.Contains(reason, "registry refused") || !strings.Contains(reason, "no registry login is bound") {
+		t.Fatalf("anonymous refusal not explained: %v %q", ok, reason)
+	}
+	other := buildTrivy(Request{TypedAssessment: true, Artifact: Artifact{Kind: "image", Ref: ref}, ScanDir: t.TempDir(), RegistryCredential: RegistryCredential{Registry: "other.example.test", Username: "u", Password: "p"}}, Config{TrivyPath: "trivy"})
+	if _, reason, ok := other.classify(1, "some unrelated failure"); !ok || !strings.Contains(reason, "different registry and was not sent") {
+		t.Fatalf("mismatch not explained: %v %q", ok, reason)
+	}
+	bound := buildTrivy(Request{TypedAssessment: true, Artifact: Artifact{Kind: "image", Ref: ref}, ScanDir: t.TempDir(), RegistryCredential: RegistryCredential{Registry: "hub.example.test", Username: "u", Password: "p"}}, Config{TrivyPath: "trivy"})
+	if _, reason, ok := bound.classify(1, "denied: requested access to the resource is denied"); !ok || !strings.Contains(reason, "credentials rejected") || strings.Contains(reason, "no registry login") {
+		t.Fatalf("rejected credential not explained: %v %q", ok, reason)
+	}
+	if _, _, ok := bound.classify(1, "disk full"); ok {
+		t.Fatal("unrelated failure reclassified")
+	}
+}

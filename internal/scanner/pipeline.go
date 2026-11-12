@@ -914,6 +914,12 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 			}
 		}
 	}
+	// A process that already failed keeps its own reason; a missing artifact
+	// is a consequence, not the cause.
+	processReason := ""
+	if run.Status == "failed" && run.ExitCode != 0 {
+		processReason = run.Reason
+	}
 	if spec.artifact != "" {
 		bounded, boundErr := boundWebArtifact(run.ArtifactPath, name, cfg.MaxOutputBytes)
 		run.Truncated = run.Truncated || bounded
@@ -925,6 +931,9 @@ func executeSpec(ctx context.Context, name string, req Request, cfg Config, spec
 			if run.ExecutionOutcome != "TIMEOUT" && run.ExecutionOutcome != "CANCELLED" && !(name == "semgrep" && run.Status == "failed" && run.ExitCode != 0) {
 				run.Outcome, run.Status = "PARSER_FAILED", "failed"
 				run.Reason = "could not retain usable bounded artifact: " + boundErr.Error()
+				if processReason != "" {
+					run.Reason = processReason + "; no usable artifact was written"
+				}
 			}
 		}
 	}
@@ -1398,6 +1407,7 @@ func buildTrivyArtifact(req Request, cfg Config) commandSpec {
 			return commandSpec{notApp: "invalid image reference", timeout: cfg.TrivyTimeout}
 		}
 		spec.env, spec.limitations = trivyRegistryEnv(req, ref)
+		spec.classify = trivyImageFailure(req, len(spec.limitations) > 0)
 		if !imageReferencePinned(ref) {
 			spec.completed = func(run *Run) {
 				reason := "image was referenced by the mutable tag " + ref + "; "
@@ -1426,6 +1436,31 @@ func trivyRegistryEnv(req Request, ref string) ([]string, []RunLimitation) {
 		return nil, []RunLimitation{{Kind: "registry_credential_not_applied", Reason: "the bound registry credential is for a different registry than this image; it was not sent"}}
 	}
 	return []string{"TRIVY_USERNAME=" + cred.Username, "TRIVY_PASSWORD=" + cred.Password}, nil
+}
+
+// trivyImageFailure turns a failed image scan into a reason that says why: a
+// registry that refused access, and whether a login was bound or was for a
+// different registry (and therefore not sent).
+func trivyImageFailure(req Request, credentialMismatch bool) func(int, string) (string, string, bool) {
+	return func(_ int, output string) (string, string, bool) {
+		note := ""
+		switch {
+		case credentialMismatch:
+			note = "; the bound registry credential is for a different registry and was not sent"
+		case req.RegistryCredential.Username == "" && req.RegistryCredential.Password == "":
+			note = "; no registry login is bound to this image"
+		}
+		lower := strings.ToLower(output)
+		for _, marker := range []string{"unauthorized", "authentication required", "access denied", "denied:", "status code 401", "401 unauthorized"} {
+			if strings.Contains(lower, marker) {
+				return "failed", "the registry refused to serve the image (authentication required or credentials rejected)" + note, true
+			}
+		}
+		if credentialMismatch {
+			return "failed", "Trivy could not scan the image" + note, true
+		}
+		return "", "", false
+	}
 }
 
 var pinnedImageReference = regexp.MustCompile(`@sha256:[a-fA-F0-9]{64}$`)
