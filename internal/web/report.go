@@ -902,6 +902,89 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdfCellFormat(pdf, 145, 8, m[1], "", 1, "L", false, 0, "")
 	}
 
+	// ─── SERVICES OVERVIEW (microservice assessments) ──────
+	if len(scan.ReportServices) > 0 {
+		pdf.AddPage()
+		drawRect(0, 0, 210, 297, darkBg)
+		drawRect(0, 0, 210, 1.5, coral)
+		pdf.SetY(15)
+		pdf.SetFont("Helvetica", "B", 22)
+		setColor(coral)
+		pdfCellFormat(pdf, 190, 12, "Services Overview", "", 1, "L", false, 0, "")
+		drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
+		pdf.Ln(8)
+		pdf.SetFont("Helvetica", "", 8)
+		setColor(white)
+		pdf.SetX(10)
+		pdfMultiCell(pdf, 190, 4, "Active findings, authentication state and scanner outcomes per service, from the saved plan, scanner runs and findings. "+
+			"\"Token applied, not verified\" means the shared login token was sent to that service but no protected path proved it was accepted.", "", "L", false)
+		pdf.Ln(4)
+		header := func() {
+			thY := pdf.GetY()
+			drawRect(10, thY, 190, 8, sectionBg)
+			pdf.SetFont("Helvetica", "B", 7)
+			setColor(coral)
+			pdf.SetXY(12, thY+1)
+			pdfCellFormat(pdf, 44, 6, "SERVICE", "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 50, 6, "TARGETS", "", 0, "L", false, 0, "")
+			for _, col := range []string{"C", "H", "M", "L", "I"} {
+				pdfCellFormat(pdf, 8, 6, col, "", 0, "C", false, 0, "")
+			}
+			pdfCellFormat(pdf, 32, 6, "AUTHENTICATION", "", 0, "L", false, 0, "")
+			pdfCellFormat(pdf, 22, 6, "OK/FAIL/SKIP", "", 1, "L", false, 0, "")
+			pdf.Ln(2)
+		}
+		header()
+		for i, svc := range scan.ReportServices {
+			if pdf.GetY() > 268 {
+				pdf.AddPage()
+				drawRect(0, 0, 210, 297, darkBg)
+				drawRect(0, 0, 210, 1.5, coral)
+				pdf.SetY(15)
+				header()
+			}
+			rowY := pdf.GetY()
+			rowBg := darkBg
+			if i%2 == 0 {
+				rowBg = sectionBg
+			}
+			drawRect(10, rowY, 190, 8, rowBg)
+			worst := "info"
+			for _, sev := range []string{"critical", "high", "medium", "low"} {
+				if svc.Counts[sev] > 0 {
+					worst = sev
+					break
+				}
+			}
+			if svc.Findings > 0 {
+				drawRect(10, rowY, 2, 8, sevColor(worst))
+			}
+			pdf.SetXY(12, rowY+1)
+			pdf.SetFont("Helvetica", "B", 7)
+			setColor(white)
+			pdfCellFormat(pdf, 44, 6, fitPDFText(pdf, svc.Name, 43), "", 0, "L", false, 0, "")
+			pdf.SetFont("Helvetica", "", 6.5)
+			setColor(gray)
+			targets := strings.Join(svc.Targets, ", ")
+			pdfCellFormat(pdf, 50, 6, fitPDFText(pdf, targets, 49), "", 0, "L", false, 0, "")
+			pdf.SetFont("Helvetica", "B", 7)
+			for _, sev := range []string{"critical", "high", "medium", "low", "info"} {
+				if svc.Counts[sev] > 0 {
+					setColor(sevColor(sev))
+				} else {
+					setColor(gray)
+				}
+				pdfCellFormat(pdf, 8, 6, fmt.Sprintf("%d", svc.Counts[sev]), "", 0, "C", false, 0, "")
+			}
+			pdf.SetFont("Helvetica", "", 6.5)
+			setColor(white)
+			pdfCellFormat(pdf, 32, 6, fitPDFText(pdf, svc.Auth, 31), "", 0, "L", false, 0, "")
+			setColor(gray)
+			pdfCellFormat(pdf, 22, 6, fmt.Sprintf("%d / %d / %d", svc.Completed, svc.Failed, svc.Skipped), "", 1, "L", false, 0, "")
+			pdf.SetY(rowY + 8)
+		}
+	}
+
 	// ─── METHODOLOGY ──────────────────────────────────────
 	pdf.AddPage()
 	drawRect(0, 0, 210, 297, darkBg)
@@ -1220,14 +1303,18 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 		pdf.SetY(15)
 		pdf.SetFont("Helvetica", "B", 22)
 		setColor(coral)
-		pdfCellFormat(pdf, 190, 12, "Vulnerabilities by Host", "", 1, "L", false, 0, "")
+		groupTitle, groupIntro := "Vulnerabilities by Host", "Unique scanner findings grouped by host."
+		if len(scan.ReportServices) > 0 {
+			groupTitle, groupIntro = "Vulnerabilities by Service", "Unique scanner findings grouped by service and host."
+		}
+		pdfCellFormat(pdf, 190, 12, groupTitle, "", 1, "L", false, 0, "")
 		drawRect(10, pdf.GetY()+2, 50, 0.8, coral)
 		pdf.Ln(8)
 
 		pdf.SetFont("Helvetica", "", 8)
 		setColor(white)
 		pdf.SetX(10)
-		pdfMultiCell(pdf, 190, 4, "Unique scanner findings grouped by host. Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
+		pdfMultiCell(pdf, 190, 4, groupIntro+" Detailed write-ups follow in the Vulnerability Details section.", "", "L", false)
 		pdf.Ln(4)
 
 		// Table header

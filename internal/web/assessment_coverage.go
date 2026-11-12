@@ -73,6 +73,9 @@ type assessmentCoverageResponse struct {
 	Gaps            []scanner.PlanDecision         `json:"gaps,omitempty"`
 	Counts          map[string]int                 `json:"counts"`
 	Reason          string                         `json:"reason,omitempty"`
+	// Services is the per-service overview when the assessment groups its
+	// targets into services; omitted otherwise.
+	Services []reportService `json:"services,omitempty"`
 }
 
 func isScanCoveragePath(path string) bool {
@@ -109,6 +112,7 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 		return coverage
 	}
 	plan := record.AssessmentPlan
+	coverage.Services = buildReportServices(plan, record.ScannerRuns, record.Vulns)
 	coverage.Profile = record.Profile
 	coverage.PlanFingerprint = record.PlanFingerprint
 	coverage.Mode = plan.Config.Mode

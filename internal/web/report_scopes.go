@@ -17,6 +17,7 @@ type reportScope struct {
 	Kind      string           `json:"kind"`
 	Target    string           `json:"target,omitempty"`
 	Origin    string           `json:"origin,omitempty"`
+	Service   string           `json:"service,omitempty"`
 	Tracks    []string         `json:"tracks,omitempty"`
 	OpenPorts []string         `json:"open_ports,omitempty"`
 	Services  []string         `json:"services,omitempty"`

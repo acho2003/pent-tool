@@ -15,7 +15,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
-const reportPromptVersion = "scanner-report-v7"
+const reportPromptVersion = "scanner-report-v8"
 
 type reportManifest struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -27,6 +27,7 @@ type reportManifest struct {
 	SourceRuns    []scanner.Run               `json:"source_runs"`
 	ParseErrors   []string                    `json:"parse_errors,omitempty"`
 	Scopes        []reportScope               `json:"scopes,omitempty"`
+	Services      []reportService             `json:"services,omitempty"`
 	Recon         *reportReconSummary         `json:"recon,omitempty"`
 	Assessment    *assessmentCoverageResponse `json:"assessment_coverage,omitempty"`
 	Findings      []reportFinding             `json:"findings"`
@@ -157,6 +158,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 		manifest.ParseErrors = append(manifest.ParseErrors, err.Error())
 	}
 	scopes := buildReportScopes(scanDir, rec.ScannerRuns)
+	orderScopesByService(scopes, rec.AssessmentPlan)
 	recon := summarizeReportRecon(scopes)
 	manifest.Scopes, manifest.Recon = scopes, &recon
 	orderReportFindings(manifest.Findings, scopes)
@@ -170,6 +172,12 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 		}
 	}
 	copyRec.Vulns = reportFindingsToVulns(collapseDuplicateTitles(collapseNextjsAdvisories(activeReport)))
+	copyRec.ReportServices = buildReportServices(rec.AssessmentPlan, rec.ScannerRuns, copyRec.Vulns)
+	if len(copyRec.ReportServices) > 0 {
+		manifest.Services = copyRec.ReportServices
+		data, _ = json.MarshalIndent(manifest, "", "  ")
+		_ = os.WriteFile(filepath.Join(scanDir, "report.json"), data, 0o600)
+	}
 	rec.Vulns = append([]VulnSummary(nil), copyRec.Vulns...)
 	copyRec.ReportMode = manifest.Mode
 	copyRec.ReportGeneratedAt = manifest.GeneratedAt

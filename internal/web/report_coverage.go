@@ -16,6 +16,9 @@ func reportScopeLabel(sc reportScope) string {
 	if len(sc.Tracks) > 0 {
 		label += "  [" + strings.Join(sc.Tracks, ", ") + "]"
 	}
+	if sc.Service != "" {
+		label = "SERVICE  " + sc.Service + "  ·  " + label
+	}
 	return label
 }
 
