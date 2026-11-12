@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function GitHubOrganization({ onChange }: { onChange: (repos: GitHubRepository[], credentialId: string) => void }) {
+export function GitHubOrganization({ onChange, note }: { onChange: (repos: GitHubRepository[], credentialId: string) => void; note?: string }) {
   const [organization, setOrganization] = useState("");
   const [token, setToken] = useState("");
   const [credentialId, setCredentialId] = useState("");
@@ -59,7 +59,7 @@ export function GitHubOrganization({ onChange }: { onChange: (repos: GitHubRepos
     <Label htmlFor="github-org-token">Repository access token (optional)</Label>
     <Input id="github-org-token" type="password" autoComplete="off" value={token} placeholder={credentialId ? "Encrypted token saved; enter a replacement if needed" : "Token for private repository access"} onChange={event => { setToken(event.target.value); reset(); }} disabled={busy} />
     <Button type="button" onClick={() => void discover()} disabled={busy || !organization.trim()}>{busy ? "Discovering…" : "Discover repositories"}</Button>
-    <p className="text-xs text-muted-foreground">Results reflect this credential’s access. Tokens are encrypted on the server. Selected repositories are scanned on their default branches under this assessment.</p>
+    <p className="text-xs text-muted-foreground">{note ?? "Results reflect this credential’s access. Tokens are encrypted on the server. Selected repositories are scanned on their default branches under this assessment."}</p>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {repos.length > 0 && <>
       <div className="flex flex-wrap items-center gap-3">

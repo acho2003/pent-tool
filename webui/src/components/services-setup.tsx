@@ -1,6 +1,7 @@
 import { useRef, useState, type ChangeEvent } from "react";
 import { Download, Plus, Trash2, Upload } from "lucide-react";
-import { api } from "@/api/client";
+import { api, type GitHubRepository } from "@/api/client";
+import { GitHubOrganization } from "@/components/github-organization";
 import type { AssessmentService, AssessmentTarget } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +11,9 @@ import { Label } from "@/components/ui/label";
 // One microservice: its URL(s) (";"-separated), optional container image,
 // optional repository URL or absolute server source path, and an optional
 // protected path used to verify the shared login token on this service.
-export type ServiceRow = { name: string; urls: string; image: string; repo: string; protectedPath: string; apiDefinitionId?: string; apiDefinitionInfo?: string };
+// repoGitHubId/repoBranch are set when the repository was picked from a
+// discovered GitHub organization; repo then holds its clone URL.
+export type ServiceRow = { name: string; urls: string; image: string; repo: string; protectedPath: string; apiDefinitionId?: string; apiDefinitionInfo?: string; repoGitHubId?: number; repoBranch?: string };
 
 export type ServiceURLTarget = { id: string; value: string; service: string; protectedPath: string };
 export type ServiceImageTarget = { id: string; value: string; service: string };
@@ -21,6 +24,9 @@ export type ServiceSet = {
   urlTargets: ServiceURLTarget[];
   imageTargets: ServiceImageTarget[];
   apiDefinitions: Array<{ target_id: string; definition_id: string }>;
+  // Target IDs of repositories picked from a discovered GitHub organization;
+  // the organization's encrypted token is bound to these.
+  githubRepoTargetIds: string[];
   ignoredInternal: number;
 };
 
@@ -34,7 +40,7 @@ function splitURLs(value: string): string[] {
 // grouping. Images and source are internal resources, so they are only
 // included in White Box mode (the count of skipped ones is reported).
 export function serviceTargets(rows: ServiceRow[], whiteBox: boolean): ServiceSet {
-  const set: ServiceSet = { targets: [], services: [], urlTargets: [], imageTargets: [], apiDefinitions: [], ignoredInternal: 0 };
+  const set: ServiceSet = { targets: [], services: [], urlTargets: [], imageTargets: [], apiDefinitions: [], githubRepoTargetIds: [], ignoredInternal: 0 };
   rows.forEach((row, index) => {
     const name = row.name.trim();
     if (!name) return;
@@ -56,7 +62,13 @@ export function serviceTargets(rows: ServiceRow[], whiteBox: boolean): ServiceSe
       set.imageTargets.push({ id, value: image, service: name });
       ids.push(id);
     }
-    if (whiteBox && repo) {
+    if (whiteBox && repo && row.repoGitHubId) {
+      // Same target ID the organization discovery bound its token to.
+      const id = `artifact-github-${row.repoGitHubId}`;
+      set.targets.push({ id, type: "REPOSITORY", value: repo, branch: row.repoBranch || undefined });
+      set.githubRepoTargetIds.push(id);
+      ids.push(id);
+    } else if (whiteBox && repo) {
       const id = `svc-${n}-repo`;
       set.targets.push({ id, type: repo.startsWith("/") ? "LOCAL_SOURCE_PATH" : "REPOSITORY", value: repo });
       ids.push(id);
@@ -90,7 +102,14 @@ export function servicesToCSV(rows: ServiceRow[]): string {
   return lines.join("\n") + "\n";
 }
 
-export function ServicesSetup({ rows, onChange, whiteBox, allowAPI }: { rows: ServiceRow[]; onChange: (rows: ServiceRow[]) => void; whiteBox: boolean; allowAPI: boolean }) {
+export function ServicesSetup({ rows, onChange, whiteBox, allowAPI, repoPool, onRepoPool }: {
+  rows: ServiceRow[];
+  onChange: (rows: ServiceRow[]) => void;
+  whiteBox: boolean;
+  allowAPI: boolean;
+  repoPool: GitHubRepository[];
+  onRepoPool: (repos: GitHubRepository[], credentialId: string) => void;
+}) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploadingRow, setUploadingRow] = useState<number | null>(null);
   const [importing, setImporting] = useState(false);
@@ -165,6 +184,12 @@ export function ServicesSetup({ rows, onChange, whiteBox, allowAPI }: { rows: Se
       </div>
       {importNote && <p role="status" className="text-xs text-emerald-300">{importNote}</p>}
       {importErrors.length > 0 && <div role="alert" className="rounded-md border border-amber-500/40 p-3 text-xs text-amber-200"><p className="font-medium">Some rows were not imported:</p><ul className="mt-1 list-disc pl-4">{importErrors.slice(0, 20).map((e) => <li key={e}>{e}</li>)}</ul></div>}
+      {whiteBox && <details className="rounded-lg border p-3" open={repoPool.length > 0}>
+        <summary className="cursor-pointer text-sm font-medium">Pick repositories from a GitHub organization {repoPool.length > 0 ? `(${repoPool.length} available)` : ""}</summary>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <GitHubOrganization onChange={onRepoPool} note="Discover the organization's repositories, then choose one for each service below. Only repositories assigned to a service are scanned; the token is encrypted on the server and used only to clone those repositories." />
+        </div>
+      </details>}
       {rows.length === 0 && <p className="text-xs text-muted-foreground">No services yet. Single-application scans can leave this empty and use the URL box above.</p>}
       {rows.map((row, index) => <div key={index} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-12">
         <div className="space-y-1 sm:col-span-3"><Label htmlFor={`svc-name-${index}`} className="text-xs">Service name</Label><Input id={`svc-name-${index}`} value={row.name} onChange={(e) => update(index, { name: e.target.value })} placeholder="Auth Service" /></div>
@@ -172,7 +197,21 @@ export function ServicesSetup({ rows, onChange, whiteBox, allowAPI }: { rows: Se
         <div className="space-y-1 sm:col-span-3"><Label htmlFor={`svc-protected-${index}`} className="text-xs">Protected path (optional)</Label><Input id={`svc-protected-${index}`} value={row.protectedPath} onChange={(e) => update(index, { protectedPath: e.target.value })} placeholder="/api/me" /></div>
         <div className="flex items-end sm:col-span-1"><Button type="button" variant="ghost" size="sm" aria-label={`Remove ${row.name || "service"}`} onClick={() => onChange(rows.filter((_, i) => i !== index))}><Trash2 className="h-4 w-4" /></Button></div>
         <div className="space-y-1 sm:col-span-6"><Label htmlFor={`svc-image-${index}`} className="text-xs">Container image {whiteBox ? "(optional)" : "(White Box only)"}</Label><Input id={`svc-image-${index}`} value={row.image} onChange={(e) => update(index, { image: e.target.value })} placeholder="registry.example/team/auth-service:6" /></div>
-        <div className="space-y-1 sm:col-span-6"><Label htmlFor={`svc-repo-${index}`} className="text-xs">Repository or source path {whiteBox ? "(optional)" : "(White Box only)"}</Label><Input id={`svc-repo-${index}`} value={row.repo} onChange={(e) => update(index, { repo: e.target.value })} placeholder="https://git.example/team/auth.git or /src/auth" /></div>
+        <div className="space-y-1 sm:col-span-6"><Label htmlFor={`svc-repo-${index}`} className="text-xs">Repository or source path {whiteBox ? "(optional)" : "(White Box only)"}</Label>
+          {whiteBox && repoPool.length > 0 && <select aria-label={`Repository for ${row.name || "service"}`} className="mb-1 w-full rounded border bg-background p-2 text-sm" value={row.repoGitHubId ? String(row.repoGitHubId) : row.repo ? "manual" : ""} onChange={(e) => {
+            const value = e.target.value;
+            if (value === "" ) { update(index, { repo: "", repoGitHubId: undefined, repoBranch: undefined }); return; }
+            if (value === "manual") { update(index, { repoGitHubId: undefined, repoBranch: undefined }); return; }
+            const picked = repoPool.find((repo) => String(repo.id) === value);
+            if (picked) update(index, { repo: picked.clone_url, repoGitHubId: picked.id, repoBranch: picked.default_branch });
+          }}>
+            <option value="">No repository</option>
+            {repoPool.map((repo) => <option key={repo.id} value={String(repo.id)} disabled={rows.some((other, i) => i !== index && other.repoGitHubId === repo.id)}>{repo.full_name}{repo.private ? " · private" : ""}{repo.default_branch ? ` · ${repo.default_branch}` : ""}</option>)}
+            <option value="manual">Enter a URL or server path…</option>
+          </select>}
+          {(!row.repoGitHubId) && <Input id={`svc-repo-${index}`} value={row.repo} onChange={(e) => update(index, { repo: e.target.value, repoGitHubId: undefined, repoBranch: undefined })} placeholder="https://git.example/team/auth.git or /src/auth" />}
+          {row.repoGitHubId && <p className="break-all font-mono text-xs text-muted-foreground">{row.repo}{row.repoBranch ? ` @ ${row.repoBranch}` : ""}</p>}
+        </div>
         {allowAPI && <div className="flex flex-wrap items-center gap-2 sm:col-span-12">
           <label className="cursor-pointer rounded-md border px-2 py-1 text-xs hover:bg-muted/30">{uploadingRow === index ? "Uploading…" : row.apiDefinitionId ? "Replace OpenAPI file" : "Upload OpenAPI / Swagger file (optional)"}<input type="file" accept=".json,.yaml,.yml,.graphql,.gql" hidden disabled={uploadingRow === index} onChange={(e) => void uploadDefinition(index, e)} /></label>
           {row.apiDefinitionInfo && <span className={`text-xs ${row.apiDefinitionId ? "text-emerald-300" : "text-destructive"}`}>{row.apiDefinitionInfo}</span>}
