@@ -56,6 +56,17 @@ func Normalize(cfg AssessmentConfig) AssessmentConfig {
 		out.Targets[i] = nt
 	}
 
+	out.Services = nil
+	for _, service := range cfg.Services {
+		ns := Service{ID: strings.TrimSpace(service.ID), Name: strings.TrimSpace(service.Name)}
+		for _, id := range service.TargetIDs {
+			if id = strings.TrimSpace(id); id != "" {
+				ns.TargetIDs = append(ns.TargetIDs, id)
+			}
+		}
+		out.Services = append(out.Services, ns)
+	}
+
 	out.Access = make([]AccessBinding, len(cfg.Access))
 	for i, ab := range cfg.Access {
 		nb := ab
@@ -305,6 +316,21 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if ab.VerifyBrowser && strings.TrimSpace(ab.VerifyMarker) == "" {
 			probs = append(probs, blocking("access.browser_marker.required", "browser verification requires a protected-route marker"))
 		}
+		if ab.Kind == AccessRegistryCreds {
+			if strings.TrimSpace(ab.CredentialID) == "" {
+				probs = append(probs, blocking("access.registry.credential_required", "registry access requires a saved registry credential"))
+			}
+			for _, id := range ab.TargetIDs {
+				for _, target := range cfg.Targets {
+					if target.ID == id && target.Kind != KindDockerImage {
+						probs = append(probs, blocking("access.registry.target_must_be_image", fmt.Sprintf("registry credential target %q must be a container image", id)))
+					}
+				}
+			}
+		}
+		if ab.Kind == AccessTokenLogin && strings.TrimSpace(ab.CredentialID) == "" {
+			probs = append(probs, blocking("access.token_login.credential_required", "token login requires a saved login credential"))
+		}
 		if ab.Kind == AccessFormLogin && len(ab.TargetIDs) != 1 {
 			probs = append(probs, blocking("access.form_login.single_target", "form login must be bound to exactly one application target"))
 		}
@@ -317,7 +343,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 		if len(ab.Identity) > 128 || len(ab.Role) > 128 || strings.ContainsAny(ab.Identity+ab.Role, "\r\n\x00") {
 			probs = append(probs, blocking("access.identity.invalid", "identity and role labels must be at most 128 printable characters"))
 		}
-		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin {
+		if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin || ab.Kind == AccessTokenLogin {
 			if strings.TrimSpace(ab.CredentialID) != "" {
 				if ab.Kind == AccessFormLogin && strings.TrimSpace(ab.VerifyURL) == "" {
 					probs = append(probs, blocking("access.verification_required", "form login requires an in-scope verify_url; a verify_marker is optional (markerless login verifies by redirect behavior)"))
@@ -339,7 +365,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 				probs = append(probs, blocking("access.target.unknown",
 					fmt.Sprintf("access binding %q references unknown target id %q", ab.Kind, id)))
 			}
-			if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin {
+			if ab.Kind == AccessApplicationHeaders || ab.Kind == AccessApplicationCookies || ab.Kind == AccessBearerToken || ab.Kind == AccessAPIKey || ab.Kind == AccessFormLogin || ab.Kind == AccessTokenLogin {
 				for _, target := range cfg.Targets {
 					if target.ID == id && target.Kind != KindURL {
 						probs = append(probs, blocking("access.target_must_be_url", fmt.Sprintf("application credential target %q must be an explicit URL", id)))
@@ -350,6 +376,7 @@ func Validate(cfg AssessmentConfig) []Problem {
 			}
 		}
 	}
+	probs = append(probs, validateServices(cfg, ids)...)
 	apiDefinitionIDs := map[string]bool{}
 	for _, id := range cfg.APIDefinitionIDs {
 		apiDefinitionIDs[id] = true
@@ -839,4 +866,42 @@ func normalizeWriteApproval(a *WriteApproval) {
 	a.CleanupPath = strings.TrimSpace(a.CleanupPath)
 	a.CleanupRef = strings.ToLower(strings.TrimSpace(a.CleanupRef))
 	a.CleanupContentType = strings.TrimSpace(a.CleanupContentType)
+}
+
+// validateServices checks that services are uniquely named groups of known
+// targets and that no target belongs to two services.
+func validateServices(cfg AssessmentConfig, ids map[string]bool) []Problem {
+	var probs []Problem
+	seenIDs := map[string]bool{}
+	seenNames := map[string]bool{}
+	owner := map[string]string{}
+	for _, service := range cfg.Services {
+		if service.ID == "" || len(service.ID) > 128 || strings.ContainsAny(service.ID, " \t\r\n\x00") {
+			probs = append(probs, blocking("service.id.invalid", "service IDs must be 1–128 characters without whitespace"))
+		} else if seenIDs[service.ID] {
+			probs = append(probs, blocking("service.id.duplicate", fmt.Sprintf("service ID %q is used more than once", service.ID)))
+		}
+		seenIDs[service.ID] = true
+		if service.Name == "" || len(service.Name) > 128 || strings.ContainsAny(service.Name, "\r\n\x00") {
+			probs = append(probs, blocking("service.name.invalid", "service names must be 1–128 printable characters"))
+		} else if key := strings.ToLower(service.Name); seenNames[key] {
+			probs = append(probs, blocking("service.name.duplicate", fmt.Sprintf("service name %q is used more than once", service.Name)))
+		} else {
+			seenNames[key] = true
+		}
+		if len(service.TargetIDs) == 0 {
+			probs = append(probs, blocking("service.targets.empty", fmt.Sprintf("service %q lists no targets", service.Name)))
+		}
+		for _, id := range service.TargetIDs {
+			if !ids[id] {
+				probs = append(probs, blocking("service.target.unknown", fmt.Sprintf("service %q references unknown target id %q", service.Name, id)))
+				continue
+			}
+			if previous, ok := owner[id]; ok && previous != service.ID {
+				probs = append(probs, blocking("service.target.shared", fmt.Sprintf("target %q belongs to more than one service", id)))
+			}
+			owner[id] = service.ID
+		}
+	}
+	return probs
 }

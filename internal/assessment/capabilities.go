@@ -72,7 +72,7 @@ func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 	for _, ab := range cfg.Access {
 		for _, id := range ab.TargetIDs {
 			switch ab.Kind {
-			case AccessApplicationHeaders, AccessApplicationCookies, AccessBearerToken, AccessAPIKey, AccessFormLogin:
+			case AccessApplicationHeaders, AccessApplicationCookies, AccessBearerToken, AccessAPIKey, AccessFormLogin, AccessTokenLogin:
 				st := StateDeclared
 				prov := "credential_ref"
 				reason := "credential reference supplied; verification pending"
@@ -82,6 +82,11 @@ func DeriveCapabilities(cfg AssessmentConfig) []CapabilityEvidence {
 					reason = "authenticated access requested without a resolvable credential"
 				}
 				evidence := ev(CapAuthWeb, id, st, prov, reason)
+				evidence.ReferenceID = strings.TrimSpace(ab.CredentialID)
+				evidence.AccessKind = ab.Kind
+				out = append(out, evidence)
+			case AccessRegistryCreds:
+				evidence := ev(CapImage, id, StateAvailable, "credential_ref", "private registry credential supplied for this image")
 				evidence.ReferenceID = strings.TrimSpace(ab.CredentialID)
 				evidence.AccessKind = ab.Kind
 				out = append(out, evidence)

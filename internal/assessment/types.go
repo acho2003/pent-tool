@@ -130,12 +130,19 @@ const (
 	AccessWindows            AccessKind = "WINDOWS"
 	AccessCloud              AccessKind = "CLOUD"
 	AccessKubernetes         AccessKind = "KUBERNETES"
+	// AccessTokenLogin logs in once against an explicit login API and applies
+	// the returned bearer token to every explicitly bound URL target.
+	AccessTokenLogin AccessKind = "TOKEN_LOGIN"
+	// AccessRegistryCreds lets Trivy pull explicitly bound images from one
+	// private container registry.
+	AccessRegistryCreds AccessKind = "REGISTRY_CREDENTIALS"
 )
 
 var AllAccessKinds = []AccessKind{
 	AccessApplicationHeaders, AccessApplicationCookies, AccessBearerToken,
 	AccessAPIKey, AccessFormLogin, AccessRepositoryCreds, AccessSSH,
-	AccessWindows, AccessCloud, AccessKubernetes,
+	AccessWindows, AccessCloud, AccessKubernetes, AccessTokenLogin,
+	AccessRegistryCreds,
 }
 
 func (a AccessKind) Valid() bool {
@@ -175,6 +182,27 @@ type Target struct {
 	Value     string     `json:"value"`
 	Branch    string     `json:"branch,omitempty"`     // repository branch, when Kind==REPOSITORY
 	RelatedTo string     `json:"related_to,omitempty"` // optional related-target ID (e.g. image built from a repo)
+}
+
+// Service names a group of targets that make up one deployed service (for
+// example its URL(s), container image and source). A target belongs to at most
+// one service.
+type Service struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	TargetIDs []string `json:"target_ids"`
+}
+
+// ServiceForTarget returns the service a target belongs to, if any.
+func (c AssessmentConfig) ServiceForTarget(targetID string) (Service, bool) {
+	for _, service := range c.Services {
+		for _, id := range service.TargetIDs {
+			if id == targetID {
+				return service, true
+			}
+		}
+	}
+	return Service{}, false
 }
 
 // AccessBinding grants an access kind to one or more targets, referencing a
@@ -271,26 +299,29 @@ type NextjsScanOptions struct {
 // AssessmentConfig is the canonical, normalized configuration for one
 // assessment.
 type AssessmentConfig struct {
-	NextjsBoundaryApprovals    []NextjsBoundaryApproval   `json:"nextjs_boundary_approvals,omitempty"`
-	NextjsActionApprovals      []NextjsActionApproval     `json:"nextjs_action_approvals,omitempty"`
-	Nextjs                     NextjsScanOptions          `json:"nextjs,omitzero"`
-	WorkflowVersion            string                     `json:"workflow_version,omitempty"`
-	ParentAssessmentID         string                     `json:"parent_assessment_id,omitempty"`
-	ParentPlanFingerprint      string                     `json:"parent_plan_fingerprint,omitempty"`
-	ApprovalPreviewFingerprint string                     `json:"approval_preview_fingerprint,omitempty"`
-	Mode                       Mode                       `json:"assessment_mode"`
-	Types                      []Type                     `json:"assessment_types"`
-	Targets                    []Target                   `json:"assessment_targets"`
-	Access                     []AccessBinding            `json:"access,omitempty"`
-	Profile                    string                     `json:"profile,omitempty"`
-	ScannerSelection           ScannerSelection           `json:"scanner_selection,omitempty"`
-	APIDefinitionIDs           []string                   `json:"api_definition_ids,omitempty"`
-	APIDefinitions             []APIDefinitionBinding     `json:"api_definitions,omitempty"`
-	APIOperationInputs         []APIOperationInput        `json:"api_operation_inputs,omitempty"`
-	FuzzApprovals              []FuzzApproval             `json:"fuzz_approvals,omitempty"`
-	WriteApprovals             []WriteApproval            `json:"write_approvals,omitempty"`
-	AuthorizationExpectations  []AuthorizationExpectation `json:"authorization_expectations,omitempty"`
-	SubdomainDiscovery         bool                       `json:"subdomain_discovery,omitempty"`
+	NextjsBoundaryApprovals    []NextjsBoundaryApproval `json:"nextjs_boundary_approvals,omitempty"`
+	NextjsActionApprovals      []NextjsActionApproval   `json:"nextjs_action_approvals,omitempty"`
+	Nextjs                     NextjsScanOptions        `json:"nextjs,omitzero"`
+	WorkflowVersion            string                   `json:"workflow_version,omitempty"`
+	ParentAssessmentID         string                   `json:"parent_assessment_id,omitempty"`
+	ParentPlanFingerprint      string                   `json:"parent_plan_fingerprint,omitempty"`
+	ApprovalPreviewFingerprint string                   `json:"approval_preview_fingerprint,omitempty"`
+	Mode                       Mode                     `json:"assessment_mode"`
+	Types                      []Type                   `json:"assessment_types"`
+	Targets                    []Target                 `json:"assessment_targets"`
+	// Services group targets (URLs, image, source) that belong to one
+	// microservice. They never change planning or scope; reports group by them.
+	Services                  []Service                  `json:"services,omitempty"`
+	Access                    []AccessBinding            `json:"access,omitempty"`
+	Profile                   string                     `json:"profile,omitempty"`
+	ScannerSelection          ScannerSelection           `json:"scanner_selection,omitempty"`
+	APIDefinitionIDs          []string                   `json:"api_definition_ids,omitempty"`
+	APIDefinitions            []APIDefinitionBinding     `json:"api_definitions,omitempty"`
+	APIOperationInputs        []APIOperationInput        `json:"api_operation_inputs,omitempty"`
+	FuzzApprovals             []FuzzApproval             `json:"fuzz_approvals,omitempty"`
+	WriteApprovals            []WriteApproval            `json:"write_approvals,omitempty"`
+	AuthorizationExpectations []AuthorizationExpectation `json:"authorization_expectations,omitempty"`
+	SubdomainDiscovery        bool                       `json:"subdomain_discovery,omitempty"`
 	// ApprovedOrigins are the explicit scheme/host/port/path destinations of
 	// each application target. When a target has none, AppScopeForTarget
 	// derives its boundary from Target.Value.
