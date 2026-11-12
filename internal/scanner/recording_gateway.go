@@ -364,7 +364,25 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == http.MethodPost {
+	// Wapiti "full" mode submits discovered forms. The operator's explicit
+	// choice of full mode plus a declared test environment is the consent for
+	// those writes; they stay inside the approved scope, honour route
+	// exclusions and count against the request budget like every request.
+	fullModeForm := r.Method == http.MethodPost && g.scanner == "wapiti" && g.req.WapitiMode == "full" && g.req.WapitiPostApproval == nil
+	if fullModeForm && !g.req.TestEnvironment {
+		g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: "Wapiti full mode submits forms only when the target is declared a test environment; form submission was blocked"})
+		gatewayReject(w, "form submission requires a declared test environment", 403)
+		return
+	}
+	if fullModeForm {
+		if err := fullModeFormAllowed(g.req, g.cfg, raw); err != nil {
+			g.record(CoverageEvent{Kind: "blocked", URL: raw, Method: r.Method, Reason: err.Error()})
+			gatewayReject(w, "request outside approved policy", 403)
+			return
+		}
+		event.NativeRef = "wapiti-full-form"
+	}
+	if r.Method == http.MethodPost && !fullModeForm {
 		if r.Body == nil {
 			r.Body = http.NoBody
 		}
@@ -604,4 +622,25 @@ func gatewayInputAuthenticationMatches(input ScannerRequestInput, request *http.
 		}
 	}
 	return matched
+}
+
+// fullModeFormAllowed applies the scope, exclusion and scope-guard checks to a
+// Wapiti full-mode form submission. It is the write-admitting counterpart of
+// browserRequestAllowed, reached only for that explicit, test-environment run.
+func fullModeFormAllowed(req Request, cfg Config, rawURL string) error {
+	if req.AppScope == nil {
+		return fmt.Errorf("approved scope required")
+	}
+	if ok, reason := req.AppScope.Allows(rawURL); !ok {
+		return fmt.Errorf("%s", reason)
+	}
+	if excluded, reason := req.AppScope.Excluded(http.MethodPost, rawURL); excluded {
+		return fmt.Errorf("excluded: %s", reason)
+	}
+	if cfg.ScopeGuard != nil {
+		if blocked, reason := cfg.ScopeGuard(rawURL, nil); blocked {
+			return fmt.Errorf("%s", reason)
+		}
+	}
+	return nil
 }

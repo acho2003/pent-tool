@@ -330,3 +330,62 @@ func TestGatewayChecksResolvedAddressesWithTheScopeGuard(t *testing.T) {
 		t.Fatalf("blocked address reached the target: status=%d hits=%d events=%s", status, hits, events)
 	}
 }
+
+func TestGatewayAdmitsWapitiFullModeFormsOnlyOnDeclaredTestEnvironment(t *testing.T) {
+	var posts []string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posts = append(posts, r.URL.Path)
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+	origin, _ := assessment.ParseApprovedOrigin("app", target.URL)
+	origin.PathPrefix = "/"
+	scope := assessment.NewAppScope([]assessment.ApprovedOrigin{origin}, assessment.Exclusion{Method: "POST", PathPattern: "/logout", Reason: "ends the session"})
+	submit := func(req Request, path string) (int, string) {
+		g, err := NewRecordingGateway(t.Context(), req, Config{}, "wapiti")
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxy, _ := url.Parse(g.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+		response, err := client.Post(target.URL+path, "application/x-www-form-urlencoded", strings.NewReader("name=probe"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		run := Run{Status: "completed"}
+		if err := g.Close(); err != nil {
+			t.Fatal(err)
+		}
+		g.ApplyOutcome(&run)
+		reasons := ""
+		for _, l := range run.Limitations {
+			reasons += l.Reason + ";"
+		}
+		return response.StatusCode, reasons
+	}
+	base := Request{Target: target.URL, AppScope: &scope, ScanDir: t.TempDir(), WapitiMode: "full"}
+
+	noTestEnv := base
+	if status, reasons := submit(noTestEnv, "/profile"); status != 403 || !strings.Contains(reasons, "declared a test environment") {
+		t.Fatalf("full mode without a test environment: status=%d reasons=%q", status, reasons)
+	}
+	testEnv := base
+	testEnv.TestEnvironment = true
+	if status, _ := submit(testEnv, "/profile"); status != 200 {
+		t.Fatalf("full mode on a test environment did not submit the form: %d", status)
+	}
+	if status, reasons := submit(testEnv, "/logout"); status != 403 || !strings.Contains(reasons, "excluded") {
+		t.Fatalf("excluded route was submitted: status=%d reasons=%q", status, reasons)
+	}
+	safe := testEnv
+	safe.WapitiMode = "safe"
+	if status, _ := submit(safe, "/profile"); status != 403 {
+		t.Fatalf("safe mode submitted a form: %d", status)
+	}
+	if len(posts) != 1 || posts[0] != "/profile" {
+		t.Fatalf("target received POSTs %v, want exactly the one full-mode submission", posts)
+	}
+}

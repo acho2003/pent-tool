@@ -134,3 +134,22 @@ func TestRegistryCredentialsMustBindImages(t *testing.T) {
 		t.Fatal("registry binding without credential accepted")
 	}
 }
+
+func TestWapitiFullModeWithoutTestEnvironmentWarns(t *testing.T) {
+	cfg := AssessmentConfig{Mode: ModeGrayBox, Types: []Type{TypeWebApplication}, Targets: []Target{{ID: "app", Kind: KindURL, Value: "https://app.example.test"}}, WapitiMode: "full"}
+	found := false
+	for _, p := range Validate(Normalize(cfg)) {
+		if p.Code == "wapiti.mode.full_needs_test_environment" {
+			found = !p.Blocking
+		}
+	}
+	if !found {
+		t.Fatal("full mode without a test environment did not produce a non-blocking warning")
+	}
+	cfg.TestEnvironment = true
+	for _, p := range Validate(Normalize(cfg)) {
+		if p.Code == "wapiti.mode.full_needs_test_environment" {
+			t.Fatal("warning shown although a test environment is declared")
+		}
+	}
+}
