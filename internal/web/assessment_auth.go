@@ -2,11 +2,14 @@ package web
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -108,7 +111,7 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 				continue
 			}
 			var lines []string
-			tokenUnverified := ""
+			unverifiedReason := ""
 			if binding.Kind == assessment.AccessTokenLogin {
 				session, failure := tokenSessions[binding.CredentialID], tokenFailures[binding.CredentialID]
 				if session == nil && failure == nil {
@@ -145,13 +148,13 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 					verifyErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
 				}
 				if verifyErr != nil {
-					if binding.VerifyURL != "" {
+					if binding.VerifyURL != "" || isProbeTransportError(verifyErr) {
 						setAuthVerification(plan, targetID, assessment.StateFailed, "token verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
 						continue
 					}
 					// No protected path was supplied: the token is still applied,
 					// but nothing claims this service accepted it.
-					tokenUnverified = "token login succeeded and the token is applied, but access to this service was not verified (no protected path supplied and the anonymous response was not distinguishable)"
+					unverifiedReason = "token login succeeded and the token is applied, but access to this service was not verified (no protected path supplied and the anonymous response was not distinguishable)"
 				}
 			} else if binding.Kind == assessment.AccessFormLogin {
 				browserLogin := formBrowserLogin
@@ -213,6 +216,10 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 					setAuthCapability(plan, targetID, assessment.StateUnavailable, "credential fields are not valid HTTP headers")
 					continue
 				}
+				if expired, at := expiredBearerJWT(lines, time.Now()); expired {
+					setAuthVerification(plan, targetID, assessment.StateFailed, "the supplied token expired at "+at.UTC().Format("2006-01-02 15:04 UTC")+"; paste a fresh token; authenticated scanning was skipped")
+					continue
+				}
 				positive, verifyErr := authProbeResult{}, error(nil)
 				if record.BrowserStorage != nil || binding.VerifyBrowser {
 					verifyErr = s.verifyBrowserCredential(ctx, target.Value, verifyURL, binding.VerifyMarker, lines, record.BrowserStorage, true)
@@ -230,8 +237,17 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 					verifyErr = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
 				}
 				if verifyErr != nil {
-					setAuthVerification(plan, targetID, assessment.StateFailed, "credential verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
-					continue
+					// With no verification URL, marker or browser check requested, a
+					// target that answered but could not prove access (an API root
+					// returning 404, an identical anonymous page) still gets the
+					// credential, recorded as not verified. Pasted tokens from logins
+					// that cannot be automated (for example NDI) depend on this.
+					asked := binding.VerifyURL != "" || binding.VerifyMarker != "" || binding.VerifyBrowser || record.BrowserStorage != nil
+					if asked || isProbeTransportError(verifyErr) {
+						setAuthVerification(plan, targetID, assessment.StateFailed, "credential verification failed ("+verifyErr.Error()+"); authenticated scanning was skipped")
+						continue
+					}
+					unverifiedReason = "credential applied, but access to this target was not verified (no verification URL supplied; " + verifyErr.Error() + ")"
 				}
 			}
 			headersByTarget[targetID] = append(headersByTarget[targetID], lines...)
@@ -244,8 +260,8 @@ func (s *Server) prepareSingleContextAuthentication(ctx context.Context, plan *s
 			if binding.Kind == assessment.AccessTokenLogin {
 				verificationReason = "shared token login succeeded; " + verificationReason
 			}
-			if tokenUnverified != "" {
-				setAuthVerification(plan, targetID, assessment.StateAvailable, tokenUnverified)
+			if unverifiedReason != "" {
+				setAuthVerification(plan, targetID, assessment.StateAvailable, unverifiedReason)
 			} else {
 				setAuthVerification(plan, targetID, assessment.StateVerified, verificationReason)
 			}
@@ -344,6 +360,12 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 		if verifyURL == "" {
 			verifyURL = appURL
 		}
+		unverified := false
+		for _, capability := range plan.Capabilities {
+			if capability.Capability == assessment.CapAuthWeb && capability.TargetID == target.ID && capability.State == assessment.StateAvailable {
+				unverified = true
+			}
+		}
 		// Concurrent jobs on one target share the renewal budget; the lock also
 		// keeps two of them from logging in at the same time.
 		var mu sync.Mutex
@@ -351,6 +373,17 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 		refreshers[target.ID] = func(ctx context.Context, current []string) ([]string, error) {
 			mu.Lock()
 			defer mu.Unlock()
+			// A pasted bearer JWT that has passed its exp claim cannot be renewed
+			// without a login Xalgorix can perform; stop authenticated work.
+			if formValues == nil {
+				if expired, at := expiredBearerJWT(current, time.Now()); expired {
+					return nil, fmt.Errorf("the supplied token expired at %s; paste a fresh token to continue authenticated testing", at.UTC().Format("2006-01-02 15:04 UTC"))
+				}
+			}
+			if unverified {
+				// Access was never verified, so there is no check to repeat.
+				return current, nil
+			}
 			if browserStorage != nil || verifyBrowser {
 				if err := s.verifyBrowserCredential(ctx, appURL, verifyURL, marker, current, browserStorage, false); err != nil {
 					return nil, fmt.Errorf("browser authentication checkpoint failed")
@@ -494,11 +527,11 @@ func probeHeaderSession(ctx context.Context, verifyURL, marker string, lines []s
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return result, fmt.Errorf("verification request failed")
+		return result, describeProbeTransportError(u.Hostname(), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return result, fmt.Errorf("verification returned non-success status")
+		return result, fmt.Errorf("verification returned non-success status (HTTP %d at %s)", resp.StatusCode, u.Path)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -584,4 +617,56 @@ func assessmentURLScopes(cfg assessment.AssessmentConfig) []assessment.AppScope 
 		}
 	}
 	return scopes
+}
+
+// probeTransportError means the verification request never got an HTTP
+// answer (DNS, connection, TLS or timeout). Applying a credential to a target
+// the scanner cannot reach proves nothing, so callers treat it as a failure.
+type probeTransportError struct{ msg string }
+
+func (e probeTransportError) Error() string { return e.msg }
+
+func describeProbeTransportError(host string, err error) error {
+	var dnsErr *net.DNSError
+	var certErr *tls.CertificateVerificationError
+	switch {
+	case errors.As(err, &dnsErr):
+		return probeTransportError{"could not resolve " + host + " from the scanner (check DNS, or add the host to the container's extra_hosts)"}
+	case errors.As(err, &certErr):
+		return probeTransportError{"the TLS certificate of " + host + " was not trusted by the scanner"}
+	case errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err):
+		return probeTransportError{"verification request to " + host + " timed out"}
+	default:
+		var opErr *net.OpError
+		if errors.As(err, &opErr) {
+			return probeTransportError{"could not connect to " + host + " from the scanner"}
+		}
+		return probeTransportError{"verification request to " + host + " failed"}
+	}
+}
+
+// isProbeTransportError reports whether verification never reached the target.
+func isProbeTransportError(err error) bool {
+	var transport probeTransportError
+	return errors.As(err, &transport)
+}
+
+// expiredBearerJWT reports whether an Authorization bearer header carries a JWT
+// whose exp claim has passed. The signature is not checked; exp only times the
+// session.
+func expiredBearerJWT(lines []string, now time.Time) (bool, time.Time) {
+	for _, line := range lines {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Authorization") {
+			continue
+		}
+		token := strings.TrimSpace(value)
+		if len(token) > 7 && strings.EqualFold(token[:7], "bearer ") {
+			token = strings.TrimSpace(token[7:])
+		}
+		if exp := jwtExpiry(token); !exp.IsZero() && !now.Before(exp) {
+			return true, exp
+		}
+	}
+	return false, time.Time{}
 }

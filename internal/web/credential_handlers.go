@@ -287,6 +287,11 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 			writeCredentialTestResult(w, result)
 			return
 		}
+		if expired, at := expiredBearerJWT(lines, time.Now()); expired {
+			result.State, result.Reason = "failed", "the supplied token expired at "+at.UTC().Format("2006-01-02 15:04 UTC")+"; paste a fresh token"
+			writeCredentialTestResult(w, result)
+			return
+		}
 		positive, err := probeHeaderSession(ctx, verifyURL, req.VerifyMarker, lines, req.TargetURL)
 		if err == nil && req.VerifyMarker != "" {
 			err = verifyNegativeControl(ctx, scope, verifyURL, req.VerifyMarker)
@@ -294,6 +299,13 @@ func (s *Server) handleTestCredential(w http.ResponseWriter, r *http.Request, id
 			err = verifyAnonymousContrast(ctx, scope, verifyURL, positive)
 		}
 		if err != nil {
+			if req.VerifyURL == "" && req.VerifyMarker == "" && !isProbeTransportError(err) {
+				// Same rule as at scan start: without a verification path the
+				// credential is applied but not claimed as verified.
+				result.State, result.Reason = "available", "the target answered but access could not be verified ("+err.Error()+"); the credential will be applied and reported as not verified; add a verification URL such as /api/auth/session or a profile endpoint to prove access"
+				writeCredentialTestResult(w, result)
+				return
+			}
 			result.State, result.Reason = "failed", err.Error()
 			writeCredentialTestResult(w, result)
 			return

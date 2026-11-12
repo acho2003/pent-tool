@@ -145,7 +145,7 @@ func serviceAuthState(plan *scanner.AssessmentPlan, service assessment.Service) 
 		case assessment.StateAvailable, assessment.StateDeclared:
 			label = "token applied, not verified"
 			if capability.AccessKind != assessment.AccessTokenLogin {
-				label = "not verified"
+				label = "credential applied, not verified"
 			}
 		case assessment.StateFailed:
 			label = "failed"

@@ -228,7 +228,9 @@ func TestHeaderCookieAuthCanAutoVerifyTargetWithLoginRedirect(t *testing.T) {
 	}
 }
 
-func TestHeaderCredentialAutoVerificationRejectsIdenticalPublicResponse(t *testing.T) {
+// Without a verification URL, a credential whose authenticated response looks
+// the same as the anonymous one is applied but never claimed as verified.
+func TestHeaderCredentialAutoVerificationNeverVerifiesIdenticalPublicResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("Public single-page app"))
 	}))
@@ -244,8 +246,17 @@ func TestHeaderCredentialAutoVerificationRejectsIdenticalPublicResponse(t *testi
 	plan.Config.Access[0].VerifyMarker = ""
 	if headers, err := s.prepareAssessmentAuthentication(context.Background(), plan); err != nil {
 		t.Fatal(err)
-	} else if len(headers["app"]) != 0 || plan.Capabilities[0].State != assessment.StateFailed || !strings.Contains(plan.Capabilities[0].Reason, "look the same") {
-		t.Fatalf("identical public response incorrectly verified credentials: headers=%v evidence=%+v", headers, plan.Capabilities[0])
+	} else if len(headers["app"]) != 1 || plan.Capabilities[0].State != assessment.StateAvailable || !strings.Contains(plan.Capabilities[0].Reason, "look the same") || !strings.Contains(plan.Capabilities[0].Reason, "not verified") {
+		t.Fatalf("identical public response must be applied as not verified, never verified: headers=%v evidence=%+v", headers, plan.Capabilities[0])
+	}
+	// With a verification URL supplied, the same failure blocks the credential.
+	plan = headerAuthPlan(server.URL+"/app", meta.ID, "", "")
+	plan.Config.Access[0].VerifyURL = server.URL + "/app/profile"
+	plan.Config.Access[0].VerifyMarker = ""
+	if headers, err := s.prepareAssessmentAuthentication(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	} else if len(headers["app"]) != 0 || plan.Capabilities[0].State != assessment.StateFailed {
+		t.Fatalf("a failed requested verification must block the credential: headers=%v evidence=%+v", headers, plan.Capabilities[0])
 	}
 }
 

@@ -458,3 +458,65 @@ func TestCredentialTestEndpointTokenLogin(t *testing.T) {
 		t.Fatalf("login outside listed targets was attempted: %s", refused)
 	}
 }
+
+func TestPastedHeaderTokenUnreachableHostFailsClearly(t *testing.T) {
+	s := newTestServer(t, nil)
+	vault := tokenTestVault(t, s)
+	meta, err := vault.Create(credentials.Record{Name: "pasted", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"portal"}, Values: map[string]string{"Authorization": "Bearer pasted-token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "portal", Kind: assessment.KindURL, Value: "https://portal.invalid"}}, Access: []assessment.AccessBinding{{Kind: assessment.AccessApplicationHeaders, CredentialID: meta.ID, TargetIDs: []string{"portal"}}}}
+	plan := &scanner.AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg)}
+	headers, err := s.prepareAssessmentAuthentication(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, reason := capabilityState(plan, "portal")
+	if len(headers["portal"]) != 0 || state != assessment.StateFailed || !strings.Contains(reason, "could not resolve portal.invalid") {
+		t.Fatalf("unreachable host: headers=%v state=%s reason=%q", headers, state, reason)
+	}
+}
+
+func TestPastedHeaderTokenAppliedUnverifiedAndExpiryStopsIt(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })) // a NestJS root: 404 with or without a token
+	defer api.Close()
+	s := newTestServer(t, nil)
+	vault := tokenTestVault(t, s)
+	token := fixtureJWT(7, time.Now().Add(time.Hour))
+	meta, err := vault.Create(credentials.Record{Name: "pasted", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"api"}, Values: map[string]string{"Authorization": "Bearer " + token}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "api", Kind: assessment.KindURL, Value: api.URL}}, Access: []assessment.AccessBinding{{Kind: assessment.AccessApplicationHeaders, CredentialID: meta.ID, TargetIDs: []string{"api"}}}}
+	plan := &scanner.AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), Jobs: []scanner.PlanJob{{Scanner: "zap", TargetID: "api", State: scanner.PlanSelected}}}
+	headers, err := s.prepareAssessmentAuthentication(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, reason := capabilityState(plan, "api")
+	if len(headers["api"]) != 1 || state != assessment.StateAvailable || !strings.Contains(reason, "not verified") || plan.Jobs[0].ExecutionMode != "authenticated" {
+		t.Fatalf("pasted token on an API root was not applied as unverified: headers=%v state=%s reason=%q", headers, state, reason)
+	}
+	refreshers, err := s.assessmentAuthRefreshers(plan, headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next, err := refreshers["api"](context.Background(), headers["api"]); err != nil || next[0] != headers["api"][0] {
+		t.Fatalf("unverified credential not kept by the session check: %v %v", next, err)
+	}
+	expired := []string{"Authorization: Bearer " + fixtureJWT(8, time.Now().Add(-time.Minute))}
+	if _, err := refreshers["api"](context.Background(), expired); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired pasted token was not stopped: %v", err)
+	}
+	// An already-expired token is refused at scan start with that reason.
+	stale, _ := vault.Create(credentials.Record{Name: "stale", Kind: assessment.AccessApplicationHeaders, TargetIDs: []string{"api"}, Values: map[string]string{"Authorization": "Bearer " + fixtureJWT(9, time.Now().Add(-time.Hour))}})
+	cfg.Access[0].CredentialID = stale.ID
+	plan = &scanner.AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg)}
+	if headers, _ := s.prepareAssessmentAuthentication(context.Background(), plan); len(headers["api"]) != 0 {
+		t.Fatal("expired pasted token applied at scan start")
+	}
+	if state, reason := capabilityState(plan, "api"); state != assessment.StateFailed || !strings.Contains(reason, "expired") {
+		t.Fatalf("expired token: state=%s reason=%q", state, reason)
+	}
+}

@@ -1131,12 +1131,12 @@ func failedPlannedJob(job PlanJob, req Request, fingerprint, reason string, emit
 	return run
 }
 
-// unverifiedTokenAuth reports a target whose shared login token is applied
-// but whose access was never verified (no protected path proved it). Runs on
+// unverifiedTokenAuth reports a target whose credential (shared login token or
+// pasted header) is applied but whose access was never verified. Runs on
 // such a target carry the token yet must not claim verified authentication.
 func unverifiedTokenAuth(plan AssessmentPlan, targetID string) (string, bool) {
 	for _, capability := range plan.Capabilities {
-		if capability.Capability == assessment.CapAuthWeb && capability.TargetID == targetID && capability.AccessKind == assessment.AccessTokenLogin && capability.State == assessment.StateAvailable {
+		if capability.Capability == assessment.CapAuthWeb && capability.TargetID == targetID && capability.AccessKind.IsWebApplication() && capability.State == assessment.StateAvailable {
 			return capability.Reason, true
 		}
 	}
