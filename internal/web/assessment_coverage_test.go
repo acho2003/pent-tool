@@ -238,3 +238,21 @@ func TestAssessmentCoverageReportsSessionExpiryFromAnyAuthenticatedTool(t *testi
 		t.Fatalf("an additional identity's expiry changed the primary capability to %s", got)
 	}
 }
+
+// ZAP's supplemental discovery run never tests operations: a completed
+// discovery run must not make a cancelled active run read as "finished".
+func TestAssessmentCoverageCancelledActiveRunIsNotReportedAsFinished(t *testing.T) {
+	plan := &scanner.AssessmentPlan{
+		Config:       assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "http://svc.example.test:5003"}}},
+		APIEndpoints: []scanner.APIEndpoint{{TargetID: "app", Method: "GET", Path: "/common/villages/all", Origin: "http://svc.example.test:5003", Resolved: true, Eligible: true}},
+		Fingerprint:  "sha256:cancelled",
+	}
+	record := &ScanRecord{AssessmentPlan: plan, ScannerRuns: []scanner.Run{
+		{Scanner: "zap", Scope: "discovery:app:zap", PlanFingerprint: plan.Fingerprint, Target: "http://svc.example.test:5003", Status: "completed"},
+		{Scanner: "zap", Scope: "app:app", PlanFingerprint: plan.Fingerprint, Target: "http://svc.example.test:5003", Status: "cancelled", Reason: "context canceled"},
+	}}
+	coverage := buildAssessmentCoverage("scan", record, "")
+	if len(coverage.Operations) != 1 || coverage.Operations[0].Status != "not_attempted" || !strings.Contains(coverage.Operations[0].Reason, "cancelled before this operation was attempted") {
+		t.Fatalf("cancelled ZAP run misreported: %+v", coverage.Operations)
+	}
+}

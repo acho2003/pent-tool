@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -438,9 +439,15 @@ func (g *RecordingGateway) forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := g.cfg.Budget.Wait(r.Context()); err != nil {
-		event.Kind, event.Reason = "blocked", "assessment budget exhausted"
+		// A cancelled scan also fails the wait; only a real deadline is
+		// reported as an exhausted budget.
+		reason := "request cancelled before it was sent (the run was stopped)"
+		if errors.Is(err, ErrBudgetExhausted) {
+			reason = "assessment budget exhausted"
+		}
+		event.Kind, event.Reason = "blocked", reason
 		g.record(event)
-		gatewayReject(w, "assessment budget exhausted", 429)
+		gatewayReject(w, reason, 429)
 		return
 	}
 	var body []byte

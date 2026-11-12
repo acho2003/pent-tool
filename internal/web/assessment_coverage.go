@@ -174,11 +174,18 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 					break
 				}
 			}
+			// Active ZAP and apichecks runs carry per-operation results; ZAP's
+			// supplemental discovery run never tests operations, so it cannot
+			// explain why one was not attempted.
+			var candidates []scanner.Run
 			for _, run := range record.ScannerRuns {
-				if (run.Scanner != "zap" && run.Scanner != "apichecks") || run.Target != targetValue || run.PlanFingerprint != plan.Fingerprint {
+				if (run.Scanner != "zap" && run.Scanner != "apichecks") || run.Target != targetValue || run.PlanFingerprint != plan.Fingerprint || strings.HasPrefix(run.Scope, "discovery:") {
 					continue
 				}
-				found := false
+				candidates = append(candidates, run)
+			}
+			found := false
+			for _, run := range candidates {
 				for _, result := range run.APIEndpointResults {
 					if result.Method == endpoint.Method && result.Path == endpoint.Path && (endpoint.Origin == "" || result.Origin == endpoint.Origin) {
 						operation.Status, operation.Reason, found = result.Status, result.Reason, true
@@ -200,13 +207,24 @@ func buildAssessmentCoverage(scanID string, record *ScanRecord, scanDir string) 
 						break
 					}
 				}
-				if !found && run.Status != "running" {
-					operation.Status, operation.Reason = "not_attempted", run.Reason
-					if operation.Reason == "" {
-						operation.Reason = "ZAP finished without recording an operation attempt"
+				if found {
+					break
+				}
+			}
+			if !found && len(candidates) > 0 && candidates[0].Status != "running" {
+				run := candidates[0]
+				operation.Status = "not_attempted"
+				switch run.Status {
+				case "completed":
+					operation.Reason = firstNonBlank(run.Reason, "ZAP finished without recording an operation attempt")
+				case "cancelled":
+					operation.Reason = "the " + run.Scanner + " run was cancelled before this operation was attempted"
+				default:
+					operation.Reason = "the " + run.Scanner + " run " + firstNonBlank(run.Status, "ended") + " before this operation was attempted"
+					if run.Reason != "" {
+						operation.Reason += " (" + run.Reason + ")"
 					}
 				}
-				break
 			}
 		}
 		// An approved write is sent by its own job, not by apichecks or ZAP, so its

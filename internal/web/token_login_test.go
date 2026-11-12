@@ -520,3 +520,17 @@ func TestPastedHeaderTokenAppliedUnverifiedAndExpiryStopsIt(t *testing.T) {
 		t.Fatalf("expired token: state=%s reason=%q", state, reason)
 	}
 }
+
+func TestInstanceStopReasonNamesTheStopper(t *testing.T) {
+	s := newTestServer(t, nil)
+	inst := &ScanInstance{StopReason: "user_stopped"}
+	s.instancesMu.Lock()
+	s.instances["inst-1"] = inst
+	s.instancesMu.Unlock()
+	if got := s.instanceStopReason("inst-1", "context canceled"); got != "stopped by a user (Stop or Stop all)" {
+		t.Fatalf("got %q", got)
+	}
+	if got := s.instanceStopReason("missing", "context canceled"); got != "context canceled" {
+		t.Fatalf("fallback lost: %q", got)
+	}
+}

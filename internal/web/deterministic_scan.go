@@ -228,7 +228,7 @@ func (s *Server) executeDeterministicScanSession(sess *scanSession) {
 		// must never be relabeled as a successful empty scan.
 	} else if ctx.Err() != nil {
 		sess.record.Status = "stopped"
-		sess.record.StopReason = ctx.Err().Error()
+		sess.record.StopReason = s.instanceStopReason(sess.instanceID, ctx.Err().Error())
 	} else {
 		sess.record.Status = "finished"
 	}
@@ -429,4 +429,37 @@ func hostOnlyWeb(t string) string {
 		t = t[:i]
 	}
 	return strings.TrimPrefix(t, "*.")
+}
+
+// instanceStopReason names who or what stopped a scan, from the reason the
+// stop path recorded on its instance (Stop, Stop all, Pause, a server signal),
+// falling back to the raw context error.
+func (s *Server) instanceStopReason(instanceID, fallback string) string {
+	if instanceID == "" {
+		return fallback
+	}
+	s.instancesMu.RLock()
+	inst := s.instances[instanceID]
+	s.instancesMu.RUnlock()
+	if inst == nil {
+		return fallback
+	}
+	inst.mu.RLock()
+	reason := inst.StopReason
+	inst.mu.RUnlock()
+	switch {
+	case reason == "user_stopped":
+		return "stopped by a user (Stop or Stop all)"
+	case reason == "user_paused":
+		return "paused by a user"
+	case reason == "user_deleted":
+		return "stopped because the scan was deleted"
+	case strings.HasPrefix(reason, "signal_"):
+		return "stopped by a server signal (" + strings.TrimPrefix(reason, "signal_") + ")"
+	case reason == "server_shutdown":
+		return "stopped by a server shutdown"
+	case reason != "":
+		return reason
+	}
+	return fallback
 }
