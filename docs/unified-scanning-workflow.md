@@ -401,3 +401,71 @@ A later increment adds three more passive detections in the same style:
   navigation and torn down with the page, so no extra request is made. Findings
   reuse the browser adapter and the served-bundle secret rule set; raw values
   are never retained.
+
+## Microservice assessments
+
+An application made of many services can be assessed in one run. Design:
+`docs/superpowers/specs/2026-11-12-microservice-assessments-design.md`.
+
+**Services.** `assessment.services` is a list of `{id, name, target_ids}` that
+groups ordinary targets (each service's URL(s), container image and
+repository/source path). It never changes planning, scope or finding identity:
+every target still gets its own jobs. A target belongs to at most one service;
+ungrouped targets are reported under "Other targets". Records without
+`services` are unchanged. New Scan has a Services table with CSV/YAML import
+(`POST /api/services/parse`; CSV header `name,url,image,repo,protected_path`,
+several URLs separated by `;`) and CSV export. Images and source are only
+included in White Box mode.
+
+**Shared token login (`TOKEN_LOGIN`).** One vault credential holds a login API
+URL, username/password, field names, JSON or form body, optional non-secret
+extra fields, optional token path (auto-detects `access_token`, `accessToken`,
+`token`, `jwt`, `id_token`, `data.token`, `data.accessToken`,
+`data.access_token`, `result.token`, `result.accessToken`) and the header
+name/prefix (default `Authorization: Bearer `). Rules:
+
+- The login URL must be inside one of the assessment's own URL targets; the
+  password is sent nowhere else and login redirects are not followed.
+- The token is injected only for targets with an explicit binding to that
+  credential (one binding per service, each with its own optional protected
+  path as `verify_url`). Discovered origins never receive it.
+- One login per credential at scan start serves every bound service.
+- With a protected path the token must succeed there and an anonymous request
+  must not: `verified`. Without one, or when the anonymous response is not
+  distinguishable, the service is still scanned with the token but recorded
+  `available` with "token applied, not verified" — in the auth run, coverage,
+  UI and report. Role comparisons require `verified` identities.
+- Renewal: proactively when the JWT `exp` is within 2 minutes (or half the
+  token lifetime), reactively when a verified service's check fails. One lock
+  per credential, so many services trigger one login. Expiry-driven renewals
+  do not count against the 3-failure renewal limit (cap 1000).
+- The token is runtime-only (never persisted, logged or placed in artifacts);
+  a restart logs in again.
+
+**Registry login (`REGISTRY_CREDENTIALS`).** Bound to image targets; resolved
+at scan start like cloud credentials and passed to Trivy only via
+`TRIVY_USERNAME`/`TRIVY_PASSWORD`, and only when the image's registry host
+equals the credential's registry (otherwise a `registry_credential_not_applied`
+limitation is recorded). The password is redacted from output. Image
+references may now be tags as well as digests (White Box only, validated, and
+passed after `--`). A tag scan records a `mutable_image_tag` limitation with the
+digest Trivy reported scanning.
+
+**Report and UI.** The PDF gets a Services Overview page (active findings by
+severity, authentication state, run outcomes per service) and groups findings
+by service then host; the scan detail page shows the same table from the
+coverage response (`services`). Report version `scanner-report-v8`.
+
+**Verified (2026-11-12):** unit tests for validation, token login (one login
+for many services, origin restriction, renewal sharing, JWT expiry, form body,
+unverified state), registry env/redaction/digest, import parsing and the
+services report; plus a local real-server run driven through the browser:
+CSV import of three services, shared login save and per-service tests
+(verified, verified, available), plan preview with per-service bindings, and a
+started scan where one login served all three services and the services card
+and PDF showed matching states, with no token or password in saved data.
+
+**Not verified:** an actual pull from a private registry (no registry was
+available locally), ZAP/Nuclei authenticated runs against the lab (not
+installed on the local host; the Docker runtime has them), and the staged
+acceptance suites.
