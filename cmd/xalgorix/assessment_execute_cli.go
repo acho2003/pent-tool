@@ -105,11 +105,17 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 
 func cliAssessmentAvailability(cfg scanner.Config) map[string]bool {
 	paths := map[string]string{
-		"nuclei": cfg.NucleiPath, "zap": "", "testssl": cfg.TestsslPath, "openvas": "",
-		"vuls": cfg.VulsPath, "trivy": cfg.TrivyPath, "semgrep": cfg.SemgrepPath,
+		"nuclei": cfg.NucleiPath, "zap": "", "testssl": cfg.TestsslPath, "sslyze": cfg.SSLyzePath, "openvas": "",
+		"vuls": cfg.VulsPath, "trivy": cfg.TrivyPath, "semgrep": cfg.SemgrepPath, "nextjs-sast": cfg.SemgrepPath,
 		"gitleaks": cfg.GitleaksPath, "osv": cfg.OsvPath, "masscan": cfg.MasscanPath, "nikto": cfg.NiktoPath,
 		"lynis":     cfg.SSHPath,
-		"subfinder": cfg.SubfinderPath, "httpx": cfg.HttpxPath, "nmap": cfg.NmapPath,
+		"subfinder": cfg.SubfinderPath, "amass": cfg.AmassPath, "dnsx": cfg.DNSXPath, "httpx": cfg.HttpxPath, "nmap": cfg.NmapPath,
+		// Staged web-pipeline adapters: availability is genuine binary presence,
+		// matching the web server's scannerAvailability so a CLI assessment plans
+		// the same optional web/API scanners the dashboard does.
+		"katana": cfg.KatanaPath, "dalfox": cfg.DalfoxPath, "wapiti": cfg.WapitiPath, "schemathesis": cfg.SchemathesisPath,
+		// Cloud / Kubernetes posture-audit adapters.
+		"kube-bench": cfg.KubeBenchPath, "prowler": cfg.ProwlerPath, "scoutsuite": cfg.ScoutSuitePath,
 	}
 	available := make(map[string]bool, len(paths))
 	for id, path := range paths {
