@@ -53,8 +53,13 @@ func ResolveWebProfile(name string) (WebProfile, bool) {
 // means no time cap. These apply to whichever profile is resolved, so the
 // operator can raise the rate and budget on their own authorized targets.
 func applyWebProfileOverrides(p WebProfile) WebProfile {
-	if v, ok := positiveEnvInt("XALGORIX_WEB_RATE_RPS"); ok {
-		p.RateRPS = v
+	// Rate may be explicitly 0, which means no limit / full speed: the request
+	// limiter is disabled and ZAP keeps its daemon-default active-scan concurrency
+	// with no injected delay. Parsed as non-negative, like the budget below.
+	if raw := strings.TrimSpace(os.Getenv("XALGORIX_WEB_RATE_RPS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			p.RateRPS = n
+		}
 	}
 	if v, ok := positiveEnvInt("XALGORIX_WEB_MAX_ENDPOINTS"); ok {
 		p.MaxEndpoints = v

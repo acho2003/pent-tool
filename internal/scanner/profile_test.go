@@ -60,12 +60,25 @@ func TestWebProfileEnvOverrides(t *testing.T) {
 	if p.AllowStateChanging || !p.Browser {
 		t.Fatalf("overrides changed safety policy: %+v", p)
 	}
-	// Invalid or non-positive rate/endpoints are ignored (default kept).
+	// Invalid or negative rate/endpoints are ignored (default kept).
 	t.Setenv("XALGORIX_WEB_RATE_RPS", "-5")
 	t.Setenv("XALGORIX_WEB_MAX_ENDPOINTS", "notanumber")
 	t.Setenv("XALGORIX_WEB_BUDGET_MINUTES", "")
 	p, _ = ResolveWebProfile(ProfileNextjsDeep)
 	if p.RateRPS != 50 || p.MaxEndpoints != 3000 || p.Budget != 240*time.Minute {
 		t.Fatalf("invalid overrides should keep defaults: %+v", p)
+	}
+}
+
+// Rate 0 means no limit / full speed, parsed like the 0-is-unlimited budget.
+func TestWebProfileRateZeroMeansNoLimit(t *testing.T) {
+	t.Setenv("XALGORIX_WEB_RATE_RPS", "0")
+	p, ok := ResolveWebProfile(ProfileThorough)
+	if !ok || p.RateRPS != 0 {
+		t.Fatalf("rate 0 override should disable the limit: %+v", p)
+	}
+	// Full speed never relaxes the write/browser policy.
+	if p.AllowStateChanging {
+		t.Fatalf("rate 0 changed safety policy: %+v", p)
 	}
 }
