@@ -321,11 +321,17 @@ type Config struct {
 	ZAPURL       string
 	ZAPAPIKey    string
 	ZAPDedicated bool
-	GVMHost      string
-	GVMPort      int
-	GVMSocket    string
-	GVMUser      string
-	GVMPass      string
+	// ZAPAttackStrength overrides the attack strength of every ZAP active-scan
+	// rule (LOW, MEDIUM, HIGH or INSANE). Empty leaves ZAP's default (MEDIUM).
+	// Higher strengths send more payloads per injection point: slower and much
+	// heavier on the target. The value is applied daemon-globally and restored
+	// after the scan, like the active-scan rate options.
+	ZAPAttackStrength string
+	GVMHost           string
+	GVMPort           int
+	GVMSocket         string
+	GVMUser           string
+	GVMPass           string
 
 	RateRPS         int
 	WebProfile      string

@@ -445,6 +445,22 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 			logLine("could not apply ZAP rate limit (continuing): " + err.Error())
 		}
 	}
+	// The configured attack strength is set on every active-scan rule. Like the
+	// rate options it is daemon-global and restored after the scan. A typed job
+	// refuses to run with a half-applied strength; a legacy job logs and keeps
+	// ZAP's default.
+	if cfg.ZAPAttackStrength != "" {
+		restore, err := zapApplyAttackStrength(cfg, call, cfg.ZAPAttackStrength, req.TypedAssessment, logLine)
+		if restore != nil {
+			defer restore()
+		}
+		if err != nil {
+			if req.TypedAssessment {
+				return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+			}
+			logLine("could not set ZAP attack strength (continuing): " + err.Error())
+		}
+	}
 	// Apply configured scan and per-target authentication headers through
 	// deterministic ZAP replacer rules before crawling. No model interprets
 	// authentication material.
@@ -958,6 +974,85 @@ func zapApplyRate(cfg Config, call zapCallFunc, delayMS, threads int, quarantine
 	}
 	log(fmt.Sprintf("ZAP active-scan rate limited: %d ms delay, %d thread(s) per host (configured %d req/s)", delayMS, threads, cfg.RateRPS))
 	return restore, nil
+}
+
+// zapAttackStrengths maps every active-scan rule id to its current attack
+// strength, as reported by ascan/view/scanners.
+func zapAttackStrengths(response map[string]any) map[string]string {
+	out := map[string]string{}
+	items, ok := response["scanners"].([]any)
+	if !ok {
+		return out
+	}
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := valueString(entry, "id")
+		if id == "" {
+			continue
+		}
+		out[id] = strings.ToUpper(valueString(entry, "attackStrength"))
+	}
+	return out
+}
+
+// zapApplyAttackStrength sets every active-scan rule to the configured attack
+// strength (LOW/MEDIUM/HIGH/INSANE) and returns a restore for the prior per-rule
+// values. These are daemon-global, like the rate options, so a failed restore
+// quarantines a dedicated daemon and a shared legacy daemon only logs it.
+// restore is nil when nothing was changed. An empty or invalid strength is a
+// no-op that leaves ZAP's default in place.
+func zapApplyAttackStrength(cfg Config, call zapCallFunc, strength string, quarantine bool, log func(string)) (func(), error) {
+	strength = strings.ToUpper(strings.TrimSpace(strength))
+	switch strength {
+	case "LOW", "MEDIUM", "HIGH", "INSANE":
+	default:
+		return nil, nil
+	}
+	view, err := call("/JSON/ascan/view/scanners/", url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("read ZAP active-scan rules: %w", err)
+	}
+	prior := zapAttackStrengths(view)
+	if len(prior) == 0 {
+		return nil, errors.New("ZAP did not report any active-scan rules; refusing to change daemon-global attack strength")
+	}
+	changed := map[string]string{}
+	for id, was := range prior {
+		if was == strength {
+			continue
+		}
+		if _, err := call("/JSON/ascan/action/setScannerAttackStrength/", url.Values{"id": {id}, "attackStrength": {strength}}); err != nil {
+			// Roll back what was already changed before reporting the failure, so
+			// the daemon does not keep a half-applied strength.
+			restorePartial(cfg, changed, quarantine, log)
+			return nil, fmt.Errorf("set ZAP attack strength for rule %s: %w", id, err)
+		}
+		changed[id] = was
+	}
+	restore := func() { restorePartial(cfg, changed, quarantine, log) }
+	log(fmt.Sprintf("ZAP active-scan attack strength set to %s on %d rule(s)", strength, len(changed)))
+	return restore, nil
+}
+
+// restorePartial resets each changed active-scan rule to its recorded prior
+// attack strength. A failure quarantines a dedicated daemon; otherwise it logs.
+func restorePartial(cfg Config, changed map[string]string, quarantine bool, log func(string)) {
+	for id, was := range changed {
+		if was == "" {
+			continue
+		}
+		if err := zapPost(cfg, "/JSON/ascan/action/setScannerAttackStrength/", url.Values{"id": {id}, "attackStrength": {was}}); err != nil {
+			if quarantine {
+				quarantineZAPService(cfg.ZAPURL, "restore active-scan attack strength: "+err.Error())
+				log("ZAP cleanup failed; daemon quarantined: " + err.Error())
+				return
+			}
+			log("could not restore ZAP attack strength for rule " + id + ": " + err.Error())
+		}
+	}
 }
 
 // zapStringList reads a JSON string array such as excludedFromScan.

@@ -123,6 +123,11 @@ type fakeZAP struct {
 	spiderExclDuring   []string
 	ascanExclDuring    []string
 	restoreDelayFails  bool
+	// strengths holds the per-rule active-scan attack strength the daemon
+	// currently reports; strengthDuringScan captures rule 40018's value at the
+	// moment the active scan started.
+	strengths          map[string]string
+	strengthDuringScan string
 }
 
 func (f *fakeZAP) record(path string) {
@@ -220,12 +225,30 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/JSON/ascan/view/scanners/":
 		f.mu.Lock()
 		state := f.domXSSEnabled
-		f.mu.Unlock()
-		if state == "" {
-			state = "false"
+		if f.strengths == nil {
+			f.strengths = map[string]string{zapDomXSSPluginID: "MEDIUM", "40018": "MEDIUM"}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"scanners": []any{map[string]any{"id": zapDomXSSPluginID, "enabled": state}}})
+		scanners := []any{}
+		for id, strength := range f.strengths {
+			entry := map[string]any{"id": id, "enabled": "true", "attackStrength": strength}
+			if id == zapDomXSSPluginID {
+				if state == "" {
+					state = "false"
+				}
+				entry["enabled"] = state
+			}
+			scanners = append(scanners, entry)
+		}
+		f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"scanners": scanners})
 		return
+	case "/JSON/ascan/action/setScannerAttackStrength/":
+		f.mu.Lock()
+		if f.strengths == nil {
+			f.strengths = map[string]string{}
+		}
+		f.strengths[r.URL.Query().Get("id")] = strings.ToUpper(r.URL.Query().Get("attackStrength"))
+		f.mu.Unlock()
 	case "/JSON/context/action/excludeFromContext/":
 		f.mu.Lock()
 		f.contextExcludes = append(f.contextExcludes, r.URL.Query().Get("regex"))
@@ -295,6 +318,7 @@ func (f *fakeZAP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.activeContext = r.URL.Query().Get("contextId")
 		f.activeInScopeOnly = r.URL.Query().Get("inScopeOnly")
 		f.delayDuringScan, f.threadsDuringScan = f.delayInMs, f.threadPerHost
+		f.strengthDuringScan = f.strengths["40018"]
 		f.spiderExclDuring = append([]string(nil), f.spiderExcludes...)
 		f.ascanExclDuring = append([]string(nil), f.ascanExcludes...)
 		f.mu.Unlock()
@@ -571,6 +595,46 @@ func TestZAPTypedAssessmentUsesFreshPathBoundContextAndCleansIt(t *testing.T) {
 	}
 	if domXSSEnabled != "true" {
 		t.Errorf("typed scan did not restore prior DOM XSS scanner policy: %q", domXSSEnabled)
+	}
+}
+
+func TestZAPAttackStrengthAppliedDuringScanAndRestored(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true"}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	req := Request{Target: "https://app.example.test/Portal/", ScanDir: t.TempDir(), TypedAssessment: true}
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPAttackStrength: "HIGH", ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 10, MaxOutputBytes: 1 << 20}
+	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	if run.Status != "completed" {
+		t.Fatalf("typed ZAP run with attack strength = %+v", run)
+	}
+	fake.mu.Lock()
+	during := fake.strengthDuringScan
+	after := fake.strengths["40018"]
+	fake.mu.Unlock()
+	if during != "HIGH" {
+		t.Errorf("active scan ran at attack strength %q, want HIGH", during)
+	}
+	if after != "MEDIUM" {
+		t.Errorf("attack strength not restored after scan: rule 40018 = %q, want MEDIUM", after)
+	}
+	if ZAPServiceQuarantined(srv.URL) {
+		t.Errorf("daemon quarantined after a clean attack-strength apply/restore")
+	}
+}
+
+func TestZAPAttackStrengthUnsetLeavesDefault(t *testing.T) {
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true"}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	req := Request{Target: "https://app.example.test/Portal/", ScanDir: t.TempDir(), TypedAssessment: true}
+	cfg := Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, WebMaxEndpoints: 10, MaxOutputBytes: 1 << 20}
+	run := zapRunner{}.Run(t.Context(), req, cfg, nil)
+	if run.Status != "completed" {
+		t.Fatalf("typed ZAP run = %+v", run)
+	}
+	if fake.called("/JSON/ascan/action/setScannerAttackStrength/") {
+		t.Errorf("attack strength was changed although no strength was configured")
 	}
 }
 

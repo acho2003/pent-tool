@@ -51,6 +51,7 @@ type Config struct {
 	ZAPURL                string
 	ZAPAPIKey             string
 	ZAPDedicated          bool
+	ZAPAttackStrength     string
 	GVMHost               string
 	GVMPort               int
 	GVMSocket             string
@@ -290,6 +291,7 @@ func load() *Config {
 		ZAPURL:                envOr("XALGORIX_ZAP_URL", ""),
 		ZAPAPIKey:             envOr("XALGORIX_ZAP_API_KEY", ""),
 		ZAPDedicated:          strings.EqualFold(envOr("XALGORIX_ZAP_DEDICATED", "false"), "true"),
+		ZAPAttackStrength:     zapAttackStrength(envOr("XALGORIX_ZAP_ATTACK_STRENGTH", "")),
 		GVMHost:               envOr("XALGORIX_GVM_HOST", ""),
 		GVMPort:               envOrInt("XALGORIX_GVM_PORT", 9390),
 		GVMSocket:             envOr("XALGORIX_GVM_SOCKET", ""),
@@ -541,6 +543,24 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// zapAttackStrength normalizes a ZAP active-scan attack strength. An empty or
+// unrecognized value yields "" so ZAP keeps its default (MEDIUM) strength; a
+// recognized value is upper-cased to ZAP's canonical form.
+func zapAttackStrength(raw string) string {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "LOW":
+		return "LOW"
+	case "MEDIUM", "DEFAULT":
+		return "MEDIUM"
+	case "HIGH":
+		return "HIGH"
+	case "INSANE":
+		return "INSANE"
+	default:
+		return ""
+	}
 }
 
 func envOrInt(key string, fallback int) int {
