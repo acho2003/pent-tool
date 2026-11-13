@@ -994,13 +994,23 @@ func TestZAPRateDelayFromRateRPSRestored(t *testing.T) {
 		}
 	}
 
-	// RateRPS unset keeps the daemon's options untouched.
-	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`}
+	// RateRPS 0 means no limit / full speed: no delay and parallel threads per
+	// host at scan time, restored to the daemon's prior options afterward.
+	fake := &fakeZAP{rules: map[string]bool{}, report: `{"alerts":[]}`, domXSSEnabled: "true", delayInMs: "15", threadPerHost: "4"}
 	srv := httptest.NewServer(fake)
-	run := zapRunner{}.Run(t.Context(), Request{Target: "http://example.test", ScanDir: t.TempDir()}, Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPTimeout: 30 * time.Second, MaxOutputBytes: 1 << 20}, nil)
+	run := zapRunner{}.Run(t.Context(), Request{Target: "https://app.example.test/", ScanDir: t.TempDir(), Scope: "app:app", TypedAssessment: true}, Config{ZAPURL: srv.URL, ZAPAPIKey: "zap-key", ZAPDedicated: true, ZAPTimeout: 30 * time.Second, RateRPS: 0, MaxOutputBytes: 1 << 20}, nil)
+	fake.mu.Lock()
+	during, threads, after, threadsAfter := fake.delayDuringScan, fake.threadsDuringScan, fake.delayInMs, fake.threadPerHost
+	fake.mu.Unlock()
 	srv.Close()
-	if run.Status != "completed" || fake.called("/JSON/ascan/action/setOptionDelayInMs/") {
-		t.Fatalf("rate options changed without a configured rate: %+v", run)
+	if run.Status != "completed" {
+		t.Fatalf("rps=0 run = %+v", run)
+	}
+	if during != "0" || threads != fmt.Sprint(zapFullSpeedThreads) {
+		t.Errorf("rps=0: active scan ran with delay=%q threadPerHost=%q, want 0/%d (full speed)", during, threads, zapFullSpeedThreads)
+	}
+	if after != "15" || threadsAfter != "4" {
+		t.Errorf("rps=0: daemon rate options not restored: delay=%q threadPerHost=%q", after, threadsAfter)
 	}
 
 	// A failed restore of daemon-global options quarantines a dedicated daemon.

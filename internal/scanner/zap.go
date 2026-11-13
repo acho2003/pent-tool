@@ -162,9 +162,14 @@ func zapExclusionRegexes(scope *assessment.AppScope) ([]string, bool) {
 // zapRateOptions converts the single configured request rate into ZAP's
 // active-scan options: one thread per host with a delay between its requests,
 // rounded up so the daemon never exceeds rps.
+// zapFullSpeedThreads is the per-host active-scan concurrency used when the rate
+// is uncapped (rps <= 0): parallel requests per host instead of the throttled
+// single thread, with no inter-request delay.
+const zapFullSpeedThreads = 8
+
 func zapRateOptions(rps int) (delayMS, threadsPerHost int) {
 	if rps <= 0 {
-		return 0, 0
+		return 0, zapFullSpeedThreads
 	}
 	return (1000 + rps - 1) / rps, 1
 }
@@ -433,7 +438,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// thread per host. These options are daemon-global and restored after the
 	// scan. A typed job refuses to run unthrottled; a legacy job logs and keeps
 	// its historical behavior.
-	if delayMS, threads := zapRateOptions(cfg.RateRPS); delayMS > 0 {
+	if delayMS, threads := zapRateOptions(cfg.RateRPS); threads > 0 {
 		restore, err := zapApplyRate(cfg, call, delayMS, threads, req.TypedAssessment, logLine)
 		if restore != nil {
 			defer restore()
@@ -972,7 +977,11 @@ func zapApplyRate(cfg Config, call zapCallFunc, delayMS, threads int, quarantine
 	if _, err := call("/JSON/ascan/action/setOptionThreadPerHost/", url.Values{"Integer": {strconv.Itoa(threads)}}); err != nil {
 		return restore, fmt.Errorf("set ZAP active-scan threads per host: %w", err)
 	}
-	log(fmt.Sprintf("ZAP active-scan rate limited: %d ms delay, %d thread(s) per host (configured %d req/s)", delayMS, threads, cfg.RateRPS))
+	if delayMS == 0 {
+		log(fmt.Sprintf("ZAP active-scan at full speed: no delay, %d thread(s) per host (no rate limit)", threads))
+	} else {
+		log(fmt.Sprintf("ZAP active-scan rate limited: %d ms delay, %d thread(s) per host (configured %d req/s)", delayMS, threads, cfg.RateRPS))
+	}
 	return restore, nil
 }
 
