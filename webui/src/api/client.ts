@@ -386,6 +386,16 @@ export const api = {
 		http<CredentialMetadata>("/api/credentials", { method: "POST", json: credential }),
 	parseServices: (content: string, format?: "csv" | "yaml") =>
 		http<import("@/types/api").ServicesImportResult>(`/api/services/parse${format ? `?format=${format}` : ""}`, { method: "POST", body: content, headers: { "Content-Type": "text/plain" } }),
+	listSystemTemplates: () =>
+		http<import("@/types/api").SystemTemplate[]>("/api/system-templates"),
+	saveSystemTemplate: (tpl: import("@/types/api").SystemTemplate) =>
+		tpl.id
+			? http<import("@/types/api").SystemTemplate>(`/api/system-templates/${encodeURIComponent(tpl.id)}`, { method: "PUT", json: tpl })
+			: http<import("@/types/api").SystemTemplate>("/api/system-templates", { method: "POST", json: tpl }),
+	deleteSystemTemplate: (id: string) =>
+		http<void>(`/api/system-templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
+	expandSystem: (input: { template_id?: string; template?: import("@/types/api").SystemTemplate; service_names: string[]; base_override?: string }) =>
+		http<import("@/types/api").ServicesImportResult>("/api/systems/expand", { method: "POST", json: input }),
 	testCredential: (id: string, input: { target_id: string; target_url: string; verify_url?: string; verify_marker?: string; browser?: boolean; login_targets?: string[] }) =>
 		http<{ verified: boolean; state: "verified" | "failed" | "unavailable" | "available"; reason: string }>(`/api/credentials/${encodeURIComponent(id)}/test`, { method: "POST", json: input }),
 	uploadAPIFixture: (body: string | Blob, contentType = "application/json") => http<{ref: string; size_bytes: number}>("/api/api-fixtures", {method:"POST",body,headers:{"Content-Type":contentType}}),

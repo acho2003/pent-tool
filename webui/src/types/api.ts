@@ -121,6 +121,21 @@ export interface AssessmentTarget { id: string; type: string; value: string; bra
 export interface AssessmentService { id: string; name: string; target_ids: string[]; }
 export interface ImportedService { name: string; urls: string[]; image?: string; repo?: string; protected_path?: string; }
 export interface ServicesImportResult { services: ImportedService[]; errors: Array<{ row: number; message: string }>; }
+export interface SystemTemplate {
+  id?: string;
+  name: string;
+  base_url: string;
+  path_template: string;
+  verify_template?: string;
+  spec_mode?: "auto" | "path";
+  spec_template?: string;
+  auth_header_name?: string;
+  auth_header_prefix?: string;
+  login_url_template?: string;
+  verify_marker?: string;
+  created_at?: string;
+  updated_at?: string;
+}
 export interface ServiceOverview { id: string; name: string; targets: string[]; counts: Record<string, number>; findings: number; auth: string; completed: number; failed: number; skipped: number; }
 export interface AssessmentConfig {
   nextjs_boundary_approvals?: Array<{ id: string; target_id: string; kind: "cache" | "redirect" | "proxy"; fixture_ref: string; owner_identity?: string; identity: string }>;
