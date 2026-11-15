@@ -19,6 +19,32 @@ func TestResolveWebProfileDefaultsAndRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestResolveWebProfileMax(t *testing.T) {
+	p, ok := ResolveWebProfile(ProfileMax)
+	if !ok || p.Name != ProfileMax {
+		t.Fatalf("web-max not resolved: %#v", p)
+	}
+	if p.Budget != 0 {
+		t.Fatalf("web-max must have no time cap, got %v", p.Budget)
+	}
+	if p.MaxEndpoints < 10000 {
+		t.Fatalf("web-max endpoint ceiling too low: %d", p.MaxEndpoints)
+	}
+	if p.AttackStrength != "INSANE" {
+		t.Fatalf("web-max must imply INSANE, got %q", p.AttackStrength)
+	}
+	if p.AllowStateChanging {
+		t.Fatal("web-max must stay read-only (no state-changing requests)")
+	}
+	if ProfileAttackStrength(ProfileMax) != "INSANE" {
+		t.Fatalf("ProfileAttackStrength(web-max) = %q", ProfileAttackStrength(ProfileMax))
+	}
+	// Other profiles imply no strength override.
+	if ProfileAttackStrength(ProfileThorough) != "" || ProfileAttackStrength("") != "" {
+		t.Fatal("non-max profiles must not imply an attack strength")
+	}
+}
+
 func TestResolveWebProfilePreservesGentleBudgets(t *testing.T) {
 	for _, name := range []string{"", ProfileGentle} {
 		p, ok := ResolveWebProfile(name)

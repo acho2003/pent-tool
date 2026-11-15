@@ -11,6 +11,7 @@ const (
 	ProfileNextjsDeep = "nextjs-deep"
 	ProfileGentle     = "web-gentle"
 	ProfileThorough   = "web-thorough"
+	ProfileMax        = "web-max"
 )
 
 type WebProfile struct {
@@ -20,6 +21,10 @@ type WebProfile struct {
 	Budget             time.Duration `json:"budget"`
 	Browser            bool          `json:"browser"`
 	AllowStateChanging bool          `json:"allow_state_changing"`
+	// AttackStrength is the default ZAP active-scan attack strength this profile
+	// implies (LOW/MEDIUM/HIGH/INSANE). Empty leaves ZAP's default. An explicit
+	// Config.ZAPAttackStrength (env/UI) always takes precedence over this.
+	AttackStrength string `json:"attack_strength,omitempty"`
 }
 
 func DefaultWebProfile(name string) WebProfile {
@@ -34,6 +39,18 @@ func DefaultWebProfile(name string) WebProfile {
 	if name == ProfileThorough {
 		return WebProfile{Name: ProfileThorough, RateRPS: 150, MaxEndpoints: 2000, Budget: 0, Browser: true, AllowStateChanging: false}
 	}
+	if name == ProfileMax {
+		// Maximum authorized coverage of one's own application: no time cap, a
+		// large endpoint ceiling, and ZAP active scanning at its most aggressive
+		// (INSANE) so every injection point gets the full payload set. The active
+		// scanners (nuclei, nikto, dalfox, zap) are already auto-selected; this
+		// profile removes the budget that otherwise starves them. Still strictly
+		// READ-ONLY (AllowStateChanging stays false) — write/API fuzzing remains a
+		// separate opt-in requiring a dedicated test environment. The default rate
+		// stays moderate so a rate-limiting target does not 429-blind differential
+		// checks; raise it with XALGORIX_WEB_RATE_RPS when the egress is whitelisted.
+		return WebProfile{Name: ProfileMax, RateRPS: 50, MaxEndpoints: 10000, Budget: 0, Browser: true, AllowStateChanging: false, AttackStrength: "INSANE"}
+	}
 	return WebProfile{Name: ProfileGentle, RateRPS: 2, MaxEndpoints: 500, Budget: 30 * time.Minute, Browser: true, AllowStateChanging: false}
 }
 
@@ -41,10 +58,20 @@ func ResolveWebProfile(name string) (WebProfile, bool) {
 	if name == "" {
 		name = ProfileGentle
 	}
-	if name != ProfileGentle && name != ProfileThorough && name != ProfileNextjsDeep {
+	if name != ProfileGentle && name != ProfileThorough && name != ProfileNextjsDeep && name != ProfileMax {
 		return WebProfile{}, false
 	}
 	return applyWebProfileOverrides(DefaultWebProfile(name)), true
+}
+
+// ProfileAttackStrength returns the ZAP attack strength implied by a web profile
+// name, or "" when the profile implies no override. An explicit configured
+// strength should be preferred over this.
+func ProfileAttackStrength(name string) string {
+	if p, ok := ResolveWebProfile(name); ok {
+		return p.AttackStrength
+	}
+	return ""
 }
 
 // applyWebProfileOverrides lets an operator tune the active web profile for an

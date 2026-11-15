@@ -453,9 +453,14 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	// The configured attack strength is set on every active-scan rule. Like the
 	// rate options it is daemon-global and restored after the scan. A typed job
 	// refuses to run with a half-applied strength; a legacy job logs and keeps
-	// ZAP's default.
-	if cfg.ZAPAttackStrength != "" {
-		restore, err := zapApplyAttackStrength(cfg, call, cfg.ZAPAttackStrength, req.TypedAssessment, logLine)
+	// ZAP's default. An explicit configured strength wins; otherwise the active
+	// web profile may imply one (web-max implies INSANE).
+	attackStrength := cfg.ZAPAttackStrength
+	if attackStrength == "" {
+		attackStrength = ProfileAttackStrength(cfg.WebProfile)
+	}
+	if attackStrength != "" {
+		restore, err := zapApplyAttackStrength(cfg, call, attackStrength, req.TypedAssessment, logLine)
 		if restore != nil {
 			defer restore()
 		}
