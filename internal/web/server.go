@@ -34,6 +34,7 @@ import (
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"github.com/xalgord/xalgorix/v4/internal/resources"
 	"github.com/xalgord/xalgorix/v4/internal/safe"
 	"github.com/xalgord/xalgorix/v4/internal/sandbox"
@@ -641,6 +642,9 @@ var dashboardRoutes = []string{
 	"/api/upload-logo",
 	"/api/upload-context",
 	"/api/services/parse",
+	"/api/systems/expand",
+	"/api/system-templates",
+	"/api/system-templates/",
 	"/api/findings",
 	"/api/findings/projects",
 	"/api/findings/summary",
@@ -750,6 +754,12 @@ type Server struct {
 	// versions, read once at start and hashed into every plan fingerprint.
 	// nil (tests building a bare Server) fingerprints like an empty map.
 	toolVersions map[string]string
+
+	// vaultOverride, when set, replaces the on-disk credential vault returned by
+	// credentialVault/openCredentialVault. It lets a headless CLI run (shared
+	// token supply) reuse the server's auth-preparation flow with an in-memory
+	// transient credential that never touches disk. nil in the dashboard.
+	vaultOverride *credentials.Vault
 }
 
 // NewServer creates a new web server.
@@ -985,6 +995,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/upload-logo", s.handleUploadLogo)
 	mux.HandleFunc("/api/upload-context", s.handleUploadContext)
 	mux.HandleFunc("/api/services/parse", s.handleServicesParse)
+	mux.HandleFunc("/api/systems/expand", s.handleSystemExpand)
+	mux.HandleFunc("/api/system-templates", s.handleSystemTemplates)
+	mux.HandleFunc("/api/system-templates/", s.handleSystemTemplateDetail)
 	// Findings surface (read-only). Handlers exist independently of the
 	// /api/scans/ dispatcher; register them explicitly so the SPA's
 	// findings table + severity summary resolve to real JSON instead of

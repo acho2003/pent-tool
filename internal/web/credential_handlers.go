@@ -42,6 +42,9 @@ type testCredentialResponse struct {
 }
 
 func (s *Server) credentialVault() (*credentials.Vault, error) {
+	if s.vaultOverride != nil {
+		return s.vaultOverride, nil
+	}
 	key, err := credentials.LoadKeyFile(os.Getenv("XALGORIX_CREDENTIAL_KEY_FILE"))
 	if err != nil {
 		return nil, err
@@ -55,6 +58,9 @@ func (s *Server) credentialVault() (*credentials.Vault, error) {
 }
 
 func (s *Server) openCredentialVault() (*credentials.Vault, error) {
+	if s.vaultOverride != nil {
+		return s.vaultOverride, nil
+	}
 	key, err := credentials.LoadKeyFile(os.Getenv("XALGORIX_CREDENTIAL_KEY_FILE"))
 	if err != nil {
 		return nil, err
