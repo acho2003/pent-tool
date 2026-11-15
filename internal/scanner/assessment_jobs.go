@@ -23,7 +23,7 @@ import (
 // that an installed binary can run as an assessment job unless the pipeline
 // has a scoped adapter for it.
 func HasAssessmentRunner(id string) bool {
-	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "nextjs-boundaries" || id == "kube-exposure" || id == "nextjs-assets" || id == "nextjs-sast" || id == "nextjs-deps" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" || id == "security-headers" || id == "authz-matrix" {
+	if id == "auth" || id == "katana" || id == "dnsx" || id == "subfinder" || id == "amass" || id == "httpx" || id == "sslyze" || id == "apichecks" || id == "apiwrites" || id == "nextjs-actions" || id == "nextjs-boundaries" || id == "kube-exposure" || id == "nextjs-assets" || id == "nextjs-sast" || id == "nextjs-deps" || id == "actuator" || id == "vcs-exposure" || id == "exposed-files" || id == "api-docs" || id == "security-headers" || id == "authz-matrix" {
 		return true
 	}
 	if id == "nmap" || id == "masscan" || id == "nikto" || id == "lynis" || id == "dalfox" || id == "schemathesis" || id == "wapiti" || id == "kube-bench" || id == "prowler" || id == "scoutsuite" {
@@ -145,6 +145,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 	byName["actuator"] = actuatorExposureRunner{}
 	byName["vcs-exposure"] = vcsExposureRunner{}
 	byName["exposed-files"] = exposedFilesRunner{}
+	byName["api-docs"] = apiDocExposureRunner{}
 	byName["security-headers"] = securityHeadersRunner{}
 	byName["apiwrites"] = apiWritesRunner{}
 	byName["nextjs-actions"] = nextjsActionsRunner{}

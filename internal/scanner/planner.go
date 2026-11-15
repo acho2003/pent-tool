@@ -84,8 +84,9 @@ type PlanInput struct {
 // version 29: Schemathesis API fuzzing; version 30: the identity access matrix;
 // version 31: operator-supplied CodeQL; version 32: consented Nuclei OAST jobs;
 // version 33: passive security-header check; version 34: removed CodeQL;
-// version 35: removed the Nuclei OAST variant).
-const PlanRegistryVersion = "35"
+// version 35: removed the Nuclei OAST variant;
+// version 36: api-docs exposure check).
+const PlanRegistryVersion = "36"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`

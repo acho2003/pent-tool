@@ -203,6 +203,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseExposureFindings(run.ArtifactPath)
 	case "exposed-files":
 		return parseExposureFindings(run.ArtifactPath)
+	case "api-docs":
+		return parseExposureFindings(run.ArtifactPath)
 	case "apiwrites":
 		// The write adapter artifact records operation and cleanup status, not
 		// scanner findings. Findings are reported only by verification adapters.
