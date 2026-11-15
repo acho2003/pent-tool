@@ -14,6 +14,7 @@ import (
 
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/xalgord/xalgorix/v4/internal/credentials"
 	"github.com/xalgord/xalgorix/v4/internal/scanner"
 	"github.com/xalgord/xalgorix/v4/internal/scopeguard"
 	"github.com/xalgord/xalgorix/v4/internal/web"
@@ -45,8 +46,18 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 	if err != nil {
 		return err
 	}
-	if len(assessmentConfig.Access) > 0 {
-		return errors.New("typed CLI execution cannot resolve credential references; remove access bindings and use the authenticated web UI")
+	var transientVault *credentials.Vault
+	if sharedTokenRequested(args) {
+		// The CLI mints the access bindings itself from --shared-token-file and
+		// stages the token in a transient in-memory vault, so the generic
+		// "cannot resolve credential references" refusal below does not apply.
+		transientVault, err = expandSystemTemplateIntoConfig(&assessmentConfig, args)
+		if err != nil {
+			return err
+		}
+	}
+	if len(assessmentConfig.Access) > 0 && !sharedTokenRequested(args) {
+		return errors.New("typed CLI execution cannot resolve credential references; remove access bindings and use the authenticated web UI, or supply --system-template with --shared-token-file")
 	}
 	for _, target := range assessmentConfig.Targets {
 		switch target.Kind {
@@ -89,6 +100,17 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 	}
 
 	pipeline := scanner.NewPipeline(scanConfig)
+	if transientVault != nil {
+		authHeaders, authErr := web.PrepareHeadlessAuth(context.Background(), transientVault, &plan)
+		if authErr != nil {
+			return fmt.Errorf("prepare shared-token authentication: %w", authErr)
+		}
+		pipeline.Config.AssessmentAuthHeaders = authHeaders
+		pipeline.Config.AssessmentAuthContexts = plan.AuthContexts
+		if os.Getenv("XALGORIX_UNIFIED_WORKFLOW") != "1" {
+			fmt.Fprintln(os.Stderr, "notice: XALGORIX_UNIFIED_WORKFLOW is not \"1\"; services will be scanned authenticated but per-service OpenAPI auto-discovery will not run")
+		}
+	}
 	runs := pipeline.RunAssessmentJobs(context.Background(), plan, scanDir, nil, nil)
 	findings, parseErrors := scanner.ParseRuns(runs)
 	result := assessmentCLIResult{State: assessmentRunsState(runs, parseErrors), Plan: plan, Runs: runs, Findings: findings}

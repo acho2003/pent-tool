@@ -29,6 +29,13 @@ func cliAssessmentPlan(args cliArgs, appConfig *config.Config) (scanner.Assessme
 	if err != nil {
 		return empty, err
 	}
+	if sharedTokenRequested(args) {
+		// Preview the expansion (targets/services, and access when a token file is
+		// supplied); the transient vault is only needed for execution, not planning.
+		if _, err := expandSystemTemplateIntoConfig(&cfg, args); err != nil {
+			return empty, err
+		}
+	}
 	return cliAssessmentPlanFromConfig(args, cfg, appConfig)
 }
 

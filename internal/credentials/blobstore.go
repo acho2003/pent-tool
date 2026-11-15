@@ -5,7 +5,57 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// MemoryBlobStore returns an in-process encrypted-record backend that never
+// touches disk. It backs transient vaults for headless one-shot runs (for
+// example a CLI shared-token scan) so a supplied credential lives only in
+// memory for the duration of the process.
+func MemoryBlobStore() BlobStore { return &memBlobs{data: map[string][]byte{}} }
+
+type memBlobs struct {
+	mu   sync.RWMutex
+	data map[string][]byte
+}
+
+func (m *memBlobs) Put(id string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]byte, len(data))
+	copy(cp, data)
+	m.data[id] = cp
+	return nil
+}
+
+func (m *memBlobs) Get(id string) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, ok := m.data[id]
+	if !ok {
+		return nil, nil // absent: match the file backend's (nil, nil) contract
+	}
+	cp := make([]byte, len(data))
+	copy(cp, data)
+	return cp, nil
+}
+
+func (m *memBlobs) List() ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]string, 0, len(m.data))
+	for id := range m.data {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (m *memBlobs) Delete(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, id)
+	return nil
+}
 
 // BlobStore is the per-credential encrypted-blob backend the Vault reads and
 // writes through. The default is file-backed (one <id>.json per record); the

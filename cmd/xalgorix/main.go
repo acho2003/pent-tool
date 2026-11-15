@@ -321,6 +321,10 @@ type cliArgs struct {
 	assessmentTypes    []string
 	assessmentConfig   string
 	apiDefinitionFiles []string
+	systemTemplate     string   // --system-template: local JSON template file
+	services           []string // --services: service names to expand
+	baseOverride       string   // --base-override: override the template base URL
+	sharedTokenFile    string   // --shared-token-file: file with the shared token/header
 	plan               bool
 	runAssessment      bool
 	bind               string
@@ -393,6 +397,26 @@ func parseCLIArgs(osArgs []string) cliArgs {
 				i++
 				args.apiDefinitionFiles = append(args.apiDefinitionFiles, osArgs[i])
 			}
+		case "--system-template":
+			if i+1 < len(osArgs) {
+				i++
+				args.systemTemplate = osArgs[i]
+			}
+		case "--services":
+			if i+1 < len(osArgs) {
+				i++
+				args.services = append(args.services, strings.Split(osArgs[i], ",")...)
+			}
+		case "--base-override":
+			if i+1 < len(osArgs) {
+				i++
+				args.baseOverride = osArgs[i]
+			}
+		case "--shared-token-file":
+			if i+1 < len(osArgs) {
+				i++
+				args.sharedTokenFile = osArgs[i]
+			}
 		case "--plan":
 			args.plan = true
 		case "--run-assessment":
@@ -452,6 +476,14 @@ func parseCLIArgs(osArgs []string) cliArgs {
 				args.assessmentConfig = strings.TrimPrefix(osArgs[i], "--assessment-config=")
 			} else if strings.HasPrefix(osArgs[i], "--api-definition=") {
 				args.apiDefinitionFiles = append(args.apiDefinitionFiles, strings.TrimPrefix(osArgs[i], "--api-definition="))
+			} else if strings.HasPrefix(osArgs[i], "--system-template=") {
+				args.systemTemplate = strings.TrimPrefix(osArgs[i], "--system-template=")
+			} else if strings.HasPrefix(osArgs[i], "--services=") {
+				args.services = append(args.services, strings.Split(strings.TrimPrefix(osArgs[i], "--services="), ",")...)
+			} else if strings.HasPrefix(osArgs[i], "--base-override=") {
+				args.baseOverride = strings.TrimPrefix(osArgs[i], "--base-override=")
+			} else if strings.HasPrefix(osArgs[i], "--shared-token-file=") {
+				args.sharedTokenFile = strings.TrimPrefix(osArgs[i], "--shared-token-file=")
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				_, _ = fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
 			} else if strings.HasPrefix(osArgs[i], "--bind=") {
