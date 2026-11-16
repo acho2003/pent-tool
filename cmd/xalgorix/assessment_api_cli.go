@@ -29,10 +29,20 @@ func cliAssessmentPlan(args cliArgs, appConfig *config.Config) (scanner.Assessme
 	if err != nil {
 		return empty, err
 	}
-	if sharedTokenRequested(args) {
+	if sharedTokenRequested(args) && headerAuthRequested(args) {
+		return empty, errors.New("--system-template and --auth-header-file cannot be combined; choose one authentication source")
+	}
+	switch {
+	case sharedTokenRequested(args):
 		// Preview the expansion (targets/services, and access when a token file is
 		// supplied); the transient vault is only needed for execution, not planning.
 		if _, err := expandSystemTemplateIntoConfig(&cfg, args); err != nil {
+			return empty, err
+		}
+	case headerAuthRequested(args):
+		// Preview the single-origin header-auth binding; the transient vault it
+		// stages is discarded (planning does not resolve the credential).
+		if _, err := applyHeaderFileAuthToConfig(&cfg, args); err != nil {
 			return empty, err
 		}
 	}

@@ -325,6 +325,9 @@ type cliArgs struct {
 	services           []string // --services: service names to expand
 	baseOverride       string   // --base-override: override the template base URL
 	sharedTokenFile    string   // --shared-token-file: file with the shared token/header
+	authHeaderFile     string   // --auth-header-file: file with Cookie:/Authorization: header lines for a single-origin --target
+	authVerifyURL      string   // --auth-verify-url: protected URL proving the headers authenticate
+	authVerifyMarker   string   // --auth-verify-marker: optional marker text expected on the verify page
 	plan               bool
 	runAssessment      bool
 	bind               string
@@ -417,6 +420,21 @@ func parseCLIArgs(osArgs []string) cliArgs {
 				i++
 				args.sharedTokenFile = osArgs[i]
 			}
+		case "--auth-header-file":
+			if i+1 < len(osArgs) {
+				i++
+				args.authHeaderFile = osArgs[i]
+			}
+		case "--auth-verify-url":
+			if i+1 < len(osArgs) {
+				i++
+				args.authVerifyURL = osArgs[i]
+			}
+		case "--auth-verify-marker":
+			if i+1 < len(osArgs) {
+				i++
+				args.authVerifyMarker = osArgs[i]
+			}
 		case "--plan":
 			args.plan = true
 		case "--run-assessment":
@@ -484,6 +502,12 @@ func parseCLIArgs(osArgs []string) cliArgs {
 				args.baseOverride = strings.TrimPrefix(osArgs[i], "--base-override=")
 			} else if strings.HasPrefix(osArgs[i], "--shared-token-file=") {
 				args.sharedTokenFile = strings.TrimPrefix(osArgs[i], "--shared-token-file=")
+			} else if strings.HasPrefix(osArgs[i], "--auth-header-file=") {
+				args.authHeaderFile = strings.TrimPrefix(osArgs[i], "--auth-header-file=")
+			} else if strings.HasPrefix(osArgs[i], "--auth-verify-url=") {
+				args.authVerifyURL = strings.TrimPrefix(osArgs[i], "--auth-verify-url=")
+			} else if strings.HasPrefix(osArgs[i], "--auth-verify-marker=") {
+				args.authVerifyMarker = strings.TrimPrefix(osArgs[i], "--auth-verify-marker=")
 			} else if strings.HasPrefix(osArgs[i], "--port=") {
 				_, _ = fmt.Sscanf(strings.TrimPrefix(osArgs[i], "--port="), "%d", &args.port)
 			} else if strings.HasPrefix(osArgs[i], "--bind=") {
@@ -527,6 +551,8 @@ func printUsage() {
 	fmt.Println("      --scanners <list>     Comma-separated subset of " + strings.Join(scanner.OrderedNames, ",") + " (default: all)")
 	fmt.Println("      --assessment-config <file>  Typed assessment JSON used with --plan or --run-assessment")
 	fmt.Println("      --api-definition <target-id=file>  Repeatable local OpenAPI file for typed assessments")
+	fmt.Println("      --auth-header-file <file>   Authenticate --target with Cookie:/Authorization: header lines read from a file (never on argv)")
+	fmt.Println("      --auth-verify-url <url>     Protected URL proving the headers authenticate (unlocks the authenticated crawl/discovery)")
 	fmt.Println("      --assessment-mode <mode>    BLACK_BOX, GRAY_BOX, or WHITE_BOX")
 	fmt.Println("      --assessment-type <type>    Repeatable assessment coverage type")
 	fmt.Println("      --plan                      Print a deterministic plan without scanning")

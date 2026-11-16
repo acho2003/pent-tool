@@ -46,18 +46,26 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 	if err != nil {
 		return err
 	}
+	if sharedTokenRequested(args) && headerAuthRequested(args) {
+		return errors.New("--system-template and --auth-header-file cannot be combined; choose one authentication source")
+	}
 	var transientVault *credentials.Vault
-	if sharedTokenRequested(args) {
+	switch {
+	case sharedTokenRequested(args):
 		// The CLI mints the access bindings itself from --shared-token-file and
 		// stages the token in a transient in-memory vault, so the generic
 		// "cannot resolve credential references" refusal below does not apply.
 		transientVault, err = expandSystemTemplateIntoConfig(&assessmentConfig, args)
-		if err != nil {
-			return err
-		}
+	case headerAuthRequested(args):
+		// --auth-header-file binds a cookie/bearer credential to the --target(s)
+		// with the same transient-vault plumbing, keeping whole-origin scope.
+		transientVault, err = applyHeaderFileAuthToConfig(&assessmentConfig, args)
 	}
-	if len(assessmentConfig.Access) > 0 && !sharedTokenRequested(args) {
-		return errors.New("typed CLI execution cannot resolve credential references; remove access bindings and use the authenticated web UI, or supply --system-template with --shared-token-file")
+	if err != nil {
+		return err
+	}
+	if len(assessmentConfig.Access) > 0 && !cliAuthRequested(args) {
+		return errors.New("typed CLI execution cannot resolve credential references; remove access bindings and use the authenticated web UI, or supply --system-template/--shared-token-file or --auth-header-file")
 	}
 	for _, target := range assessmentConfig.Targets {
 		switch target.Kind {
