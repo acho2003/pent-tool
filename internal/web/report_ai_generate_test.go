@@ -19,22 +19,24 @@ func (f *fakeReportGenerator) Generate(_ context.Context, model, system, user st
 	return f.out, f.err
 }
 
-func TestAIReportDisabledByDefault(t *testing.T) {
+func TestAIReportConfiguredGating(t *testing.T) {
+	// No env flag, no stored credential, no env token: not configured, so the
+	// report path must not call out.
 	t.Setenv("XALGORIX_AI_REPORT", "")
-	if aiReportEnabled() {
-		t.Fatal("AI report must be off by default")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	s := &Server{dataDir: t.TempDir()}
+	if s.aiReportConfigured() {
+		t.Fatal("must not be configured with no flag and no credential")
 	}
-	gen := &fakeReportGenerator{out: "should not run"}
-	if _, err := generateAIReport(context.Background(), gen, reportManifest{}); err != errAIReportDisabled {
-		t.Fatalf("expected errAIReportDisabled, got %v", err)
-	}
-	if gen.called {
-		t.Fatal("generator must not be called when disabled (no data leaves the host)")
+	// The env opt-in flag alone enables it.
+	t.Setenv("XALGORIX_AI_REPORT", "1")
+	if !s.aiReportConfigured() {
+		t.Fatal("XALGORIX_AI_REPORT=1 should enable the feature")
 	}
 }
 
-func TestAIReportEnabledCallsGenerator(t *testing.T) {
-	t.Setenv("XALGORIX_AI_REPORT", "1")
+func TestGenerateAIReportCallsGenerator(t *testing.T) {
 	t.Setenv("XALGORIX_AI_REPORT_MODEL", "")
 	gen := &fakeReportGenerator{out: "# Report\n\nbody"}
 	manifest := reportManifest{Mode: "GRAY_BOX"}

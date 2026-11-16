@@ -386,6 +386,12 @@ export const api = {
 		http<CredentialMetadata>("/api/credentials", { method: "POST", json: credential }),
 	parseServices: (content: string, format?: "csv" | "yaml") =>
 		http<import("@/types/api").ServicesImportResult>(`/api/services/parse${format ? `?format=${format}` : ""}`, { method: "POST", body: content, headers: { "Content-Type": "text/plain" } }),
+	aiConnection: () =>
+		http<import("@/types/api").AIConnectionStatus>("/api/settings/ai-connection"),
+	setAIConnection: (kind: "api_key" | "auth_token", value: string) =>
+		http<import("@/types/api").AIConnectionStatus>("/api/settings/ai-connection", { method: "POST", json: { kind, value } }),
+	clearAIConnection: () =>
+		http<import("@/types/api").AIConnectionStatus>("/api/settings/ai-connection", { method: "DELETE" }),
 	listSystemTemplates: () =>
 		http<import("@/types/api").SystemTemplate[]>("/api/system-templates"),
 	saveSystemTemplate: (tpl: import("@/types/api").SystemTemplate) =>

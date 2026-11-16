@@ -56,13 +56,15 @@ type aiReportGenerator interface {
 // chain (ANTHROPIC_AUTH_TOKEN, an ant/Claude Code OAuth profile, or an API key).
 type anthropicReportGenerator struct{ client anthropic.Client }
 
-func newAnthropicReportGenerator() anthropicReportGenerator {
+func newAnthropicReportGenerator(extra ...option.RequestOption) anthropicReportGenerator {
 	var opts []option.RequestOption
-	// A raw OAuth bearer (Claude Code token) needs the oauth beta header; a
-	// mounted profile adds its own headers, and an API key needs neither.
+	// A raw OAuth bearer in the environment (Claude Code token) needs the oauth
+	// beta header; a mounted profile adds its own headers, and an API key needs
+	// neither. Credentials stored in the GUI arrive as `extra` options.
 	if tok := strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN")); tok != "" {
 		opts = append(opts, option.WithAuthToken(tok), option.WithHeaderAdd("anthropic-beta", oauthBetaHeader))
 	}
+	opts = append(opts, extra...)
 	return anthropicReportGenerator{client: anthropic.NewClient(opts...)}
 }
 
@@ -118,12 +120,9 @@ func buildAIReportPrompt(manifest reportManifest) (string, error) {
 }
 
 // generateAIReport composes a full written report for a scan's manifest using
-// the configured generator. It returns errAIReportDisabled when the operator
-// has not opted in, so callers fall back to the deterministic report.
+// the given generator. Gating (whether the feature is enabled and credentialed)
+// is the caller's responsibility; see Server.aiReportConfigured.
 func generateAIReport(ctx context.Context, gen aiReportGenerator, manifest reportManifest) (string, error) {
-	if !aiReportEnabled() {
-		return "", errAIReportDisabled
-	}
 	if gen == nil {
 		gen = newAnthropicReportGenerator()
 	}
@@ -141,7 +140,8 @@ const aiReportArtifactName = "report-ai.md"
 // API error, refusal) is logged and leaves the deterministic report as the
 // deliverable. Called from the report-generation path only when enabled.
 func (s *Server) generateAIReportArtifact(ctx context.Context, manifest reportManifest, scanDir string, rec *ScanRecord, instanceID string) {
-	md, err := generateAIReport(ctx, nil, manifest)
+	gen := newAnthropicReportGenerator(s.aiCredentialOptions()...)
+	md, err := generateAIReport(ctx, gen, manifest)
 	if err != nil {
 		if !errors.Is(err, errAIReportDisabled) {
 			log.Printf("[report] AI report generation failed: %v", err)
@@ -166,8 +166,8 @@ func (s *Server) generateAIReportArtifact(ctx context.Context, manifest reportMa
 func (s *Server) serveAIReport(w http.ResponseWriter, rec *ScanRecord, scanDir string) {
 	aiPath := filepath.Join(scanDir, aiReportArtifactName)
 	if info, err := os.Stat(aiPath); err != nil || !info.Mode().IsRegular() {
-		if !aiReportEnabled() {
-			http.Error(w, "AI report generation is not enabled (set XALGORIX_AI_REPORT=1 and provide Claude Code / Anthropic credentials)", http.StatusNotFound)
+		if !s.aiReportConfigured() {
+			http.Error(w, "AI report generation is not connected (connect Claude in Settings, or set XALGORIX_AI_REPORT=1 with credentials)", http.StatusNotFound)
 			return
 		}
 		s.generateScannerReport(rec, scanDir, rec.InstanceID)

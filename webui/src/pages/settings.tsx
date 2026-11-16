@@ -30,6 +30,7 @@ import {
   useUpdateRateLimit,
   useAuthStatus,
 } from "@/api/queries";
+import { AIConnectionSetup } from "@/components/ai-connection-setup";
 import { useAuth } from "@/store/auth";
 import type {
   EnvironmentSettings,
@@ -145,7 +146,8 @@ export default function SettingsPage() {
           <TabsTrigger value="account">Account</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="engagement">
+        <TabsContent value="engagement" className="space-y-4">
+          <AIConnectionSetup />
           {rate.isLoading ? (
             <Skeleton className="h-72" />
           ) : rate.error ? (

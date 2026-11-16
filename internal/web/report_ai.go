@@ -181,7 +181,7 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 	}
 	// Opt-in: compose a full AI-written report alongside the deterministic one.
 	// Non-fatal — the deterministic PDF below is always the baseline deliverable.
-	if aiReportEnabled() {
+	if s.aiReportConfigured() {
 		s.generateAIReportArtifact(context.Background(), manifest, scanDir, rec, instanceID)
 	}
 	rec.Vulns = append([]VulnSummary(nil), copyRec.Vulns...)

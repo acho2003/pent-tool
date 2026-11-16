@@ -121,6 +121,12 @@ export interface AssessmentTarget { id: string; type: string; value: string; bra
 export interface AssessmentService { id: string; name: string; target_ids: string[]; }
 export interface ImportedService { name: string; urls: string[]; image?: string; repo?: string; protected_path?: string; }
 export interface ServicesImportResult { services: ImportedService[]; errors: Array<{ row: number; message: string }>; }
+export interface AIConnectionStatus {
+  configured: boolean;
+  kind?: "api_key" | "auth_token";
+  source?: "stored" | "environment";
+  updated_at?: string;
+}
 export interface SystemTemplate {
   id?: string;
   name: string;

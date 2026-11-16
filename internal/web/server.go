@@ -663,6 +663,7 @@ var dashboardRoutes = []string{
 	"/api/api-fixtures/",
 	"/api/settings/rate-limit",
 	"/api/settings/environment",
+	"/api/settings/ai-connection",
 	"/api/queue/status",
 	"/api/queue/resume",
 	"/api/queue/clear",
@@ -1022,6 +1023,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/api-fixtures/", s.handleAPIFixture)
 	mux.HandleFunc("/api/settings/rate-limit", s.handleRateLimit)
 	mux.HandleFunc("/api/settings/environment", s.handleEnvironmentSettings)
+	mux.HandleFunc("/api/settings/ai-connection", s.handleAIConnection)
 	mux.HandleFunc("/api/queue/status", s.handleQueueStatus)
 	mux.HandleFunc("/api/queue/resume", s.handleQueueResume)
 	mux.HandleFunc("/api/queue/clear", s.handleQueueClear)
