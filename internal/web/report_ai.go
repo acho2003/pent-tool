@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -177,6 +178,11 @@ func (s *Server) generateScannerReport(rec *ScanRecord, scanDir, instanceID stri
 		manifest.Services = copyRec.ReportServices
 		data, _ = json.MarshalIndent(manifest, "", "  ")
 		_ = os.WriteFile(filepath.Join(scanDir, "report.json"), data, 0o600)
+	}
+	// Opt-in: compose a full AI-written report alongside the deterministic one.
+	// Non-fatal — the deterministic PDF below is always the baseline deliverable.
+	if aiReportEnabled() {
+		s.generateAIReportArtifact(context.Background(), manifest, scanDir, rec, instanceID)
 	}
 	rec.Vulns = append([]VulnSummary(nil), copyRec.Vulns...)
 	copyRec.ReportMode = manifest.Mode

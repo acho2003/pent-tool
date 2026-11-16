@@ -2737,6 +2737,11 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if strings.EqualFold(r.URL.Query().Get("format"), "ai") {
+		s.serveAIReport(w, rec, scanDir)
+		return
+	}
+
 	var reportPath string
 	var err error
 	if rec.SchemaVersion >= scanner.SchemaVersion {
