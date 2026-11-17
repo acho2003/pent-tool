@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"html"
 	"image"
 	_ "image/jpeg" // register JPEG decoder for image.Decode on uploaded logos
 	_ "image/png"  // register PNG decoder for image.Decode on uploaded logos
@@ -1573,36 +1574,7 @@ func (s *Server) generateReport(scan *ScanRecord) (string, error) {
 			pdf.Ln(1)
 
 			// Sections - only add if content exists
-			type section struct {
-				label   string
-				content string
-			}
-
-			sections := []section{}
-			if label, ok := scopeLabels[v.Scope]; ok {
-				sections = append(sections, section{"SCOPE", label})
-			}
-			if v.Endpoint != "" {
-				sections = append(sections, section{"ENDPOINT", v.Endpoint})
-			}
-			if v.Description != "" {
-				sections = append(sections, section{"DESCRIPTION", v.Description})
-			}
-			if v.Impact != "" {
-				sections = append(sections, section{"IMPACT", v.Impact})
-			}
-			if v.TechnicalAnalysis != "" {
-				sections = append(sections, section{technicalAnalysisSectionLabel(v.TechnicalAnalysis), v.TechnicalAnalysis})
-			}
-			if v.PoCDescription != "" {
-				sections = append(sections, section{"PROOF OF CONCEPT", v.PoCDescription})
-			}
-			if v.PoCScript != "" {
-				sections = append(sections, section{"POC SCRIPT", v.PoCScript})
-			}
-			if v.Fix != "" {
-				sections = append(sections, section{"SUGGESTED FIX", v.Fix})
-			}
+			sections := reportFindingSections(v, scopeLabels)
 
 			for _, sec := range sections {
 				if pdf.GetY() > 250 {
@@ -2087,4 +2059,61 @@ func scannerCoverageGaps(runs []scanner.Run) string {
 		return ""
 	}
 	return "The following tools did not complete. Their results cannot establish that the affected targets are free of vulnerabilities.\n\n" + strings.Join(lines, "\n\n")
+}
+
+// reportFindingSection is one labelled block in a finding's PDF entry.
+type reportFindingSection struct {
+	label   string
+	content string
+}
+
+// reportFindingSections lists the populated PDF sections for one finding.
+// Scanner remediation (ZAP solutions, native-check advice) is printed as its
+// own section; before this only Fix was rendered and scanner findings never
+// set it, so the PDF carried no remediation at all.
+func reportFindingSections(v VulnSummary, scopeLabels map[string]string) []reportFindingSection {
+	var sections []reportFindingSection
+	add := func(label, content string) {
+		if strings.TrimSpace(content) != "" {
+			sections = append(sections, reportFindingSection{label, content})
+		}
+	}
+	if label, ok := scopeLabels[v.Scope]; ok {
+		add("SCOPE", label)
+	}
+	add("ENDPOINT", v.Endpoint)
+	add("DESCRIPTION", v.Description)
+	add("IMPACT", v.Impact)
+	if v.TechnicalAnalysis != "" {
+		add(technicalAnalysisSectionLabel(v.TechnicalAnalysis), v.TechnicalAnalysis)
+	}
+	add("PROOF OF CONCEPT", v.PoCDescription)
+	add("POC SCRIPT", v.PoCScript)
+	add("SUGGESTED FIX", v.Fix)
+	if remediation := reportRemediationText(v.Remediation); remediation != "" && remediation != strings.TrimSpace(v.Fix) {
+		add("REMEDIATION", remediation)
+	}
+	return sections
+}
+
+var reportHTMLTag = regexp.MustCompile(`(?i)<\s*(/?p|br\s*/?|/?li|/?ul|/?ol)\s*>|<[^>]{1,200}>`)
+
+// reportRemediationText turns scanner remediation, which ZAP supplies as
+// light HTML (<p>, <br>, <li>), into plain text for the PDF.
+func reportRemediationText(raw string) string {
+	text := reportHTMLTag.ReplaceAllStringFunc(raw, func(tag string) string {
+		lower := strings.ToLower(tag)
+		if strings.HasPrefix(lower, "<p") || strings.HasPrefix(lower, "</p") || strings.HasPrefix(lower, "<br") || strings.HasPrefix(lower, "<li") || strings.HasPrefix(lower, "</li") {
+			return "\n"
+		}
+		return ""
+	})
+	text = html.UnescapeString(text)
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
