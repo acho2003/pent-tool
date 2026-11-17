@@ -560,3 +560,35 @@ discovery gap, and the auth job still reports the failure, so the result is
 never read as authenticated coverage. Jobs bound to an authenticated identity
 stay skipped: the access matrix, approved API writes, the bounded Wapiti POST
 campaign and Schemathesis write fuzzing.
+
+## NestJS source checks (registry version 38)
+
+`nestjs-sast` runs automatically for White Box source targets (repository or
+local path) and reports not applicable unless a `package.json` depends on
+`@nestjs/core` or `@nestjs/common`. Like `nextjs-sast` it runs the pinned
+Semgrep with a rule pack embedded in the binary (no registry download) over a
+bounded private snapshot of `.ts`/`.js` sources, excluding type declarations,
+spec/test files and `test`, `tests`, `__tests__`, `e2e`, `node_modules`,
+`dist` directories. Severity, CWE and remediation come from the Go catalog.
+
+| Rule | Finds | Severity |
+|---|---|---|
+| `nestjs-sql-raw-query-interpolation` | `query()`/query-builder `where`/`orderBy`/Knex `raw` built with `${}` or `+` | high |
+| `nestjs-prisma-raw-unsafe` | `$queryRawUnsafe`/`$executeRawUnsafe` with a non-constant SQL string | high |
+| `nestjs-request-to-command` | `@Query/@Body/@Param/@Headers` value reaching `exec`/`execSync`/shell `spawn` | critical |
+| `nestjs-request-to-ssrf` | request value as the URL of `HttpService`/axios/fetch/got | high |
+| `nestjs-request-to-file-path` | request value in `fs.*`, `res.sendFile`, `res.download` (`basename` sanitizes) | high |
+| `nestjs-request-to-redirect` | request value in `res.redirect` / `@Redirect` return | medium |
+| `nestjs-jwt-ignore-expiration` | `ignoreExpiration: true` | high |
+| `nestjs-jwt-hardcoded-secret` | literal `secret`/`secretOrKey`, or `process.env.X \|\| 'literal'` fallback | high |
+| `nestjs-cors-credentials-any-origin` | `credentials: true` with `origin: true` or `'*'` | medium |
+| `nestjs-validation-pipe-without-whitelist` | `ValidationPipe` without `whitelist: true` (mass assignment) | medium |
+| `nestjs-typeorm-synchronize-enabled` | `synchronize: true` | medium |
+| `nestjs-swagger-unconditional` | `SwaggerModule.setup` not inside an `if` | low |
+| `nestjs-route-without-guard` | handler with no `@UseGuards` on method or controller and no `@Public()`; dropped when the project registers `APP_GUARD` or `useGlobalGuards` | low |
+
+Request-to-sink rules are local (same handler) dataflow: a value passed to a
+service in another file is not followed. `testdata/nestjs-sast` annotates each
+expected match with `// ruleid:` and each safe control with `// ok:`;
+`TestNestjsSASTRealEngine` (set `XALGORIX_TEST_SEMGREP`) requires an exact match.
+The Next.js and NestJS checks now share one engine (`sast_bundled.go`).

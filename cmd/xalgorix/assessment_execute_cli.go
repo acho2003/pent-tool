@@ -136,7 +136,7 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 func cliAssessmentAvailability(cfg scanner.Config) map[string]bool {
 	paths := map[string]string{
 		"nuclei": cfg.NucleiPath, "zap": "", "testssl": cfg.TestsslPath, "sslyze": cfg.SSLyzePath, "openvas": "",
-		"vuls": cfg.VulsPath, "trivy": cfg.TrivyPath, "semgrep": cfg.SemgrepPath, "nextjs-sast": cfg.SemgrepPath,
+		"vuls": cfg.VulsPath, "trivy": cfg.TrivyPath, "semgrep": cfg.SemgrepPath, "nextjs-sast": cfg.SemgrepPath, "nestjs-sast": cfg.SemgrepPath,
 		"gitleaks": cfg.GitleaksPath, "osv": cfg.OsvPath, "masscan": cfg.MasscanPath, "nikto": cfg.NiktoPath,
 		"lynis":     cfg.SSHPath,
 		"subfinder": cfg.SubfinderPath, "amass": cfg.AmassPath, "dnsx": cfg.DNSXPath, "httpx": cfg.HttpxPath, "nmap": cfg.NmapPath,

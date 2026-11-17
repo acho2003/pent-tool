@@ -85,8 +85,9 @@ type PlanInput struct {
 // version 31: operator-supplied CodeQL; version 32: consented Nuclei OAST jobs;
 // version 33: passive security-header check; version 34: removed CodeQL;
 // version 35: removed the Nuclei OAST variant;
-// version 36: api-docs exposure check).
-const PlanRegistryVersion = "37"
+// version 36: api-docs exposure check; version 37: exposure catalogs and Dalfox
+// selected by default; version 38: NestJS source checks).
+const PlanRegistryVersion = "38"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -118,6 +119,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	toolVersions["nextjs-deps-catalog"] = nextjsDepsVersion
 	toolVersions["nextjs-reconcile-catalog"] = nextjsReconcileVersion
 	toolVersions["nextjs-sast-rules"] = fmt.Sprintf("%s:%x", nextjsSASTVersion, sha256.Sum256(nextjsSASTRules))
+	toolVersions["nestjs-sast-rules"] = fmt.Sprintf("%s:%x", nestjsSASTVersion, sha256.Sum256(nestjsSASTRules))
 	toolVersions["nextjs-actions-catalog"] = nextjsActionsVersion
 	toolVersions["nextjs-boundaries-catalog"] = nextjsBoundariesVersion
 	toolVersions["actuator-catalog"] = actuatorCatalogVersion

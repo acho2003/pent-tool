@@ -34,7 +34,7 @@ func (s *Server) integrationPaths() map[string]string {
 		"nuclei": s.cfg.NucleiPath, "testssl": s.cfg.TestsslPath, "sslyze": s.cfg.SSLyzePath, "dalfox": s.cfg.DalfoxPath,
 		"wapiti": s.cfg.WapitiPath, "schemathesis": s.cfg.SchemathesisPath,
 		"vuls": s.cfg.VulsPath, "lynis": s.cfg.SSHPath, "trivy": s.cfg.TrivyPath, "semgrep": s.cfg.SemgrepPath,
-		"nextjs-sast": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
+		"nextjs-sast": s.cfg.SemgrepPath, "nestjs-sast": s.cfg.SemgrepPath, "gitleaks": s.cfg.GitleaksPath, "osv": s.cfg.OsvPath,
 		"kube-bench": s.cfg.KubeBenchPath, "prowler": s.cfg.ProwlerPath, "scoutsuite": s.cfg.ScoutSuitePath,
 		"gau": s.cfg.GauPath, "waybackurls": s.cfg.WaybackurlsPath,
 	}

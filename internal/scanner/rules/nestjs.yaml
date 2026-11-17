@@ -1,0 +1,236 @@
+rules:
+  # SQL built by string interpolation or concatenation and passed to a raw
+  # query API (TypeORM DataSource/EntityManager/Repository/QueryRunner.query,
+  # query-builder where clauses, Sequelize/Knex raw).
+  - id: nestjs-sql-raw-query-interpolation
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Raw SQL is built from interpolated or concatenated values; use bound parameters.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query(`...${$V}...`, ...)
+          - pattern: $DB.query("..." + $V, ...)
+          - pattern: $DB.query($V + "...", ...)
+          - pattern: $QB.where(`...${$V}...`, ...)
+          - pattern: $QB.andWhere(`...${$V}...`, ...)
+          - pattern: $QB.orWhere(`...${$V}...`, ...)
+          - pattern: $QB.having(`...${$V}...`, ...)
+          - pattern: $QB.orderBy(`...${$V}...`, ...)
+          - pattern: $QB.where("..." + $V, ...)
+          - pattern: $QB.andWhere("..." + $V, ...)
+          - pattern: $QB.orWhere("..." + $V, ...)
+          - pattern: $K.raw(`...${$V}...`, ...)
+          - pattern: $K.whereRaw(`...${$V}...`, ...)
+
+  # Prisma's *Unsafe raw APIs with a non-literal SQL string.
+  - id: nestjs-prisma-raw-unsafe
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Prisma raw "Unsafe" query with a non-constant SQL string; use $queryRaw tagged templates.
+    patterns:
+      - pattern-either:
+          - pattern: $P.$queryRawUnsafe($SQL, ...)
+          - pattern: $P.$executeRawUnsafe($SQL, ...)
+      - pattern-not: $P.$queryRawUnsafe("...", ...)
+      - pattern-not: $P.$executeRawUnsafe("...", ...)
+
+  - id: nestjs-typeorm-synchronize-enabled
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: TypeORM schema synchronize is enabled; it can drop or alter production data.
+    paths:
+      exclude: ["*.spec.ts", "*.e2e-spec.ts", "test/", "tests/", "__tests__/"]
+    pattern: "{..., synchronize: true, ...}"
+
+  - id: nestjs-validation-pipe-without-whitelist
+    languages: [typescript]
+    severity: WARNING
+    message: ValidationPipe without whitelist lets clients set properties the DTO does not declare (mass assignment).
+    paths:
+      exclude: ["*.spec.ts", "*.e2e-spec.ts", "test/", "tests/", "__tests__/"]
+    patterns:
+      - pattern-either:
+          - pattern: new ValidationPipe()
+          - pattern: new ValidationPipe({...})
+      - pattern-not: "new ValidationPipe({..., whitelist: true, ...})"
+
+  - id: nestjs-jwt-ignore-expiration
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: JWT expiration is ignored; expired tokens stay valid forever.
+    paths:
+      exclude: ["*.spec.ts", "*.e2e-spec.ts", "test/", "tests/", "__tests__/"]
+    pattern: "{..., ignoreExpiration: true, ...}"
+
+  - id: nestjs-jwt-hardcoded-secret
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: A JWT signing or verification secret is a source-code literal or has a literal fallback.
+    paths:
+      exclude: ["*.spec.ts", "*.e2e-spec.ts", "test/", "tests/", "__tests__/"]
+    pattern-either:
+      - pattern: 'JwtModule.register({..., secret: "...", ...})'
+      - pattern: 'JwtModule.register({..., secret: $E || "...", ...})'
+      - pattern: 'JwtModule.register({..., secret: $E ?? "...", ...})'
+      - pattern: '{..., secretOrKey: "...", ...}'
+      - pattern: '{..., secretOrKey: $E || "...", ...}'
+      - pattern: '{..., secretOrKey: $E ?? "...", ...}'
+      - pattern: $JWT.sign($PAYLOAD, "...", ...)
+      - pattern: $JWT.verify($TOKEN, "...", ...)
+      - pattern: '$SVC.sign($PAYLOAD, {..., secret: "...", ...})'
+      - pattern: '$SVC.verify($TOKEN, {..., secret: "...", ...})'
+
+  - id: nestjs-cors-credentials-any-origin
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: CORS reflects any origin while allowing credentials, so any site can make authenticated requests and read responses.
+    patterns:
+      - pattern-either:
+          - pattern: $APP.enableCors($OPTS)
+          - pattern: 'NestFactory.create($M, {..., cors: $OPTS, ...})'
+          - pattern: 'NestFactory.create<$T>($M, {..., cors: $OPTS, ...})'
+      - metavariable-pattern:
+          metavariable: $OPTS
+          patterns:
+            - pattern: "{..., credentials: true, ...}"
+            - pattern-either:
+                - pattern: "{..., origin: true, ...}"
+                - pattern: '{..., origin: "*", ...}'
+
+  - id: nestjs-swagger-unconditional
+    languages: [typescript]
+    severity: INFO
+    message: Swagger UI and the OpenAPI document are mounted unconditionally, so they are also served in production.
+    patterns:
+      - pattern: SwaggerModule.setup(...)
+      - pattern-not-inside: |
+          if (...) { ... }
+      - pattern-not-inside: |
+          if (...) { ... } else { ... }
+
+  # A route handler in a controller with no @UseGuards on the class or the
+  # method. Dropped by post-processing when the project registers a global
+  # guard (APP_GUARD / useGlobalGuards), and for @Public()-style handlers.
+  - id: nestjs-route-without-guard
+    languages: [typescript]
+    severity: INFO
+    message: Route handler has no @UseGuards on its method or controller.
+    paths:
+      exclude: ["*.spec.ts", "*.e2e-spec.ts", "test/", "tests/", "__tests__/"]
+    patterns:
+      - pattern-inside: |
+          @Controller(...)
+          class $C { ... }
+      - pattern-not-inside: |
+          @UseGuards(...)
+          class $C { ... }
+      - pattern: |
+          @$VERB(...)
+          $METHOD(...) { ... }
+      - metavariable-regex:
+          metavariable: $VERB
+          regex: ^(Get|Post|Put|Patch|Delete|All)$
+      - pattern-not: |
+          @UseGuards(...)
+          $METHOD(...) { ... }
+      - pattern-not: |
+          @Public(...)
+          $METHOD(...) { ... }
+      - focus-metavariable: $METHOD
+
+  # Request-controlled values (@Query/@Body/@Param/@Headers handler params)
+  # reaching dangerous sinks in the same handler.
+  - id: nestjs-request-to-ssrf
+    languages: [typescript]
+    severity: ERROR
+    message: A request-controlled value is used as a server-side fetch destination.
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              $M(..., @$D(...) $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $D
+              regex: ^(Query|Body|Param|Headers)$
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: axios.$F($URL, ...)
+              - pattern: axios($URL, ...)
+              - pattern: fetch($URL, ...)
+              - pattern: got($URL, ...)
+              - pattern: $X.httpService.$F($URL, ...)
+              - pattern: "$HTTP.request({..., url: $URL, ...})"
+          - focus-metavariable: $URL
+
+  - id: nestjs-request-to-redirect
+    languages: [typescript]
+    severity: WARNING
+    message: A request-controlled value is used as a redirect destination.
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              $M(..., @$D(...) $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $D
+              regex: ^(Query|Body|Param|Headers)$
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.redirect($URL)
+              - pattern: $RES.redirect($CODE, $URL)
+              - pattern: "return {..., url: $URL, ...}"
+          - focus-metavariable: $URL
+
+  - id: nestjs-request-to-file-path
+    languages: [typescript]
+    severity: ERROR
+    message: A request-controlled value reaches a filesystem path (path traversal).
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              $M(..., @$D(...) $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $D
+              regex: ^(Query|Body|Param|Headers)$
+          - pattern: $P
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+      - pattern: basename(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fs.$F($PATH, ...)
+              - pattern: $RES.sendFile($PATH, ...)
+              - pattern: $RES.download($PATH, ...)
+              - pattern: createReadStream($PATH, ...)
+              - pattern: readFile($PATH, ...)
+              - pattern: readFileSync($PATH, ...)
+          - focus-metavariable: $PATH
+
+  - id: nestjs-request-to-command
+    languages: [typescript]
+    severity: ERROR
+    message: A request-controlled value reaches a shell command.
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              $M(..., @$D(...) $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $D
+              regex: ^(Query|Body|Param|Headers)$
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: exec($CMD, ...)
+              - pattern: execSync($CMD, ...)
+              - pattern: $CP.exec($CMD, ...)
+              - pattern: $CP.execSync($CMD, ...)
+              - pattern: 'spawn($CMD, $ARGS, {..., shell: true, ...})'
+          - focus-metavariable: $CMD
