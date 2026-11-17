@@ -71,6 +71,39 @@ func exposedFileCases() []exposedFileCase {
 		{id: "docker-compose-prod", body: "services:\n  db:\n    image: postgres:16\n", wantSeverity: "medium"},
 		{id: "gitlab-ci", body: "stages:\n  - test\ntest:\n  script:\n    - go test ./...\n", wantSeverity: "low"},
 		{id: "travis-ci", body: "language: go\nscript: go test ./...\n", wantSeverity: "low"},
+		// Next.js / Vercel build and deployment files.
+		{id: "dotenv-vercel-production", body: "# Created by Vercel CLI\nNEXTAUTH_SECRET=\"" + plantedToken + "\"\nDATABASE_URL=\"postgres://u:" + plantedPassword + "@db/app\"\n", wantSeverity: "high", wantKeyName: "NEXTAUTH_SECRET"},
+		{id: "nextjs-required-server-files", body: `{"version":1,"config":{"env":{"INTERNAL_API_TOKEN":"` + plantedToken + `"},"serverRuntimeConfig":{}},"appDir":"/app","files":[".next/routes-manifest.json"]}`, wantSeverity: "high", wantKeyName: "INTERNAL_API_TOKEN"},
+		{id: "nextjs-required-server-files", body: `{"version":1,"config":{"images":{"domains":[]}},"appDir":"/app","files":[]}`, wantSeverity: "medium"},
+		{id: "nextjs-server-reference-manifest", body: `{"node":{"7f3a":{"workers":{"app/page":"x"},"layer":{}}},"edge":{},"encryptionKey":"` + plantedToken + `"}`, wantSeverity: "high"},
+		{id: "nextjs-server-reference-manifest", body: `{"node":{"7f3a":{"workers":{"app/page":"x"}}},"edge":{}}`, wantSeverity: "medium"},
+		{id: "nextjs-pages-manifest", body: `{"/_app":"pages/_app.js","/api/users":"pages/api/users.js"}`, wantSeverity: "medium"},
+		{id: "nextjs-app-paths-manifest", body: `{"/page":"app/page.js","/api/orders/route":"app/api/orders/route.js"}`, wantSeverity: "medium"},
+		{id: "nextjs-middleware-manifest", body: `{"version":3,"middleware":{"/":{"matchers":[{"regexp":"^/admin"}]}},"functions":{}}`, wantSeverity: "medium"},
+		{id: "nextjs-build-id", body: "Xy1_aB3cD4eF5gH6iJ7kL", wantSeverity: "low"},
+		{id: "nextjs-build-id", body: "Unauthorized", wantSeverity: ""},
+		{id: "nextjs-build-id", body: "not a build id at all", wantSeverity: ""},
+		{id: "vercel-project", body: `{"projectId":"prj_abc","orgId":"team_xyz"}`, wantSeverity: "low"},
+		// NestJS / Node.js config, ORM, logs, dashboards.
+		{id: "typeorm-ormconfig-json", body: `{"type": "postgres", "host": "db", "username": "app", "password": "` + plantedPassword + `", "database": "app", "synchronize": false}`, wantSeverity: "high", wantKeyName: "password"},
+		{id: "typeorm-ormconfig-js", body: "module.exports = {\n  type: 'postgres',\n  host: process.env.DB_HOST,\n  password: process.env.DB_PASSWORD,\n  database: 'app',\n};\n", wantSeverity: "medium"},
+		{id: "typeorm-ormconfig-json", body: `{"name": "not-an-orm"}`, wantSeverity: ""},
+		{id: "dotenv-typeorm-ormconfig-env", body: "TYPEORM_CONNECTION=postgres\nTYPEORM_PASSWORD=" + plantedPassword + "\n", wantSeverity: "high"},
+		{id: "node-config-production-json", body: `{"jwt": {"secret": "` + plantedToken + `"}, "port": 3000}`, wantSeverity: "high", wantKeyName: "secret"},
+		{id: "node-config-default-json", body: `{"port": 3000, "jwt": {"secret": "${JWT_SECRET}"}}`, wantSeverity: ""},
+		{id: "sequelize-config", body: `{"development": {"username": "root", "password": "` + plantedPassword + `", "database": "app", "dialect": "mysql"}}`, wantSeverity: "high"},
+		{id: "knexfile", body: "module.exports = {\n  client: 'pg',\n  connection: { host: 'db', password: '" + plantedPassword + "' },\n};\n", wantSeverity: "high"},
+		{id: "prisma-schema", body: "datasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\nmodel User { id Int @id }\n", wantSeverity: "medium"},
+		{id: "prisma-schema", body: "datasource db {\n  provider = \"postgresql\"\n  url      = \"postgresql://app:" + plantedPassword + "@db:5432/app\"\n}\n", wantSeverity: "high"},
+		{id: "pm2-ecosystem", body: "module.exports = {\n  apps: [{ name: 'api', script: 'dist/main.js', env: { JWT_SECRET: '" + plantedToken + "' } }],\n};\n", wantSeverity: "high", wantKeyName: "JWT_SECRET"},
+		{id: "bull-board-admin", body: `{"queues":[{"name":"email","counts":{"active":0,"failed":3},"jobs":[]}]}`, wantSeverity: "high"},
+		{id: "bull-board-root", body: `{"queues": "disabled"}`, wantSeverity: ""},
+		{id: "prometheus-metrics", body: "# HELP process_cpu_user_seconds_total Total user CPU time.\n# TYPE process_cpu_user_seconds_total counter\nprocess_cpu_user_seconds_total 1.2\n", wantSeverity: "low"},
+		{id: "prometheus-metrics", body: "ok", wantSeverity: ""},
+		{id: "npm-debug-log", body: "0 info it worked if it ends with ok\n1 verbose cli [ '/usr/bin/node' ]\n2 npm ERR! code ELIFECYCLE\n", wantSeverity: "medium"},
+		{id: "nest-cli", body: `{"$schema":"https://json.schemastore.org/nest-cli","collection":"@nestjs/schematics","sourceRoot":"src"}`, wantSeverity: "low"},
+		{id: "package-json", body: `{"name":"api","version":"1.0.0","dependencies":{"@nestjs/core":"10.0.0"}}`, wantSeverity: "low"},
+		{id: "package-json", body: `{"name":"public-manifest","short_name":"app"}`, wantSeverity: ""},
 	}
 }
 
@@ -127,7 +160,7 @@ func TestExposedFilesCatalogCoversOperatorEnvList(t *testing.T) {
 }
 
 func TestIsPlaceholderValue(t *testing.T) {
-	for _, v := range []string{"", "  ", "changeme", "\"\"", "${DB_PASSWORD}", "<your-password>", "your_api_key", "xxxxxxxx", "******", "null", "<%= ENV['X'] %>", "{{ .Values.pw }}", "ab"} {
+	for _, v := range []string{"process.env.DB_PASSWORD,", "env(\"DATABASE_URL\")", "configService.get('JWT_SECRET')", "", "  ", "changeme", "\"\"", "${DB_PASSWORD}", "<your-password>", "your_api_key", "xxxxxxxx", "******", "null", "<%= ENV['X'] %>", "{{ .Values.pw }}", "ab"} {
 		if !isPlaceholderValue(v) {
 			t.Errorf("%q should be a placeholder", v)
 		}

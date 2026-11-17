@@ -527,3 +527,22 @@ credential types, never values. Placeholders such as `changeme`, `${VAR}`,
 `<your-key>` and ERB/Helm templates are not treated as secrets. The catalog is
 ordered by value, so a budget that runs out still covers `.env` and credential
 files first.
+
+### Next.js and NestJS additions (catalog exposed-files-v5, 116 probes)
+
+- Next.js / Vercel: `.vercel/.env.{production,preview,development}.local`
+  (written by `vercel env pull`), `.next/required-server-files.json` (resolved
+  next.config including `env`), `.next/server/server-reference-manifest.json`
+  (high when it carries the Server Actions `encryptionKey`), pages/app-paths/
+  middleware manifests, `.next/BUILD_ID`, `.vercel/project.json`.
+- NestJS / Node.js: TypeORM `ormconfig.{json,yml,js,env}`, node-config
+  `config/{default,production,local}.json|yml`, Sequelize `config/config.json`,
+  `knexfile.js`, `prisma/schema.prisma` (high with a literal credentialed URL),
+  PM2 `ecosystem.config.js`, Bull Board queue API (`/admin/queues/api/queues`,
+  `/queues/api/queues`), Prometheus `/metrics`, npm/yarn error logs,
+  `nest-cli.json`, `package.json`.
+
+Swagger/OpenAPI (`/docs-json`, `/documentation-json`, ...) and GraphQL
+consoles stay in the `api-docs` check; Next.js source maps, `__NEXT_DATA__`
+and dev mode stay in `nextjs-assets`. `process.env.X`, `env("X")` and
+`configService.get(...)` values are treated as references, not secrets.

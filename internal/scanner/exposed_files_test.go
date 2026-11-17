@@ -94,7 +94,7 @@ func TestExposedFilesClassifierRequiresSignature(t *testing.T) {
 }
 
 func TestExposedFilesCatalogIsDeterministic(t *testing.T) {
-	if exposedFilesCatalogVersion != "exposed-files-v4" {
+	if exposedFilesCatalogVersion != "exposed-files-v5" {
 		t.Fatalf("unexpected catalog version: %s", exposedFilesCatalogVersion)
 	}
 	seen := map[string]bool{}

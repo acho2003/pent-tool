@@ -14,7 +14,9 @@ import (
 // v3 adds Next.js build-output artifacts served at the web root.
 // v4 widens the .env family (environment/backup/template/key-file names) and
 // adds application, infrastructure and tool configuration files.
-const exposedFilesCatalogVersion = "exposed-files-v4"
+// v5 adds Next.js/Vercel build and deployment files and NestJS/Node config,
+// ORM, log, metrics and queue-dashboard paths.
+const exposedFilesCatalogVersion = "exposed-files-v5"
 
 type exposedFilesRunner struct{}
 
@@ -69,6 +71,10 @@ var exposedFilesCatalog = []exposureCheck{
 	{ID: "dotenv-backup", Path: "/.env.backup", Purpose: "Exposed .env backup"},
 	{ID: "dotenv-copy", Path: "/.env.copy", Purpose: "Exposed .env copy"},
 	{ID: "dotenv-tilde", Path: "/.env~", Purpose: "Exposed editor backup of .env"},
+	// `vercel pull` / `vercel env pull` writes real environment values here.
+	{ID: "dotenv-vercel-production", Path: "/.vercel/.env.production.local", Purpose: "Exposed Vercel production environment file"},
+	{ID: "dotenv-vercel-preview", Path: "/.vercel/.env.preview.local", Purpose: "Exposed Vercel preview environment file"},
+	{ID: "dotenv-vercel-development", Path: "/.vercel/.env.development.local", Purpose: "Exposed Vercel development environment file"},
 	// Credential stores and infrastructure state.
 	{ID: "aws-credentials", Path: "/.aws/credentials", Purpose: "Exposed AWS credentials file"},
 	{ID: "gcp-credentials", Path: "/credentials.json", Purpose: "Exposed Google Cloud credentials file"},
@@ -107,6 +113,19 @@ var exposedFilesCatalog = []exposureCheck{
 	{ID: "config-yml", Path: "/config.yml", Purpose: "Exposed config.yml"},
 	{ID: "config-yaml", Path: "/config.yaml", Purpose: "Exposed config.yaml"},
 	{ID: "settings-json", Path: "/settings.json", Purpose: "Exposed settings.json"},
+	// NestJS / Node.js: ORM, node-config, process-manager and build config.
+	{ID: "typeorm-ormconfig-json", Path: "/ormconfig.json", Purpose: "Exposed TypeORM ormconfig.json"},
+	{ID: "typeorm-ormconfig-yml", Path: "/ormconfig.yml", Purpose: "Exposed TypeORM ormconfig.yml"},
+	{ID: "typeorm-ormconfig-js", Path: "/ormconfig.js", Purpose: "Exposed TypeORM ormconfig.js"},
+	{ID: "dotenv-typeorm-ormconfig-env", Path: "/ormconfig.env", Purpose: "Exposed TypeORM ormconfig.env"},
+	{ID: "node-config-default-json", Path: "/config/default.json", Purpose: "Exposed node-config default.json"},
+	{ID: "node-config-production-json", Path: "/config/production.json", Purpose: "Exposed node-config production.json"},
+	{ID: "node-config-default-yml", Path: "/config/default.yml", Purpose: "Exposed node-config default.yml"},
+	{ID: "node-config-local-json", Path: "/config/local.json", Purpose: "Exposed node-config local.json"},
+	{ID: "sequelize-config", Path: "/config/config.json", Purpose: "Exposed Sequelize database config"},
+	{ID: "knexfile", Path: "/knexfile.js", Purpose: "Exposed Knex knexfile.js"},
+	{ID: "prisma-schema", Path: "/prisma/schema.prisma", Purpose: "Exposed Prisma schema"},
+	{ID: "pm2-ecosystem", Path: "/ecosystem.config.js", Purpose: "Exposed PM2 ecosystem config"},
 	// Next.js framework config is server-side source; it is never meant to be
 	// served and leaks rewrites, allowed image hosts, headers and env wiring.
 	{ID: "nextjs-config-js", Path: "/next.config.js", Purpose: "Exposed Next.js configuration source"},
@@ -120,6 +139,15 @@ var exposedFilesCatalog = []exposureCheck{
 	{ID: "nextjs-build-manifest", Path: "/.next/build-manifest.json", Purpose: "Exposed Next.js build manifest"},
 	{ID: "nextjs-routes-manifest", Path: "/.next/routes-manifest.json", Purpose: "Exposed Next.js routes manifest"},
 	{ID: "nextjs-trace", Path: "/_next/trace", Purpose: "Exposed Next.js build trace"},
+	// required-server-files.json embeds the resolved next.config (including
+	// env and serverRuntimeConfig values); the server manifests map every route
+	// to its server bundle and list Server Action IDs.
+	{ID: "nextjs-required-server-files", Path: "/.next/required-server-files.json", Purpose: "Exposed Next.js required-server-files manifest"},
+	{ID: "nextjs-server-reference-manifest", Path: "/.next/server/server-reference-manifest.json", Purpose: "Exposed Next.js Server Action manifest"},
+	{ID: "nextjs-pages-manifest", Path: "/.next/server/pages-manifest.json", Purpose: "Exposed Next.js pages manifest"},
+	{ID: "nextjs-app-paths-manifest", Path: "/.next/server/app-paths-manifest.json", Purpose: "Exposed Next.js app-paths manifest"},
+	{ID: "nextjs-middleware-manifest", Path: "/.next/server/middleware-manifest.json", Purpose: "Exposed Next.js middleware manifest"},
+	{ID: "nextjs-build-id", Path: "/.next/BUILD_ID", Purpose: "Exposed Next.js build directory"},
 	// Container and deployment configuration.
 	{ID: "docker-compose", Path: "/docker-compose.yml", Purpose: "Exposed Docker Compose file"},
 	{ID: "docker-compose-override", Path: "/docker-compose.override.yml", Purpose: "Exposed Docker Compose override file"},
@@ -136,6 +164,16 @@ var exposedFilesCatalog = []exposureCheck{
 	{ID: "dotenv-template-dist", Path: "/.env.dist", Purpose: "Exposed .env.dist template"},
 	{ID: "gitlab-ci", Path: "/.gitlab-ci.yml", Purpose: "Exposed GitLab CI configuration"},
 	{ID: "travis-ci", Path: "/.travis.yml", Purpose: "Exposed Travis CI configuration"},
+	// NestJS queue dashboards (Bull Board) expose a JSON API that lists, retries
+	// and cleans jobs; an unauthenticated one is a real admin surface.
+	{ID: "bull-board-admin", Path: "/admin/queues/api/queues", Purpose: "Exposed Bull Board queue dashboard API"},
+	{ID: "bull-board-root", Path: "/queues/api/queues", Purpose: "Exposed Bull Board queue dashboard API"},
+	{ID: "prometheus-metrics", Path: "/metrics", Purpose: "Exposed Prometheus metrics"},
+	{ID: "npm-debug-log", Path: "/npm-debug.log", Purpose: "Exposed npm debug log"},
+	{ID: "yarn-error-log", Path: "/yarn-error.log", Purpose: "Exposed Yarn error log"},
+	{ID: "vercel-project", Path: "/.vercel/project.json", Purpose: "Exposed Vercel project link"},
+	{ID: "nest-cli", Path: "/nest-cli.json", Purpose: "Exposed NestJS CLI project file"},
+	{ID: "package-json", Path: "/package.json", Purpose: "Exposed package.json"},
 }
 
 var (
@@ -161,9 +199,15 @@ var (
 	travisLanguage     = regexp.MustCompile(`(?m)^language\s*:`)
 	configAssignment   = regexp.MustCompile(`^\s*(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_.\-]*)["']?\s*[=:]\s*(.*)$`)
 	jsonStringField    = regexp.MustCompile(`"([A-Za-z_][A-Za-z0-9_.\-]*)"\s*:\s*"([^"]*)"`)
+	jsSingleQuoted     = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*:\s*'([^']*)'`)
+	jsDoubleQuoted     = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*:\s*"([^"]*)"`)
 	xmlKeyValueAttr    = regexp.MustCompile(`(?i)key\s*=\s*"([^"]+)"\s+value\s*=\s*"([^"]*)"`)
 	secretNamedKey     = regexp.MustCompile(`(?i)(password|passwd|pwd|secret|private[_\-.]?key|api[_\-.]?key|apikey|access[_\-.]?key|token|connection[_\-.]?string|conn[_\-.]?str|database[_\-.]?url|db[_\-.]?url|\bdsn\b|_dsn|credential|signing[_\-.]?key|encryption[_\-.]?key|master[_\-.]?key)`)
 	keyNameUnsafeChars = regexp.MustCompile(`[^A-Za-z0-9_.\-]`)
+	nextBuildID        = regexp.MustCompile(`^[A-Za-z0-9_\-]{8,64}$`)
+	ormConfigShape     = regexp.MustCompile(`(?i)["']?type["']?\s*[:=]\s*["']?(postgres|mysql|mariadb|mssql|sqlite|better-sqlite3|oracle|mongodb|cockroachdb)`)
+	prismaLiteralURL   = regexp.MustCompile(`(?m)^\s*url\s*=\s*"[a-z+]+://[^"\s]*:[^"\s@]+@`)
+	promMetricsShape   = regexp.MustCompile(`(?m)^# (HELP|TYPE) [a-zA-Z_:][a-zA-Z0-9_:]* `)
 )
 
 // placeholderValues are values a template or sample config uses instead of a
@@ -196,7 +240,7 @@ func isPlaceholderValue(raw string) bool {
 			return true
 		}
 	}
-	for _, marker := range []string{"${", "{{", "%(", "<%", "xxx", "***", "example.com", "change_me", "changeme", "replace", "insert_"} {
+	for _, marker := range []string{"${", "{{", "%(", "<%", "xxx", "***", "example.com", "change_me", "changeme", "replace", "insert_", "process.env", "env(", "configservice", "config.get(", "getenv", "os.environ"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
@@ -247,6 +291,13 @@ func secretKeyNames(text string) []string {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, ";") {
 			continue
+		}
+		// Inline JavaScript object literals (knexfile, PM2, ormconfig.js):
+		// { host: 'db', password: '...' } on one line.
+		for _, re := range []*regexp.Regexp{jsSingleQuoted, jsDoubleQuoted} {
+			for _, kv := range re.FindAllStringSubmatch(line, -1) {
+				add(kv[1], kv[2])
+			}
 		}
 		if m := configAssignment.FindStringSubmatch(line); m != nil {
 			value := m[2]
@@ -502,6 +553,112 @@ func classifyExposedFile(check exposureCheck, resp *http.Response, body []byte) 
 				return leakWith("medium", "Exposed CI configuration with credentials", "CI pipeline definition", nil, providers)
 			}
 			return leakWith("low", "Exposed CI configuration", "CI pipeline definition", nil, nil)
+		}
+	case "nextjs-required-server-files":
+		if isJSONObject && strings.Contains(text, `"config"`) && (strings.Contains(text, `"files"`) || strings.Contains(text, `"appDir"`)) {
+			keys := secretKeyNames(text)
+			providers := providerSecretNames(text)
+			if len(keys) > 0 || len(providers) > 0 {
+				return leakWith("high", "Exposed Next.js server config with secrets", "required-server-files.json with resolved next.config", keys, providers)
+			}
+			return leakWith("medium", "Exposed Next.js server config", "required-server-files.json with resolved next.config", nil, nil)
+		}
+	case "nextjs-server-reference-manifest":
+		if isJSONObject && strings.Contains(text, `"node"`) && (strings.Contains(text, `"workers"`) || strings.Contains(text, `"edge"`)) {
+			// Next.js stores the Server Actions encryption key in this manifest;
+			// with it, closure-bound action arguments can be decrypted and forged.
+			if strings.Contains(text, `"encryptionKey"`) {
+				return leakWith("high", "Exposed Next.js Server Actions encryption key", "server-reference-manifest.json with encryptionKey", nil, nil)
+			}
+			return leakWith("medium", "Exposed Next.js Server Action manifest", "Server Action IDs and their modules", nil, nil)
+		}
+	case "nextjs-pages-manifest":
+		if isJSONObject && strings.Contains(text, `"pages/`) && strings.Contains(text, `.js"`) {
+			return leakWith("medium", "Exposed Next.js pages manifest", "route to server-bundle map", nil, nil)
+		}
+	case "nextjs-app-paths-manifest":
+		if isJSONObject && strings.Contains(text, `"app/`) && (strings.Contains(text, `/page"`) || strings.Contains(text, `/route"`) || strings.Contains(text, `/page.js"`) || strings.Contains(text, `/route.js"`)) {
+			return leakWith("medium", "Exposed Next.js app-paths manifest", "app route to server-bundle map", nil, nil)
+		}
+	case "nextjs-middleware-manifest":
+		if isJSONObject && strings.Contains(text, `"middleware"`) && strings.Contains(text, `"version"`) {
+			return leakWith("medium", "Exposed Next.js middleware manifest", "middleware matchers", nil, nil)
+		}
+	case "nextjs-build-id":
+		// Build IDs are random (nanoid) or a git hash; requiring a digit keeps a
+		// plain-text "Unauthorized"/"Forbidden" body from matching.
+		if len(text) >= 10 && nextBuildID.MatchString(text) && strings.ContainsAny(text, "0123456789") {
+			return leakWith("low", "Exposed Next.js build directory", ".next/BUILD_ID served", nil, nil)
+		}
+	case "vercel-project":
+		if isJSONObject && strings.Contains(text, `"projectId"`) && strings.Contains(text, `"orgId"`) {
+			return leakWith("low", "Exposed Vercel project link", "project and org IDs", nil, nil)
+		}
+	case "typeorm-ormconfig-json", "typeorm-ormconfig-yml", "typeorm-ormconfig-js":
+		if ormConfigShape.MatchString(text) && (strings.Contains(lower, "database") || strings.Contains(lower, "host") || strings.Contains(lower, "url")) {
+			if keys := secretKeyNames(text); len(keys) > 0 {
+				return leakWith("high", "Exposed TypeORM configuration with database credentials", "TypeORM connection options", keys, nil)
+			}
+			return leakWith("medium", "Exposed TypeORM configuration", "TypeORM connection options", nil, nil)
+		}
+	case "sequelize-config":
+		if isJSONObject && strings.Contains(text, `"dialect"`) && (strings.Contains(text, `"development"`) || strings.Contains(text, `"production"`)) {
+			if keys := secretKeyNames(text); len(keys) > 0 {
+				return leakWith("high", "Exposed Sequelize configuration with database credentials", "Sequelize environments", keys, nil)
+			}
+			return leakWith("medium", "Exposed Sequelize configuration", "Sequelize environments", nil, nil)
+		}
+	case "knexfile":
+		if strings.Contains(text, "module.exports") && strings.Contains(lower, "client") && strings.Contains(lower, "connection") {
+			if keys := secretKeyNames(text); len(keys) > 0 {
+				return leakWith("high", "Exposed Knex configuration with database credentials", "knexfile connection", keys, nil)
+			}
+			return leakWith("medium", "Exposed Knex configuration", "knexfile connection", nil, nil)
+		}
+	case "prisma-schema":
+		if strings.Contains(text, "datasource") && strings.Contains(text, "provider") {
+			if prismaLiteralURL.MatchString(text) {
+				return leakWith("high", "Exposed Prisma schema with a hard-coded database URL", "datasource url with credentials", nil, nil)
+			}
+			return leakWith("medium", "Exposed Prisma schema", "datasource and data model", nil, nil)
+		}
+	case "pm2-ecosystem":
+		if strings.Contains(text, "apps") && strings.Contains(lower, "script") && (strings.Contains(text, "module.exports") || strings.Contains(text, "export default")) {
+			keys := secretKeyNames(text)
+			providers := providerSecretNames(text)
+			if len(keys) > 0 || len(providers) > 0 {
+				return leakWith("high", "Exposed PM2 ecosystem config with secrets", "PM2 apps and env", keys, providers)
+			}
+			return leakWith("medium", "Exposed PM2 ecosystem config", "PM2 apps and env", nil, nil)
+		}
+	case "node-config-default-json", "node-config-production-json", "node-config-default-yml", "node-config-local-json":
+		providers := providerSecretNames(text)
+		keys := secretKeyNames(text)
+		if len(providers) > 0 {
+			return leakWith("high", "Exposed application config with credentials", "node-config file", keys, providers)
+		}
+		if len(keys) > 0 {
+			return leakWith("high", "Exposed application config with secret values", "node-config file", keys, nil)
+		}
+	case "bull-board-admin", "bull-board-root":
+		if isJSONObject && strings.Contains(text, `"queues"`) && (strings.Contains(text, `"counts"`) || strings.Contains(text, `"jobs"`)) {
+			return leakWith("high", "Unauthenticated Bull Board queue dashboard", "queue list with job counts", nil, nil)
+		}
+	case "prometheus-metrics":
+		if promMetricsShape.MatchString(text) {
+			return leakWith("low", "Exposed Prometheus metrics endpoint", "Prometheus exposition format", nil, nil)
+		}
+	case "npm-debug-log", "yarn-error-log":
+		if strings.Contains(text, "npm ERR!") || strings.Contains(text, "verbose cli") || (strings.Contains(text, "Arguments:") && strings.Contains(text, "PATH:")) || strings.Contains(text, "Yarn version:") {
+			return leakWith("medium", "Exposed package-manager error log", "npm/yarn log with environment details", nil, nil)
+		}
+	case "nest-cli":
+		if isJSONObject && (strings.Contains(text, "@nestjs/schematics") || (strings.Contains(text, `"sourceRoot"`) && strings.Contains(text, `"compilerOptions"`))) {
+			return leakWith("low", "Exposed NestJS CLI project file", "nest-cli.json", nil, nil)
+		}
+	case "package-json":
+		if isJSONObject && strings.Contains(text, `"name"`) && (strings.Contains(text, `"dependencies"`) || strings.Contains(text, `"devDependencies"`)) {
+			return leakWith("low", "Exposed package.json", "dependency and script manifest", nil, nil)
 		}
 	case "ds-store":
 		if bytes.Contains(trimmed, []byte("Bud1")) {
