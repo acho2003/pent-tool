@@ -592,3 +592,31 @@ service in another file is not followed. `testdata/nestjs-sast` annotates each
 expected match with `// ruleid:` and each safe control with `// ok:`;
 `TestNestjsSASTRealEngine` (set `XALGORIX_TEST_SEMGREP`) requires an exact match.
 The Next.js and NestJS checks now share one engine (`sast_bundled.go`).
+
+## Routes from linked source code
+
+In White Box assessments, a URL target linked to a source target with
+`related_to` (a service row with both a URL and a repository, or the "Link
+source code to each site" card on New Scan) gets the routes declared in that
+code added to its request inventory, next to crawled and OpenAPI operations:
+
+- **NestJS:** `@Controller` paths (string, array or `{ path, version }`),
+  `@Get/@Post/@Put/@Patch/@Delete/@Head/@Options/@All` paths,
+  `app.setGlobalPrefix(...)`, URI versioning (`enableVersioning` with
+  `VersioningType.URI`, `defaultVersion`, `@Version`), `@Query('name')`
+  parameters and `@Query() dto: Dto` fields.
+- **Next.js:** `app/**/page.*`, `app/**/route.*` (exported `GET`/`POST`/...),
+  `pages/**` and `pages/api/**`, with route groups, parallel slots, private
+  folders and intercepting routes handled, `[id]`/`[...slug]`/`[[...slug]]`,
+  and `next.config` `basePath`.
+
+Routes are resolved against the approved target URL (a global prefix equal to
+the target path is not doubled) and re-checked against scope and exclusions.
+Read-only routes without path parameters are dispatched to ZAP, Nuclei and the
+other web scanners, with labelled type-based query placeholders (`1`, `true`,
+`test`). `{id}` routes wait for values harvested from the application's own
+list responses. POST/PUT/PATCH/DELETE routes are listed in the inventory but
+not sent. Each seeded endpoint has `source-routes` provenance, and the extracted
+list is saved as `discovery/<target>/source-routes.json`. Wildcard, regular
+expression and computed paths are reported as discovery gaps. Nothing in the
+source is executed, and the walk uses the same file limits as the source checks.

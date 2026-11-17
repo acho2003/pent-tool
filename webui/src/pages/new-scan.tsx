@@ -185,7 +185,7 @@ export default function NewScanPage() {
         // A repository assigned to a service is scanned once, as part of that service.
         .filter((target) => !serviceSet.targets.some((serviceTarget) => serviceTarget.id === target.id))
       : []),
-  ]; return all.map(target => ({ ...target, related_to: target.type === "URL" ? all.find(source => ["REPOSITORY", "LOCAL_SOURCE_PATH"].includes(source.type) && source.value === nextjsSourceLinks[target.value])?.id : undefined })); }, [targets, serviceSet, assessmentMode, artifactKind, artifactRefs, nextjsSourceLinks, organizationRepos]);
+  ]; return all.map(target => ({ ...target, related_to: target.type === "URL" ? (all.find(source => ["REPOSITORY", "LOCAL_SOURCE_PATH"].includes(source.type) && source.value === nextjsSourceLinks[target.value])?.id ?? ("related_to" in target ? (target.related_to as string | undefined) : undefined)) : undefined })); }, [targets, serviceSet, assessmentMode, artifactKind, artifactRefs, nextjsSourceLinks, organizationRepos]);
   // Every URL target can receive a shared credential: service URLs and URLs typed
   // in the targets box (for example a portal in front of the services).
   const sharedLoginTargets = useMemo(() => [

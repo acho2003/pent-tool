@@ -402,6 +402,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				apiEndpoints = append(apiEndpoints, endpoint)
 			}
 		}
+		// Routes declared in an explicitly linked source target (related_to)
+		// seed the inventory like an uploaded definition; {id} routes are
+		// filled by value harvesting below, unsafe methods stay inventory-only.
+		apiEndpoints = append(apiEndpoints, p.sourceRouteSeeds(ctx, plan.Config, scanDir, target, targetByID, repoCheckouts, surface)...)
 		MergeOpenAPIEndpointsScoped(surface, inventoryTarget, apiEndpoints, appScopes[target.ID])
 		if expanded {
 			crawlReq.Target = inventoryTarget

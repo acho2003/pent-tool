@@ -151,7 +151,7 @@ func placeholderScalar(value any) (string, bool) {
 // supplied values and their encoding are preserved; it returns the names it
 // filled, sorted. Only read-only OpenAPI operations are changed.
 func withQueryPlaceholders(raw string, endpoint APIEndpoint) (string, []string) {
-	if endpoint.Source != "openapi" || (endpoint.Method != "GET" && endpoint.Method != "HEAD") {
+	if (endpoint.Source != "openapi" && endpoint.Source != sourceRoutesTool) || (endpoint.Method != "GET" && endpoint.Method != "HEAD") {
 		return raw, nil
 	}
 	parsed, err := url.Parse(raw)

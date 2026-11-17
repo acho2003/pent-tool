@@ -46,6 +46,7 @@ export function serviceTargets(rows: ServiceRow[], whiteBox: boolean): ServiceSe
     if (!name) return;
     const n = index + 1;
     const ids: string[] = [];
+    const urlTargetsStart = set.targets.length;
     splitURLs(row.urls).forEach((value, k) => {
       const id = `svc-${n}-url-${k + 1}`;
       set.targets.push({ id, type: "URL", value });
@@ -72,6 +73,15 @@ export function serviceTargets(rows: ServiceRow[], whiteBox: boolean): ServiceSe
       const id = `svc-${n}-repo`;
       set.targets.push({ id, type: repo.startsWith("/") ? "LOCAL_SOURCE_PATH" : "REPOSITORY", value: repo });
       ids.push(id);
+    }
+    // The row states that this repository is the service's source, so its URLs
+    // are linked to it (related_to): routes declared in the code seed those
+    // URLs' scans, and recorded framework versions are compared at runtime.
+    const sourceId = ids.find((id) => set.targets.some((t) => t.id === id && (t.type === "REPOSITORY" || t.type === "LOCAL_SOURCE_PATH")));
+    if (sourceId) {
+      for (let i = urlTargetsStart; i < set.targets.length; i++) {
+        if (set.targets[i].type === "URL") set.targets[i] = { ...set.targets[i], related_to: sourceId };
+      }
     }
     if (!whiteBox) set.ignoredInternal += (image ? 1 : 0) + (repo ? 1 : 0);
     if (ids.length) set.services.push({ id: `svc-${n}`, name, target_ids: ids });
