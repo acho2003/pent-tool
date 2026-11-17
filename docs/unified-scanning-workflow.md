@@ -502,3 +502,28 @@ The `web-max` profile now lifts per-scanner time caps exactly like
 `web-thorough` and enables Dalfox parameter mining. Dalfox, Wapiti and
 Schemathesis need a finite run time, so under both profiles their ceiling is
 four hours instead of 15-20 minutes.
+
+## Exposed env and configuration files (catalog exposed-files-v4)
+
+`exposed-files` now probes 87 paths (was 26), each one read-only GET relative
+to the approved target path, through the scope guard and request budget:
+
+- The `.env` family: production, staging, preprod, uat, qa, dev, test, docker,
+  shared, monorepo, secret, ci and remote variants; backups (`.bak`, `.old`,
+  `.orig`, `.save`, `.backup`, `.copy`, `~`); dotenvx/dotenv-vault key files
+  (`.env.keys`, `.env.vault`); and templates (`.env.example`, `.env.sample`,
+  `.env.dist`). Templates are reported only when they hold real values.
+- Credentials and infrastructure: GCP service-account JSON, kubeconfig,
+  Terraform state, Docker registry auth, `.netrc`, `.pgpass`, `.my.cnf`,
+  `.pypirc`, VS Code/Sublime SFTP configs.
+- Application config: ASP.NET `appsettings*.json` and `web.config`, Spring
+  `application*.properties|yml`, Rails `master.key`/`secrets.yml`/
+  `database.yml`, generic `config.json|yml|yaml` and `settings.json` (reported
+  only with secret values), Compose variants, GitLab/Travis CI files.
+
+Each file must match its own content signature, and HTML responses are never
+reported. Evidence names secret-bearing KEYS (for example `DB_PASSWORD`) and
+credential types, never values. Placeholders such as `changeme`, `${VAR}`,
+`<your-key>` and ERB/Helm templates are not treated as secrets. The catalog is
+ordered by value, so a budget that runs out still covers `.env` and credential
+files first.

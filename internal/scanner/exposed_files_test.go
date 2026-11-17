@@ -33,7 +33,7 @@ func TestExposedFilesDetectsSecretsWithoutLeakingThem(t *testing.T) {
 	target := server.URL + "/customer/app"
 	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}}
 	scope := assessment.AppScopeForTarget(cfg, "app")
-	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 50, 0)}, nil)
+	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 500, 0)}, nil)
 	if run.Status != "completed" {
 		t.Fatalf("status=%q reason=%q", run.Status, run.Reason)
 	}
@@ -72,7 +72,7 @@ func TestExposedFilesIgnoresCatchAllAndEmpty(t *testing.T) {
 	target := server.URL + "/customer/app"
 	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}}
 	scope := assessment.AppScopeForTarget(cfg, "app")
-	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 50, 0)}, nil)
+	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 500, 0)}, nil)
 	if run.Status != "completed" {
 		t.Fatalf("status=%q reason=%q", run.Status, run.Reason)
 	}
@@ -94,7 +94,7 @@ func TestExposedFilesClassifierRequiresSignature(t *testing.T) {
 }
 
 func TestExposedFilesCatalogIsDeterministic(t *testing.T) {
-	if exposedFilesCatalogVersion != "exposed-files-v3" {
+	if exposedFilesCatalogVersion != "exposed-files-v4" {
 		t.Fatalf("unexpected catalog version: %s", exposedFilesCatalogVersion)
 	}
 	seen := map[string]bool{}
@@ -126,7 +126,7 @@ func TestExposedFilesDetectsNextjsConfigAndDevEnv(t *testing.T) {
 	target := server.URL
 	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}}
 	scope := assessment.AppScopeForTarget(cfg, "app")
-	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 50, 0)}, nil)
+	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 500, 0)}, nil)
 	if run.Status != "completed" {
 		t.Fatalf("status=%q reason=%q", run.Status, run.Reason)
 	}
@@ -162,7 +162,7 @@ func TestExposedFilesDetectsNextjsBuildArtifacts(t *testing.T) {
 	target := server.URL
 	cfg := assessment.AssessmentConfig{Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: target}}}
 	scope := assessment.AppScopeForTarget(cfg, "app")
-	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 50, 0)}, nil)
+	run := (exposedFilesRunner{}).Run(context.Background(), Request{Target: target, ScanDir: t.TempDir(), Scope: "assessment:app", TypedAssessment: true, AppScope: &scope}, Config{Budget: NewAssessmentBudget(0, 500, 0)}, nil)
 	if run.Status != "completed" {
 		t.Fatalf("status=%q reason=%q", run.Status, run.Reason)
 	}
