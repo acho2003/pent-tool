@@ -73,10 +73,7 @@ func buildWapitiFull(req Request, cfg Config) commandSpec {
 	base := filepath.Join(req.ScanDir, "scanner-output", "wapiti")
 	artifact := filepath.Join(base, "results.json")
 
-	duration := cfg.WapitiTimeout
-	if duration <= 0 || duration > wapitiMaxDuration {
-		duration = wapitiMaxDuration
-	}
+	duration := boundedToolDuration(cfg.WapitiTimeout, wapitiMaxDuration, req.Profile)
 	scanSeconds := int(duration / time.Second)
 	if scanSeconds > 30 {
 		scanSeconds -= 15
@@ -165,10 +162,7 @@ func buildWapiti(req Request, cfg Config) commandSpec {
 	base := filepath.Join(req.ScanDir, "scanner-output", "wapiti")
 	artifact := filepath.Join(base, "results.json")
 
-	duration := cfg.WapitiTimeout
-	if duration <= 0 || duration > wapitiMaxDuration {
-		duration = wapitiMaxDuration
-	}
+	duration := boundedToolDuration(cfg.WapitiTimeout, wapitiMaxDuration, req.Profile)
 	// Reserve a little headroom so wapiti flushes its JSON before the outer
 	// process deadline fires.
 	scanSeconds := int(duration / time.Second)

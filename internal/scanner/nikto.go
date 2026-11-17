@@ -62,7 +62,7 @@ func buildNikto(req Request, cfg Config) commandSpec {
 	artifact := filepath.Join(base, "results.json")
 	isolatedConfig := filepath.Join(base, "nikto.conf")
 	args := []string{"-config", isolatedConfig, "-host", u.String(), "-nointeractive", "-nocheck"}
-	if req.Profile == ProfileThorough {
+	if profileLiftsTimeCaps(req.Profile) {
 		duration = 0
 	} else {
 		if duration <= 0 || duration > niktoMaxDuration {

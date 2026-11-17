@@ -11,10 +11,7 @@ import (
 )
 
 func runWapitiBatches(ctx context.Context, req Request, cfg Config, emit EmitFunc) Run {
-	duration := cfg.WapitiTimeout
-	if duration <= 0 || duration > wapitiMaxDuration {
-		duration = wapitiMaxDuration
-	}
+	duration := boundedToolDuration(cfg.WapitiTimeout, wapitiMaxDuration, req.Profile)
 	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 	parent := Run{Scanner: "wapiti", Target: req.Target, Scope: req.Scope, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano), AttemptID: req.AttemptID, PlanFingerprint: req.PlanFingerprint}

@@ -306,9 +306,10 @@ func buildSchemathesis(req Request, cfg Config) commandSpec {
 	if duration <= 0 {
 		duration = schemathesisDefaultDuration
 	}
-	if duration > schemathesisMaxDuration {
-		duration = schemathesisMaxDuration
+	if profileLiftsTimeCaps(req.Profile) && cfg.SchemathesisTimeout <= 0 {
+		duration = uncappedToolMaxDuration
 	}
+	duration = boundedToolDuration(duration, schemathesisMaxDuration, req.Profile)
 	if strings.TrimSpace(cfg.SchemathesisPath) == "" {
 		return commandSpec{notApp: "Schemathesis executable is not configured", timeout: duration}
 	}
@@ -341,7 +342,7 @@ func buildSchemathesis(req Request, cfg Config) commandSpec {
 	configPath := filepath.Join(base, "schemathesis.toml")
 	operationsPath := filepath.Join(base, "operations.json")
 	examples := schemathesisDefaultExamples
-	if req.Profile == ProfileThorough || req.Profile == ProfileNextjsDeep {
+	if profileDeepInputs(req.Profile) {
 		examples = schemathesisThoroughExample
 	}
 	// Write fuzzing caps generated requests per operation to the operator's

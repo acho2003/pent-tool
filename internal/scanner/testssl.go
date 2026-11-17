@@ -35,7 +35,7 @@ func buildTestssl(req Request, cfg Config) commandSpec {
 		target, // must remain the final arg
 	}
 	timeout := cfg.TestsslTimeout
-	if req.Profile == ProfileThorough {
+	if profileLiftsTimeCaps(req.Profile) {
 		timeout = 0
 	}
 	return commandSpec{path: cfg.TestsslPath, args: args, artifact: artifact, timeout: timeout, classify: testsslConnectFailure}

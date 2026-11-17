@@ -42,9 +42,9 @@ func DefaultWebProfile(name string) WebProfile {
 	if name == ProfileMax {
 		// Maximum authorized coverage of one's own application: no time cap, a
 		// large endpoint ceiling, and ZAP active scanning at its most aggressive
-		// (INSANE) so every injection point gets the full payload set. The active
-		// scanners (nuclei, nikto, dalfox, zap) are already auto-selected; this
-		// profile removes the budget that otherwise starves them. Still strictly
+		// (INSANE) so every injection point gets the full payload set. It lifts the
+		// per-scanner time caps exactly like web-thorough (profileLiftsTimeCaps)
+		// and enables Dalfox parameter mining (profileDeepInputs). Still strictly
 		// READ-ONLY (AllowStateChanging stays false) — write/API fuzzing remains a
 		// separate opt-in requiring a dedicated test environment. The default rate
 		// stays moderate so a rate-limiting target does not 429-blind differential
@@ -62,6 +62,36 @@ func ResolveWebProfile(name string) (WebProfile, bool) {
 		return WebProfile{}, false
 	}
 	return applyWebProfileOverrides(DefaultWebProfile(name)), true
+}
+
+// uncappedToolMaxDuration bounds the scanners whose command line needs a
+// finite run time (Dalfox, Wapiti, Schemathesis) under a profile that
+// promises no time cap. The per-tool Stop control still ends them early.
+const uncappedToolMaxDuration = 4 * time.Hour
+
+// profileLiftsTimeCaps reports whether a web profile promises no per-scanner
+// time cap. web-thorough and web-max both do.
+func profileLiftsTimeCaps(name string) bool {
+	return name == ProfileThorough || name == ProfileMax
+}
+
+// profileDeepInputs reports whether a web profile widens input generation:
+// Dalfox hidden-parameter mining and more Schemathesis examples.
+func profileDeepInputs(name string) bool {
+	return name == ProfileThorough || name == ProfileNextjsDeep || name == ProfileMax
+}
+
+// boundedToolDuration returns a scanner's run time: the configured value,
+// clamped to its normal ceiling, or to uncappedToolMaxDuration when the
+// profile lifts time caps.
+func boundedToolDuration(configured, ceiling time.Duration, profile string) time.Duration {
+	if profileLiftsTimeCaps(profile) {
+		ceiling = uncappedToolMaxDuration
+	}
+	if configured <= 0 || configured > ceiling {
+		return ceiling
+	}
+	return configured
 }
 
 // ProfileAttackStrength returns the ZAP attack strength implied by a web profile

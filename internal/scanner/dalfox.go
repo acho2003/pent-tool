@@ -90,10 +90,7 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 	artifact := filepath.Join(base, "results.jsonl")
 	listPath := filepath.Join(base, "targets.txt")
 
-	duration := cfg.DalfoxTimeout
-	if duration <= 0 || duration > dalfoxMaxDuration {
-		duration = dalfoxMaxDuration
-	}
+	duration := boundedToolDuration(cfg.DalfoxTimeout, dalfoxMaxDuration, req.Profile)
 
 	// Bounded, machine-readable detection run (flags verified against the
 	// pinned dalfox v2.13.0 cmd/root.go):
@@ -123,7 +120,7 @@ func buildDalfox(req Request, cfg Config) commandSpec {
 		"--worker", "1",
 		"--timeout", "10",
 	}
-	if req.Profile != ProfileThorough && req.Profile != ProfileNextjsDeep {
+	if !profileDeepInputs(req.Profile) {
 		// Default (and web-gentle): only test the dispatcher-approved parameters.
 		args = append(args, "--skip-mining-all")
 	}

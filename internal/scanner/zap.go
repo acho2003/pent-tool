@@ -262,7 +262,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 	}
 	zapTimeout := cfg.ZAPTimeout
-	if req.Profile == ProfileThorough {
+	if profileLiftsTimeCaps(req.Profile) {
 		zapTimeout = 0
 	} else if cfg.WebBudget > 0 && cfg.WebBudget < zapTimeout {
 		zapTimeout = cfg.WebBudget

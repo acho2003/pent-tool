@@ -1357,7 +1357,7 @@ func buildNuclei(req Request, cfg Config) commandSpec {
 		}
 	}
 	timeout := cfg.NucleiTimeout
-	if req.Profile == ProfileThorough {
+	if profileLiftsTimeCaps(req.Profile) {
 		timeout = 0
 	}
 	if _, hasDeadline := cfg.Budget.Deadline(); hasDeadline {
