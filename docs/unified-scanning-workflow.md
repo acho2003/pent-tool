@@ -483,3 +483,22 @@ and PDF showed matching states, with no token or password in saved data.
 across four lab microservices with real Nuclei and a dedicated ZAP daemon;
 `STAGED_SUITE=registry` pulls a private image from a disposable basic-auth
 registry. Recorded outcomes are in `docs/unified-workflow-validation.md`.
+
+## Default selection changes (registry version 37)
+
+Registry version 37 selects four web checks by default for URL web/API
+targets: `exposed-files`, `vcs-exposure` and `actuator` (curated read-only GET
+probes through the scope guard, classified by response content so a catch-all
+200 is not reported) and `dalfox` (XSS on GET query parameters through the
+recording gateway, rate limited, OAST disabled). Before this they were opt-in
+and rarely ran. Dalfox still reports as unavailable when its binary is absent.
+
+Choosing optional tools on New Scan now adds them to the automatic selection
+(`scanner_selection` mode `auto` with `variants`). Previously the page sent a
+`custom` list that silently skipped automatic checks outside the legacy tool
+list. `custom` keeps its exact-list meaning for the CLI `--scanners` flag.
+
+The `web-max` profile now lifts per-scanner time caps exactly like
+`web-thorough` and enables Dalfox parameter mining. Dalfox, Wapiti and
+Schemathesis need a finite run time, so under both profiles their ceiling is
+four hours instead of 15-20 minutes.

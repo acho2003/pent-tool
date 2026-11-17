@@ -86,7 +86,7 @@ type PlanInput struct {
 // version 33: passive security-header check; version 34: removed CodeQL;
 // version 35: removed the Nuclei OAST variant;
 // version 36: api-docs exposure check).
-const PlanRegistryVersion = "36"
+const PlanRegistryVersion = "37"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
