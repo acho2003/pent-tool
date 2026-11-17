@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -86,17 +87,51 @@ func TestRunAssessmentJobsPassesVerifiedFormSessionToNuclei(t *testing.T) {
 	}
 }
 
-func TestRunAssessmentJobsSkipsNucleiWhenFormSessionUnavailable(t *testing.T) {
+// A failed login no longer skips the web scan: eligible scanners run without
+// any credential (a stale cookie must not be sent) and carry the login-fallback
+// limitation so the result is never read as authenticated coverage.
+func TestRunAssessmentJobsRunsNucleiWithoutCredentialsWhenLoginFails(t *testing.T) {
 	runner := &resourceJobRunner{name: "nuclei"}
-	pipeline := &Pipeline{Config: Config{KatanaPath: "/nonexistent/katana"}, Runners: []Runner{runner}}
+	pipeline := &Pipeline{Config: Config{
+		KatanaPath:            "/nonexistent/katana",
+		AssessmentAuthHeaders: map[string][]string{"app": {"Cookie: session=stale"}},
+		AssessmentAuthRefresh: map[string]func(context.Context, []string) ([]string, error){"app": func(context.Context, []string) ([]string, error) {
+			return nil, errors.New("login rejected")
+		}},
+	}, Runners: []Runner{runner}}
 	plan := AssessmentPlan{Config: assessment.AssessmentConfig{
 		Profile: ProfileThorough,
 		Targets: []assessment.Target{{ID: "app", Kind: assessment.KindURL, Value: "https://app.example.test/"}},
 		Access:  []assessment.AccessBinding{{Kind: assessment.AccessFormLogin, TargetIDs: []string{"app"}}},
 	}, Fingerprint: "sha256:nuclei-auth", Jobs: []PlanJob{{Scanner: "nuclei", TargetID: "app", Target: "https://app.example.test/", Variant: "nuclei", State: PlanSelected}}}
 	runs := pipeline.RunAssessmentJobs(t.Context(), plan, t.TempDir(), nil, nil)
-	if len(runs) != 1 || runs[0].Status != "skipped" || runner.calls != 0 {
-		t.Fatalf("unverified Nuclei job ran: runs=%+v calls=%d", runs, runner.calls)
+	if len(runs) != 1 || runs[0].Status != "completed" || runner.calls != 1 {
+		t.Fatalf("login-fallback Nuclei job did not run: runs=%+v calls=%d", runs, runner.calls)
+	}
+	if runner.authHeader != "" || runs[0].Authenticated {
+		t.Fatalf("credentials were used after a failed login: header=%q authenticated=%v", runner.authHeader, runs[0].Authenticated)
+	}
+	if len(runs[0].Limitations) != 1 || runs[0].Limitations[0].Kind != LimitationLoginFallback {
+		t.Fatalf("login-fallback limitation missing: %+v", runs[0].Limitations)
+	}
+}
+
+// Jobs whose consent or purpose is bound to an authenticated identity stay
+// skipped when the login fails.
+func TestLoginFallbackKeepsIdentityBoundJobsSkipped(t *testing.T) {
+	cfg := assessment.AssessmentConfig{}
+	for _, job := range []PlanJob{{Scanner: "authz-matrix"}, {Scanner: "apiwrites"}, {Scanner: "wapiti", FuzzApprovalID: "post-1"}, {Scanner: "katana"}} {
+		if loginFallbackEligible(job, cfg) {
+			t.Errorf("%s (%s) must not run without credentials", job.Scanner, job.FuzzApprovalID)
+		}
+	}
+	if loginFallbackEligible(PlanJob{Scanner: "schemathesis"}, assessment.AssessmentConfig{APIWriteFuzz: true}) {
+		t.Error("schemathesis write fuzzing must not run without credentials")
+	}
+	for _, id := range []string{"zap", "nuclei", "dalfox", "wapiti", "schemathesis"} {
+		if !loginFallbackEligible(PlanJob{Scanner: id}, cfg) {
+			t.Errorf("%s should run without credentials after a failed login", id)
+		}
 	}
 }
 

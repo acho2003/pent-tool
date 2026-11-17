@@ -546,3 +546,17 @@ Swagger/OpenAPI (`/docs-json`, `/documentation-json`, ...) and GraphQL
 consoles stay in the `api-docs` check; Next.js source maps, `__NEXT_DATA__`
 and dev mode stay in `nextjs-assets`. `process.env.X`, `env("X")` and
 `configService.get(...)` values are treated as references, not secrets.
+
+## Login fallback
+
+When a target's configured login fails (wrong password, expired cookie, login
+endpoint down), the assessment no longer skips that target's discovery and web
+scanners. Katana, the browser crawl, API discovery, path-value harvesting,
+supplemental ZAP discovery and the ZAP, Nuclei, Dalfox, Wapiti (GET) and
+Schemathesis (read-only) jobs run **without any credential**: stale cookies,
+headers and browser storage are not sent. Each such run carries the
+`login_failed_unauthenticated_fallback` limitation, the inventory records a
+discovery gap, and the auth job still reports the failure, so the result is
+never read as authenticated coverage. Jobs bound to an authenticated identity
+stay skipped: the access matrix, approved API writes, the bounded Wapiti POST
+campaign and Schemathesis write fuzzing.

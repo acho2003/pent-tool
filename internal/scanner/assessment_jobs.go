@@ -189,6 +189,17 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		}
 	}
 	authVerified := make(map[string]bool)
+	// loginFallback marks targets whose configured login failed. Their
+	// discovery and eligible scanners still run, without any credential, and
+	// every such run carries LimitationLoginFallback so the result is never read
+	// as authenticated coverage.
+	loginFallback := make(map[string]bool)
+	primaryAuthHeaders := func(targetID string) string {
+		if loginFallback[targetID] {
+			return ""
+		}
+		return strings.Join(p.Config.AssessmentAuthHeaders[targetID], "\n")
+	}
 	webDeadlines := map[string]time.Time{}
 	repoCheckouts := map[string]repoCheckout{}
 	targetKinds := map[string]assessment.TargetKind{}
@@ -224,12 +235,16 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if authBound {
 			if err := p.refreshAssessmentWebAuth(ctx, target.ID); err != nil {
 				// A requested authenticated crawl must not quietly become a
-				// public crawl when a cookie has expired or login failed.
+				// public crawl when a cookie has expired or login failed: it runs
+				// without credentials and is labelled as a login fallback.
 				authVerified[target.ID] = false
+				loginFallback[target.ID] = true
 			} else {
 				authVerified[target.ID] = true
 			}
 		}
+		// effectiveAuth: credentials are actually used for this discovery.
+		effectiveAuth := authBound && !loginFallback[target.ID]
 		inventoryScope := assessmentTargetScope(target)
 		inventoryTarget := target.Value
 		if !strings.HasPrefix(strings.ToLower(inventoryTarget), "http://") && !strings.HasPrefix(strings.ToLower(inventoryTarget), "https://") {
@@ -239,10 +254,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			BrowserEmit: emit, BrowserAttemptControl: p.AttemptControl, ReplayStore: replayStore, ReplayScope: inventoryScope, Target: target.Value, Scope: crawlScope, WorkflowVersion: plan.Config.WorkflowVersion, PlanFingerprint: plan.Fingerprint,
 			ScanDir: filepath.Join(scanDir, "discovery", stableJobPath(target.ID)),
 			Profile: plan.Config.Profile, Nextjs: plan.Config.Nextjs, TypedAssessment: true,
-			TargetAuth: strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n"),
+			TargetAuth: primaryAuthHeaders(target.ID),
 			AppScope:   appScopes[target.ID],
 		}
-		if authBound {
+		if effectiveAuth {
 			crawlReq.AuthRefresh = p.Config.AssessmentAuthRefresh[target.ID]
 		}
 		spec := buildKatana(crawlReq, p.Config)
@@ -253,15 +268,15 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			_ = os.Remove(spec.artifact)
 		}
 		surface, valid := LoadAttackSurface(scanDir, inventoryScope, spec.artifact)
-		if valid && authBound && !attackSurfaceObservedWithAuth(surface) {
+		if valid && effectiveAuth && !attackSurfaceObservedWithAuth(surface) {
 			surface, valid = nil, false
 		}
-		if !valid && !authBound {
+		if !valid && !effectiveAuth {
 			if parsed, parseErr := ParseKatanaAttackSurfaceScoped(spec.artifact, inventoryScope, inventoryTarget, crawlReq.TargetAuth != "", crawlReq.AppScope); parseErr == nil {
 				surface = parsed
 			}
 		}
-		if surface == nil && katanaAvailable(p.Config) && spec.notApp == "" && (!authBound || authVerified[target.ID]) {
+		if surface == nil && katanaAvailable(p.Config) && spec.notApp == "" {
 			// The crawl is the longest preparation tool, so it gets its own attempt
 			// ID and cancellation like every other job: a per-tool stop must reach
 			// it without ending the assessment.
@@ -296,7 +311,10 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				crawlRun.FinishedAt = time.Now().Format(time.RFC3339Nano)
 			}
 			crawlRun.Scope = crawlScope
-			crawlRun.Authenticated = authBound && crawlReq.TargetAuth != "" && crawlRun.Status == "completed"
+			crawlRun.Authenticated = effectiveAuth && crawlReq.TargetAuth != "" && crawlRun.Status == "completed"
+			if loginFallback[target.ID] {
+				crawlRun.Limitations = appendLoginFallbackLimitation(crawlRun.Limitations)
+			}
 			crawlRun.Stage = StageCrawl
 			if crawlRun.Authenticated {
 				crawlRun.AuthState, crawlRun.AuthCheckedAt = assessment.StateVerified, time.Now().UTC().Format(time.RFC3339)
@@ -331,14 +349,19 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			surface = NewSeedAttackSurface(inventoryScope, inventoryTarget)
 		}
 		MergeKatanaRedirectTargets(surface, spec.artifact, crawlReq.AppScope, crawlReq.TargetAuth != "")
-		if expanded && (!authBound || authVerified[target.ID]) && (p.Config.WebBrowser || authBound || p.Config.AssessmentBrowserStorage[target.ID] != nil) {
+		if expanded && (p.Config.WebBrowser || authBound || p.Config.AssessmentBrowserStorage[target.ID] != nil) {
 			browserReq := crawlReq
-			browserReq.BrowserStorage = p.Config.AssessmentBrowserStorage[target.ID]
-			browserReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
+			if !loginFallback[target.ID] {
+				browserReq.BrowserStorage = p.Config.AssessmentBrowserStorage[target.ID]
+			}
+			browserReq.TargetAuth = primaryAuthHeaders(target.ID)
 			browserReq.Target = inventoryTarget
 			browserReq.ScanDir = filepath.Join(crawlReq.ScanDir, "browser")
 			browserRun := DiscoverBrowser(ctx, browserReq, p.Config)
 			browserRun.Stage = StageCrawl
+			if loginFallback[target.ID] {
+				browserRun.Limitations = appendLoginFallbackLimitation(browserRun.Limitations)
+			}
 			results = append(results, browserRun)
 			if parsed, err := ParseKatanaAttackSurfaceScoped(browserRun.ArtifactPath, inventoryScope, inventoryTarget, browserRun.Authenticated, crawlReq.AppScope); err == nil {
 				byID := map[string]int{}
@@ -379,7 +402,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		MergeOpenAPIEndpointsScoped(surface, inventoryTarget, apiEndpoints, appScopes[target.ID])
-		if expanded && (!authBound || authVerified[target.ID]) {
+		if expanded {
 			crawlReq.Target = inventoryTarget
 			discoveredAPIs[target.ID] = DiscoverAPIs(ctx, crawlReq, p.Config, surface)
 			for i := range discoveredAPIs[target.ID] {
@@ -390,7 +413,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			// application returned from a related list operation.
 			harvestReq := crawlReq
 			harvestReq.Target = inventoryTarget
-			harvestReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
+			harvestReq.TargetAuth = primaryAuthHeaders(target.ID)
 			known := append(append([]APIEndpoint(nil), apiEndpoints...), discoveredAPIs[target.ID]...)
 			if harvested := HarvestPathValues(ctx, harvestReq, p.Config, inventoryTarget, known); len(harvested) > 0 {
 				for i := range harvested {
@@ -403,15 +426,29 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 		if expanded {
 			addIdentitySchemaSeeds(surface, target.ID, p.Config.AssessmentAuthContexts)
 		}
-		if expanded && (!authBound || authVerified[target.ID]) && slices.ContainsFunc(plan.Jobs, func(job PlanJob) bool {
+		if expanded && slices.ContainsFunc(plan.Jobs, func(job PlanJob) bool {
 			return job.TargetID == target.ID && job.Scanner == "zap" && job.State == PlanSelected
 		}) {
 			sealInventoryRequests(surface, replayStore, inventoryScope)
 			hydrateRequestReplay(surface, replayStore, inventoryScope)
 			zapReq := crawlReq
 			zapReq.Target = inventoryTarget
-			zapReq.TargetAuth = strings.Join(p.Config.AssessmentAuthHeaders[target.ID], "\n")
-			results = append(results, runSupplementalZAPDiscovery(ctx, target.ID, zapReq, p.Config, surface, existing, emit, p.AttemptControl)...)
+			zapReq.TargetAuth = primaryAuthHeaders(target.ID)
+			if loginFallback[target.ID] {
+				zapReq.AuthRefresh = nil
+			}
+			supplemental := runSupplementalZAPDiscovery(ctx, target.ID, zapReq, p.Config, surface, existing, emit, p.AttemptControl)
+			if loginFallback[target.ID] {
+				for i := range supplemental {
+					if supplemental[i].AuthContextID == "" {
+						supplemental[i].Limitations = appendLoginFallbackLimitation(supplemental[i].Limitations)
+					}
+				}
+			}
+			results = append(results, supplemental...)
+		}
+		if loginFallback[target.ID] {
+			surface.DiscoveryGaps = append(surface.DiscoveryGaps, loginFallbackReason)
 		}
 		MergeHistoricalCandidates(surface, pendingHistory[target.ID])
 		for _, previous := range results {
@@ -575,8 +612,14 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, plannedJobNotRun(job, req, plan.Fingerprint, reason, emit))
 			continue
 		}
+		fallbackJob := false
 		if job.AuthContextID == "" && assessmentWebAuthBound(plan.Config.Access, job.TargetID) && scannerUsesWebAuth(job.Scanner) {
-			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err != nil {
+			if err := p.refreshAssessmentWebAuth(ctx, job.TargetID); err != nil && loginFallbackEligible(job, plan.Config) {
+				// Login failed: run this scanner without credentials rather than
+				// skip it, and label the result. Credentials are never sent.
+				fallbackJob = true
+				loginFallback[job.TargetID] = true
+			} else if err != nil {
 				run := plannedJobNotRun(job, req, plan.Fingerprint, "authenticated scan skipped: session verification failed", emit)
 				run.AuthState, run.GapKind = assessment.StateFailed, GapAuthFailed
 				if authVerified[job.TargetID] {
@@ -585,8 +628,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 				run.Stage = job.Stage
 				appendOutcome(job, run)
 				continue
+			} else {
+				authVerified[job.TargetID] = true
 			}
-			authVerified[job.TargetID] = true
 		}
 		if job.AuthContextID != "" && !preparedSurfaces[job.TargetID] {
 			if target, ok := targetByID[job.TargetID]; ok {
@@ -646,7 +690,7 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			appendOutcome(job, old)
 			continue
 		}
-		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; job.AuthContextID == "" && len(headers) > 0 && scannerUsesWebAuth(job.Scanner) {
+		if headers := p.Config.AssessmentAuthHeaders[job.TargetID]; !fallbackJob && job.AuthContextID == "" && len(headers) > 0 && scannerUsesWebAuth(job.Scanner) {
 			req.TargetAuth = strings.Join(headers, "\n")
 			req.AuthRefresh = p.Config.AssessmentAuthRefresh[job.TargetID]
 			req.AuthKind = "HTTP headers"
@@ -900,6 +944,9 @@ func (p *Pipeline) RunAssessmentJobs(ctx context.Context, plan AssessmentPlan, s
 			}
 		}
 		run.Authenticated = req.TargetAuth != "" && run.Status == "completed" && scannerUsesWebAuth(job.Scanner)
+		if fallbackJob {
+			run.Limitations = appendLoginFallbackLimitation(run.Limitations)
+		}
 		if run.Authenticated && run.AuthState == "" {
 			run.AuthState, run.AuthCheckedAt = assessment.StateVerified, time.Now().UTC().Format(time.RFC3339)
 			if _, unverified := unverifiedTokenAuth(plan, job.TargetID); unverified && job.AuthContextID == "" {
