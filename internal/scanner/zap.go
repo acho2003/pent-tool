@@ -223,7 +223,7 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 	}
 	defer release()
 	if ZAPServiceQuarantined(cfg.ZAPURL) {
-		return failedServiceRun("zap", req, "ZAP daemon is quarantined after a cleanup failure; restart the managed daemon and Xalgorix before retrying", emit)
+		return failedServiceRun("zap", req, "ZAP daemon is quarantined after a cleanup failure; restart the managed daemon and 21Pent before retrying", emit)
 	}
 	base := filepath.Join(req.ScanDir, "scanner-output", "zap")
 	_ = os.MkdirAll(base, 0o700)

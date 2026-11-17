@@ -12,7 +12,7 @@ import (
 // kubeBenchRunner runs the CIS Kubernetes benchmark (kube-bench) — a read-only
 // configuration audit. It is an assessment-only, opt-in runner for KUBERNETES /
 // COMPLIANCE assessments. kube-bench inspects the cluster/node it can reach; the
-// operator is responsible for running Xalgorix where kube-bench has that access
+// operator is responsible for running 21Pent where kube-bench has that access
 // (on a node, or deployed in-cluster). It sends no traffic to workloads.
 type kubeBenchRunner struct{}
 

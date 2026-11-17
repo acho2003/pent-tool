@@ -209,7 +209,7 @@ function ResourcesBar({ resources }: { resources: InstancesResponse["resources"]
           label="HOST MEMORY"
           value={`${ramPct}%`}
           sub={(() => {
-            const used = `${Math.round(ramUsed)}MB used${rss > 0 ? ` · xalgorix ${rss}MB RSS` : ""}`
+            const used = `${Math.round(ramUsed)}MB used${rss > 0 ? ` · 21Pent ${rss}MB RSS` : ""}`
             const cap = scanMem > 0
               ? `Max ${resources.effective_max_instances} · scan ${scanMem}MB${toolLimitText}`
               : `Max ${resources.effective_max_instances} instances`

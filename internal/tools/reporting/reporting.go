@@ -95,7 +95,7 @@ const (
 // A dedicated, distinct-purpose Verifier agent (injected by the agent package
 // to avoid an import cycle) independently re-tests every actionable candidate
 // finding (low severity and above; only 'info' is exempt) BEFORE it is
-// persisted. This is the core of Xalgorix's "real validation, not just
+// persisted. This is the core of 21Pent's "real validation, not just
 // detection" guarantee: a finding that the verifier cannot independently
 // reproduce is never presented as validated.
 

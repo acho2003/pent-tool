@@ -1412,7 +1412,7 @@ function EventsTab({
         events={events}
         filter={filter}
         onFilterChange={setFilter}
-        exportFilePrefix={`xalgorix-${target || scanId}-events`}
+        exportFilePrefix={`21pent-${target || scanId}-events`}
         exportScope={scanId}
         emptyTitle="No events yet"
         emptyDescription="Once the scan starts producing output it will stream here."

@@ -1,4 +1,4 @@
-// Package web provides the Xalgorix web UI server.
+// Package web provides the 21Pent web UI server.
 package web
 
 import (
@@ -1060,9 +1060,9 @@ func (s *Server) Start() error {
 	}
 	addr := fmt.Sprintf("%s:%d", bindAddr, s.port)
 	if isLoopback {
-		log.Printf("Xalgorix Web UI → http://%s:%d (loopback only)", bindAddr, s.port)
+		log.Printf("21Pent Web UI → http://%s:%d (loopback only)", bindAddr, s.port)
 	} else {
-		log.Printf("Xalgorix Web UI → http://%s:%d (NETWORK-EXPOSED)", bindAddr, s.port)
+		log.Printf("21Pent Web UI → http://%s:%d (NETWORK-EXPOSED)", bindAddr, s.port)
 	}
 	log.Printf("Scan data → %s", s.dataDir)
 	log.Printf("Rate limiting: %d requests/%ds per IP", s.cfg.RateLimitRequests, s.cfg.RateLimitWindow)
@@ -1162,10 +1162,10 @@ func (s *Server) Start() error {
 		// "terminated"/"interrupt" rather than a numeric fallback for any
 		// os.Signal implementation that doesn't satisfy fmt.Stringer.
 		if s.discordWebhook != "" {
-			s.sendDiscord(0xff6b6b, "🔄 Xalgorix Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig.String()))
+			s.sendDiscord(0xff6b6b, "🔄 21Pent Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig.String()))
 		}
 		if s.telegramConfigured() {
-			s.sendTelegram(0xff6b6b, "🔄 Xalgorix Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig.String()))
+			s.sendTelegram(0xff6b6b, "🔄 21Pent Restarting", fmt.Sprintf("Service received %s signal. Saving state and restarting.\nInterrupted scans will auto-resume.", sig.String()))
 		}
 
 		// Give scans a moment to save their queue state
@@ -1215,12 +1215,12 @@ func (s *Server) scheduleGracefulRestart() bool {
 	}
 	log.Printf("[RESTART] Graceful restart requested — will restart once all scans finish")
 	if s.discordWebhook != "" {
-		s.sendDiscord(0x4dabf7, "🕓 Xalgorix Restart Scheduled",
-			"A restart was requested. Xalgorix will restart automatically once all running scans finish and no tools are active.")
+		s.sendDiscord(0x4dabf7, "🕓 21Pent Restart Scheduled",
+			"A restart was requested. 21Pent will restart automatically once all running scans finish and no tools are active.")
 	}
 	if s.telegramConfigured() {
-		s.sendTelegram(0x4dabf7, "🕓 Xalgorix Restart Scheduled",
-			"A restart was requested. Xalgorix will restart automatically once all running scans finish and no tools are active.")
+		s.sendTelegram(0x4dabf7, "🕓 21Pent Restart Scheduled",
+			"A restart was requested. 21Pent will restart automatically once all running scans finish and no tools are active.")
 	}
 	go s.restartWhenIdleWatcher(s.httpServer)
 	return true
@@ -1286,10 +1286,10 @@ func (s *Server) restartWhenIdleWatcher(httpServer *http.Server) {
 func (s *Server) restartNow(httpServer *http.Server) {
 	log.Printf("[RESTART] Scanner idle — restarting now")
 	if s.discordWebhook != "" {
-		s.sendDiscord(0x4dabf7, "🔄 Xalgorix Restarting", "Scanner is idle. Restarting now; interrupted work (if any) auto-resumes.")
+		s.sendDiscord(0x4dabf7, "🔄 21Pent Restarting", "Scanner is idle. Restarting now; interrupted work (if any) auto-resumes.")
 	}
 	if s.telegramConfigured() {
-		s.sendTelegram(0x4dabf7, "🔄 Xalgorix Restarting", "Scanner is idle. Restarting now; interrupted work (if any) auto-resumes.")
+		s.sendTelegram(0x4dabf7, "🔄 21Pent Restarting", "Scanner is idle. Restarting now; interrupted work (if any) auto-resumes.")
 	}
 
 	// Release the listening socket so the restarted process can rebind.
@@ -1729,12 +1729,12 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if restartForceRequested(r) {
 		log.Printf("[RESTART] /api/restart FORCE requested (idle=%v) — restarting immediately, interrupting any in-flight work", idle)
 		if s.discordWebhook != "" {
-			s.sendDiscord(0xff6b6b, "🔁 Xalgorix Force Restart",
-				"An immediate restart was requested. Xalgorix is restarting now; any in-flight scans are interrupted and marked stopped.")
+			s.sendDiscord(0xff6b6b, "🔁 21Pent Force Restart",
+				"An immediate restart was requested. 21Pent is restarting now; any in-flight scans are interrupted and marked stopped.")
 		}
 		if s.telegramConfigured() {
-			s.sendTelegram(0xff6b6b, "🔁 Xalgorix Force Restart",
-				"An immediate restart was requested. Xalgorix is restarting now; any in-flight scans are interrupted and marked stopped.")
+			s.sendTelegram(0xff6b6b, "🔁 21Pent Force Restart",
+				"An immediate restart was requested. 21Pent is restarting now; any in-flight scans are interrupted and marked stopped.")
 		}
 		// Prevent an already-scheduled idle watcher from also firing.
 		s.restartWhenIdle.Store(true)
@@ -2785,7 +2785,7 @@ func (s *Server) handleDownloadReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"xalgorix_report_%s.pdf\"", scanID))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"21pent_report_%s.pdf\"", scanID))
 	http.ServeFile(w, r, reportPath)
 }
 
@@ -2845,7 +2845,7 @@ func (s *Server) handleRateLimit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleVersion returns the current Xalgorix version
+// handleVersion returns the current 21Pent version
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -2859,10 +2859,10 @@ func (s *Server) handleStopNotify(w http.ResponseWriter, r *http.Request) {
 
 	// Send Discord notification if webhook is configured
 	if s.discordWebhook != "" {
-		s.sendDiscord(0xff6b6b, "🛑 Xalgorix Stopped", "The Xalgorix service has been stopped by the user.")
+		s.sendDiscord(0xff6b6b, "🛑 21Pent Stopped", "The 21Pent service has been stopped by the user.")
 	}
 	if s.telegramConfigured() {
-		s.sendTelegram(0xff6b6b, "🛑 Xalgorix Stopped", "The Xalgorix service has been stopped by the user.")
+		s.sendTelegram(0xff6b6b, "🛑 21Pent Stopped", "The 21Pent service has been stopped by the user.")
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "notified"})

@@ -1,4 +1,4 @@
-// Package scanner implements Xalgorix's deterministic security-scanner
+// Package scanner implements 21Pent's deterministic security-scanner
 // pipeline. It deliberately has no dependency on internal/agent or internal/llm.
 package scanner
 

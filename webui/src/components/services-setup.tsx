@@ -219,7 +219,7 @@ export function ServicesSetup({ rows, onChange, whiteBox, allowAPI, repoPool, on
         </div>}
       </div>)}
       {set.services.length > 0 && <p className="text-xs text-muted-foreground">{set.services.length} service{set.services.length === 1 ? "" : "s"} · {set.urlTargets.length} URL target{set.urlTargets.length === 1 ? "" : "s"} · {set.imageTargets.length} image{set.imageTargets.length === 1 ? "" : "s"}. The protected path is a page that only works when logged in; it lets the shared login prove access per service.</p>}
-      {allowAPI && <p className="text-xs text-muted-foreground">Without an uploaded file, Xalgorix still looks for a published schema on each service (/openapi.json, /swagger.json, /v3/api-docs, /api-docs, and the NestJS /api-json, /docs-json, /api/docs-json). Select API coverage so the endpoints are tested.</p>}
+      {allowAPI && <p className="text-xs text-muted-foreground">Without an uploaded file, 21Pent still looks for a published schema on each service (/openapi.json, /swagger.json, /v3/api-docs, /api-docs, and the NestJS /api-json, /docs-json, /api/docs-json). Select API coverage so the endpoints are tested.</p>}
       {set.ignoredInternal > 0 && <p className="text-xs text-amber-200">{set.ignoredInternal} image/source entr{set.ignoredInternal === 1 ? "y is" : "ies are"} ignored outside White Box mode. Choose White Box to scan images and source.</p>}
     </CardContent>
   </Card>;

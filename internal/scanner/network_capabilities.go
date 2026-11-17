@@ -14,7 +14,7 @@ const (
 )
 
 // MasscanCapabilityReason is empty only when this process has the Linux
-// capabilities required by Xalgorix's raw-packet Masscan adapter.
+// capabilities required by 21Pent's raw-packet Masscan adapter.
 func MasscanCapabilityReason() string {
 	if runtime.GOOS != "linux" {
 		return ""

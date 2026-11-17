@@ -61,8 +61,7 @@ func (s *Server) sendDiscordWithFile(color int, title, description, filePath str
 
 	// Add payload JSON
 	embedPayload := map[string]any{
-		"username":   "Xalgorix",
-		"avatar_url": "https://raw.githubusercontent.com/xalgord/xalgord/main/assets/logo.png",
+		"username": "21Pent",
 		"embeds": []map[string]any{
 			{
 				"title":       title,
@@ -70,7 +69,7 @@ func (s *Server) sendDiscordWithFile(color int, title, description, filePath str
 				"color":       color,
 				"timestamp":   time.Now().Format(time.RFC3339),
 				"footer": map[string]string{
-					"text": "Xalgorix — Deterministic Security Scanner",
+					"text": "21Pent — Deterministic Security Scanner",
 				},
 			},
 		},
@@ -122,8 +121,7 @@ func (s *Server) sendDiscordWithFile(color int, title, description, filePath str
 // sendSimpleEmbed sends a simple embed without file attachment
 func (s *Server) sendSimpleEmbed(color int, title, description string) {
 	payload := map[string]any{
-		"username":   "Xalgorix",
-		"avatar_url": "https://raw.githubusercontent.com/xalgord/xalgord/main/assets/logo.png",
+		"username": "21Pent",
 		"embeds": []map[string]any{
 			{
 				"title":       title,
@@ -131,7 +129,7 @@ func (s *Server) sendSimpleEmbed(color int, title, description string) {
 				"color":       color,
 				"timestamp":   time.Now().Format(time.RFC3339),
 				"footer": map[string]string{
-					"text": "Xalgorix — Deterministic Security Scanner",
+					"text": "21Pent — Deterministic Security Scanner",
 				},
 			},
 		},

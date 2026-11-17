@@ -19,7 +19,7 @@ type Palette struct {
 	Code     [3]int
 }
 
-// ThemePalette returns the dark-theme palette baked into every Xalgorix
+// ThemePalette returns the dark-theme palette baked into every 21Pent
 // report. The hex comments next to each color mirror the original
 // reference values from internal/web/report.go.
 func ThemePalette() Palette {

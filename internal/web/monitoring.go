@@ -22,7 +22,7 @@ import (
 )
 
 // Wazuh retains the event store. Only the connection and operator actions live
-// in Xalgorix's data directory, entirely separate from assessment records.
+// in 21Pent's data directory, entirely separate from assessment records.
 type monitoringConfig struct {
 	ManagerURL      string   `json:"manager_url"`
 	IndexerURL      string   `json:"indexer_url"`

@@ -374,7 +374,7 @@ func (s *Server) assessmentAuthRefreshers(plan *scanner.AssessmentPlan, headers 
 			mu.Lock()
 			defer mu.Unlock()
 			// A pasted bearer JWT that has passed its exp claim cannot be renewed
-			// without a login Xalgorix can perform; stop authenticated work.
+			// without a login 21Pent can perform; stop authenticated work.
 			if formValues == nil {
 				if expired, at := expiredBearerJWT(current, time.Now()); expired {
 					return nil, fmt.Errorf("the supplied token expired at %s; paste a fresh token to continue authenticated testing", at.UTC().Format("2006-01-02 15:04 UTC"))

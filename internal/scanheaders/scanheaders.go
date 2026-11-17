@@ -1,5 +1,5 @@
 // Package scanheaders manages operator-supplied custom HTTP headers that
-// identify authorized Xalgorix scan traffic (for example "X-Bug-Bounty: user").
+// identify authorized 21Pent scan traffic (for example "X-Bug-Bounty: user").
 //
 // The headers mark every target-facing request as an authorized run, so the
 // traffic is attributable in the target's access logs and can be allow-listed

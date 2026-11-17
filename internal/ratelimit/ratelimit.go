@@ -1,5 +1,5 @@
 // Package ratelimit provides a per-domain token-bucket rate limiter
-// for outbound HTTP requests made by Xalgorix tools.
+// for outbound HTTP requests made by 21Pent tools.
 //
 // Configuration (via env or ~/.xalgorix.env):
 //

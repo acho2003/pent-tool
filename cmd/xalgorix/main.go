@@ -1,4 +1,4 @@
-// Xalgorix — deterministic security scanner pipeline
+// 21Pent — deterministic security scanner pipeline
 package main
 
 import (
@@ -263,7 +263,7 @@ func main() {
 
 		fmt.Print(tui.Banner)
 		fmt.Println()
-		fmt.Printf("\n  Xalgorix Web UI starting on port %d...\n", port)
+		fmt.Printf("\n  21Pent Web UI starting on port %d...\n", port)
 		printServiceAccessInfo(cfg, port)
 		fmt.Println()
 
@@ -595,7 +595,7 @@ func handleStart() {
 
 	// Check if binary exists
 	if _, err := os.Stat(installPath); os.IsNotExist(err) {
-		fmt.Printf("❌ Xalgorix not found at %s\n", installPath)
+		fmt.Printf("❌ 21Pent not found at %s\n", installPath)
 		fmt.Println("   Install with: xalgorix --update")
 		os.Exit(1)
 	}
@@ -672,7 +672,7 @@ func handleStart() {
 		return
 	}
 
-	fmt.Println("✅ Xalgorix installed and started as systemd service!")
+	fmt.Println("✅ 21Pent installed and started as systemd service!")
 	printServiceAccessInfo(config.Get(), defaultWebPort)
 	fmt.Println("   Logs:   journalctl -u xalgorix -f")
 	fmt.Println("   Status: systemctl status xalgorix")
@@ -680,7 +680,7 @@ func handleStart() {
 
 func serviceUnitContent(home, installPath string) string {
 	return fmt.Sprintf(`[Unit]
-Description=Xalgorix - Deterministic Security Scanner Pipeline
+Description=21Pent - Deterministic Security Scanner Pipeline
 After=network.target
 
 [Service]
@@ -747,7 +747,7 @@ func startBackground() {
 		os.Exit(1)
 	}
 
-	fmt.Println("✅ Xalgorix started in background!")
+	fmt.Println("✅ 21Pent started in background!")
 	printServiceAccessInfo(config.Get(), defaultWebPort)
 	fmt.Println("   Logs:   tail -f /tmp/xalgorix.log")
 	fmt.Printf("   PID:    %d\n", startCmd.Process.Pid)
@@ -776,7 +776,7 @@ func handleStop() {
 		_ = cmd.Run()
 	}
 
-	fmt.Println("✅ Xalgorix stopped!")
+	fmt.Println("✅ 21Pent stopped!")
 }
 
 // handleRestart restarts the xalgorix service
@@ -792,7 +792,7 @@ func handleRestart() {
 		return
 	}
 
-	fmt.Println("✅ Xalgorix restarted!")
+	fmt.Println("✅ 21Pent restarted!")
 	printServiceAccessInfo(config.Get(), defaultWebPort)
 }
 
@@ -820,7 +820,7 @@ func handleRestartWhenIdle() {
 		os.Exit(1)
 	}
 	fmt.Println("✅ Graceful restart scheduled.")
-	fmt.Println("   Xalgorix will restart automatically once all running scans finish")
+	fmt.Println("   21Pent will restart automatically once all running scans finish")
 	fmt.Println("   and no tools are active. Watch progress with:")
 	fmt.Println("     journalctl -u xalgorix -f      (systemd)")
 	fmt.Println("     tail -f /tmp/xalgorix.log      (background mode)")
@@ -877,7 +877,7 @@ func dashboardAuthConfigured(cfg *config.Config) bool {
 
 // handleUninstall removes xalgorix from the system
 func handleUninstall() {
-	fmt.Println("🗑️  Uninstalling Xalgorix...")
+	fmt.Println("🗑️  Uninstalling 21Pent...")
 
 	// Stop the service first
 	cmd := exec.Command("pkill", "-f", "xalgorix")

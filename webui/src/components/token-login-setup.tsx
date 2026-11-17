@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { protectedPathURL, type ServiceURLTarget } from "@/components/services-setup";
 
 // A saved shared credential bound to the ticked URL targets.
-// - TOKEN_LOGIN: Xalgorix logs in with a username/password and renews the token.
+// - TOKEN_LOGIN: 21Pent logs in with a username/password and renews the token.
 // - APPLICATION_HEADERS: a token or cookie the operator pasted (for logins that
 //   cannot be automated, such as NDI wallet sign-in); it cannot be renewed.
 // `bound` records each target's URL at save time so a later URL edit forces a
@@ -190,8 +190,8 @@ export function TokenLoginSetup({ targets, loginTargets, value, onChange }: {
       </div> : <>
         <fieldset className="grid gap-2 sm:grid-cols-2">
           <legend className="sr-only">How do you sign in?</legend>
-          <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm ${mode === "login" ? "border-primary bg-primary/5" : ""}`}><input type="radio" name="shared-login-mode" className="mt-1" checked={mode === "login"} onChange={() => setMode("login")} /><span><span className="font-medium">Log in with a username and password</span><span className="block text-xs text-muted-foreground">Xalgorix calls your login API and renews the token itself.</span></span></label>
-          <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm ${mode === "paste" ? "border-primary bg-primary/5" : ""}`}><input type="radio" name="shared-login-mode" className="mt-1" checked={mode === "paste"} onChange={() => setMode("paste")} /><span><span className="font-medium">Paste a token I already have</span><span className="block text-xs text-muted-foreground">For logins Xalgorix cannot perform, such as NDI or a mobile app QR scan.</span></span></label>
+          <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm ${mode === "login" ? "border-primary bg-primary/5" : ""}`}><input type="radio" name="shared-login-mode" className="mt-1" checked={mode === "login"} onChange={() => setMode("login")} /><span><span className="font-medium">Log in with a username and password</span><span className="block text-xs text-muted-foreground">21Pent calls your login API and renews the token itself.</span></span></label>
+          <label className={`flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm ${mode === "paste" ? "border-primary bg-primary/5" : ""}`}><input type="radio" name="shared-login-mode" className="mt-1" checked={mode === "paste"} onChange={() => setMode("paste")} /><span><span className="font-medium">Paste a token I already have</span><span className="block text-xs text-muted-foreground">For logins 21Pent cannot perform, such as NDI or a mobile app QR scan.</span></span></label>
         </fieldset>
         {mode === "login" ? <>
           <div className="space-y-2"><Label htmlFor="token-login-url">Login API URL</Label><Input id="token-login-url" value={loginURL} onChange={(e) => setLoginURL(e.target.value)} placeholder="http://10.0.0.5:30862/api/auth/login" /></div>

@@ -1,6 +1,6 @@
 # Target credential storage
 
-Xalgorix can store target-bound header, cookie, bearer-token, API-key, form-login,
+21Pent can store target-bound header, cookie, bearer-token, API-key, form-login,
 SSH, Windows, cloud, or Kubernetes credential values in its encrypted credential
 vault. Credential records live under `<data-dir>/_credentials`; the values are
 encrypted with AES-256-GCM, and files/directories are created with owner-only
@@ -17,7 +17,7 @@ without the matching key also makes them unusable.
 
 To rotate a key, use the vault's `RotateKey` operation while the service is
 quiescent, then atomically replace the mounted key file with the same new 32-byte
-key before restarting Xalgorix. Keep a protected backup of the previous key and
+key before restarting 21Pent. Keep a protected backup of the previous key and
 vault until the rotated records have been verified. The web API does not expose
 key rotation.
 

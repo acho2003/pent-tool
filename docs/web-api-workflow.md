@@ -1,6 +1,6 @@
 # Web application and API assessments
 
-Xalgorix builds a previewed, target-bound workflow for web applications and
+21Pent builds a previewed, target-bound workflow for web applications and
 REST APIs. A preview does not contact the target. Starting the assessment runs
 the accepted jobs in dependency order and records stage status, tool output,
 and coverage gaps.
@@ -67,7 +67,7 @@ before starting.
 Application credentials are stored in the encrypted credential vault and
 bound to targets. For HTTP header or cookie credentials, save the credential
 and optionally provide a protected verification URL and response marker. With
-neither set, Xalgorix checks the approved target URL and compares authenticated
+neither set, 21Pent checks the approved target URL and compares authenticated
 and anonymous status/redirect behavior; if they look identical, provide a
 protected URL or marker. Form login still requires a protected URL and marker.
 

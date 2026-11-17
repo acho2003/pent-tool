@@ -1,4 +1,4 @@
-// Package config provides configuration management for Xalgorix.
+// Package config provides configuration management for 21Pent.
 // All configuration is loaded from environment variables with XALGORIX_ prefix.
 package config
 
@@ -16,7 +16,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/scanheaders"
 )
 
-// Config holds all Xalgorix configuration. The scanner pipeline is fully
+// Config holds all 21Pent configuration. The scanner pipeline is fully
 // deterministic; there is no LLM/AI configuration.
 type Config struct {
 	NucleiPath            string
@@ -106,7 +106,7 @@ type Config struct {
 
 	// ScanHeaders are operator-supplied custom HTTP headers ("Name: value")
 	// injected into all TARGET-facing scan traffic to identify an authorized
-	// Xalgorix run: the agent's HTTP client and, via their -H flag, bundled
+	// 21Pent run: the agent's HTTP client and, via their -H flag, bundled
 	// tools (httpx, nuclei). Built-in equivalent of Nuclei's -H/-header. Bug-
 	// bounty programs often require such a header (e.g. "X-Bug-Bounty: user");
 	// it also lets a target's WAF/SOC allow-list the scan. Never attached to
@@ -478,7 +478,7 @@ func resolveDataDir(home string) (string, error) {
 
 // maybeEmitMigrationWarning emits a single WARN-level [MIGRATION] log line
 // when the binary is launched from a directory that looks like the legacy
-// $CWD-rooted Xalgorix workspace layout (notes.json, _schedules/,
+// $CWD-rooted 21Pent workspace layout (notes.json, _schedules/,
 // vulnerabilities.json, or YYYY-MM-DD/scan-* output dirs) and the user has
 // not pinned the workspace via XALGORIX_DATA_DIR or XALGORIX_WORKSPACE.
 //

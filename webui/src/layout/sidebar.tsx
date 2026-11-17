@@ -44,7 +44,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <img src="/logo.svg" alt="" className="h-full w-full object-contain p-0.5" aria-hidden />
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-semibold tracking-tight">Xalgorix</span>
+          <span className="text-sm font-semibold tracking-tight">21Pent</span>
           <span className="text-[10px] text-muted-foreground mono">
             {version?.version ? `v${version.version}` : "security scanner"}
           </span>

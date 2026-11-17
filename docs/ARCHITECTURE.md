@@ -1,6 +1,6 @@
 # Architecture
 
-Xalgorix uses one deterministic scanner engine from the web server, scheduler, and CLI.
+21Pent uses one deterministic scanner engine from the web server, scheduler, and CLI.
 
 ```text
 request

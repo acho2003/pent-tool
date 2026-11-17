@@ -1,5 +1,5 @@
 // Package reporting owns the branded-PDF generation pipeline used by the
-// self-hosted Xalgorix binary. It encapsulates the layout primitives
+// self-hosted 21Pent binary. It encapsulates the layout primitives
 // (palette, fonts, page chrome), the scan-summary helpers (severity rollups,
 // risk scoring, recon extraction), the security-framework mappings
 // (CWE / OWASP / PTES), and the methodology phase catalog.

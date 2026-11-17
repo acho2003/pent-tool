@@ -17,7 +17,7 @@ import (
 )
 
 // Schemathesis (pinned 4.32.5) generates property-based requests from an
-// OpenAPI definition. Xalgorix never hands it the operator's original document:
+// OpenAPI definition. 21Pent never hands it the operator's original document:
 // it receives a definition rebuilt from the approved, in-scope GET/HEAD
 // operations only, it runs only through the recording gateway (which injects
 // the verified session itself, enforces scope, exclusions, methods and the
@@ -38,7 +38,7 @@ const (
 const schemathesisConfig = "[phases.coverage]\nunexpected-methods = []\n"
 
 // schemathesisCheck is the only response check run. Conformance checks would
-// judge responses against definitions Xalgorix invented, and ignored_auth would
+// judge responses against definitions 21Pent invented, and ignored_auth would
 // report the gateway's re-injected session as an authentication bypass.
 const schemathesisCheck = "not_a_server_error"
 

@@ -22,7 +22,7 @@ function describeLoginError(err: unknown): string {
         : ""
     switch (err.status) {
       case 0:
-        return "Cannot reach the server. Check your network or that the Xalgorix service is running."
+        return "Cannot reach the server. Check your network or that the 21Pent service is running."
       case 400:
         return serverMsg || "Invalid request. Please try again."
       case 401:
@@ -33,7 +33,7 @@ function describeLoginError(err: unknown): string {
         // The login endpoint is missing on the server. This is almost
         // always a stale Go binary — the SPA was rebuilt with the
         // /api/auth/login client but the embedded server wasn't.
-        return "Login endpoint not found on this server. The backend appears to be out of date — rebuild and redeploy the Xalgorix server."
+        return "Login endpoint not found on this server. The backend appears to be out of date — rebuild and redeploy the 21Pent server."
       case 405:
         return "This server doesn't accept the login request shape. Try refreshing the page."
       case 429: {
@@ -84,8 +84,8 @@ export default function LoginPage() {
     <div className="grid min-h-screen w-full bg-background lg:grid-cols-2">
       <div className="hidden flex-col justify-between border-r border-border bg-muted/30 p-12 lg:flex">
         <div className="flex items-center gap-3">
-          <img src="/logo.svg" alt="Xalgorix" className="h-8 w-8" />
-          <span className="font-mono text-sm font-semibold tracking-tight">XALGORIX</span>
+          <img src="/logo.svg" alt="21Pent" className="h-8 w-8" />
+          <span className="font-mono text-sm font-semibold tracking-tight">21Pent</span>
         </div>
         <div className="space-y-6">
           <div className="space-y-2">
@@ -104,14 +104,14 @@ export default function LoginPage() {
             <Stat label="Source code" value="04" />
           </dl>
         </div>
-        <p className="text-xs text-muted-foreground">© Xalgorix · Internal use only</p>
+        <p className="text-xs text-muted-foreground">© 21Pent · Internal use only</p>
       </div>
 
       <div className="flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-sm">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <img src="/logo.svg" alt="Xalgorix" className="h-8 w-8" />
-            <span className="font-mono text-sm font-semibold tracking-tight">XALGORIX</span>
+            <img src="/logo.svg" alt="21Pent" className="h-8 w-8" />
+            <span className="font-mono text-sm font-semibold tracking-tight">21Pent</span>
           </div>
           <Card>
             <CardHeader>

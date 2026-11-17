@@ -1,10 +1,10 @@
-# Pent Tool
+# 21Pent
 
-Pent Tool is a self-hosted penetration-testing and security-assessment platform for authorized testing. It combines a web dashboard, assessment planning, native security tools, containerized scanners, Kubernetes exposure checks, and durable assessment artifacts.
+21Pent is a self-hosted penetration-testing and security-assessment platform for authorized testing. It combines a web dashboard, assessment planning, native security tools, containerized scanners, Kubernetes exposure checks, and durable assessment artifacts.
 
 Repository: <https://github.com/acho2003/pent-tool>
 
-> The repository is transitioning from its original Xalgorix implementation. Some runtime names, Compose services, binaries, environment variables, and volumes still use `xalgorix`; this README uses the current product name while keeping commands accurate.
+> 21Pent began as a fork of the MIT-licensed Xalgorix project. Some runtime names, Compose services, binaries, environment variables, and volumes still use `xalgorix`; this README uses the current product name while keeping commands accurate.
 
 ## Features
 

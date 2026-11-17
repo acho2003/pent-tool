@@ -1,4 +1,4 @@
-// Package proxy provides HTTP, HTTPS and SOCKS5 proxy support for Xalgorix.
+// Package proxy provides HTTP, HTTPS and SOCKS5 proxy support for 21Pent.
 // It supports the following formats:
 //   - ip:port
 //   - ip:port:user:pass

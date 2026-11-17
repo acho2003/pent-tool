@@ -71,7 +71,7 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 		switch target.Kind {
 		case assessment.KindDomain, assessment.KindURL, assessment.KindIP, assessment.KindCIDR, assessment.KindHost:
 			if scopeguard.IsLocalOrListener(scopeguard.Config{BindAddr: appConfig.BindAddr, AllowLocalTargets: appConfig.AllowLocalTargets}, target.Value) {
-				return fmt.Errorf("target %q is local or points at the Xalgorix host; CLI assessment refused by local-target policy", target.Value)
+				return fmt.Errorf("target %q is local or points at the 21Pent host; CLI assessment refused by local-target policy", target.Value)
 			}
 		}
 	}
@@ -96,7 +96,7 @@ func executeAssessmentCLI(args cliArgs, appConfig *config.Config, output io.Writ
 		return errors.New("assessment plan has no runnable selected jobs")
 	}
 	if appConfig.DataDir == "" {
-		return errors.New("Xalgorix data directory is not configured")
+		return errors.New("21Pent data directory is not configured")
 	}
 	assessmentRoot := filepath.Join(appConfig.DataDir, "assessments")
 	if err := os.MkdirAll(assessmentRoot, 0o700); err != nil {

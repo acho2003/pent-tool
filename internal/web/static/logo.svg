@@ -1,3 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Xalgorix">
-  <path fill="#4CE6B5" d="M7 8h12.5L36 26.3l-7.7 7.9L7 8Zm50 0H44.5L28 26.3l7.7 7.9L57 8ZM7 56h12.5L36 37.7l-7.7-7.9L7 56Zm50 0H44.5L28 37.7l7.7-7.9L57 56Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="21Pent">
+  <g stroke="#4CE6B5" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 21c0-7 5.2-11 11.5-11S31 14 31 21c0 5.5-3.4 9.3-8.4 14.2L8 50h23.5"/>
+    <path d="M40 17.5 48.5 10v40M40 50h17"/>
+  </g>
 </svg>

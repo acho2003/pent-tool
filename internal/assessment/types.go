@@ -1,5 +1,5 @@
 // Package assessment holds the shared, dependency-light domain model for
-// Xalgorix assessments: modes, assessment types, targets, access bindings, and
+// 21Pent assessments: modes, assessment types, targets, access bindings, and
 // derived capability evidence. It deliberately imports neither internal/web nor
 // the scanner command implementations so the planner and the web layer can both
 // depend on it without a cycle.

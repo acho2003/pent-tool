@@ -16,7 +16,7 @@ type ExportableFeedEvent = Omit<FeedEvent, "_key" | "_receivedAt"> & {
 export function exportFeedEvents({
   events,
   format,
-  filenamePrefix = "xalgorix-live-feed",
+  filenamePrefix = "21pent-live-feed",
   metadata = {},
 }: FeedExportOptions) {
   if (events.length === 0 || typeof document === "undefined") return;
@@ -67,7 +67,7 @@ function buildPayload(
       return {
         body: JSON.stringify(
           {
-            source: "xalgorix-live-feed",
+            source: "21pent-live-feed",
             exported_at: exportedAt.toISOString(),
             count: events.length,
             ...metadata,
@@ -87,7 +87,7 @@ function buildTranscript(
   metadata: Record<string, unknown>,
 ): string {
   const lines = [
-    "Xalgorix live feed export",
+    "21Pent live feed export",
     `Exported: ${exportedAt.toISOString()}`,
     `Events: ${events.length}`,
   ];

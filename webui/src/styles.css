@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Charcoal and mint palette from the Xalgorix reference. */
+/* Charcoal and mint palette from the 21Pent reference. */
 @theme {
   --color-background: #080d11;
   --color-foreground: #f4f8fa;

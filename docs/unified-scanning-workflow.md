@@ -243,7 +243,7 @@ response schemas, so conformance checks would judge invented contracts, and
 `ignored_auth` would mistake the gateway's re-injected session for an
 authentication bypass. A 5xx response the target itself returned becomes a
 low-severity CWE-755 finding with the request, status and response excerpt;
-responses the gateway produced (marked `X-Xalgorix-Gateway-Rejection`, which
+responses the gateway produced (marked `X-21Pent-Gateway-Rejection`, which
 the gateway strips from upstream responses) are discarded. Exit code 1 means
 failures or errors, so the NDJSON event log decides: a fatal error fails the
 run, while a missing end event, an early stop or errored test cases make it
@@ -328,7 +328,7 @@ and input manifest are keyed `nuclei-oast` so they never overwrite ordinary
 Nuclei coverage. Legacy (non unified-v1) plans warn instead.
 
 Nuclei's default callback servers are ProjectDiscovery's public `oast.*`
-services, so payloads naming the target would reach a third party. Xalgorix
+services, so payloads naming the target would reach a third party. 21Pent
 never uses them: `XALGORIX_INTERACTSH_SERVER` must be the origin of a
 self-hosted `interactsh-server` (for example `https://oast.example.org`), and
 public Interactsh hosts are refused. Without a valid server the consented job is

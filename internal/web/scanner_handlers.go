@@ -222,13 +222,13 @@ func (s *Server) assessmentScopeProblems(cfg assessment.AssessmentConfig, allowL
 		switch target.Kind {
 		case assessment.KindDomain, assessment.KindURL, assessment.KindIP, assessment.KindCIDR, assessment.KindHost:
 			if s.isBlockedTargetForScan(target.Value, allowLoopbackPorts) {
-				problems = append(problems, assessment.Problem{Code: "target.scope_blocked", Message: fmt.Sprintf("assessment target %q is local, internal, or the Xalgorix listener and is outside scan policy", target.ID), Blocking: true})
+				problems = append(problems, assessment.Problem{Code: "target.scope_blocked", Message: fmt.Sprintf("assessment target %q is local, internal, or the 21Pent listener and is outside scan policy", target.ID), Blocking: true})
 			}
 		}
 	}
 	for _, origin := range cfg.ApprovedOrigins {
 		if s.isBlockedTargetForScan(origin.Origin(), allowLoopbackPorts) {
-			problems = append(problems, assessment.Problem{Code: "target.scope_blocked", Message: fmt.Sprintf("approved origin %s of target %q is local, internal, or the Xalgorix listener and is outside scan policy", origin.Origin(), origin.TargetID), Blocking: true})
+			problems = append(problems, assessment.Problem{Code: "target.scope_blocked", Message: fmt.Sprintf("approved origin %s of target %q is local, internal, or the 21Pent listener and is outside scan policy", origin.Origin(), origin.TargetID), Blocking: true})
 		}
 	}
 	return problems

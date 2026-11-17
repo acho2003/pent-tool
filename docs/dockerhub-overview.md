@@ -1,6 +1,6 @@
-# Xalgorix — Deterministic Security Scanner Pipeline
+# 21Pent — Deterministic Security Scanner Pipeline
 
-Xalgorix runs Nuclei, OWASP ZAP, OpenVAS/Greenbone, Trivy, and Vuls in a fixed sequence. It streams and preserves native scanner output and produces a downloadable report assembled deterministically from that output.
+21Pent runs Nuclei, OWASP ZAP, OpenVAS/Greenbone, Trivy, and Vuls in a fixed sequence. It streams and preserves native scanner output and produces a downloadable report assembled deterministically from that output.
 
 Report assembly is deterministic and driven only by scanner source records. Every finding retains its source scanner and exact source record ID.
 

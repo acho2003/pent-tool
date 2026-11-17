@@ -107,7 +107,7 @@ func allEnvSettingDefinitions() []envSettingDefinition {
 		{Key: "XALGORIX_SCAN_MEMORY_BUDGET_MB", Label: "Scan memory budget MB", Category: "Resources", Description: "Memory budget per active scan. Empty means auto-scale from RAM and CPU cores.", Placeholder: "auto", InputType: "number", RequiresRestart: true},
 		{Key: "XALGORIX_SCAN_OVERHEAD_MB", Label: "Scan overhead MB", Category: "Resources", Description: "Reserved memory overhead per scan. Empty means auto-scale from RAM.", Placeholder: "auto", InputType: "number", RequiresRestart: true},
 		{Key: "XALGORIX_HEAVY_TOOL_MEM_LIMIT_MB", Label: "Heavy tool memory limit MB", Category: "Resources", Description: "Optional hard address-space limit for heavy terminal tools. Empty or 0 leaves hard limiting disabled; dynamic admission still uses live RAM headroom.", Placeholder: "disabled", InputType: "number", RequiresRestart: true},
-		{Key: "XALGORIX_GO_MEM_LIMIT_MB", Label: "Go memory limit MB", Category: "Resources", Description: "Soft memory limit for the Xalgorix parent process. Empty means auto-scale from RAM.", Placeholder: "auto", InputType: "number", RequiresRestart: true},
+		{Key: "XALGORIX_GO_MEM_LIMIT_MB", Label: "Go memory limit MB", Category: "Resources", Description: "Soft memory limit for the 21Pent parent process. Empty means auto-scale from RAM.", Placeholder: "auto", InputType: "number", RequiresRestart: true},
 	}
 }
 

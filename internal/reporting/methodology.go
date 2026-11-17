@@ -1,6 +1,6 @@
 package reporting
 
-// MethodologyPhaseNames maps each phase number in the Xalgorix 22-phase
+// MethodologyPhaseNames maps each phase number in the 21Pent 22-phase
 // methodology to its display name. The map is the single source of truth
 // consumed by the legacy PDF report renderer and older scan records.
 var MethodologyPhaseNames = map[int]string{

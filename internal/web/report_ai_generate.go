@@ -178,6 +178,6 @@ func (s *Server) serveAIReport(w http.ResponseWriter, rec *ScanRecord, scanDir s
 		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"xalgorix_report_%s.md\"", rec.ID))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"21pent_report_%s.md\"", rec.ID))
 	_, _ = w.Write(data)
 }

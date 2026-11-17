@@ -1,6 +1,6 @@
 # Proxy Support
 
-Xalgorix supports routing all outbound network requests through **HTTP**, **HTTPS**, and **SOCKS5** proxies, with automatic rotation from a proxy list.
+21Pent supports routing all outbound network requests through **HTTP**, **HTTPS**, and **SOCKS5** proxies, with automatic rotation from a proxy list.
 
 ## Quick Start
 

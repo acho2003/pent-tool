@@ -19,7 +19,7 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
-// The access matrix is Xalgorix's native counterpart of the Autorize Burp
+// The access matrix is 21Pent's native counterpart of the Autorize Burp
 // extension, which needs an interactive Burp session and cannot run headless.
 // It replays read-only requests that one verified identity actually observed,
 // as every other verified identity and anonymously, and compares responses.

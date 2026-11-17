@@ -41,7 +41,7 @@ with its absolute container path, such as `/workspace/source/sbom.cdx.json`,
 and request `DEPENDENCIES` coverage. For an image, use `--artifact-kind image`
 with a registry-accessible `name@sha256:<digest>` reference and request
 `CONTAINER,DEPENDENCIES` coverage. An image that exists only in the host's
-Docker daemon is not available inside Xalgorix; publish it to a registry or
+Docker daemon is not available inside 21Pent; publish it to a registry or
 use a separate approved transfer workflow. This configuration does not mount
 `/var/run/docker.sock`.
 
