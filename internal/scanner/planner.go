@@ -163,6 +163,10 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	for _, v := range cfg.ScannerSelection.Variants {
 		custom[v] = true
 	}
+	// In auto mode, variants are additions: every automatic scanner stays
+	// selected and the named optional scanners are promoted. Custom mode keeps
+	// its exact-list meaning (the CLI --scanners flag relies on it).
+	additive := !requestedCustom && len(custom) > 0
 	if requestedCustom && len(custom) == 0 {
 		plan.Errors = append(plan.Errors, assessment.Problem{Code: "selection.empty", Message: "custom scanner selection must include at least one registry ID", Blocking: true})
 	}
@@ -203,6 +207,9 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 		if requestedCustom {
 			selected = custom[def.ID]
 		}
+		if additive && custom[def.ID] {
+			selected = true
+		}
 		if providerChosen[def.ID] {
 			selected = true
 		}
@@ -239,7 +246,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 					state, code, reason = PlanSelected, "identities.multiple", "Two or more identities are bound to this target, so their observed read-only requests are compared across identities."
 					promoted = true
 				}
-				if requestedCustom && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
+				if (requestedCustom || additive) && custom[def.ID] && state == PlanOptional && !(def.ID == "subfinder" && !cfg.SubdomainDiscovery) {
 					state, code, reason = PlanSelected, "scanner.explicitly_selected", "This optional scanner was explicitly selected by the operator."
 				}
 				if providerChosen[def.ID] && state == PlanOptional {

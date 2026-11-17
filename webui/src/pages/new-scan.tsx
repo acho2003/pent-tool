@@ -15,7 +15,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useStartScan } from "@/api/queries";
 import { api } from "@/api/client";
-import type { AssessmentConfig, AssessmentMode, AssessmentPlan, AssessmentType, AssessmentScannerDefinition, ToolInfo } from "@/types/api";
+import type { AssessmentConfig, AssessmentMode, AssessmentPlan, AssessmentType, AssessmentScannerDefinition } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -138,8 +138,6 @@ export default function NewScanPage() {
   const health = useQuery({ queryKey: ["scanner-status"], queryFn: api.scannerStatus, refetchInterval: 30000 });
   const registryQuery = useQuery({ queryKey: ["assessment-scanner-registry"], queryFn: api.scannerRegistry, refetchInterval: 30000 });
   const registry: AssessmentScannerDefinition[] = registryQuery.data?.scanners ?? [];
-  const tools: ToolInfo[] = health.data?.scanners ?? [];
-  const selectable = useMemo(() => tools.filter((t) => t.selectable), [tools]);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const targets = useMemo(() => targetsText.split(/[\n,]/).map((v) => v.trim()).filter(Boolean), [targetsText]);
@@ -377,8 +375,10 @@ export default function NewScanPage() {
         })(),
         authorization_expectations: authorizationExpectations.length ? authorizationExpectations : undefined,
         api_operation_inputs: serializedAPIOperationInputs(),
+        // Optional tools are additions to the automatic selection; "custom"
+        // would replace it and silently drop automatic checks.
         scanner_selection: optionalAssessmentScanners.length > 0
-          ? { mode: "custom", variants: [...new Set([...selectable.map((tool) => tool.name), ...optionalAssessmentScanners])] }
+          ? { mode: "auto", variants: [...new Set(optionalAssessmentScanners)] }
           : { mode: "auto" },
       });
       setAssessmentPlan(plan);
