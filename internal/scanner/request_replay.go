@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/credentials"
 )
 
 func bodyDigest(body string) string {

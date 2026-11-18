@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 var discoveryRevisionMu sync.Mutex

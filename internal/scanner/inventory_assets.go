@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 	"net/url"
 	"os"
 	"strconv"

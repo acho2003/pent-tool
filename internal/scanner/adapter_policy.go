@@ -3,7 +3,7 @@ package scanner
 import (
 	"context"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // Policy reasons for optional adapters whose generated traffic cannot comply

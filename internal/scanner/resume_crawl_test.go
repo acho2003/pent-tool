@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // A crawl killed mid-run leaves a truncated artifact next to a "running" run.

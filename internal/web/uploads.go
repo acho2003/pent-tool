@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/attacksurface"
+	"github.com/acho2003/pent-tool/internal/attacksurface"
 )
 
 // handleUploadTargets parses a text file with one target per line.

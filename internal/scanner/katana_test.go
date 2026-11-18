@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 func argValue(args []string, flag string) (string, bool) {

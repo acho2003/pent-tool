@@ -3,8 +3,8 @@
 # Triggers on version tags (vX.Y.Z, pushed by release.sh) and can be run
 # manually. Publishes the purpose-built amd64 image tagged with the
 # version and `latest` to:
-#   - GitHub Container Registry: ghcr.io/xalgord/xalgorix   (always)
-#   - Docker Hub:                docker.io/xalgord/xalgorix (when the
+#   - GitHub Container Registry: ghcr.io/acho2003/pent-tool   (always)
+#   - Docker Hub:                docker.io/acho2003/pent-tool (when the
 #     DOCKERHUB_USERNAME + DOCKERHUB_TOKEN repo secrets are set)
 #
 # The Docker Hub target is OPTIONAL and self-gating: with no secrets, the run
@@ -73,11 +73,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # GHCR always; Docker Hub (docker.io/xalgord/xalgorix) only when the
+          # GHCR always; Docker Hub (docker.io/acho2003/pent-tool) only when the
           # secret is present — the empty line is ignored by the action.
           images: |
             ghcr.io/${{ github.repository }}
-            ${{ env.DOCKERHUB_USER != '' && 'docker.io/xalgord/xalgorix' || '' }}
+            ${{ env.DOCKERHUB_USER != '' && 'docker.io/acho2003/pent-tool' || '' }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

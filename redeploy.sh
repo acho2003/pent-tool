@@ -23,7 +23,7 @@
 #   ./redeploy.sh                       # build ./Dockerfile, recreate in place
 #   ./redeploy.sh --pull                # docker pull IMAGE instead of building
 #   ./redeploy.sh --no-build            # recreate from the current IMAGE as-is
-#   ./redeploy.sh --image xalgord/xalgorix:latest
+#   ./redeploy.sh --image acho2003/pent-tool:latest
 #   ./redeploy.sh --env-file ./my.env   # force an env-file (first deploy / override)
 #
 # Config (environment variable = default):

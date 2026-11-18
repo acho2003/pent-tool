@@ -12,7 +12,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/xalgord/xalgorix/v4/internal/storage"
+	"github.com/acho2003/pent-tool/internal/storage"
 )
 
 // Retain complete records within the byte budget. Errors leave the original

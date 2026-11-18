@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/proxy"
-	"github.com/xalgord/xalgorix/v4/internal/resources"
-	"github.com/xalgord/xalgorix/v4/internal/scanheaders"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
-	"github.com/xalgord/xalgorix/v4/internal/tui"
-	"github.com/xalgord/xalgorix/v4/internal/web"
+	"github.com/acho2003/pent-tool/internal/config"
+	"github.com/acho2003/pent-tool/internal/proxy"
+	"github.com/acho2003/pent-tool/internal/resources"
+	"github.com/acho2003/pent-tool/internal/scanheaders"
+	"github.com/acho2003/pent-tool/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/tui"
+	"github.com/acho2003/pent-tool/internal/web"
 )
 
 // version is the build-time version string. CI/release flow should
@@ -138,7 +138,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "❌ Failed to fetch latest version from GitHub\n")
 			fmt.Fprintf(os.Stderr, "   This is usually caused by GitHub API rate limiting (60 req/hour for unauthenticated users).\n")
 			fmt.Fprintf(os.Stderr, "   Try again in a few minutes, or update manually:\n")
-			fmt.Fprintf(os.Stderr, "   wget -O $(which xalgorix) https://github.com/xalgord/xalgorix/releases/latest/download/xalgorix-linux-amd64\n")
+			fmt.Fprintf(os.Stderr, "   wget -O $(which xalgorix) https://github.com/acho2003/pent-tool/releases/latest/download/xalgorix-linux-amd64\n")
 			os.Exit(1)
 		}
 
@@ -170,13 +170,13 @@ func main() {
 	goInstallFallback:
 		// Fallback: use go install with explicit version
 		fmt.Printf("Installing v%s via go install...\n", latestVer)
-		cmd := exec.Command("go", "install", "-v", "-ldflags", "-X main.version="+latestVer, "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
+		cmd := exec.Command("go", "install", "-v", "-ldflags", "-X main.version="+latestVer, "github.com/acho2003/pent-tool/cmd/xalgorix@v"+latestVer)
 		// GOPRIVATE makes the toolchain skip the public proxy and checksum DB
 		// for our module path; GOSUMDB=off avoids hitting sum.golang.org for
 		// this private module. (GONOSUMCHECK / GONOSUMDB are not real env vars.)
 		cmd.Env = append(os.Environ(),
 			"GOPROXY=direct",
-			"GOPRIVATE=github.com/xalgord/*",
+			"GOPRIVATE=github.com/acho2003/*",
 			"GOSUMDB=off",
 		)
 		cmd.Stdout = os.Stdout
@@ -184,7 +184,7 @@ func main() {
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Update failed: %v\n", err)
 			fmt.Fprintf(os.Stderr, "\nManual install:\n")
-			fmt.Fprintf(os.Stderr, "  GOPROXY=direct GOPRIVATE=github.com/xalgord/* GOSUMDB=off go install -v github.com/xalgord/xalgorix/v4/cmd/xalgorix@v%s\n", latestVer)
+			fmt.Fprintf(os.Stderr, "  GOPROXY=direct GOPRIVATE=github.com/acho2003/* GOSUMDB=off go install -v github.com/acho2003/pent-tool/cmd/xalgorix@v%s\n", latestVer)
 			os.Exit(1)
 		}
 
@@ -985,10 +985,10 @@ func autoUpdate() {
 	} else {
 		// Fallback to go install
 		fmt.Println("   Installing update via go install...")
-		cmd := exec.Command("go", "install", "-v", "-ldflags", "-X main.version="+latestVer, "github.com/xalgord/xalgorix/v4/cmd/xalgorix@v"+latestVer)
+		cmd := exec.Command("go", "install", "-v", "-ldflags", "-X main.version="+latestVer, "github.com/acho2003/pent-tool/cmd/xalgorix@v"+latestVer)
 		cmd.Env = append(os.Environ(),
 			"GOPROXY=direct",
-			"GOPRIVATE=github.com/xalgord/*",
+			"GOPRIVATE=github.com/acho2003/*",
 			"GOSUMDB=off",
 		)
 		cmd.Stdout = os.Stdout
@@ -1075,7 +1075,7 @@ func execRestart(path string, argv, env []string) error {
 func fetchLatestRelease() (version string, downloadURL string) {
 	client := &http.Client{Timeout: 15 * time.Second}
 
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/xalgord/xalgorix/releases/latest", nil)
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/acho2003/pent-tool/releases/latest", nil)
 	if err != nil {
 		return "", ""
 	}
@@ -1127,7 +1127,7 @@ func fetchLatestRelease() (version string, downloadURL string) {
 
 // fetchLatestTag uses the git tags API as a fallback when releases API is rate-limited.
 func fetchLatestTag(client *http.Client) (string, string) {
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/xalgord/xalgorix/tags?per_page=1", nil)
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/acho2003/pent-tool/tags?per_page=1", nil)
 	if err != nil {
 		return "", ""
 	}
@@ -1156,7 +1156,7 @@ func fetchLatestTag(client *http.Client) (string, string) {
 	}
 
 	wantName := fmt.Sprintf("xalgorix-%s-%s", runtime.GOOS, runtime.GOARCH)
-	downloadURL := fmt.Sprintf("https://github.com/xalgord/xalgorix/releases/download/v%s/%s", ver, wantName)
+	downloadURL := fmt.Sprintf("https://github.com/acho2003/pent-tool/releases/download/v%s/%s", ver, wantName)
 	return ver, downloadURL
 }
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // CaptureBrowserLogin must drive a real login and come back with the session

@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/scopeguard"
-	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
+	"github.com/acho2003/pent-tool/internal/config"
+	"github.com/acho2003/pent-tool/internal/scopeguard"
+	"github.com/acho2003/pent-tool/internal/tools/reporting"
 )
 
 // swapTelegramAPIBaseForTest temporarily replaces the package-level

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // fakeGit puts a stub `git` first on PATH that records its argv and GIT_*

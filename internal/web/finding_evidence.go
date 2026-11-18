@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 const maxFindingEvidenceRunes = 2000

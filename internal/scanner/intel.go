@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/net/publicsuffix"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // Optional third-party intelligence lookups ("how the internet sees the

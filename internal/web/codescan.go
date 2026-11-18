@@ -1,7 +1,7 @@
 package web
 
 import (
-	"github.com/xalgord/xalgorix/v4/internal/scopeguard"
+	"github.com/acho2003/pent-tool/internal/scopeguard"
 )
 
 // isBlockedTargetForScan is isBlockedTarget with a per-scan loopback allowlist.

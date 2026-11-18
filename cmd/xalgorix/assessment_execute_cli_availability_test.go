@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // TestCLIAssessmentAvailabilityDetectsOptionalWebTools locks CLI/web parity: the

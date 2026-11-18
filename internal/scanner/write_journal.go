@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/storage"
+	"github.com/acho2003/pent-tool/internal/storage"
 )
 
 // WriteJournalSchemaVersion is the only journal schema this build understands.

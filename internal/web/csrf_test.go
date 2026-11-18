@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/acho2003/pent-tool/internal/config"
 )
 
 // minimalCfgForCSRF returns a Config with auth enabled so the CSRF gate

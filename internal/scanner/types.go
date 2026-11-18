@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/credentials"
 )
 
 const SchemaVersion = 2

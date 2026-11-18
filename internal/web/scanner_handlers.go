@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/apifixture"
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/apifixture"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 func (s *Server) scannerAvailability() map[string]bool {

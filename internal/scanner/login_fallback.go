@@ -1,6 +1,6 @@
 package scanner
 
-import "github.com/xalgord/xalgorix/v4/internal/assessment"
+import "github.com/acho2003/pent-tool/internal/assessment"
 
 // LimitationLoginFallback: the target's configured login failed, so this run
 // used no credentials. It covers only what an anonymous visitor can reach;

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/storage"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/storage"
 )
 
 // schemaProbePaths are well-known schema locations probed at each approved

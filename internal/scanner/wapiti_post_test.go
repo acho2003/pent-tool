@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 func formFuzzFixture(t *testing.T, target string) (Request, Config) {

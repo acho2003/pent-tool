@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 var assessmentSSHAliasPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)

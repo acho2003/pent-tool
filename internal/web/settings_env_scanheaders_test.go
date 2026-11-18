@@ -38,7 +38,7 @@ func TestScanHeaderEnvSettingsExposed(t *testing.T) {
 // environment exactly as config.loadScanHeaders() expects to parse it.
 func TestScanHeadersValueSurvivesNormalization(t *testing.T) {
 	def := envDefinitionByKey()["XALGORIX_SCAN_HEADERS"]
-	in := "X-Bug-Bounty: ulises2k; Authorization: Bearer a:b:c"
+	in := "X-Bug-Bounty: tester; Authorization: Bearer a:b:c"
 	got, err := normalizeEnvSettingValue(def, in)
 	if err != nil {
 		t.Fatalf("normalizeEnvSettingValue(%q) error: %v", in, err)

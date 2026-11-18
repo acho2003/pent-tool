@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/credentials"
 )
 
 // A long dashboard body so the markerless landing check clears its minimum

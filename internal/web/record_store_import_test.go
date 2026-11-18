@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
-	"github.com/xalgord/xalgorix/v4/internal/recordstore"
+	"github.com/acho2003/pent-tool/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/recordstore"
 )
 
 // TestImportRealDataIntoPostgres is the prototype end-to-end proof: import the

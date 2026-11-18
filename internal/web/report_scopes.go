@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // reportScope is one host or source block of a scanner report: what it is, the

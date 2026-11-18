@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 func TestParseKatanaAttackSurface_DropsOffHostEndpoints(t *testing.T) {

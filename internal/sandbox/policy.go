@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/safe"
-	"github.com/xalgord/xalgorix/v4/internal/scanctx"
+	"github.com/acho2003/pent-tool/internal/config"
+	"github.com/acho2003/pent-tool/internal/safe"
+	"github.com/acho2003/pent-tool/internal/scanctx"
 )
 
 // Policy is the immutable Allow_List boundary check used by every

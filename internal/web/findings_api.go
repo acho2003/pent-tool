@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 func findingRouteParts(path string) ([]string, bool) {

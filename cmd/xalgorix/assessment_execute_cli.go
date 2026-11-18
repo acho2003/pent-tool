@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
-	"github.com/xalgord/xalgorix/v4/internal/scopeguard"
-	"github.com/xalgord/xalgorix/v4/internal/web"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/config"
+	"github.com/acho2003/pent-tool/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/scopeguard"
+	"github.com/acho2003/pent-tool/internal/web"
 )
 
 type assessmentCLIResult struct {

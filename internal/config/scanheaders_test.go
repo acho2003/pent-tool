@@ -9,10 +9,10 @@ import (
 
 func TestLoadScanHeaders(t *testing.T) {
 	// Env only: ';'-separated pair parses into two ordered headers.
-	t.Setenv("XALGORIX_SCAN_HEADERS", "X-Bug-Bounty: ulises2k; X-Scan-ID: 42")
+	t.Setenv("XALGORIX_SCAN_HEADERS", "X-Bug-Bounty: tester; X-Scan-ID: 42")
 	t.Setenv("XALGORIX_SCAN_HEADERS_FILE", "")
 	got := loadScanHeaders()
-	want := []string{"X-Bug-Bounty: ulises2k", "X-Scan-ID: 42"}
+	want := []string{"X-Bug-Bounty: tester", "X-Scan-ID: 42"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("env-only loadScanHeaders() = %#v, want %#v", got, want)
 	}
@@ -26,7 +26,7 @@ func TestLoadScanHeaders(t *testing.T) {
 	}
 	t.Setenv("XALGORIX_SCAN_HEADERS_FILE", fp)
 	got = loadScanHeaders()
-	want = []string{"X-Bug-Bounty: ulises2k", "X-Scan-ID: 42", "X-Extra: e"}
+	want = []string{"X-Bug-Bounty: tester", "X-Scan-ID: 42", "X-Extra: e"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("env+file loadScanHeaders() = %#v, want %#v", got, want)
 	}
@@ -34,7 +34,7 @@ func TestLoadScanHeaders(t *testing.T) {
 	// A missing file is non-fatal: the env headers still load.
 	t.Setenv("XALGORIX_SCAN_HEADERS_FILE", filepath.Join(dir, "does-not-exist.txt"))
 	got = loadScanHeaders()
-	want = []string{"X-Bug-Bounty: ulises2k", "X-Scan-ID: 42"}
+	want = []string{"X-Bug-Bounty: tester", "X-Scan-ID: 42"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("missing-file loadScanHeaders() = %#v, want %#v", got, want)
 	}

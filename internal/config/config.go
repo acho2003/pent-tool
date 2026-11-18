@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanheaders"
+	"github.com/acho2003/pent-tool/internal/scanheaders"
 )
 
 // Config holds all 21Pent configuration. The scanner pipeline is fully

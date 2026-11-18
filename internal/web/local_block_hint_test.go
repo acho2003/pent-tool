@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/config"
+	"github.com/acho2003/pent-tool/internal/config"
 )
 
 // TestHandleScan_LocalTargetBlockedHint verifies that an all-local scan request

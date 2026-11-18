@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // maxSessionRenewals bounds how many fresh form logins one target may get per

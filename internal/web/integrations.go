@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // integrationEntry describes one tool on the Integrations page: how it is

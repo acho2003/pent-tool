@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 func (s *Server) verifyBrowserCredential(ctx context.Context, appURL, verifyURL, marker string, headers []string, storage *credentials.BrowserStorage, negative bool) error {

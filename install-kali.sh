@@ -62,7 +62,7 @@ ok "Go: $(go version)"
 info "Building xalgorix"
 REV="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 CGO_ENABLED=0 go build \
-  -ldflags "-s -w -X github.com/xalgord/xalgorix/v4/internal/scanner.BuildRevision=$REV" \
+  -ldflags "-s -w -X github.com/acho2003/pent-tool/internal/scanner.BuildRevision=$REV" \
   -o ./xalgorix ./cmd/xalgorix
 $SUDO install -m 0755 ./xalgorix "$PREFIX/xalgorix"
 ok "Installed $PREFIX/xalgorix ($("$PREFIX/xalgorix" --version 2>/dev/null | head -1 || echo built))"

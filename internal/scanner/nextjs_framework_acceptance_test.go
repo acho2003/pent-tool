@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/apifixture"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/apifixture"
+	"github.com/acho2003/pent-tool/internal/credentials"
 	"path/filepath"
 )
 

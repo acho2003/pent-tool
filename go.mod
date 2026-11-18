@@ -1,4 +1,4 @@
-module github.com/xalgord/xalgorix/v4
+module github.com/acho2003/pent-tool
 
 go 1.26
 

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/acho2003/pent-tool/internal/credentials"
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
 )
 
 // The AI-report Claude credential is entered from the dashboard and stored

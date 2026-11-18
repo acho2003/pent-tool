@@ -15,9 +15,9 @@ import (
 	// resolve even on minimal container images that ship without tzdata.
 	_ "time/tzdata"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/safe"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/safe"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 type ScanSchedule struct {

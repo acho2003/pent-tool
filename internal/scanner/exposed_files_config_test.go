@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // Planted secret values. None may ever appear in a verdict or artifact.

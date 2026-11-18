@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // DNSResolution is evidence only. A resolved address never becomes an

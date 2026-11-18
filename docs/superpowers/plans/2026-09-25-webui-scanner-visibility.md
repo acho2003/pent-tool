@@ -252,7 +252,7 @@ Confirm the `config.Config` field names (`SubfinderPath`, `HttpxPath`, `NmapPath
   - `?scope=` on the output and artifact endpoints.
 - Tasks 4–5 mirror these in TypeScript.
 
-- [ ] **Step 1: Failing tests.** Append to `internal/web/scanner_handlers_test.go` (add imports `os`, `path/filepath`, `github.com/xalgord/xalgorix/v4/internal/scanner`):
+- [ ] **Step 1: Failing tests.** Append to `internal/web/scanner_handlers_test.go` (add imports `os`, `path/filepath`, `github.com/acho2003/pent-tool/internal/scanner`):
 
 ```go
 // saveScannerScan writes a schema-v2 scan record under s.dataDir so

@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 const nextjsActionsVersion = "nextjs-actions-v2"

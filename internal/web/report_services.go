@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // otherTargetsService groups findings and runs that belong to no declared

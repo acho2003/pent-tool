@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/resources"
-	"github.com/xalgord/xalgorix/v4/internal/safe"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/config"
+	"github.com/acho2003/pent-tool/internal/resources"
+	"github.com/acho2003/pent-tool/internal/safe"
 )
 
 // ────────────────────────────────────────────────────────

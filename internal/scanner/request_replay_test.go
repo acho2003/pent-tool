@@ -3,7 +3,7 @@ package scanner
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/credentials"
 	"os"
 	"path/filepath"
 	"strings"

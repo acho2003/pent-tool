@@ -1,8 +1,8 @@
 package web
 
 import (
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // Mark only newly previewed/accepted requests. Saved-plan revalidation does not

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // placeholderSpec mirrors the shapes found in a real NestJS common service:

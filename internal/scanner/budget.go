@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/ratelimit"
+	"github.com/acho2003/pent-tool/internal/ratelimit"
 )
 
 // ErrBudgetExhausted is returned by AssessmentBudget.Wait once the

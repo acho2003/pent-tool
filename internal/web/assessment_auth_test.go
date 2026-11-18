@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 func TestVerifyHeaderSessionRequiresMarkerAndKeepsRedirectInScope(t *testing.T) {

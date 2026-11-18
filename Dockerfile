@@ -73,7 +73,7 @@ COPY . .
 COPY --from=webui /src/internal/web/static ./internal/web/static
 ARG VERSION=docker
 ARG VCS_REF=unknown
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X github.com/xalgord/xalgorix/v4/internal/scanner.BuildRevision=${VCS_REF}" \
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X github.com/acho2003/pent-tool/internal/scanner.BuildRevision=${VCS_REF}" \
     -o /out/xalgorix ./cmd/xalgorix/
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/go-buildinfo ./runtime/go-buildinfo.go
 

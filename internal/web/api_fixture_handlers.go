@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/apifixture"
+	"github.com/acho2003/pent-tool/internal/apifixture"
 )
 
 func (s *Server) handleAPIFixtures(w http.ResponseWriter, r *http.Request) {

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // accessFixture serves one route per verdict the matrix must tell apart.

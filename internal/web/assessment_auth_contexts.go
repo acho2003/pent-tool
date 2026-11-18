@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // Verify every named identity independently. The existing single-context

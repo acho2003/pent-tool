@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
-	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
+	"github.com/acho2003/pent-tool/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/tools/reporting"
 )
 
 func (s *Server) scanRecordForSession(sess *scanSession) *ScanRecord {

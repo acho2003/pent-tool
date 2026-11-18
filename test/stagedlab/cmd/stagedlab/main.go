@@ -12,7 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 
-	"github.com/xalgord/xalgorix/v4/test/stagedlab"
+	"github.com/acho2003/pent-tool/test/stagedlab"
 	"golang.org/x/crypto/bcrypt"
 )
 

@@ -66,7 +66,7 @@ All variables can also be placed in `~/.xalgorix.env`.
 ## Adding Proxy Support to New Code
 
 ```go
-import "github.com/xalgord/xalgorix/v4/internal/proxy"
+import "github.com/acho2003/pent-tool/internal/proxy"
 
 // Get a client for the next proxy in the rotation
 client, err := proxy.GetClient()

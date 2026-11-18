@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/safe"
+	"github.com/acho2003/pent-tool/internal/safe"
 )
 
 // RequestRatePolicy is the per-scan outbound request budget. MaxRPS is kept as

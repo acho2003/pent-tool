@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/xalgord/xalgorix/v4/internal/scanctx"
+	"github.com/acho2003/pent-tool/internal/scanctx"
 )
 
 // sleepMagnitudeRe extracts the numeric argument of SLEEP/pg_sleep/WAITFOR-style

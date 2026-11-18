@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/config"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // TestScannerConfigThreadsReconAndTestsslPaths guards the config-plumbing gap

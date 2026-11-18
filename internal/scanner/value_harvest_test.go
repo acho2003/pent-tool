@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 const harvestSpec = `{"openapi":"3.0.0","info":{"title":"common","version":"1"},"paths":{

@@ -3,8 +3,8 @@ package web
 import (
 	"context"
 
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/scanner"
 )
 
 // PrepareHeadlessAuth runs the assessment authentication-preparation flow for a

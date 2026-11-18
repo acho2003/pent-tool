@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/acho2003/pent-tool/internal/assessment"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 // Query map entries supply GraphQL arguments. Required inputs remain unresolved

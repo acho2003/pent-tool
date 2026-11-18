@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/safe"
+	"github.com/acho2003/pent-tool/internal/safe"
 )
 
 // reservedTopLevelNames are direct children of Data_Dir that hold system

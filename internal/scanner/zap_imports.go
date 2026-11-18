@@ -8,10 +8,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/acho2003/pent-tool/internal/assessment"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/formatter"
 	"github.com/vektah/gqlparser/v2/parser"
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 var testedZAPAddons = map[string]string{"network": "0.28.0", "openapi": "56.0.0", "graphql": "0.33.0"}

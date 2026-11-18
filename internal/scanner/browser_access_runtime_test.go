@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/test/stagedlab"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/test/stagedlab"
 )
 
 // An application that answers an anonymous visitor to a protected page with

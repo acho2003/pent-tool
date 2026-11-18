@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/safe"
-	"github.com/xalgord/xalgorix/v4/internal/scopeguard"
+	"github.com/acho2003/pent-tool/internal/safe"
+	"github.com/acho2003/pent-tool/internal/scopeguard"
 )
 
 // The finding notification body is authored once in Discord Markdown

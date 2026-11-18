@@ -16,8 +16,8 @@ func TestParse(t *testing.T) {
 	}{
 		{"empty", "", nil},
 		{"whitespace only", "   \n  ", nil},
-		{"single", "X-Bug-Bounty: ulises2k", []string{"X-Bug-Bounty: ulises2k"}},
-		{"trims and normalizes spacing", "  X-Bug-Bounty:ulises2k  ", []string{"X-Bug-Bounty: ulises2k"}},
+		{"single", "X-Bug-Bounty: tester", []string{"X-Bug-Bounty: tester"}},
+		{"trims and normalizes spacing", "  X-Bug-Bounty:tester  ", []string{"X-Bug-Bounty: tester"}},
 		{"multiple via newline", "X-Bug-Bounty: u\nX-Scan-ID: 42", []string{"X-Bug-Bounty: u", "X-Scan-ID: 42"}},
 		{"multiple via semicolon", "X-Bug-Bounty: u; X-Scan-ID: 42", []string{"X-Bug-Bounty: u", "X-Scan-ID: 42"}},
 		{"dedup by name keeps first", "X-A: 1\nX-A: 2", []string{"X-A: 1"}},

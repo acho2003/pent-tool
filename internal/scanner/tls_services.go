@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // expandTLSServiceJobs pins each TLS run to one approved hostname/SNI and port.

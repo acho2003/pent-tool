@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // katanaAvailable reports whether the katana binary is runnable, so recon can

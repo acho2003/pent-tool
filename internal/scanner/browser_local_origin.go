@@ -7,10 +7,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/acho2003/pent-tool/internal/assessment"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
 )
 
 // Local browser trust is explicit and exact-origin, never a wildcard browser

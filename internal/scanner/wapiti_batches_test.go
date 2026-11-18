@@ -3,7 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 	"net/http"
 	"net/http/httptest"
 	"os"

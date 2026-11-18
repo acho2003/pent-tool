@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/ratelimit"
+	"github.com/acho2003/pent-tool/internal/ratelimit"
 )
 
 // TestBurstAllowedImmediately verifies that up to `burst` tokens are

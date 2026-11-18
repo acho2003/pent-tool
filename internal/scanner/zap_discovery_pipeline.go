@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 func runSupplementalZAPDiscovery(ctx context.Context, targetID string, req Request, cfg Config, surface *AttackSurface, existing []Run, emit EmitFunc, control func(string, context.CancelFunc) func()) []Run {

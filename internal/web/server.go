@@ -32,16 +32,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/config"
-	"github.com/xalgord/xalgorix/v4/internal/credentials"
-	"github.com/xalgord/xalgorix/v4/internal/resources"
-	"github.com/xalgord/xalgorix/v4/internal/safe"
-	"github.com/xalgord/xalgorix/v4/internal/sandbox"
-	"github.com/xalgord/xalgorix/v4/internal/scanctx"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
-	"github.com/xalgord/xalgorix/v4/internal/storage"
-	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/config"
+	"github.com/acho2003/pent-tool/internal/credentials"
+	"github.com/acho2003/pent-tool/internal/resources"
+	"github.com/acho2003/pent-tool/internal/safe"
+	"github.com/acho2003/pent-tool/internal/sandbox"
+	"github.com/acho2003/pent-tool/internal/scanctx"
+	"github.com/acho2003/pent-tool/internal/scanner"
+	"github.com/acho2003/pent-tool/internal/storage"
+	"github.com/acho2003/pent-tool/internal/tools/reporting"
 )
 
 // Version is set by main.go at startup — single source of truth.

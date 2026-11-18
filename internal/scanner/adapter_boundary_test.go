@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 func scopeFor(t *testing.T, raw string, exclusions ...assessment.Exclusion) *assessment.AppScope {

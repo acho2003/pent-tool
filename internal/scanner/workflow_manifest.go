@@ -12,8 +12,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
-	"github.com/xalgord/xalgorix/v4/internal/storage"
+	"github.com/acho2003/pent-tool/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/storage"
 )
 
 // WorkflowManifestSchemaVersion is the only manifest schema LoadWorkflowManifest

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/acho2003/pent-tool/internal/scanner"
 	"github.com/go-pdf/fpdf"
-	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
 type reportPalette struct {

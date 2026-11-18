@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xalgord/xalgorix/v4/internal/assessment"
+	"github.com/acho2003/pent-tool/internal/assessment"
 )
 
 // The access matrix is 21Pent's native counterpart of the Autorize Burp
