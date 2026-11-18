@@ -42,6 +42,34 @@ output, and never stored in scan records, logs, artifacts, or reports.
 Tool paths are overridable via `XALGORIX_PROWLER_PATH`, `XALGORIX_SCOUTSUITE_PATH`,
 and `XALGORIX_KUBEBENCH_PATH`.
 
+### Threat intelligence lookups (optional, API-key gated)
+
+These ask a third-party service about the target's public IP, domain or locked
+npm dependencies. They never send a request to the target, but the target
+identifier is disclosed to the provider. All are opt-in per assessment and stay
+unavailable until their key is set under **Settings → Intelligence API keys**
+(no restart needed).
+
+| Scanner | Key(s) | Reports |
+|---|---|---|
+| `intel-shodan` | `SHODAN_API_KEY` | Internet-visible services and banner-matched CVEs |
+| `intel-censys` | `CENSYS_API_TOKEN` (`CENSYS_ORG_ID` optional) | Internet-visible services |
+| `intel-shadowserver` | `SHADOWSERVER_API_KEY`, `SHADOWSERVER_API_SECRET` | Shadowserver report events for the IP |
+| `intel-greynoise` | `GREYNOISE_API_KEY` | Target IP seen scanning/attacking the internet |
+| `intel-abuseipdb` | `ABUSEIPDB_API_KEY` | Abuse reports against the IP |
+| `intel-crtsh` | none | Hostnames in certificate-transparency logs (candidates only) |
+| `intel-hibp` | `HIBP_API_KEY` | Breached accounts on the verified domain (counts only) |
+| `intel-github-leaks` | `GITHUB_TOKEN` | Public code mentioning the domain with credential keywords |
+| `intel-dehashed` | `DEHASHED_API_KEY` | Count of leaked credential records |
+| `intel-cloudflare` | `CLOUDFLARE_API_TOKEN` (read-only) | Weak zone TLS settings, DNS records that bypass the proxy |
+| `intel-socket` | `SOCKET_API_TOKEN` | Malicious or risky npm packages (needs `package-lock.json`) |
+| `intel-depsdev` | none | Deprecated or low-Scorecard direct npm dependencies |
+
+`SECURITYTRAILS_API_KEY`, `CHAOS_API_KEY`, `VIRUSTOTAL_API_KEY`, `SHODAN_API_KEY`
+and `GITHUB_TOKEN` are also passed to Subfinder as extra passive sources;
+`VIRUSTOTAL_API_KEY` is passed to waybackurls. The provider response parsers are
+covered by stubbed tests only and have not been run against the live services.
+
 ## Runtime helpers and services
 
 Chromium supports Katana's browser crawl. Git clones source repositories; SSH

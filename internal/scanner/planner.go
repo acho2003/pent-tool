@@ -86,8 +86,9 @@ type PlanInput struct {
 // version 33: passive security-header check; version 34: removed CodeQL;
 // version 35: removed the Nuclei OAST variant;
 // version 36: api-docs exposure check; version 37: exposure catalogs and Dalfox
-// selected by default; version 38: NestJS source checks).
-const PlanRegistryVersion = "38"
+// selected by default; version 38: NestJS source checks; version 39: optional
+// third-party intelligence lookups).
+const PlanRegistryVersion = "39"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`
@@ -126,6 +127,7 @@ func PlanAssessment(input PlanInput) AssessmentPlan {
 	toolVersions["vcs-exposure-catalog"] = vcsCatalogVersion
 	toolVersions["exposed-files-catalog"] = exposedFilesCatalogVersion
 	toolVersions["security-headers-catalog"] = securityHeadersCatalogVersion
+	toolVersions["intel-catalog"] = intelCatalogVersion
 	toolVersions["nextjs-advisories"] = fmt.Sprintf("%s:%x", nextjsAdvisoriesVersion, sha256.Sum256(nextjsAdvisoriesJSON))
 	plan := AssessmentPlan{Config: cfg, Capabilities: assessment.DeriveCapabilities(cfg), RegistryVersion: PlanRegistryVersion, ToolVersions: toolVersions}
 	for i := range plan.Capabilities {

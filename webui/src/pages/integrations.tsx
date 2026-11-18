@@ -10,6 +10,7 @@ const groups: { id: string; title: string; description: string }[] = [
   { id: "code", title: "Code, dependencies & containers", description: "Static analysis, secrets and dependency checks" },
   { id: "cloud", title: "Cloud", description: "Read-only cloud posture audits" },
   { id: "kubernetes", title: "Kubernetes", description: "Cluster benchmark checks" },
+  { id: "threat_intel", title: "Threat intelligence", description: "Optional third-party lookups; each needs its API key in Settings and never contacts the target" },
 ];
 
 const integrationLabel: Record<string, string> = {

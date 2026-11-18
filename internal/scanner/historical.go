@@ -83,6 +83,9 @@ func (r historicalRunner) Run(ctx context.Context, req Request, cfg Config, emit
 		cmd.Stdin = strings.NewReader(domain + "\n")
 	}
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	if key := strings.TrimSpace(os.Getenv("VIRUSTOTAL_API_KEY")); key != "" && r.provider == "waybackurls" {
+		cmd.Env = append(cmd.Env, "VT_API_KEY="+key) // optional extra waybackurls source
+	}
 	stdout, stderr := &cappedHistoricalOutput{limit: 8 << 20}, &cappedHistoricalOutput{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if emit != nil {

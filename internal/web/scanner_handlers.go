@@ -38,6 +38,10 @@ func (s *Server) scannerAvailability() map[string]bool {
 	if scanner.MasscanCapabilityReason() != "" {
 		available["masscan"] = false
 	}
+	// Third-party intelligence lookups are available once their API key is set.
+	for id, ok := range scanner.IntelAvailability() {
+		available[id] = ok
+	}
 	// Typed assessment planning requires an explicitly dedicated managed ZAP
 	// backend; a configured shared daemon is not sufficient evidence.
 	available["zap"] = strings.TrimSpace(s.cfg.ZAPURL) != "" && s.cfg.ZAPDedicated && !scanner.ZAPServiceQuarantined(s.cfg.ZAPURL)
@@ -107,6 +111,11 @@ func (s *Server) buildAssessmentPlanForScan(cfg assessment.AssessmentConfig, all
 	if _, err := exec.LookPath(s.cfg.MasscanPath); err == nil {
 		if reason := scanner.MasscanCapabilityReason(); reason != "" {
 			unavailableReasons["masscan"] = reason
+		}
+	}
+	for id, ok := range scanner.IntelAvailability() {
+		if !ok {
+			unavailableReasons[id] = scanner.IntelUnavailableReason(id)
 		}
 	}
 	plan := scanner.PlanAssessment(scanner.PlanInput{Config: cfg, Availability: s.assessmentScannerAvailability(), UnavailabilityReasons: unavailableReasons, CredentialAvailability: credentialAvailability, ToolVersions: s.toolVersions, CredentialRevisions: credentialRevisions})
@@ -266,6 +275,9 @@ func (s *Server) handleScannerRegistry(w http.ResponseWriter, r *http.Request) {
 		}
 		if definitions[i].ID == "masscan" && !definitions[i].Available {
 			definitions[i].AvailabilityReason = scanner.MasscanCapabilityReason()
+		}
+		if scanner.IsIntelScanner(definitions[i].ID) {
+			definitions[i].AvailabilityReason = scanner.IntelUnavailableReason(definitions[i].ID)
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

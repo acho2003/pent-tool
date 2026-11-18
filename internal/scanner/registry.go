@@ -54,9 +54,12 @@ func ScannerRegistry() []ScannerDefinition {
 		{ID: "scoutsuite", Name: "scoutsuite", Category: PhaseCloud, AssessmentTypes: []assessment.Type{assessment.TypeCloud, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindCloudAccount}, RequiredCapabilities: []assessment.Capability{assessment.CapCloud}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "Read-only multi-cloud security posture audit using a supplied read-only credential"},
 		{ID: "kube-bench", Name: "kube-bench", Category: PhaseKubernetes, AssessmentTypes: []assessment.Type{assessment.TypeKubernetes, assessment.TypeCompliance}, TargetKinds: []assessment.TargetKind{assessment.KindKubernetesCluster}, RequiredCapabilities: []assessment.Capability{assessment.CapKubernetes}, SupportsAuthentication: true, DefaultSelection: "optional", Risk: "low", Available: false, Summary: "CIS Kubernetes benchmark checks against a supplied kubeconfig"},
 	}
+	defs = append(defs, intelDefinitions()...)
 	for i := range defs {
 		defs[i].Selectable = slices.Contains(OrderedNames, defs[i].ID) || slices.Contains(assessmentOnlyNames, defs[i].ID)
-		defs[i].Group = scannerGroups[defs[i].ID]
+		if group, ok := scannerGroups[defs[i].ID]; ok {
+			defs[i].Group = group
+		}
 		if defs[i].Group == GroupWebAPI {
 			meta := webScannerMetadata[defs[i].ID]
 			defs[i].Stage = stageForScanner(defs[i].ID)

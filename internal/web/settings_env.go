@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xalgord/xalgorix/v4/internal/scanner"
 )
 
 type envSettingDefinition struct {
@@ -41,7 +43,22 @@ type environmentSettingsResponse struct {
 
 var envSettingKeyRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
+// allEnvSettingDefinitions is the fixed settings plus one entry per optional
+// third-party API key. Keys take effect on save: lookups read the environment
+// when they run.
 func allEnvSettingDefinitions() []envSettingDefinition {
+	defs := baseEnvSettingDefinitions()
+	for _, key := range scanner.IntelKeys() {
+		def := envSettingDefinition{Key: key.Key, Label: key.Label, Category: "Intelligence API keys", Description: key.Description, InputType: "secret", Sensitive: true}
+		if key.Key == "CENSYS_ORG_ID" {
+			def.InputType, def.Sensitive = "text", false
+		}
+		defs = append(defs, def)
+	}
+	return defs
+}
+
+func baseEnvSettingDefinitions() []envSettingDefinition {
 	return []envSettingDefinition{
 		{Key: "XALGORIX_NUCLEI_PATH", Label: "Nuclei path", Category: "Scanners", Description: "Nuclei executable path.", DefaultValue: "nuclei", InputType: "path", RequiresRestart: true},
 		{Key: "XALGORIX_TRIVY_PATH", Label: "Trivy path", Category: "Scanners", Description: "Trivy executable path.", DefaultValue: "trivy", InputType: "path", RequiresRestart: true},

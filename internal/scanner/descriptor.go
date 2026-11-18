@@ -183,7 +183,8 @@ func Catalog() []ToolInfo {
 	defs := ScannerRegistry()
 	out := make([]ToolInfo, 0, 12)
 	for _, d := range defs {
-		if !d.Available || (d.Category != PhaseRecon && !slices.Contains(OrderedNames, d.ID)) {
+		// Intelligence lookups are assessment-only and never part of this legacy list.
+		if !d.Available || d.Group == GroupIntel || (d.Category != PhaseRecon && !slices.Contains(OrderedNames, d.ID)) {
 			continue
 		}
 		out = append(out, ToolInfo{Name: d.Name, Phase: d.Category, Selectable: d.Selectable, Summary: d.Summary})

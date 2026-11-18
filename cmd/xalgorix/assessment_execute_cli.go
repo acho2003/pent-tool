@@ -162,6 +162,9 @@ func cliAssessmentAvailability(cfg scanner.Config) map[string]bool {
 	if scanner.MasscanCapabilityReason() != "" {
 		available["masscan"] = false
 	}
+	for id, ok := range scanner.IntelAvailability() {
+		available[id] = ok
+	}
 	return available
 }
 

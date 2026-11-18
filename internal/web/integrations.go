@@ -81,6 +81,8 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			} else if !entry.Available {
 				entry.AvailabilityReason = def.AvailabilityReason
 			}
+		case scanner.IsIntelScanner(def.ID):
+			entry.Integration, entry.AvailabilityReason = "service", scanner.IntelUnavailableReason(def.ID)
 		default:
 			entry.Integration = "built-in"
 			if !entry.Available {

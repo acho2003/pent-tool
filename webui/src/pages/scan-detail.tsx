@@ -423,12 +423,13 @@ function scopeHeading(sc: ReportScope): string {
 }
 
 // Scanner-group display order + labels (mirrors the backend registry Group).
-const RUN_GROUP_ORDER = ["web_api", "network_servers", "cloud", "kubernetes", "code"];
+const RUN_GROUP_ORDER = ["web_api", "network_servers", "cloud", "kubernetes", "code", "threat_intel"];
 const RUN_GROUP_LABELS: Record<string, string> = {
 	web_api: "Web & API",
 	network_servers: "Network & servers",
 	cloud: "Cloud",
 	kubernetes: "Kubernetes",
+	threat_intel: "Threat intelligence",
 	code: "Source, dependencies & containers",
 };
 const runGroupLabel = (g: string) => RUN_GROUP_LABELS[g] ?? (g || "Other");

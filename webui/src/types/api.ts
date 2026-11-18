@@ -194,6 +194,7 @@ export interface AssessmentScannerDefinition {
   risk: string;
   selectable: boolean;
   available: boolean;
+  availability_reason?: string;
   summary: string;
 }
 

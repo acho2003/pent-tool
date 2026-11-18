@@ -178,6 +178,9 @@ func FindingScope(run Run) string {
 }
 
 func ParseRun(run Run) ([]Finding, error) {
+	if IsIntelScanner(run.Scanner) {
+		return parseExposureFindings(run.ArtifactPath)
+	}
 	switch run.Scanner {
 	case "nuclei":
 		return parseNuclei(run.ArtifactPath)
