@@ -7,42 +7,69 @@ import (
 	"strings"
 )
 
-// defaultSemgrepConfigs are the registry rulesets the generic source scan runs.
-// p/default is the broad baseline; the rest add TypeScript/Node.js, the OWASP
-// Top Ten, JWT, secret and Dockerfile coverage that matches the NestJS/Next.js
-// stack. They are resolved from the Semgrep registry at scan time (like the
-// original p/default), so the source target's host needs registry access; an
-// air-gapped run should override the list with local rule paths (see
-// semgrepConfigs). Each entry becomes a separate --config flag.
-var defaultSemgrepConfigs = []string{
-	"p/default",
-	"p/typescript",
-	"p/nodejs",
-	"p/owasp-top-ten",
-	"p/jwt",
-	"p/secrets",
-	"p/docker",
+// semgrepPacks are the rulesets the generic source scan runs: the broad
+// p/default baseline plus TypeScript/Node.js, OWASP Top Ten, JWT, secret and
+// Dockerfile coverage for the NestJS/Next.js stack.
+var semgrepPacks = []string{
+	"default",
+	"typescript",
+	"nodejs",
+	"owasp-top-ten",
+	"jwt",
+	"secrets",
+	"docker",
 }
 
-// semgrepConfigs returns the rulesets to run. XALGORIX_SEMGREP_CONFIGS, a
-// comma-separated list, replaces the default set when set (for example to pin a
-// subset, add a team ruleset, or point at bundled local rule files for an
-// offline run). An empty or whitespace-only value falls back to the default.
-func semgrepConfigs() []string {
-	raw := strings.TrimSpace(os.Getenv("XALGORIX_SEMGREP_CONFIGS"))
-	if raw == "" {
-		return defaultSemgrepConfigs
+// bundledSemgrepRulesDir holds the pack YAMLs baked into the runtime image at
+// build time (one <pack>.yaml per entry in semgrepPacks). When present, the
+// scan uses these local files and needs no registry access. A var so tests can
+// point it at a fixture.
+var bundledSemgrepRulesDir = "/usr/local/share/xalgorix/semgrep-rules"
+
+// registrySemgrepConfigs are the p/<name> registry aliases, used when the
+// bundle is absent (developer machines, non-image runs). These resolve from the
+// Semgrep registry at scan time, so that path needs network.
+func registrySemgrepConfigs() []string {
+	out := make([]string, 0, len(semgrepPacks))
+	for _, pack := range semgrepPacks {
+		out = append(out, "p/"+pack)
 	}
-	var configs []string
-	for _, part := range strings.Split(raw, ",") {
-		if part = strings.TrimSpace(part); part != "" {
-			configs = append(configs, part)
+	return out
+}
+
+// bundledSemgrepConfigs returns the local pack files present in
+// bundledSemgrepRulesDir, or nil when none are bundled.
+func bundledSemgrepConfigs() []string {
+	var out []string
+	for _, pack := range semgrepPacks {
+		path := filepath.Join(bundledSemgrepRulesDir, pack+".yaml")
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			out = append(out, path)
 		}
 	}
-	if len(configs) == 0 {
-		return defaultSemgrepConfigs
+	return out
+}
+
+// semgrepConfigs returns the rulesets to run, in priority order:
+//  1. XALGORIX_SEMGREP_CONFIGS (comma-separated) if set — an explicit override.
+//  2. the offline bundle baked into the image, if present (no registry access).
+//  3. the p/<name> registry aliases (fetched at scan time) as a fallback.
+func semgrepConfigs() []string {
+	if raw := strings.TrimSpace(os.Getenv("XALGORIX_SEMGREP_CONFIGS")); raw != "" {
+		var configs []string
+		for _, part := range strings.Split(raw, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				configs = append(configs, part)
+			}
+		}
+		if len(configs) > 0 {
+			return configs
+		}
 	}
-	return configs
+	if bundled := bundledSemgrepConfigs(); len(bundled) > 0 {
+		return bundled
+	}
+	return registrySemgrepConfigs()
 }
 
 // buildSemgrep uses explicit registry rulesets: auto configuration refuses to

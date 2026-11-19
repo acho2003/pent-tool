@@ -120,6 +120,18 @@ RUN curl -fsSL https://nmap.org/dist/nmap-7.99.tar.bz2 -o nmap.tar.bz2 \
     && make -j4 && make DESTDIR=/out install \
     && strip /out/usr/bin/nmap
 
+FROM debian-base AS semgrep-rules
+# Bake the Semgrep registry packs into the image so the generic source scan runs
+# offline (no registry fetch at scan time). Pinned to build time: the packs float
+# on the registry, so each image snapshots their then-current content. The scan
+# falls back to the p/<name> aliases only when this bundle is absent.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /out/semgrep-rules
+RUN for p in default typescript nodejs owasp-top-ten jwt secrets docker; do \
+      curl -fsSL "https://semgrep.dev/c/p/$p" -o "$p.yaml" && test -s "$p.yaml"; \
+    done
+
 FROM debian-base AS bearer-build
 # Bearer ships a prebuilt binary (CGO/tree-sitter), so install + verify it rather
 # than go install. Pinned arm64 to match the runtime image architecture.
@@ -172,6 +184,7 @@ COPY --from=native-build /out/usr/bin/nmap /usr/bin/nmap
 COPY --from=native-build /out/usr/share/nmap /usr/share/nmap
 COPY --from=gobuild /go/bin/ /root/go/bin/
 COPY --from=bearer-build /out/usr/local/bin/bearer /usr/local/bin/bearer
+COPY --from=semgrep-rules /out/semgrep-rules/ /usr/local/share/xalgorix/semgrep-rules/
 COPY --from=gobuild /out/kube-bench/ /opt/kube-bench/
 COPY --from=python-build /usr/local/ /usr/local/
 COPY --from=python-build /opt/venvs/ /opt/venvs/
