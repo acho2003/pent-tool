@@ -311,6 +311,14 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 		return out, nil
 	}
+	// Wait for the shared daemon to be responsive before starting. After many
+	// back-to-back INSANE scans it can degrade (heavy operations time out even
+	// though it is still "up"); a bounded wait absorbs a slow recovery or a
+	// restart, and a clear failure after the window beats burning the whole
+	// per-service budget on a dead daemon.
+	if err := zapAwaitReady(cctx, cfg, zapReadyTimeout(), logLine); err != nil {
+		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
+	}
 	if _, err := call("/JSON/core/view/version/", url.Values{}); err != nil {
 		return finishServiceFailure(run, err, secrets, cfg.MaxOutputBytes, emit)
 	}
@@ -362,7 +370,16 @@ func (zapRunner) Run(ctx context.Context, req Request, cfg Config, emit EmitFunc
 		}
 		contextName = "xalgorix-" + stableJobPath(req.Scope+"\x00"+target)
 		if _, err := call("/JSON/core/action/newSession/", url.Values{}); err != nil {
-			return finishServiceFailure(run, fmt.Errorf("create fresh ZAP session: %w", err), secrets, cfg.MaxOutputBytes, emit)
+			// A degraded daemon can time out on this heavy call while still
+			// answering version. Wait for it to recover (or restart) once, then
+			// retry before giving up, so one slow moment does not drop the scan.
+			logLine("ZAP session reset was slow; waiting for the daemon and retrying: " + err.Error())
+			if werr := zapAwaitReady(cctx, cfg, zapReadyTimeout(), logLine); werr != nil {
+				return finishServiceFailure(run, fmt.Errorf("create fresh ZAP session: %w", err), secrets, cfg.MaxOutputBytes, emit)
+			}
+			if _, err := call("/JSON/core/action/newSession/", url.Values{}); err != nil {
+				return finishServiceFailure(run, fmt.Errorf("create fresh ZAP session: %w", err), secrets, cfg.MaxOutputBytes, emit)
+			}
 		}
 		defer func() {
 			if err := zapPost(cfg, "/JSON/core/action/newSession/", url.Values{}); err != nil {
