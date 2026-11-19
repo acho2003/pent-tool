@@ -47,6 +47,7 @@ func NewPipeline(cfg Config) *Pipeline {
 		vulsRunner{},
 		commandRunner{name: "trivy", desc: Descriptor{Name: "trivy", Summary: "Dependency, misconfiguration and secret scan of the source", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildTrivy},
 		commandRunner{name: "semgrep", desc: Descriptor{Name: "semgrep", Summary: "Static code analysis of the source", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildSemgrep},
+		commandRunner{name: "bearer", desc: Descriptor{Name: "bearer", Summary: "Static security and sensitive-data analysis of the source", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildBearer},
 		commandRunner{name: "gitleaks", desc: Descriptor{Name: "gitleaks", Summary: "Secret detection in the source repository", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildGitleaks},
 		commandRunner{name: "osv", desc: Descriptor{Name: "osv", Summary: "Known-vulnerability check of dependency lockfiles", Phase: PhaseSAST, Weight: WeightLight, Applies: appliesToSource}, build: buildOSV},
 	}}
@@ -195,6 +196,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.SemgrepPath == "" {
 		cfg.SemgrepPath = "semgrep"
 	}
+	if cfg.BearerPath == "" {
+		cfg.BearerPath = "bearer"
+	}
 	if cfg.GitleaksPath == "" {
 		cfg.GitleaksPath = "gitleaks"
 	}
@@ -242,6 +246,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.SemgrepTimeout <= 0 {
 		cfg.SemgrepTimeout = 30 * time.Minute
+	}
+	if cfg.BearerTimeout <= 0 {
+		cfg.BearerTimeout = 30 * time.Minute
 	}
 	if cfg.GitleaksTimeout <= 0 {
 		cfg.GitleaksTimeout = 15 * time.Minute

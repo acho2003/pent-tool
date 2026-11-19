@@ -120,6 +120,19 @@ RUN curl -fsSL https://nmap.org/dist/nmap-7.99.tar.bz2 -o nmap.tar.bz2 \
     && make -j4 && make DESTDIR=/out install \
     && strip /out/usr/bin/nmap
 
+FROM debian-base AS bearer-build
+# Bearer ships a prebuilt binary (CGO/tree-sitter), so install + verify it rather
+# than go install. Pinned arm64 to match the runtime image architecture.
+ARG BEARER_VERSION=2.1.3
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp/bearer
+RUN curl -fsSL "https://github.com/Bearer/bearer/releases/download/v${BEARER_VERSION}/bearer_${BEARER_VERSION}_linux_arm64.tar.gz" -o bearer.tar.gz \
+    && echo '93e340650311d4129689a25e7063dd146bcda2e33d22adf15ffba5fc8b112260  bearer.tar.gz' | sha256sum -c - \
+    && tar -xzf bearer.tar.gz bearer \
+    && install -D -m0755 bearer /out/usr/local/bin/bearer \
+    && /out/usr/local/bin/bearer version
+
 FROM debian-base AS content-build
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -158,6 +171,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libjson-perl li
 COPY --from=native-build /out/usr/bin/nmap /usr/bin/nmap
 COPY --from=native-build /out/usr/share/nmap /usr/share/nmap
 COPY --from=gobuild /go/bin/ /root/go/bin/
+COPY --from=bearer-build /out/usr/local/bin/bearer /usr/local/bin/bearer
 COPY --from=gobuild /out/kube-bench/ /opt/kube-bench/
 COPY --from=python-build /usr/local/ /usr/local/
 COPY --from=python-build /opt/venvs/ /opt/venvs/

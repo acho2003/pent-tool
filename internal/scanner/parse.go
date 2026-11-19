@@ -224,6 +224,8 @@ func ParseRun(run Run) ([]Finding, error) {
 		return parseTrivy(run.ArtifactPath)
 	case "semgrep":
 		return parseSemgrep(run.ArtifactPath)
+	case "bearer":
+		return parseBearer(run.ArtifactPath)
 	case "gitleaks":
 		return parseGitleaks(run.ArtifactPath)
 	case "osv":

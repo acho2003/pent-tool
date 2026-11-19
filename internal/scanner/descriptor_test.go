@@ -19,6 +19,7 @@ func TestExistingRunnerDescriptors(t *testing.T) {
 		"openvas":  {PhaseServer, WeightHeavy},
 		"trivy":    {PhaseSAST, WeightLight},
 		"semgrep":  {PhaseSAST, WeightLight},
+		"bearer":   {PhaseSAST, WeightLight},
 		"gitleaks": {PhaseSAST, WeightLight},
 		"osv":      {PhaseSAST, WeightLight},
 		"vuls":     {PhaseServer, WeightLight},

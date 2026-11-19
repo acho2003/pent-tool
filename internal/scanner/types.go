@@ -315,6 +315,7 @@ type Config struct {
 	SSHPath             string
 	TestsslPath         string
 	SemgrepPath         string
+	BearerPath          string
 	GitleaksPath        string
 	OsvPath             string
 
@@ -389,6 +390,7 @@ type Config struct {
 	LynisTimeout        time.Duration
 	TestsslTimeout      time.Duration
 	SemgrepTimeout      time.Duration
+	BearerTimeout       time.Duration
 	GitleaksTimeout     time.Duration
 	OsvTimeout          time.Duration
 

@@ -87,8 +87,8 @@ type PlanInput struct {
 // version 35: removed the Nuclei OAST variant;
 // version 36: api-docs exposure check; version 37: exposure catalogs and Dalfox
 // selected by default; version 38: NestJS source checks; version 39: optional
-// third-party intelligence lookups).
-const PlanRegistryVersion = "39"
+// third-party intelligence lookups; version 40: Bearer source analysis).
+const PlanRegistryVersion = "40"
 
 type AssessmentPlan struct {
 	AuthContexts    []AuthContext                   `json:"auth_contexts,omitempty"`

@@ -443,3 +443,34 @@ func TestParseRunSkipsZapDiscoveryVariant(t *testing.T) {
 		t.Fatalf("real ZAP alerts must still parse: findings=%+v err=%v", findings, err)
 	}
 }
+
+func TestParseBearerFindings(t *testing.T) {
+	// Real Bearer JSON shape: severity buckets, each a list of findings.
+	body := `{
+	  "critical": [
+	    {"id":"javascript_lang_dynamic_os_command","title":"Unsanitized dynamic input in OS command","cwe_ids":["78"],"filename":"src/app.ts","full_filename":"/scan/src/app.ts","line_number":5,"description":"## Description\n\nCommand injection risk.\n\n## Remediations\n\n- Do sanitize input."}
+	  ],
+	  "high": [
+	    {"id":"javascript_jwt_hardcoded_secret","title":"Hardcoded JWT secret","cwe_ids":["CWE-798"],"filename":"src/auth.ts","line_number":12,"description":"secret in source"}
+	  ],
+	  "medium": []
+	}`
+	p := writeFixture(t, "results.json", body)
+	got, err := ParseRun(Run{Scanner: "bearer", Status: "completed", ArtifactPath: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 findings, got %d: %#v", len(got), got)
+	}
+	crit := got[0]
+	if crit.Severity != "critical" || crit.RuleID != "javascript_lang_dynamic_os_command" || crit.SourceLocation != "src/app.ts:5" || crit.CWE != "CWE-78" {
+		t.Fatalf("critical finding fields wrong: %+v", crit)
+	}
+	if crit.Title != "Unsanitized dynamic input in OS command" || !strings.Contains(crit.Description, "Command injection") || strings.Contains(crit.Description, "## Remediations") {
+		t.Fatalf("title/description not extracted cleanly: %+v", crit)
+	}
+	if got[1].Severity != "high" || got[1].CWE != "CWE-798" {
+		t.Fatalf("high finding fields wrong: %+v", got[1])
+	}
+}

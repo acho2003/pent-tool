@@ -35,6 +35,7 @@ type Config struct {
 	MasscanPath           string
 	TestsslPath           string
 	SemgrepPath           string
+	BearerPath            string
 	GitleaksPath          string
 	OsvPath               string
 	NiktoPath             string
@@ -77,6 +78,7 @@ type Config struct {
 	NmapTimeoutSec        int
 	TestsslTimeoutSec     int
 	SemgrepTimeoutSec     int
+	BearerTimeoutSec      int
 	GitleaksTimeoutSec    int
 	OsvTimeoutSec         int
 
@@ -275,6 +277,7 @@ func load() *Config {
 		MasscanPath:           envOr("XALGORIX_MASSCAN_PATH", "masscan"),
 		TestsslPath:           envOr("XALGORIX_TESTSSL_PATH", "testssl.sh"),
 		SemgrepPath:           envOr("XALGORIX_SEMGREP_PATH", "semgrep"),
+		BearerPath:            envOr("XALGORIX_BEARER_PATH", "bearer"),
 		GitleaksPath:          envOr("XALGORIX_GITLEAKS_PATH", "gitleaks"),
 		OsvPath:               envOr("XALGORIX_OSV_PATH", "osv-scanner"),
 		NiktoPath:             envOr("XALGORIX_NIKTO_PATH", "nikto"),
@@ -317,6 +320,7 @@ func load() *Config {
 		NmapTimeoutSec:        envOrInt("XALGORIX_NMAP_TIMEOUT_SECONDS", 1800),
 		TestsslTimeoutSec:     envOrInt("XALGORIX_TESTSSL_TIMEOUT_SECONDS", 1800),
 		SemgrepTimeoutSec:     envOrInt("XALGORIX_SEMGREP_TIMEOUT_SECONDS", 1800),
+		BearerTimeoutSec:      envOrInt("XALGORIX_BEARER_TIMEOUT_SECONDS", 1800),
 		GitleaksTimeoutSec:    envOrInt("XALGORIX_GITLEAKS_TIMEOUT_SECONDS", 900),
 		OsvTimeoutSec:         envOrInt("XALGORIX_OSV_TIMEOUT_SECONDS", 900),
 

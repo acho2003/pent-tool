@@ -27,7 +27,7 @@ func ScannerConfig(cfg *config.Config) scanner.Config {
 	return scanner.Config{
 		NucleiPath: cfg.NucleiPath, NucleiTemplatesDir: cfg.NucleiTemplatesDir, TrivyPath: cfg.TrivyPath, VulsPath: cfg.VulsPath, VulsSSHConfigPath: cfg.VulsSSHConfigPath,
 		SubfinderPath: cfg.SubfinderPath, AmassPath: cfg.AmassPath, DNSXPath: cfg.DNSXPath, GauPath: cfg.GauPath, WaybackurlsPath: cfg.WaybackurlsPath, SSLyzePath: cfg.SSLyzePath, HttpxPath: cfg.HttpxPath, NmapPath: cfg.NmapPath, MasscanPath: cfg.MasscanPath, NiktoPath: cfg.NiktoPath, KatanaPath: cfg.KatanaPath, KatanaChromePath: cfg.BrowserPath, BrowserLocalOrigins: cfg.BrowserLocalOrigins, DalfoxPath: cfg.DalfoxPath, SchemathesisPath: cfg.SchemathesisPath, WapitiPath: cfg.WapitiPath, KubeBenchPath: cfg.KubeBenchPath, ProwlerPath: cfg.ProwlerPath, ScoutSuitePath: cfg.ScoutSuitePath, SSHPath: cfg.SSHPath, TestsslPath: cfg.TestsslPath,
-		SemgrepPath: cfg.SemgrepPath, GitleaksPath: cfg.GitleaksPath, OsvPath: cfg.OsvPath,
+		SemgrepPath: cfg.SemgrepPath, BearerPath: cfg.BearerPath, GitleaksPath: cfg.GitleaksPath, OsvPath: cfg.OsvPath,
 		ZAPURL: cfg.ZAPURL, ZAPAPIKey: cfg.ZAPAPIKey, ZAPDedicated: cfg.ZAPDedicated, ZAPAttackStrength: cfg.ZAPAttackStrength, GVMHost: cfg.GVMHost, GVMPort: cfg.GVMPort, GVMSocket: cfg.GVMSocket, GVMUser: cfg.GVMUsername, GVMPass: cfg.GVMPassword,
 		RateRPS: int(cfg.RateLimitRPS), MaxWorkers: cfg.MaxWorkers, ScanHeaders: append([]string(nil), cfg.ScanHeaders...), MaxOutputBytes: cfg.ScannerMaxOutputBytes,
 		MasscanRate: cfg.MasscanRate, MasscanTimeout: time.Duration(cfg.MasscanTimeoutSec) * time.Second,
@@ -40,6 +40,7 @@ func ScannerConfig(cfg *config.Config) scanner.Config {
 		NmapTimeout:     time.Duration(cfg.NmapTimeoutSec) * time.Second,
 		TestsslTimeout:  time.Duration(cfg.TestsslTimeoutSec) * time.Second,
 		SemgrepTimeout:  time.Duration(cfg.SemgrepTimeoutSec) * time.Second,
+		BearerTimeout:   time.Duration(cfg.BearerTimeoutSec) * time.Second,
 		GitleaksTimeout: time.Duration(cfg.GitleaksTimeoutSec) * time.Second,
 		OsvTimeout:      time.Duration(cfg.OsvTimeoutSec) * time.Second,
 	}

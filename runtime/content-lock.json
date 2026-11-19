@@ -13,6 +13,7 @@
     "subfinder": "v2.16.0",
     "katana": "v1.7.0",
     "gitleaks": "v8.30.1",
+    "bearer": "v2.1.3",
     "testssl.sh": "5b900792f2a6a86135d1151e965c05c59a861e72",
     "dalfox": "v2.13.0",
     "kube-bench": "v0.16.0",
@@ -115,6 +116,10 @@
       "/opt/venvs/sslyze/bin/python",
       "-c",
       "from importlib.metadata import version; print('sslyze ' + version('sslyze'))"
+    ],
+    "bearer": [
+      "bearer",
+      "version"
     ]
   },
   "version_sources": {
