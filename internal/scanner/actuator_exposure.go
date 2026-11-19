@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -48,6 +49,10 @@ var actuatorCatalog = []exposureCheck{
 // endpoint, keeping the management-surface findings from firing on unrelated
 // APIs. The Actuator media type or one of its characteristic top-level keys is
 // required.
+// springHealthStatus matches Spring Boot's health Status enum (case-sensitive
+// uppercase), which NestJS/Terminus ("ok"/"error") does not use.
+var springHealthStatus = regexp.MustCompile(`"status"\s*:\s*"(UP|DOWN|OUT_OF_SERVICE|UNKNOWN)"`)
+
 func looksLikeActuator(contentType, lowerBody string) bool {
 	if strings.Contains(contentType, "actuator") {
 		return true
@@ -87,7 +92,12 @@ func classifyActuator(check exposureCheck, resp *http.Response, body []byte) exp
 			return exposureVerdict{Classification: "internal_disclosure", Severity: "medium", Title: "Spring Boot internal diagnostics endpoint exposed"}
 		}
 	case strings.Contains(check.ID, "health"):
-		if isJSON && strings.Contains(lower, "\"status\"") {
+		// /health is generic (NestJS/Terminus, Express, k8s probes all use it),
+		// so a bare "status" field is not enough. Spring Boot health reports a
+		// Status enum (UP/DOWN/OUT_OF_SERVICE/UNKNOWN, uppercase) — NestJS uses
+		// lowercase "ok"/"error". Require that enum (case-sensitive) or an
+		// actuator marker so a Terminus health JSON is not misreported.
+		if isJSON && (springHealthStatus.Match(body) || looksLikeActuator(ct, lower)) {
 			return exposureVerdict{Classification: "management_surface_exposed", Severity: "low", Title: "Spring Boot health endpoint exposed"}
 		}
 	case strings.Contains(check.ID, "index"):

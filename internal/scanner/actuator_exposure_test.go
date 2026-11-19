@@ -101,3 +101,30 @@ func TestActuatorCatalogIsDeterministic(t *testing.T) {
 		seen[check.ID] = true
 	}
 }
+
+// A NestJS/Terminus health endpoint returns {"status":"ok","info":…,"details":…}
+// at /health. That is not Spring Boot Actuator and must not be flagged — the
+// earlier EMIS run produced 19 such false positives.
+func TestActuatorHealthRejectsNestjsTerminus(t *testing.T) {
+	json := http.Header{"Content-Type": {"application/json"}}
+	ok := &http.Response{StatusCode: 200, Header: json}
+	nestjs := []string{
+		`{"status":"ok","info":{"database":{"status":"up"}},"error":{},"details":{"database":{"status":"up"}}}`,
+		`{"status":"ok"}`,
+		`{"status":"error","error":{"redis":{"status":"down"}}}`,
+	}
+	for _, body := range nestjs {
+		for _, id := range []string{"legacy-health", "actuator-health"} {
+			if v := classifyActuator(exposureCheck{ID: id}, ok, []byte(body)); v.Classification != "" {
+				t.Errorf("%s flagged NestJS health %q: %+v", id, body, v)
+			}
+		}
+	}
+	// Genuine Spring Boot Actuator health must still be flagged.
+	spring := []string{`{"status":"UP"}`, `{"status":"UP","components":{"db":{"status":"UP"}}}`, `{"status":"DOWN","groups":["liveness"]}`}
+	for _, body := range spring {
+		if v := classifyActuator(exposureCheck{ID: "actuator-health"}, ok, []byte(body)); v.Classification != "management_surface_exposed" {
+			t.Errorf("Spring health %q not detected: %+v", body, v)
+		}
+	}
+}

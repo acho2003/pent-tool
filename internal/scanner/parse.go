@@ -185,6 +185,12 @@ func ParseRun(run Run) ([]Finding, error) {
 	case "nuclei":
 		return parseNuclei(run.ArtifactPath)
 	case "zap":
+		// Supplemental ZAP discovery (variant "zap-discovery") writes a JSONL
+		// crawl inventory, not an alerts report; it carries no findings and must
+		// not reach the single-object alert parser. Only active-scan ZAP runs do.
+		if run.Variant == "zap-discovery" {
+			return nil, nil
+		}
 		return parseZAP(run.ArtifactPath)
 	case "apichecks":
 		return parseAPIChecks(run.ArtifactPath)

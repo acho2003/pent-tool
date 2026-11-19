@@ -420,3 +420,26 @@ func TestParseOpenVASReadsNestedGvmdReportAndSkipsLogResults(t *testing.T) {
 		t.Fatalf("unexpected finding: %+v", f)
 	}
 }
+
+// A ZAP supplemental-discovery run (Variant "zap-discovery") writes JSONL crawl
+// records, not an alerts report. ParseRun must not feed it to the alert parser,
+// which fails on JSONL with "invalid character '{' after top-level value".
+func TestParseRunSkipsZapDiscoveryVariant(t *testing.T) {
+	jsonl := `{"request":{"endpoint":"https://app.test/a","method":"GET"}}
+{"request":{"endpoint":"https://app.test/b","method":"GET"}}
+`
+	p := writeFixture(t, "zap-discovery.jsonl", jsonl)
+	got, err := ParseRun(Run{Scanner: "zap", Variant: "zap-discovery", Status: "completed", ArtifactPath: p})
+	if err != nil {
+		t.Fatalf("zap-discovery run should not be parsed as alerts: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("zap-discovery produced %d findings, want 0", len(got))
+	}
+	// A real ZAP alert run (empty variant) still parses through parseZAP.
+	alerts := writeFixture(t, "results.json", `{"alerts":[{"pluginId":"40018","name":"SQL Injection","riskdesc":"High","url":"https://app.test/x"}]}`)
+	findings, err := ParseRun(Run{Scanner: "zap", Status: "completed", ArtifactPath: alerts})
+	if err != nil || len(findings) != 1 || findings[0].RuleID != "40018" {
+		t.Fatalf("real ZAP alerts must still parse: findings=%+v err=%v", findings, err)
+	}
+}
